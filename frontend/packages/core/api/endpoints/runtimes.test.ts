@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpClient } from "../http";
+import { ApiContractError } from "../schema";
 import { RuntimesEndpoints } from "./runtimes";
 
 function jsonResponse(body: unknown): Response {
@@ -274,5 +275,191 @@ describe("RuntimesEndpoints daemon retirement", () => {
     await expect(
       endpoints.retireDaemon("ws-1", "daemon-1", "snapshot-1"),
     ).resolves.toMatchObject({ workspace_id: "", retired_at: "" });
+  });
+});
+
+describe("RuntimesEndpoints SSH mesh", () => {
+  const overview = {
+    workspace_id: "ws-1",
+    enabled: true,
+    key_version: 2,
+    fingerprint: "SHA256:test",
+    rotation_state: "stable",
+    config_revision: "revision-3",
+    rotation_ready_daemons: 1,
+    rotation_total_daemons: 1,
+    created_at: "2026-08-18T00:00:00Z",
+    updated_at: "2026-08-18T00:00:00Z",
+    runtimes: [
+      {
+        daemon_id: "daemon-1",
+        name: "build-host",
+        status: "ready",
+        ssh_user: "runner",
+        ssh_alias: "remi-build-host",
+        hostname: "build-host",
+        addresses: ["10.37.206.133"],
+      },
+    ],
+  };
+
+  it("parses a browser-safe overview and defaults fields from older daemons", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(overview)));
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(endpoints.getSshMeshOverview("ws-1")).resolves.toMatchObject({
+      enabled: true,
+      fingerprint: "SHA256:test",
+      runtimes: [
+        {
+          daemon_id: "daemon-1",
+          ssh_alias: "remi-build-host",
+          port: 22,
+          peer_tests: [],
+          runtime_ids: [],
+        },
+      ],
+    });
+  });
+
+  it("strips unexpected private material before it reaches the frontend cache", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({
+        ...overview,
+        private_key: "TOP-LEVEL-SECRET",
+        runtimes: [{
+          ...overview.runtimes[0],
+          private_key: "RUNTIME-SECRET",
+          peer_tests: [{
+            daemon_id: "daemon-2",
+            status: "ready",
+            private_key: "PEER-SECRET",
+          }],
+        }],
+      })),
+    );
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    const parsed = await endpoints.getSshMeshOverview("ws-1");
+
+    expect(parsed).not.toHaveProperty("private_key");
+    expect(parsed.runtimes[0]).not.toHaveProperty("private_key");
+    expect(parsed.runtimes[0]?.peer_tests[0]).not.toHaveProperty("private_key");
+    expect(JSON.stringify(parsed)).not.toContain("SECRET");
+  });
+
+  it("fails closed when the server returns a null runtime list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ ...overview, runtimes: null })),
+    );
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(endpoints.getSshMeshOverview("ws-1")).resolves.toEqual({
+      enabled: false,
+      workspace_id: "",
+      key_version: 0,
+      fingerprint: null,
+      rotation_state: "stable",
+      config_revision: "",
+      rotation_ready_daemons: 0,
+      rotation_total_daemons: 0,
+      created_at: null,
+      updated_at: null,
+      runtimes: [],
+    });
+  });
+
+  it("never sends private key material from enable, rotate, or test actions", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ ...overview, runtimes: [] }))
+      .mockResolvedValueOnce(jsonResponse({ ...overview, runtimes: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          request_id: "ssh-probe-1",
+          probe_revision: 4,
+          status: "pending",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await endpoints.setSshMeshEnabled("ws-1", true);
+    await endpoints.rotateSshMeshKey("ws-1");
+    await endpoints.testSshMeshConnection("ws-1", "daemon-1", "daemon-2");
+
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty("body");
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        source_daemon_id: "daemon-1",
+        target_daemon_id: "daemon-2",
+      }),
+    });
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("private_key");
+  });
+
+  it.each([
+    {},
+    { ...overview, enabled: false },
+    { ...overview, workspace_id: "another-workspace" },
+    { ...overview, rotation_state: "rolling_out" },
+  ])("rejects malformed or mismatched enable responses", async (body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(
+      endpoints.setSshMeshEnabled("ws-1", true),
+    ).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it.each([
+    {},
+    { ...overview, enabled: false },
+    { ...overview, workspace_id: "another-workspace" },
+    { ...overview, key_version: 0, fingerprint: null },
+    { ...overview, rotation_state: "unknown" },
+  ])("rejects malformed or unconfirmed rotation responses", async (body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(
+      endpoints.rotateSshMeshKey("ws-1"),
+    ).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it.each([
+    {},
+    { request_id: "", probe_revision: 4, status: "pending" },
+    { request_id: "probe-1", probe_revision: 0, status: "pending" },
+    { request_id: "probe-1", probe_revision: 4, status: "done" },
+  ])("rejects malformed probe acknowledgements", async (body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(
+      endpoints.testSshMeshConnection("ws-1", "daemon-1"),
+    ).rejects.toBeInstanceOf(ApiContractError);
   });
 });

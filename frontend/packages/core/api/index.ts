@@ -5,7 +5,12 @@ export {
   PreviewUnsupportedError,
 } from "./client";
 export type { ApiClientOptions } from "./client";
-export { parseWithFallback, setSchemaLogger } from "./schema";
+export {
+  ApiContractError,
+  parseStrictResponse,
+  parseWithFallback,
+  setSchemaLogger,
+} from "./schema";
 export type { ParseOptions } from "./schema";
 export { DuplicateIssueErrorBodySchema } from "./schemas";
 export type { DuplicateIssueErrorBody } from "./schemas";

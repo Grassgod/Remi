@@ -38,6 +38,12 @@ import {
   ResizablePanelGroup,
 } from "@multiremi/ui/components/ui/resizable";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@multiremi/ui/components/ui/tabs";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { cn } from "@multiremi/ui/lib/utils";
 import { EmptyState } from "../../common/empty-state";
@@ -47,6 +53,7 @@ import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { ProviderLogo } from "./provider-logo";
 import { RuntimeList, buildWorkloadIndex } from "./runtime-list";
 import { RetireDaemonDialog } from "./retire-daemon-dialog";
+import { SshMeshPanel } from "./ssh-mesh-panel";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
@@ -837,11 +844,29 @@ function MachineDetail({
         </div>
       </div>
 
-      <RuntimeList
-        runtimes={machine.runtimes}
-        updatableIds={updatableIds}
-        now={now}
-      />
+      <Tabs defaultValue="runtimes" className="min-h-0 flex-1 gap-0">
+        <TabsList variant="line" className="mx-5 mt-2 shrink-0">
+          <TabsTrigger value="runtimes">
+            {t(($) => $.machine.tabs.runtimes)}
+          </TabsTrigger>
+          <TabsTrigger value="ssh-mesh">
+            {t(($) => $.machine.tabs.ssh_mesh)}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="runtimes" className="min-h-0 flex-1 overflow-hidden">
+          <RuntimeList
+            runtimes={machine.runtimes}
+            updatableIds={updatableIds}
+            now={now}
+          />
+        </TabsContent>
+        <TabsContent value="ssh-mesh" className="min-h-0 flex-1 overflow-hidden">
+          <SshMeshPanel
+            sourceDaemonId={machine.daemonId}
+            sourceName={machine.title}
+          />
+        </TabsContent>
+      </Tabs>
     </main>
   );
 }

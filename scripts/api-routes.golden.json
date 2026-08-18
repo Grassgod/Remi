@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 541,
+    "routeCount": 546,
     "routeCountByPrefix": {
       "native": 193,
-      "compat": 335,
+      "compat": 340,
       "root": 13
     },
-    "getRoutes": 239,
-    "getRoutesWithBody": 236,
+    "getRoutes": 241,
+    "getRoutesWithBody": 238,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 302,
+    "mutationRoutes": 305,
     "mutationRoutesCovered": 277,
     "flows": [
       "agents-compat",
@@ -161,6 +161,7 @@
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
+    "GET /api/daemon/ssh-mesh/config",
     "GET /api/daemon/tasks/:taskId/gc-check",
     "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
     "GET /api/daemon/tasks/:taskId/messages",
@@ -349,6 +350,7 @@
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/ssh-mesh",
     "GET /auth/lark/url",
     "GET /favicon.ico",
     "GET /health",
@@ -568,6 +570,8 @@
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
     "POST /api/workspaces/:id/repos",
     "POST /api/workspaces/:id/repos/inspect",
+    "POST /api/workspaces/:id/ssh-mesh/rotate",
+    "POST /api/workspaces/:id/ssh-mesh/test",
     "POST /auth/google",
     "POST /auth/lark/callback",
     "POST /auth/logout",
@@ -603,7 +607,8 @@
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/relay-config/:engine",
-    "PUT /api/workspaces/:id/relay-config/discovery"
+    "PUT /api/workspaces/:id/relay-config/discovery",
+    "PUT /api/workspaces/:id/ssh-mesh"
   ],
   "coveredRoutes": [
     "DELETE /api/attachments/:id",
@@ -701,6 +706,7 @@
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
+    "GET /api/daemon/ssh-mesh/config",
     "GET /api/daemon/tasks/:taskId/gc-check",
     "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
     "GET /api/daemon/tasks/:taskId/messages",
@@ -889,6 +895,7 @@
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/ssh-mesh",
     "GET /auth/lark/url",
     "GET /favicon.ico",
     "GET /health",
@@ -2902,7 +2909,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600228",
+        "order_id": "local-1767225600229",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -3472,6 +3479,9 @@
           "chat_sessions_reset": 0,
           "issue_workspaces_abandoned": 0,
           "tokens_revoked": 0
+        },
+        "ssh_mesh_key_rotation": {
+          "status": "not_required"
         }
       }
     },
@@ -6610,6 +6620,15 @@
           "autopilot_run_id": "run_u4c9m3gewz2d"
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/daemon/ssh-mesh/config",
+      "route": "GET /api/daemon/ssh-mesh/config",
+      "path": "/api/daemon/ssh-mesh/config",
+      "status": 400,
+      "body": {
+        "error": "runtime_id is required"
+      }
     },
     {
       "key": "get-sweep GET /api/daemon/tasks/:taskId/gc-check",
@@ -14477,6 +14496,52 @@
       }
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/ssh-mesh",
+      "route": "GET /api/workspaces/:id/ssh-mesh",
+      "path": "/api/workspaces/local/ssh-mesh",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "enabled": false,
+        "key_version": 0,
+        "fingerprint": null,
+        "rotation_state": "stable",
+        "config_revision": "ce584f895ccd9080fc1b088e83b3470b7d4f2a84114953f9f8d06a11ad2110ff",
+        "rotation_ready_daemons": 0,
+        "rotation_total_daemons": 1,
+        "created_at": null,
+        "updated_at": null,
+        "runtimes": [
+          {
+            "daemon_id": "dmn_snapshot",
+            "runtime_ids": [
+              "rt_snapshot"
+            ],
+            "name": "snapshot-runtime",
+            "ssh_alias": "remi-dmn-snapshot-89006f",
+            "status": "disabled",
+            "protocol_version": 0,
+            "key_version": null,
+            "config_revision": null,
+            "desired_config_revision": "ce584f895ccd9080fc1b088e83b3470b7d4f2a84114953f9f8d06a11ad2110ff",
+            "ssh_user": null,
+            "hostname": null,
+            "port": 22,
+            "addresses": [],
+            "host_keys": [],
+            "public_key_installed": false,
+            "config_installed": false,
+            "probe_revision": 0,
+            "desired_probe_revision": 0,
+            "peer_tests": [],
+            "last_error_code": null,
+            "last_error": null,
+            "last_reported_at": null
+          }
+        ]
+      }
+    },
+    {
       "key": "get-sweep GET /auth/lark/url",
       "route": "GET /auth/lark/url",
       "path": "/auth/lark/url?redirect_uri=https%3A%2F%2Fsnapshot.invalid%2Fcallback",
@@ -17154,7 +17219,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600231",
+        "id": "local-contact-1767225600232",
         "status": "received",
         "mode": "local",
         "request": {
@@ -18452,7 +18517,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600236",
+        "session_id": "local-lark-1767225600237",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

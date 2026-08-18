@@ -1,5 +1,24 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import type { SshMeshOverview } from "./types";
+
+export const SSH_MESH_ACTIVE_REFRESH_MS = 1_500;
+export const SSH_MESH_IDLE_REFRESH_MS = 60_000;
+
+export function getSshMeshRefreshInterval(
+  overview: SshMeshOverview | undefined,
+): number {
+  const applying =
+    overview?.rotation_state === "rolling_out" ||
+    overview?.runtimes.some(
+      (runtime) =>
+        runtime.status === "syncing" ||
+        runtime.desired_probe_revision > runtime.probe_revision,
+    );
+  return applying
+    ? SSH_MESH_ACTIVE_REFRESH_MS
+    : SSH_MESH_IDLE_REFRESH_MS;
+}
 
 export const runtimeKeys = {
   all: (wsId: string) => ["runtimes", wsId] as const,
@@ -17,6 +36,8 @@ export const runtimeKeys = {
     ["runtimes", "daemons", "inventory", wsId] as const,
   daemonRetirementPlan: (wsId: string, daemonId: string) =>
     ["runtimes", wsId, "daemons", daemonId, "retirement-plan"] as const,
+  sshMesh: (wsId: string) =>
+    ["runtimes", wsId, "ssh-mesh"] as const,
 };
 
 export function daemonInventoryOptions(wsId: string) {
@@ -32,6 +53,15 @@ export function daemonRetirementPlanOptions(wsId: string, daemonId: string) {
     queryKey: runtimeKeys.daemonRetirementPlan(wsId, daemonId),
     queryFn: () => api.getDaemonRetirementPlan(wsId, daemonId),
     staleTime: 0,
+  });
+}
+
+export function sshMeshOptions(wsId: string) {
+  return queryOptions({
+    queryKey: runtimeKeys.sshMesh(wsId),
+    queryFn: () => api.getSshMeshOverview(wsId),
+    staleTime: 30_000,
+    refetchInterval: (query) => getSshMeshRefreshInterval(query.state.data),
   });
 }
 

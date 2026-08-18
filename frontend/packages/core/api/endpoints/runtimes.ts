@@ -17,6 +17,8 @@ import type {
   DaemonInventoryResponse,
   DaemonRetirementPlan,
   RetireDaemonResponse,
+  SshMeshOverview,
+  SshMeshTestResponse,
 } from "../../runtimes/types";
 import type {
   CloudRuntimeNode,
@@ -24,7 +26,11 @@ import type {
   ListCloudRuntimeNodesParams,
 } from "../../runtimes/cloud-runtime";
 import type { HttpClient } from "../http";
-import { parseWithFallback } from "../schema";
+import {
+  ApiContractError,
+  parseStrictResponse,
+  parseWithFallback,
+} from "../schema";
 import {
   type CliLatestVersionResponse,
   CliLatestVersionResponseSchema,
@@ -41,6 +47,7 @@ import {
   EMPTY_RELAY_CONFIG,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
   EMPTY_RETIRE_DAEMON_RESPONSE,
+  EMPTY_SSH_MESH_OVERVIEW,
   FleetModelsResponseSchema,
   type RelayConfigResponse,
   RelayConfigResponseSchema,
@@ -50,6 +57,8 @@ import {
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
   RetireDaemonResponseSchema,
+  SshMeshOverviewSchema,
+  SshMeshTestResponseSchema,
 } from "../schemas/runtimes";
 
 export class RuntimesEndpoints {
@@ -229,6 +238,94 @@ export class RuntimesEndpoints {
       return EMPTY_RETIRE_DAEMON_RESPONSE;
     }
     return response;
+  }
+
+  async getSshMeshOverview(workspaceId: string): Promise<SshMeshOverview> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/ssh-mesh`,
+    );
+    const response = parseWithFallback(
+      raw,
+      SshMeshOverviewSchema,
+      EMPTY_SSH_MESH_OVERVIEW,
+      { endpoint: "GET /api/workspaces/:id/ssh-mesh" },
+    );
+    return response.workspace_id === workspaceId
+      ? response
+      : EMPTY_SSH_MESH_OVERVIEW;
+  }
+
+  async setSshMeshEnabled(
+    workspaceId: string,
+    enabled: boolean,
+  ): Promise<SshMeshOverview> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/ssh-mesh`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    const endpoint = "PUT /api/workspaces/:id/ssh-mesh";
+    const response = parseStrictResponse<SshMeshOverview>(
+      raw,
+      SshMeshOverviewSchema,
+      { endpoint },
+    );
+    if (
+      response.workspace_id !== workspaceId ||
+      response.enabled !== enabled ||
+      response.rotation_state !== "stable" ||
+      (enabled && (response.key_version <= 0 || !response.fingerprint))
+    ) {
+      throw new ApiContractError(endpoint, "SSH Mesh state did not match the requested update");
+    }
+    return response;
+  }
+
+  async rotateSshMeshKey(workspaceId: string): Promise<SshMeshOverview> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/ssh-mesh/rotate`,
+      { method: "POST" },
+    );
+    const endpoint = "POST /api/workspaces/:id/ssh-mesh/rotate";
+    const response = parseStrictResponse<SshMeshOverview>(
+      raw,
+      SshMeshOverviewSchema,
+      { endpoint },
+    );
+    if (
+      response.workspace_id !== workspaceId ||
+      !response.enabled ||
+      response.key_version <= 0 ||
+      !response.fingerprint ||
+      (response.rotation_state !== "rolling_out" && response.rotation_state !== "stable")
+    ) {
+      throw new ApiContractError(endpoint, "SSH Mesh state did not confirm key rotation");
+    }
+    return response;
+  }
+
+  async testSshMeshConnection(
+    workspaceId: string,
+    sourceDaemonId: string,
+    targetDaemonId?: string,
+  ): Promise<SshMeshTestResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/ssh-mesh/test`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          source_daemon_id: sourceDaemonId,
+          ...(targetDaemonId ? { target_daemon_id: targetDaemonId } : {}),
+        }),
+      },
+    );
+    return parseStrictResponse<SshMeshTestResponse>(
+      raw,
+      SshMeshTestResponseSchema,
+      { endpoint: "POST /api/workspaces/:id/ssh-mesh/test" },
+    );
   }
 
   // Cascade variant of deleteRuntime. The strict DELETE refuses with

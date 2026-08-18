@@ -359,7 +359,7 @@ export function safeUpdateWorkspaceMember(
   store: MultiremiStore,
   memberId: string,
   input: UpdateWorkspaceMemberInput,
-): ReturnType<MultiremiStore["updateWorkspaceMember"]> | { error: string; status: 400 | 404 } {
+): ReturnType<MultiremiStore["updateWorkspaceMember"]> | { error: string; status: 400 | 404 | 409 } {
   try {
     return store.updateWorkspaceMember(memberId, input);
   } catch (error) {
@@ -370,7 +370,7 @@ export function safeUpdateWorkspaceMember(
 export function safeArchiveWorkspaceMember(
   store: MultiremiStore,
   memberId: string,
-): ReturnType<MultiremiStore["archiveWorkspaceMember"]> | { error: string; status: 400 | 404 } {
+): ReturnType<MultiremiStore["archiveWorkspaceMember"]> | { error: string; status: 400 | 404 | 409 } {
   try {
     return store.archiveWorkspaceMember(memberId);
   } catch (error) {
@@ -382,7 +382,7 @@ export function safeLeaveWorkspace(
   store: MultiremiStore,
   workspaceId: string,
   memberId?: string,
-): { ok: true } | { error: string; status: 400 | 404 } {
+): { ok: true } | { error: string; status: 400 | 404 | 409 } {
   try {
     const left = store.leaveWorkspace(workspaceId, memberId);
     if (!left) return { error: "member not found", status: 404 };
@@ -392,10 +392,14 @@ export function safeLeaveWorkspace(
   }
 }
 
-export function workspaceMemberMutationError(error: unknown, missingMessage: string): { error: string; status: 400 | 404 } {
+export function workspaceMemberMutationError(
+  error: unknown,
+  missingMessage: string,
+): { error: string; status: 400 | 404 | 409 } {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("Member not found") || message === missingMessage) return { error: missingMessage, status: 404 };
   if (message === "workspace must have at least one owner") return { error: message, status: 400 };
+  if (message.startsWith("member owns active daemons:")) return { error: message, status: 409 };
   return { error: message, status: 400 };
 }
 

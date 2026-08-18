@@ -98,3 +98,75 @@ export interface RetireDaemonResponse {
   already_retired: boolean;
   impact: DaemonRetirementImpact;
 }
+
+export type SshMeshRuntimeStatus =
+  | "disabled"
+  | "syncing"
+  | "ready"
+  | "setup_required"
+  | "blocked"
+  | "error"
+  | "offline"
+  | (string & {});
+
+export type SshMeshPeerStatus =
+  | "ready"
+  | "unreachable"
+  | "host_key_mismatch"
+  | "auth_failed"
+  | "error"
+  | (string & {});
+
+export interface SshMeshPeerTest {
+  daemon_id: string;
+  status: SshMeshPeerStatus;
+  latency_ms: number | null;
+  error_code: string | null;
+  error: string | null;
+  checked_at: string | null;
+}
+
+export interface SshMeshRuntime {
+  daemon_id: string;
+  runtime_ids: string[];
+  name: string | null;
+  status: SshMeshRuntimeStatus;
+  protocol_version: number;
+  key_version: number | null;
+  config_revision: string | null;
+  desired_config_revision: string;
+  ssh_user: string | null;
+  ssh_alias: string | null;
+  hostname: string | null;
+  port: number;
+  addresses: string[];
+  host_keys: string[];
+  public_key_installed: boolean;
+  config_installed: boolean;
+  last_error_code: string | null;
+  last_error: string | null;
+  last_reported_at: string | null;
+  probe_revision: number;
+  desired_probe_revision: number;
+  peer_tests: SshMeshPeerTest[];
+}
+
+export interface SshMeshOverview {
+  workspace_id: string;
+  enabled: boolean;
+  key_version: number;
+  fingerprint: string | null;
+  rotation_state: "stable" | "rolling_out" | (string & {});
+  config_revision: string;
+  rotation_ready_daemons: number;
+  rotation_total_daemons: number;
+  created_at: string | null;
+  updated_at: string | null;
+  runtimes: SshMeshRuntime[];
+}
+
+export interface SshMeshTestResponse {
+  request_id: string;
+  probe_revision: number;
+  status: "pending" | (string & {});
+}

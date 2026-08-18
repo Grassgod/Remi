@@ -87,18 +87,24 @@ import {
   type ResolvedTaskWorkDir,
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
 import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
+import { SshMeshManager } from "@daemon/ssh-mesh.js";
 import type {
   MultiremiDaemonHeartbeatAck,
+  MultiremiDaemonSshMeshStatus,
   MultiremiIssueWorkspaceRepo,
   MultiremiRepoData,
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
   MultiremiTaskHumanRequest,
   MultiremiTaskWithAgent,
+  MultiremiSshMeshHeartbeatAck,
   RegisterRuntimeInput,
   TaskUsageEntry,
 } from "@multiremi/contracts/types.js";
-import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
+import {
+  MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+  MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
+} from "@multiremi/contracts/types.js";
 
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
@@ -202,6 +208,14 @@ export interface MultiremiDaemonOptions {
   runtimeModelRetryBaseMs?: number;
   /** Maximum retry delay for Runtime model discovery/reporting. */
   runtimeModelRetryMaxMs?: number;
+  /** Injectable SSH Mesh lifecycle for daemon integration tests. */
+  sshMeshManager?: MultiremiDaemonSshMeshRuntime;
+}
+
+export interface MultiremiDaemonSshMeshRuntime {
+  getHeartbeatStatus(): MultiremiDaemonSshMeshStatus;
+  reconcile(desired: MultiremiSshMeshHeartbeatAck): Promise<void>;
+  cleanupForRetirement(): Promise<void>;
 }
 
 interface RunSummary {
@@ -255,7 +269,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "pluginCacheRoot" | "agentPluginProviderPreflight">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -296,6 +310,8 @@ export class MultiremiDaemon {
   private readonly agentPluginCache: AgentPluginCache;
   private readonly agentPluginReconciler: AgentPluginRuntimeReconciler;
   private readonly agentPluginProviderPreflight: MultiremiAgentPluginProviderPreflight;
+  private readonly sshMeshManager: MultiremiDaemonSshMeshRuntime;
+  private terminalAuthorityCleanup: Promise<void> | null = null;
   private agentPluginReconcileAbort: AbortController | null = null;
   private runtimeModels: MultiremiRuntimeModel[] | null = null;
   private runtimeRegistrationGeneration = 0;
@@ -360,6 +376,15 @@ export class MultiremiDaemon {
       ?? ((provider, signal) => preflightAgentPluginProvider(provider, {}, signal));
     this.localSkillRoots = options.localSkillRoots ?? {};
     this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token);
+    this.sshMeshManager = options.sshMeshManager ?? new SshMeshManager({
+      workspaceId: this.options.workspaceId ?? "local",
+      daemonId: this.options.daemonId ?? this.options.runtimeName,
+      getConfig: async () => {
+        const runtimeId = this.options.runtimeId;
+        if (!runtimeId) throw new Error("SSH Mesh configuration requested before Runtime registration");
+        return await this.client.getSshMeshConfig(runtimeId);
+      },
+    });
     this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot);
     this.agentPluginCache = new AgentPluginCache({
       root: this.options.pluginCacheRoot,
@@ -403,7 +428,10 @@ export class MultiremiDaemon {
 
       while (!this.stopped) {
         try {
-          const ack = await this.client.heartbeatRuntime(this.options.runtimeId!);
+          const ack = await this.client.heartbeatRuntime(
+            this.options.runtimeId!,
+            this.sshMeshManager.getHeartbeatStatus(),
+          );
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
           if (!skipClaim && !this.stopped) {
             await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
@@ -446,18 +474,26 @@ export class MultiremiDaemon {
           // kill the daemon — that takes every runtime offline until a human
           // re-launches it. Log and retry on the next poll. `once` mode (tests,
           // one-shot runs) still surfaces the error.
-          if (this.stopped || this.options.once) throw err;
           if (isTerminalDaemonAuthorityError(err)) {
             log.error(
               `daemon authorization was revoked or retired; stopping: ${err instanceof Error ? err.message : String(err)}`,
             );
-            this.stop();
+            await this.stopAfterTerminalAuthority();
             break;
           }
+          if (this.stopped || this.options.once) throw err;
           log.warn(`daemon poll loop error, retrying in ${this.options.pollIntervalMs}ms: ${err instanceof Error ? err.message : String(err)}`);
           await sleep(this.options.pollIntervalMs);
         }
       }
+    } catch (error) {
+      if (isTerminalDaemonAuthorityError(error)) {
+        log.error(
+          `daemon authorization was revoked or retired during startup; stopping: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await this.stopAfterTerminalAuthority();
+      }
+      throw error;
     } finally {
       this.ready = false;
       this.cancelRuntimeModelRefresh();
@@ -480,6 +516,7 @@ export class MultiremiDaemon {
         cliVersion: multiremiVersion,
         launchedBy: this.options.launchedBy ?? "manual",
         agentPluginProtocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+        sshMeshProtocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
         runtime: {
           // Empty name → server derives `<provider> (<deviceName>)`, which the
           // dashboard splits into the machine title + a clean provider row.
@@ -545,6 +582,7 @@ export class MultiremiDaemon {
         agent_version: this.agentVersion() ?? undefined,
         launched_by: this.options.launchedBy ?? "manual",
         agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+        ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
       },
       deviceInfo: `${this.options.runtimeName} · ${multiremiVersion}`,
       ...(this.runtimeModels ? { models: this.runtimeModels } : {}),
@@ -567,6 +605,9 @@ export class MultiremiDaemon {
     if (ack.pending_directory_scan) {
       await this.handleRuntimeDirectoryScan(runtimeId, ack.pending_directory_scan);
     }
+    if (ack.ssh_mesh) {
+      await this.sshMeshManager.reconcile(ack.ssh_mesh);
+    }
     const imports = ack.pending_local_skill_imports?.length
       ? ack.pending_local_skill_imports
       : ack.pending_local_skill_import
@@ -581,7 +622,7 @@ export class MultiremiDaemon {
   private async handleRuntimeGone(runtimeId: string, entryAtMs: number): Promise<boolean> {
     const workspaceId = this.options.workspaceId;
     if (!workspaceId) {
-      this.stop();
+      await this.stopAfterTerminalAuthority();
       return false;
     }
     if (this.runtimeGoneInflight.has(runtimeId)) return false;
@@ -601,7 +642,7 @@ export class MultiremiDaemon {
           log.error(
             `Runtime cannot re-register because daemon authorization was revoked or retired; stopping: ${error instanceof Error ? error.message : String(error)}`,
           );
-          this.stop();
+          await this.stopAfterTerminalAuthority();
           return false;
         }
         log.warn(`Re-register after runtime_gone failed for ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1014,6 +1055,18 @@ export class MultiremiDaemon {
     this.stopped = true;
     this.agentPluginReconcileAbort?.abort();
     this.cancelRuntimeModelRefresh();
+  }
+
+  private async stopAfterTerminalAuthority(): Promise<void> {
+    this.claimsPaused = true;
+    this.terminalAuthorityCleanup ??= this.sshMeshManager.cleanupForRetirement();
+    try {
+      await this.terminalAuthorityCleanup;
+    } catch (error) {
+      log.error(`SSH Mesh retirement cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.stop();
+    }
   }
 
   async runGcOnce(): Promise<MultiremiDaemonGcSummary> {

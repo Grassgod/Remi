@@ -750,6 +750,87 @@ export interface MultiremiDaemonHeartbeatAck {
     id: string;
     skill_key: string;
   }>;
+  ssh_mesh?: MultiremiSshMeshHeartbeatAck;
+}
+
+export const MULTIREMI_SSH_MESH_PROTOCOL_VERSION = 1;
+
+export type MultiremiSshMeshRuntimeStatus =
+  | "disabled"
+  | "syncing"
+  | "ready"
+  | "setup_required"
+  | "blocked"
+  | "error";
+
+export type MultiremiSshMeshPeerStatus =
+  | "ready"
+  | "unreachable"
+  | "host_key_mismatch"
+  | "auth_failed"
+  | "error";
+
+export interface MultiremiSshMeshPeerProbe {
+  daemon_id: string;
+  status: MultiremiSshMeshPeerStatus;
+  latency_ms?: number | null;
+  error_code?: string | null;
+  error?: string | null;
+  checked_at?: string | null;
+}
+
+/** Machine-level SSH Mesh state observed by a daemon and sent with heartbeat. */
+export interface MultiremiDaemonSshMeshStatus {
+  status: MultiremiSshMeshRuntimeStatus;
+  key_version?: number | null;
+  config_revision?: string | null;
+  probe_revision?: number;
+  ssh_user?: string | null;
+  hostname?: string | null;
+  port?: number;
+  addresses?: string[];
+  /** OpenSSH public host keys as `algorithm base64`, without a host prefix. */
+  host_keys?: string[];
+  public_key_installed?: boolean;
+  config_installed?: boolean;
+  peers?: MultiremiSshMeshPeerProbe[];
+  last_error_code?: string | null;
+  last_error?: string | null;
+}
+
+export interface MultiremiSshMeshHeartbeatAck {
+  enabled: boolean;
+  key_version: number;
+  config_revision: string;
+  needs_sync: boolean;
+  rotation_state: "stable" | "rolling_out" | "rekey_required";
+  probe_revision: number;
+  needs_probe: boolean;
+}
+
+export interface MultiremiDaemonSshMeshHost {
+  daemon_id: string;
+  alias: string;
+  hostname: string | null;
+  ssh_user: string | null;
+  port: number;
+  addresses: string[];
+  host_keys: string[];
+}
+
+/** Daemon-only response. `private_key` must never be exposed on browser routes. */
+export interface MultiremiDaemonSshMeshConfig {
+  protocol_version: number;
+  enabled: boolean;
+  key_version: number;
+  config_revision: string;
+  rotation_state: "stable" | "rolling_out" | "rekey_required";
+  probe_revision: number;
+  probe_target_daemon_ids: string[];
+  private_key?: string;
+  public_key?: string;
+  authorized_public_keys: string[];
+  hosts: MultiremiDaemonSshMeshHost[];
 }
 
 export interface MultiremiRuntimeModelThinkingLevel {

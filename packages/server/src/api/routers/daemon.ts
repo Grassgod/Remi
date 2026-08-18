@@ -39,7 +39,13 @@ import {
   daemonTaskWireResponse,
   workspaceReposResponse,
 } from "../wire/index.js";
-import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, MultiremiTask } from "@multiremi/contracts/types.js";
+import type {
+  MultiremiDaemonSshMeshStatus,
+  MultiremiIssueWorkspaceRepo,
+  MultiremiIssueWorkspaceStatus,
+  MultiremiTask,
+} from "@multiremi/contracts/types.js";
+import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -99,6 +105,9 @@ function validateDaemonInstallRequestBody(
     ) {
       return { error: `${field} must be a positive number` };
     }
+  }
+  if (body.expiresInDays != null || body.expires_in_days != null) {
+    return { error: "daemon tokens cannot expire; retire the daemon to revoke machine trust" };
   }
   for (const field of ["createToken", "create_token"] as const) {
     if (body[field] != null && typeof body[field] !== "boolean") {
@@ -178,7 +187,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         daemonId,
         name: body.tokenName ?? body.token_name ?? "Multiremi daemon",
         type: "daemon",
-        expiresInDays: body.expiresInDays ?? body.expires_in_days ?? 90,
       });
       token = created.token;
       tokenId = created.id;
@@ -246,6 +254,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       supports_batch_import?: boolean;
       supports_directory_scan?: boolean;
       agent_plugin_protocol?: number;
+      ssh_mesh_protocol?: number;
+      ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -255,10 +265,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
     if (denied) return denied;
     const reportsAgentPluginProtocol = Object.prototype.hasOwnProperty.call(body, "agent_plugin_protocol");
+    const reportsSshMeshProtocol = Object.prototype.hasOwnProperty.call(body, "ssh_mesh_protocol");
     const authorization = c.req.header("Authorization") ?? "";
     const usesMasterToken = Boolean(authToken) && authorization === `Bearer ${authToken}`;
     if (
-      reportsAgentPluginProtocol &&
+      (reportsAgentPluginProtocol || reportsSshMeshProtocol) &&
       currentAccessToken(c)?.type !== "daemon" &&
       authToken &&
       !usesMasterToken
@@ -271,7 +282,34 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       agentPluginProtocol: reportsAgentPluginProtocol ? body.agent_plugin_protocol : undefined,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
+    if (reportsSshMeshProtocol) {
+      const protocol = normalizeDaemonProtocolVersion(body.ssh_mesh_protocol);
+      const meshAck = store.recordSshMeshHeartbeat(runtimeId, protocol, body.ssh_mesh_status);
+      if (meshAck) ack.ssh_mesh = meshAck;
+    } else {
+      store.recordSshMeshHeartbeat(runtimeId, 0);
+    }
     return c.json(daemonHeartbeatHttpResponse(ack));
+  });
+  app.get("/api/daemon/ssh-mesh/config", (c) => {
+    const runtimeId = String(c.req.query("runtime_id") ?? "").trim();
+    if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
+    if (currentAccessToken(c)?.type !== "daemon") {
+      return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+    }
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    try {
+      const config = store.getSshMeshConfigForDaemon(runtimeId);
+      if (!config) return c.json({ error: "runtime not found" }, 404);
+      c.header("Cache-Control", "no-store");
+      return c.json(config);
+    } catch (error) {
+      if (error instanceof SshMeshKeyError) {
+        return c.json({ error: error.message, code: error.code }, 503);
+      }
+      throw error;
+    }
   });
   app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
     const denied = denyDaemonTokenWorkspace(c, c.req.param("workspaceId"));
@@ -622,4 +660,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
 
 function safeProjectKnowledgeError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 500);
+}
+
+function normalizeDaemonProtocolVersion(value: unknown): number {
+  const protocol = Number(value);
+  return Number.isSafeInteger(protocol) && protocol >= 0 ? protocol : 0;
 }

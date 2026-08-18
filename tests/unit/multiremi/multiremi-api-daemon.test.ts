@@ -155,7 +155,11 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(mintedBody.setupCommand).toContain("--token mdt_");
     expect(mintedBody.setupCommand).toContain("--provider claude");
     expect(mintedBody.commands.map((command: any) => command.key)).toEqual(["install", "setup", "daemon"]);
-    expect(store.listAccessTokens("local")[0]).toMatchObject({ id: mintedBody.tokenId, type: "daemon" });
+    expect(store.listAccessTokens("local")[0]).toMatchObject({
+      id: mintedBody.tokenId,
+      type: "daemon",
+      expiresAt: null,
+    });
   });
 
   it("validates daemon install requests before minting credentials", async () => {
@@ -169,6 +173,10 @@ describe("Multiremi API — daemon endpoints", () => {
       {
         daemonId: "daemon-invalid-expiry",
         body: { daemon_id: "daemon-invalid-expiry", expires_in_days: "90" },
+      },
+      {
+        daemonId: "daemon-disallowed-expiry",
+        body: { daemon_id: "daemon-disallowed-expiry", expires_in_days: 90 },
       },
       {
         daemonId: "daemon-invalid-token-name",
@@ -508,6 +516,45 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(store.getAccessToken(wrongOwnerToken.id)).toMatchObject({ type: "pat", purpose: "cli" });
   });
 
+  it("does not promote a time-limited legacy CLI PAT into a daemon credential", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({
+      id: "legacy-expiring-owner-member",
+      userId: "legacy-expiring-owner",
+      name: "Legacy Expiring Owner",
+      role: "admin",
+    });
+    const legacy = await store.createAccessToken({
+      name: "Expiring add-computer credential",
+      type: "pat",
+      purpose: "cli",
+      workspaceId: "local",
+      userId: "legacy-expiring-owner",
+      expiresInDays: 30,
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${legacy.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-expiring-legacy",
+        runtimes: [{ type: "codex" }],
+      }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "daemon_credential_upgrade_failed" });
+    expect(store.getAccessToken(legacy.id)).toMatchObject({
+      type: "pat",
+      purpose: "cli",
+      daemonId: null,
+      expiresAt: expect.any(String),
+    });
+    expect(store.listRuntimes().some((runtime) => runtime.daemonId === "daemon-expiring-legacy"))
+      .toBeFalse();
+  });
+
   it("does not let colliding daemon identities overwrite an existing Runtime", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
@@ -698,7 +745,7 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(await humanHeartbeat.json()).toMatchObject({ code: "daemon_token_required" });
   });
 
-  it("rejects daemon and legacy CLI credentials after their owner leaves the workspace", async () => {
+  it("requires daemon retirement before its owner leaves the workspace", async () => {
     const store = createStore();
     const member = store.createWorkspaceMember({ id: "removed-daemon-owner", name: "Removed owner", role: "member" });
     const memberToken = await store.createAccessToken({
@@ -745,6 +792,14 @@ describe("Multiremi API — daemon endpoints", () => {
     });
     const runtimeId = (await registered.json()).runtimes[0].id;
 
+    expect(() => store.archiveWorkspaceMember(member.id)).toThrow("retire them before removing the member");
+    const retirementPlan = store.getDaemonRetirementPlan("local", credential.daemonId);
+    expect(store.retireDaemon(
+      "local",
+      credential.daemonId,
+      retirementPlan.snapshot,
+      "local",
+    )).toMatchObject({ status: "retired", alreadyRetired: false });
     store.archiveWorkspaceMember(member.id);
 
     const heartbeat = await app.request("/api/daemon/heartbeat", {
@@ -752,8 +807,7 @@ describe("Multiremi API — daemon endpoints", () => {
       headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ runtime_id: runtimeId }),
     });
-    expect(heartbeat.status).toBe(403);
-    expect(await heartbeat.json()).toMatchObject({ code: "daemon_owner_membership_required" });
+    expect(heartbeat.status).toBe(401);
 
     const compatibilityRegister = await app.request("/api/multiremi/runtimes", {
       method: "POST",
@@ -766,11 +820,8 @@ describe("Multiremi API — daemon endpoints", () => {
         name: "MUTATED",
       }),
     });
-    expect(compatibilityRegister.status).toBe(403);
-    expect(await compatibilityRegister.json()).toMatchObject({
-      code: "daemon_owner_membership_required",
-    });
-    expect(store.getRuntime(runtimeId)?.name).not.toBe("MUTATED");
+    expect(compatibilityRegister.status).toBe(401);
+    expect(store.getRuntime(runtimeId)).toBeNull();
 
     const compatibilityHeartbeat = await app.request(
       `/api/multiremi/runtimes/${runtimeId}/heartbeat`,
@@ -779,10 +830,7 @@ describe("Multiremi API — daemon endpoints", () => {
         headers: { Authorization: `Bearer ${credential.token}` },
       },
     );
-    expect(compatibilityHeartbeat.status).toBe(403);
-    expect(await compatibilityHeartbeat.json()).toMatchObject({
-      code: "daemon_owner_membership_required",
-    });
+    expect(compatibilityHeartbeat.status).toBe(401);
 
     const reregister = await app.request("/api/daemon/register", {
       method: "POST",
@@ -793,7 +841,7 @@ describe("Multiremi API — daemon endpoints", () => {
         runtimes: [{ type: "claude" }],
       }),
     });
-    expect(reregister.status).toBe(403);
+    expect(reregister.status).toBe(401);
 
     const rejectedUnboundDaemon = await app.request("/api/daemon/register", {
       method: "POST",

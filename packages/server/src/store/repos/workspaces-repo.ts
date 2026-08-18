@@ -57,6 +57,30 @@ export interface GatewayModelsSnapshot {
   lastError: string | null;
 }
 
+export class WorkspaceDaemonRetirementRequiredError extends Error {
+  readonly code = "daemon_retirement_required";
+
+  constructor(readonly daemonIds: string[]) {
+    super(`Retire active daemons before deleting the workspace: ${daemonIds.join(", ")}`);
+    this.name = "WorkspaceDaemonRetirementRequiredError";
+  }
+}
+
+export class WorkspaceSshMeshCleanupRequiredError extends Error {
+  readonly code = "ssh_mesh_cleanup_required";
+
+  constructor(
+    readonly enabled: boolean,
+    readonly rotationState: string,
+    readonly daemonIds: string[],
+  ) {
+    super(
+      "Disable SSH Mesh and wait for every daemon to report disabled before deleting the workspace",
+    );
+    this.name = "WorkspaceSshMeshCleanupRequiredError";
+  }
+}
+
 export class WorkspacesRepo {
   constructor(private ctx: StoreContext) {}
 
@@ -112,6 +136,9 @@ export class WorkspacesRepo {
     if (!current) throw new Error(`Member not found: ${id}`);
     const nextWorkspaceId = input.workspaceId ?? current.workspaceId;
     const nextRole = input.role ?? current.role;
+    if (!current.archivedAt && nextWorkspaceId !== current.workspaceId) {
+      this.assertMemberHasNoActiveDaemonIdentity(current);
+    }
     if (current.role === "owner" && (nextRole !== "owner" || nextWorkspaceId !== current.workspaceId)) {
       this.assertWorkspaceKeepsOwner(current);
     }
@@ -139,6 +166,7 @@ export class WorkspacesRepo {
   archiveWorkspaceMember(id: string): MultiremiWorkspaceMember {
     const current = this.getWorkspaceMember(id);
     if (!current) throw new Error(`Member not found: ${id}`);
+    if (!current.archivedAt) this.assertMemberHasNoActiveDaemonIdentity(current);
     if (current.role === "owner" && !current.archivedAt) this.assertWorkspaceKeepsOwner(current);
     const now = nowIso();
     const affectedProjects: Array<{ id: string; workspace_id: string }> = [];
@@ -173,6 +201,28 @@ export class WorkspacesRepo {
       });
     }
     return this.getWorkspaceMember(id)!;
+  }
+
+  private assertMemberHasNoActiveDaemonIdentity(member: MultiremiWorkspaceMember): void {
+    const ownerIds = [...new Set([member.userId, member.id].filter((value): value is string => Boolean(value)))];
+    if (!ownerIds.length) return;
+    const placeholders = ownerIds.map(() => "?").join(",");
+    const rows = this.ctx.db.query(
+      `SELECT daemon_id
+       FROM multiremi_daemon_lifecycle_locks lifecycle
+       WHERE lifecycle.workspace_id = ?
+         AND lifecycle.owner_user_id IN (${placeholders})
+         AND NOT EXISTS (
+           SELECT 1 FROM multiremi_daemon_retirements retired
+           WHERE retired.workspace_id = lifecycle.workspace_id
+             AND retired.daemon_id = lifecycle.daemon_id
+         )
+       ORDER BY daemon_id ASC`,
+    ).all(member.workspaceId, ...ownerIds) as Array<{ daemon_id: string }>;
+    const daemonIds = [...new Set(rows.map((row) => String(row.daemon_id)).filter(Boolean))];
+    if (daemonIds.length) {
+      throw new Error(`member owns active daemons: ${daemonIds.join(", ")}; retire them before removing the member`);
+    }
   }
 
   private assertWorkspaceKeepsOwner(member: MultiremiWorkspaceMember): void {
@@ -458,15 +508,70 @@ export class WorkspacesRepo {
 
   deleteWorkspace(id: string): boolean {
     if (id === "local") throw new Error("local workspace cannot be deleted");
-    const result = this.ctx.db.run("DELETE FROM multiremi_workspaces WHERE id = ?", [id]);
-    if (result.changes === 0) return false;
-    const now = nowIso();
-    this.ctx.db.run("UPDATE multiremi_workspace_members SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE workspace_id = ?", [
-      now,
-      now,
-      id,
-    ]);
-    return true;
+    return this.ctx.db.transaction(() => {
+      if (!this.getWorkspace(id)) return false;
+      this.ctx.lockWorkspaceRuntimeLifecycle(id);
+      this.assertWorkspaceDaemonTrustRevoked(id);
+      const result = this.ctx.db.run("DELETE FROM multiremi_workspaces WHERE id = ?", [id]);
+      if (result.changes === 0) return false;
+      this.ctx.db.run("DELETE FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ?", [id]);
+      this.ctx.db.run("DELETE FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?", [id]);
+      const now = nowIso();
+      this.ctx.db.run("UPDATE multiremi_workspace_members SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE workspace_id = ?", [
+        now,
+        now,
+        id,
+      ]);
+      return true;
+    })();
+  }
+
+  private assertWorkspaceDaemonTrustRevoked(workspaceId: string): void {
+    const activeDaemonRows = this.ctx.db.query(
+      `SELECT identities.daemon_id
+       FROM (
+         SELECT daemon_id FROM multiremi_daemon_lifecycle_locks WHERE workspace_id = ?
+         UNION
+         SELECT daemon_id FROM multiremi_runtimes
+         WHERE COALESCE(workspace_id, 'local') = ? AND daemon_id IS NOT NULL AND daemon_id != ''
+         UNION
+         SELECT daemon_id FROM multiremi_access_tokens
+         WHERE workspace_id = ? AND type = 'daemon' AND daemon_id IS NOT NULL AND daemon_id != ''
+           AND revoked_at IS NULL
+       ) identities
+       WHERE NOT EXISTS (
+         SELECT 1 FROM multiremi_daemon_retirements retired
+         WHERE retired.workspace_id = ? AND retired.daemon_id = identities.daemon_id
+       )
+       ORDER BY identities.daemon_id ASC`,
+    ).all(workspaceId, workspaceId, workspaceId, workspaceId) as Array<{ daemon_id: string }>;
+    const activeDaemonIds = [...new Set(activeDaemonRows.map((row) => String(row.daemon_id)).filter(Boolean))];
+    if (activeDaemonIds.length) throw new WorkspaceDaemonRetirementRequiredError(activeDaemonIds);
+
+    const config = this.ctx.db.query(
+      `SELECT enabled, rotation_state
+       FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?`,
+    ).get(workspaceId) as { enabled: number | boolean; rotation_state: string } | null;
+    const unclearedStates = this.ctx.db.query(
+      `SELECT daemon_id
+       FROM multiremi_daemon_ssh_mesh_states
+       WHERE workspace_id = ?
+         AND (status NOT IN ('disabled', 'cleaned')
+           OR public_key_installed != 0
+           OR config_installed != 0)
+       ORDER BY daemon_id ASC`,
+    ).all(workspaceId) as Array<{ daemon_id: string }>;
+    const unclearedDaemonIds = [...new Set(unclearedStates.map((row) => String(row.daemon_id)).filter(Boolean))];
+    const enabled = Boolean(config?.enabled);
+    const rotationState = String(config?.rotation_state ?? "stable");
+    if (
+      enabled
+      || rotationState === "rolling_out"
+      || rotationState === "rekey_required"
+      || unclearedDaemonIds.length
+    ) {
+      throw new WorkspaceSshMeshCleanupRequiredError(enabled, rotationState, unclearedDaemonIds);
+    }
   }
 
   leaveWorkspace(id: string, memberId = `mem_${id}_local`): boolean {

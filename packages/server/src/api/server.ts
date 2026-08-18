@@ -586,7 +586,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           if (!heartbeat.runtimeId) return;
           if (!ws.data.runtimeIds.includes(heartbeat.runtimeId)) return;
           if (
-            heartbeat.agentPluginProtocol !== undefined &&
+            (heartbeat.agentPluginProtocol !== undefined || heartbeat.sshMeshProtocol !== undefined) &&
             !ws.data.canReportAgentPluginProtocol
           ) {
             ws.sendText(JSON.stringify({
@@ -602,6 +602,16 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
             supportsDirectoryScan: heartbeat.supportsDirectoryScan,
             agentPluginProtocol: heartbeat.agentPluginProtocol,
           });
+          if (heartbeat.sshMeshProtocol !== undefined) {
+            const meshAck = store.recordSshMeshHeartbeat(
+              heartbeat.runtimeId,
+              heartbeat.sshMeshProtocol,
+              heartbeat.sshMeshStatus,
+            );
+            if (meshAck) ack.ssh_mesh = meshAck;
+          } else {
+            store.recordSshMeshHeartbeat(heartbeat.runtimeId, 0);
+          }
           ws.sendText(JSON.stringify({
             type: "daemon:heartbeat_ack",
             payload: ack,

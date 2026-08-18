@@ -17,6 +17,21 @@ export interface ParseOptions {
 }
 
 /**
+ * Raised when a successful HTTP response does not satisfy the endpoint's
+ * contract. Unlike ApiError, this represents an invalid 2xx body rather than
+ * an HTTP failure.
+ */
+export class ApiContractError extends Error {
+  readonly endpoint: string;
+
+  constructor(endpoint: string, message = "API response did not match its contract") {
+    super(`${message}: ${endpoint}`);
+    this.name = "ApiContractError";
+    this.endpoint = endpoint;
+  }
+}
+
+/**
  * Validate a JSON value parsed from an API response against a zod schema,
  * returning the parsed value on success or `fallback` on failure.
  *
@@ -52,4 +67,22 @@ export function parseWithFallback<T>(
     },
   );
   return fallback;
+}
+
+/** Validate command responses without converting malformed 2xx bodies into success. */
+export function parseStrictResponse<T>(
+  data: unknown,
+  schema: ZodType,
+  opts: ParseOptions,
+): T {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data as T;
+  schemaLogger.warn(
+    `API response failed schema validation: ${opts.endpoint}`,
+    {
+      endpoint: opts.endpoint,
+      issues: result.error.issues,
+    },
+  );
+  throw new ApiContractError(opts.endpoint);
 }

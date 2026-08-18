@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import {
   denyCurrentUserWorkspaceAccess,
   isTaskTokenCreateInput,
@@ -14,6 +14,10 @@ import type {
   CreateAccessTokenInput,
   MultiremiAccessToken,
 } from "@multiremi/contracts/types.js";
+import {
+  BoundDaemonTokenRetirementRequiredError,
+  DaemonTokenExpiryNotAllowedError,
+} from "@multiremi/store/repos/access-tokens-repo.js";
 import type { RouterDeps } from "./deps.js";
 
 function personalTokenResponse(token: MultiremiAccessToken & { token?: string }) {
@@ -44,15 +48,23 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
-    return c.json({ token: await store.createAccessToken(body) }, 201);
+    try {
+      return c.json({ token: await store.createAccessToken(body) }, 201);
+    } catch (error) {
+      return accessTokenMutationError(c, error);
+    }
   });
   app.delete("/api/multiremi/tokens/:id", (c) => {
     const current = store.getAccessToken(c.req.param("id"));
     if (!current) return c.json({ error: "token not found" }, 404);
     const denied = requireWorkspaceAdmin(c, store, current.workspaceId);
     if (denied) return denied;
-    const token = store.revokeAccessToken(current.id);
-    return c.json({ token, ok: true });
+    try {
+      const token = store.revokeAccessToken(current.id);
+      return c.json({ token, ok: true });
+    } catch (error) {
+      return accessTokenMutationError(c, error);
+    }
   });
 
   app.get("/api/tokens", (c) => {
@@ -108,17 +120,21 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     }
 
     const body = await readJson<Partial<CreateAccessTokenInput>>(c);
-    const token = await store.createAccessToken({
-      workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
-      name: body.name ?? "Renewed local token",
-      type: body.type ?? "pat",
-      expiresInDays: body.expiresInDays ?? body.expires_in_days ?? 30,
-    });
-    return c.json({
-      ...token,
-      access_token: token.token,
-      token_type: "bearer",
-    }, 201);
+    try {
+      const token = await store.createAccessToken({
+        workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
+        name: body.name ?? "Renewed local token",
+        type: body.type ?? "pat",
+        expiresInDays: body.expiresInDays ?? body.expires_in_days ?? 30,
+      });
+      return c.json({
+        ...token,
+        access_token: token.token,
+        token_type: "bearer",
+      }, 201);
+    } catch (error) {
+      return accessTokenMutationError(c, error);
+    }
   });
   app.delete("/api/tokens/:id", (c) => {
     const token = store.getAccessToken(c.req.param("id"));
@@ -130,7 +146,25 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     ) {
       return c.json({ error: "token not found" }, 404);
     }
-    store.revokeAccessToken(token.id);
-    return c.body(null, 204);
+    try {
+      store.revokeAccessToken(token.id);
+      return c.body(null, 204);
+    } catch (error) {
+      return accessTokenMutationError(c, error);
+    }
   });
+}
+
+function accessTokenMutationError(c: Context, error: unknown): Response {
+  if (error instanceof BoundDaemonTokenRetirementRequiredError) {
+    return c.json({
+      error: error.message,
+      code: error.code,
+      daemon_id: error.daemonId,
+    }, 409);
+  }
+  if (error instanceof DaemonTokenExpiryNotAllowedError) {
+    return c.json({ error: error.message, code: error.code }, 400);
+  }
+  throw error;
 }

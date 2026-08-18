@@ -25,6 +25,7 @@ import {
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type {
   MultiremiAccessToken,
+  MultiremiDaemonSshMeshStatus,
   MultiremiTask,
   MultiremiTaskMessage,
 } from "@multiremi/contracts/types.js";
@@ -702,6 +703,8 @@ export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): {
   supportsBatchImport: boolean;
   supportsDirectoryScan: boolean;
   agentPluginProtocol: number | undefined;
+  sshMeshProtocol: number | undefined;
+  sshMeshStatus: MultiremiDaemonSshMeshStatus | undefined;
 } {
   const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, any> : {};
   const runtimeId = cleanString(payload.runtime_id ?? event.runtime_id);
@@ -710,6 +713,12 @@ export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): {
     : Object.prototype.hasOwnProperty.call(event, "agent_plugin_protocol")
       ? event.agent_plugin_protocol
       : undefined;
+  const sshMeshProtocolValue = Object.prototype.hasOwnProperty.call(payload, "ssh_mesh_protocol")
+    ? payload.ssh_mesh_protocol
+    : Object.prototype.hasOwnProperty.call(event, "ssh_mesh_protocol")
+      ? event.ssh_mesh_protocol
+      : undefined;
+  const sshMeshStatusValue = payload.ssh_mesh_status ?? event.ssh_mesh_status;
   return {
     runtimeId,
     supportsBatchImport: Boolean(payload.supports_batch_import ?? event.supports_batch_import),
@@ -717,6 +726,12 @@ export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): {
     agentPluginProtocol: protocolValue === undefined
       ? undefined
       : normalizeProtocolVersion(protocolValue),
+    sshMeshProtocol: sshMeshProtocolValue === undefined
+      ? undefined
+      : normalizeProtocolVersion(sshMeshProtocolValue),
+    sshMeshStatus: sshMeshStatusValue && typeof sshMeshStatusValue === "object" && !Array.isArray(sshMeshStatusValue)
+      ? sshMeshStatusValue as MultiremiDaemonSshMeshStatus
+      : undefined,
   };
 }
 

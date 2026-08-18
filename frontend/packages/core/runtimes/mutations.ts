@@ -7,6 +7,7 @@ import { agentTaskSnapshotKeys, agentTasksKeys } from "../agents/queries";
 import { agentPluginKeys } from "../plugins/queries";
 import { chatKeys } from "../chat/queries";
 import { issueKeys } from "../issues/queries";
+import type { SshMeshOverview } from "./types";
 
 export function useDeleteRuntime(wsId: string) {
   const qc = useQueryClient();
@@ -97,5 +98,77 @@ export function useRetireDaemon(wsId: string) {
       qc.invalidateQueries({ queryKey: ["issues", "tasks"] });
       qc.invalidateQueries({ queryKey: ["issues", "sessions"] });
     },
+  });
+}
+
+export function useSetSshMeshEnabled(wsId: string) {
+  const qc = useQueryClient();
+  const queryKey = runtimeKeys.sshMesh(wsId);
+  return useMutation({
+    mutationFn: (enabled: boolean) => api.setSshMeshEnabled(wsId, enabled),
+    onMutate: async (enabled) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<SshMeshOverview>(queryKey);
+      qc.setQueryData<SshMeshOverview>(queryKey, (current) =>
+        current ? { ...current, enabled } : current,
+      );
+      return { previous };
+    },
+    onError: (_error, _enabled, context) => {
+      if (context?.previous) qc.setQueryData(queryKey, context.previous);
+    },
+    onSuccess: (overview) => qc.setQueryData(queryKey, overview),
+    onSettled: () => qc.invalidateQueries({ queryKey }),
+  });
+}
+
+export function useRotateSshMeshKey(wsId: string) {
+  const qc = useQueryClient();
+  const queryKey = runtimeKeys.sshMesh(wsId);
+  return useMutation({
+    mutationFn: () => api.rotateSshMeshKey(wsId),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey });
+      qc.setQueryData<SshMeshOverview>(queryKey, (current) =>
+        current ? { ...current, rotation_state: "rolling_out" } : current,
+      );
+    },
+    onSuccess: (overview) => qc.setQueryData(queryKey, overview),
+    onSettled: () => qc.invalidateQueries({ queryKey }),
+  });
+}
+
+export function useTestSshMeshConnection(wsId: string) {
+  const qc = useQueryClient();
+  const queryKey = runtimeKeys.sshMesh(wsId);
+  return useMutation({
+    mutationFn: ({
+      sourceDaemonId,
+      targetDaemonId,
+    }: {
+      sourceDaemonId: string;
+      targetDaemonId?: string;
+    }) => api.testSshMeshConnection(wsId, sourceDaemonId, targetDaemonId),
+    onSuccess: (result, variables) => {
+      if (!result.request_id || result.probe_revision <= 0) return;
+      qc.setQueryData<SshMeshOverview>(queryKey, (current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          runtimes: current.runtimes.map((runtime) =>
+            runtime.daemon_id === variables.sourceDaemonId
+              ? {
+                  ...runtime,
+                  desired_probe_revision: Math.max(
+                    runtime.desired_probe_revision,
+                    result.probe_revision,
+                  ),
+                }
+              : runtime,
+          ),
+        };
+      });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey }),
   });
 }

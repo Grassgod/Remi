@@ -1744,6 +1744,76 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("waits for SSH Mesh cleanup before stopping after daemon authority is revoked", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-authority-cleanup-");
+    const daemonToken = await store.createAccessToken({
+      name: "Authority cleanup daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-authority-cleanup-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    let cleanupCalls = 0;
+    let releaseCleanup!: () => void;
+    const cleanupBlocked = new Promise<void>((resolveCleanup) => { releaseCleanup = resolveCleanup; });
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      daemonId: "daemon-authority-cleanup",
+      runtimeName: "authority-cleanup-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 10,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory: () => ({
+        async *sendStream() {},
+        getLastResponse: () => null,
+        discoverModelCapabilities: async () => [{ id: "claude-test", label: "Claude Test", default: true }],
+      }),
+      sshMeshManager: {
+        getHeartbeatStatus: () => ({ status: "disabled" }),
+        reconcile: async () => {},
+        cleanupForRetirement: async () => {
+          cleanupCalls++;
+          await cleanupBlocked;
+        },
+      },
+    });
+    let settled = false;
+    const daemonRun = daemon.start().finally(() => { settled = true; });
+
+    try {
+      const port = await waitForLocalPort(daemon);
+      await waitForRunningHealth(port);
+      const retirementPlan = store.getDaemonRetirementPlan("local", "daemon-authority-cleanup");
+      expect(store.retireDaemon(
+        "local",
+        "daemon-authority-cleanup",
+        retirementPlan.snapshot,
+        "local",
+      )).toMatchObject({ status: "retired" });
+      await waitForCondition(() => cleanupCalls === 1, 5_000);
+      await Bun.sleep(20);
+      expect(settled).toBe(false);
+
+      releaseCleanup();
+      await daemonRun;
+      expect(cleanupCalls).toBe(1);
+      expect(settled).toBe(true);
+    } finally {
+      releaseCleanup();
+      daemon.stop();
+      await daemonRun.catch(() => {});
+      server.stop(true);
+    }
+  });
+
   it("re-uploads the cached model snapshot to a replacement Runtime after runtime_gone", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-runtime-gone-models-");
     const oldRuntimeId = "rt_runtime_gone_models_old";

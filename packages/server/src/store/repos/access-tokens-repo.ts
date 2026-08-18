@@ -13,6 +13,24 @@ import type {
 
 type Row = Record<string, unknown>;
 
+export class BoundDaemonTokenRetirementRequiredError extends Error {
+  readonly code = "daemon_retirement_required";
+
+  constructor(readonly daemonId: string) {
+    super(`Bound daemon ${daemonId} must be retired before its credential can be revoked`);
+    this.name = "BoundDaemonTokenRetirementRequiredError";
+  }
+}
+
+export class DaemonTokenExpiryNotAllowedError extends Error {
+  readonly code = "daemon_token_expiry_not_allowed";
+
+  constructor() {
+    super("Daemon tokens cannot expire; retire the daemon to revoke machine trust");
+    this.name = "DaemonTokenExpiryNotAllowedError";
+  }
+}
+
 export class AccessTokensRepo {
   constructor(private db: SqlDatabase) {}
 
@@ -23,6 +41,9 @@ export class AccessTokensRepo {
     const name = input.name?.trim();
     if (!name) throw new Error("Token name is required");
     const type = normalizeAccessTokenType(input.type);
+    if (type === "daemon" && (input.expiresInDays != null || input.expires_in_days != null)) {
+      throw new DaemonTokenExpiryNotAllowedError();
+    }
     const purpose = normalizeAccessTokenPurpose(input.purpose, type);
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
     const daemonId = type === "daemon" ? cleanOptionalString(input.daemonId ?? input.daemon_id) : null;
@@ -88,6 +109,18 @@ export class AccessTokensRepo {
     return rows.map(toAccessToken);
   }
 
+  listExpiringBoundDaemonTokens(workspaceId: string): MultiremiAccessToken[] {
+    return (this.db.query(
+      `SELECT * FROM multiremi_access_tokens
+       WHERE workspace_id = ?
+         AND type = 'daemon'
+         AND daemon_id IS NOT NULL AND daemon_id != ''
+         AND revoked_at IS NULL
+         AND expires_at IS NOT NULL
+       ORDER BY daemon_id ASC, created_at ASC`,
+    ).all(workspaceId) as Row[]).map(toAccessToken);
+  }
+
   getAccessToken(id: string): MultiremiAccessToken | null {
     const row = this.db.query("SELECT * FROM multiremi_access_tokens WHERE id = ?").get(id) as Row | null;
     return row ? toAccessToken(row) : null;
@@ -98,11 +131,12 @@ export class AccessTokensRepo {
     const normalizedDaemonId = cleanOptionalString(daemonId);
     if (!normalizedDaemonId) return null;
     const current = this.getAccessToken(id);
-    if (!current || current.type !== "daemon") return null;
+    if (!current || current.type !== "daemon" || current.expiresAt) return null;
     if (current.daemonId && current.daemonId !== normalizedDaemonId) return null;
     if (!current.daemonId) {
       this.db.run(
-        "UPDATE multiremi_access_tokens SET daemon_id = ? WHERE id = ? AND type = 'daemon' AND daemon_id IS NULL",
+        `UPDATE multiremi_access_tokens SET daemon_id = ?
+         WHERE id = ? AND type = 'daemon' AND daemon_id IS NULL AND expires_at IS NULL`,
         [normalizedDaemonId, id],
       );
     }
@@ -131,9 +165,10 @@ export class AccessTokensRepo {
          AND type = 'pat'
          AND purpose = 'cli'
          AND daemon_id IS NULL
+         AND expires_at IS NULL
          AND revoked_at IS NULL
-         AND (expires_at IS NULL OR expires_at > ?)`,
-      [normalizedDaemonId, id, normalizedWorkspaceId, nowIso()],
+      `,
+      [normalizedDaemonId, id, normalizedWorkspaceId],
     );
     if (result.changes !== 1) return null;
     const promoted = this.getAccessToken(id);
@@ -145,6 +180,9 @@ export class AccessTokensRepo {
   revokeAccessToken(id: string): MultiremiAccessToken | null {
     const current = this.getAccessToken(id);
     if (!current) return null;
+    if (current.type === "daemon" && current.daemonId && !current.revokedAt) {
+      throw new BoundDaemonTokenRetirementRequiredError(current.daemonId);
+    }
     if (!current.revokedAt) {
       this.db.run("UPDATE multiremi_access_tokens SET revoked_at = ? WHERE id = ?", [nowIso(), id]);
     }

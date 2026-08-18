@@ -5,6 +5,122 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — daemon retirement", () => {
+  it("funnels bound credential revocation and member removal through daemon retirement", async () => {
+    const store = createStore();
+    const member = store.createWorkspaceMember({
+      id: "machine-member-record",
+      userId: "machine-member",
+      name: "Machine Member",
+      role: "member",
+    });
+    const first = await store.createAccessToken({
+      name: "Machine credential one",
+      type: "daemon",
+      workspaceId: "local",
+      daemonId: "daemon-trust-revocation",
+      userId: "machine-member",
+    });
+    const second = await store.createAccessToken({
+      name: "Machine credential two",
+      type: "daemon",
+      workspaceId: "local",
+      daemonId: "daemon-trust-revocation",
+      userId: "machine-member",
+    });
+    const unbound = await store.createAccessToken({
+      name: "Unused daemon credential",
+      type: "daemon",
+      workspaceId: "local",
+      userId: "machine-member",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
+
+    const revokeBound = await app.request(`/api/multiremi/tokens/${first.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(revokeBound.status).toBe(409);
+    expect(await revokeBound.json()).toMatchObject({
+      code: "daemon_retirement_required",
+      daemon_id: "daemon-trust-revocation",
+    });
+    expect(store.getAccessToken(first.id)?.revokedAt).toBeNull();
+
+    const revokeUnbound = await app.request(`/api/multiremi/tokens/${unbound.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(revokeUnbound.status).toBe(200);
+    expect(store.getAccessToken(unbound.id)?.revokedAt).not.toBeNull();
+
+    const removeOwner = await app.request(`/api/workspaces/local/members/${member.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(removeOwner.status).toBe(409);
+    expect(await removeOwner.json()).toMatchObject({
+      error: expect.stringContaining("retire them before removing the member"),
+    });
+
+    const plan = store.getDaemonRetirementPlan("local", "daemon-trust-revocation");
+    const retired = await app.request("/api/multiremi/daemons/daemon-trust-revocation/retire", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ workspace_id: "local", expected_snapshot: plan.snapshot }),
+    });
+    expect(retired.status).toBe(200);
+    expect(await retired.json()).toMatchObject({
+      ssh_mesh_key_rotation: { status: "not_required" },
+    });
+    expect(store.getAccessToken(first.id)?.revokedAt).not.toBeNull();
+    expect(store.getAccessToken(second.id)?.revokedAt).not.toBeNull();
+
+    const removed = await app.request(`/api/workspaces/local/members/${member.id}`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(removed.status).toBe(204);
+  });
+
+  it("rejects expiring daemon credentials at the storage and admin API boundaries", async () => {
+    const store = createStore();
+    await expect(store.createAccessToken({
+      name: "Expiring daemon",
+      type: "daemon",
+      workspaceId: "local",
+      daemonId: "daemon-expiring",
+      expiresInDays: 30,
+    })).rejects.toThrow("Daemon tokens cannot expire");
+
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const response = await app.request("/api/multiremi/tokens", {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Expiring daemon API",
+        type: "daemon",
+        workspace_id: "local",
+        daemon_id: "daemon-expiring-api",
+        expires_in_days: 30,
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "daemon_token_expiry_not_allowed" });
+
+    const compatibilityRenew = await app.request("/api/tokens/current/renew", {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Expiring daemon renew compatibility",
+        type: "daemon",
+        expires_in_days: 30,
+      }),
+    });
+    expect(compatibilityRenew.status).toBe(400);
+    expect(await compatibilityRenew.json()).toMatchObject({ code: "daemon_token_expiry_not_allowed" });
+  });
+
   it("lists every daemon for managers and only owner-claimed daemons for members", async () => {
     const store = createStore();
     store.createWorkspaceMember({ id: "inventory-admin", name: "Inventory Admin", role: "admin" });

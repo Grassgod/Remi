@@ -7,6 +7,8 @@ import type {
   DaemonInventoryResponse,
   DaemonRetirementPlanResponse,
   RetireDaemonResponse,
+  SshMeshOverview,
+  SshMeshTestResponse,
 } from "../../runtimes/types";
 import type { CloudRuntimeNode } from "../../runtimes/cloud-runtime";
 
@@ -383,4 +385,89 @@ export const EMPTY_RETIRE_DAEMON_RESPONSE: RetireDaemonResponse = {
     issue_workspaces_abandoned: 0,
     tokens_revoked: 0,
   },
+};
+
+// ---------------------------------------------------------------------------
+// Workspace SSH mesh — browser-safe control-plane projection. The private key
+// is deliberately absent from both the schema and the inferred frontend type.
+// Unknown status strings are retained so newer servers degrade to a neutral
+// label instead of breaking an older desktop build.
+// ---------------------------------------------------------------------------
+
+const SshMeshPeerTestSchema = z
+  .object({
+    daemon_id: z.string().min(1),
+    status: z.string().default("error"),
+    latency_ms: z.number().nonnegative().nullable().default(null),
+    error_code: z.string().nullable().default(null),
+    error: z.string().nullable().default(null),
+    checked_at: z.string().nullable().default(null),
+  });
+
+const SshMeshRuntimeSchema = z
+  .object({
+    daemon_id: z.string().min(1),
+    runtime_ids: z.array(z.string()).default([]),
+    name: z.string().nullable().default(null),
+    status: z.string().default("offline"),
+    protocol_version: z.number().int().nonnegative().default(0),
+    key_version: z.number().int().nonnegative().nullable().default(null),
+    config_revision: z.string().nullable().default(null),
+    desired_config_revision: z.string().default(""),
+    ssh_user: z.string().nullable().default(null),
+    ssh_alias: z.string().nullable().default(null),
+    hostname: z.string().nullable().default(null),
+    port: z.number().int().positive().default(22),
+    addresses: z.array(z.string()).default([]),
+    host_keys: z.array(z.string()).default([]),
+    public_key_installed: z.boolean().default(false),
+    config_installed: z.boolean().default(false),
+    last_error_code: z.string().nullable().default(null),
+    last_error: z.string().nullable().default(null),
+    last_reported_at: z.string().nullable().default(null),
+    probe_revision: z.number().int().nonnegative().default(0),
+    desired_probe_revision: z.number().int().nonnegative().default(0),
+    peer_tests: z.array(SshMeshPeerTestSchema).default([]),
+  });
+
+export const SshMeshOverviewSchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    enabled: z.boolean(),
+    key_version: z.number().int().nonnegative(),
+    fingerprint: z.string().nullable(),
+    rotation_state: z.string(),
+    config_revision: z.string(),
+    rotation_ready_daemons: z.number().int().nonnegative(),
+    rotation_total_daemons: z.number().int().nonnegative(),
+    created_at: z.string().nullable(),
+    updated_at: z.string().nullable(),
+    runtimes: z.array(SshMeshRuntimeSchema),
+  });
+
+export const EMPTY_SSH_MESH_OVERVIEW: SshMeshOverview = {
+  workspace_id: "",
+  enabled: false,
+  key_version: 0,
+  fingerprint: null,
+  rotation_state: "stable",
+  config_revision: "",
+  rotation_ready_daemons: 0,
+  rotation_total_daemons: 0,
+  created_at: null,
+  updated_at: null,
+  runtimes: [],
+};
+
+export const SshMeshTestResponseSchema = z
+  .object({
+    request_id: z.string().min(1),
+    probe_revision: z.number().int().positive(),
+    status: z.literal("pending"),
+  });
+
+export const EMPTY_SSH_MESH_TEST_RESPONSE: SshMeshTestResponse = {
+  request_id: "",
+  probe_revision: 0,
+  status: "",
 };

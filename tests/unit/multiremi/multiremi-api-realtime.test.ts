@@ -9,6 +9,8 @@ afterEach(resetMultiremiTestEnv);
 describe("Multiremi API — realtime websockets", () => {
   it("serves daemon websocket upgrades and realtime health", async () => {
     const store = createStore();
+    const workspaceEvents: any[] = [];
+    const unsubscribeWorkspaceEvents = store.onWorkspaceEvent((event) => workspaceEvents.push(event));
     const runtime = store.registerRuntime({ id: "rt_ws", name: "WS runtime", provider: "codex" });
     const agent = store.createAgent({ name: "WS Codex", provider: "codex" });
     const updateRequest = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v3.0.0" });
@@ -20,6 +22,7 @@ describe("Multiremi API — realtime websockets", () => {
       id: "rt_ws_camel",
       name: "Camel WS runtime",
       provider: "codex",
+      daemonId: "daemon-ws-camel",
       metadata: { agent_plugin_protocol: 1 },
     });
     const camelImportOne = store.createRuntimeLocalSkillImportRequest(camelRuntime.id, { skill_key: "ws-camel-one" });
@@ -42,7 +45,12 @@ describe("Multiremi API — realtime websockets", () => {
 
       camelWs.send(JSON.stringify({
         type: "daemon:heartbeat",
-        payload: { runtime_id: "rt_ws_camel", supportsBatchImport: true },
+        payload: {
+          runtime_id: "rt_ws_camel",
+          supportsBatchImport: true,
+          ssh_mesh_protocol: 1,
+          ssh_mesh_status: { status: "disabled" },
+        },
       }));
       const camelHeartbeatAck = await nextWebSocketMessage(camelWs);
       expect(camelHeartbeatAck).toMatchObject({
@@ -51,9 +59,20 @@ describe("Multiremi API — realtime websockets", () => {
           runtime_id: "rt_ws_camel",
           status: "ok",
           pending_local_skill_import: { id: camelImportOne.id, skill_key: "ws-camel-one" },
+          ssh_mesh: { enabled: false, rotation_state: "stable" },
         },
       });
       expect(camelHeartbeatAck.payload.pending_local_skill_imports).toBeUndefined();
+      expect(workspaceEvents.find((event) => event.type === "daemon:heartbeat")).toMatchObject({
+        workspaceId: "local",
+        actorType: "daemon",
+        actorId: "daemon-ws-camel",
+        payload: {
+          runtime_id: "rt_ws_camel",
+          daemon_id: "daemon-ws-camel",
+          ssh_mesh: { status: "disabled", enabled: false, rotation_state: "stable" },
+        },
+      });
       expect(store.getRuntime(camelRuntime.id)?.metadata.agent_plugin_protocol).toBe(1);
       expect(store.getRuntimeLocalSkillImportRequest(camelRuntime.id, camelImportTwo.id)?.status).toBe("pending");
       camelWs.close();
@@ -122,6 +141,7 @@ describe("Multiremi API — realtime websockets", () => {
       const closedHealth = await fetch(`${baseUrl}/health/realtime`);
       expect(await closedHealth.json()).toMatchObject({ enabled: true, connections: 0, transport: "websocket" });
     } finally {
+      unsubscribeWorkspaceEvents();
       server.stop(true);
     }
   });
@@ -592,6 +612,13 @@ describe("Multiremi API — realtime websockets", () => {
         { headers: { Authorization: `Bearer ${removedDaemonToken.token}` } } as any,
       );
       expect(await nextWebSocketMessage(removedOwner)).toMatchObject({ type: "ready" });
+      const removedPlan = store.getDaemonRetirementPlan("local", "daemon-removed-ws");
+      expect(store.retireDaemon(
+        "local",
+        "daemon-removed-ws",
+        removedPlan.snapshot,
+        "local",
+      )).toMatchObject({ status: "retired" });
       store.archiveWorkspaceMember(removedMember.id);
       removedOwner.send(JSON.stringify({
         type: "daemon:heartbeat",

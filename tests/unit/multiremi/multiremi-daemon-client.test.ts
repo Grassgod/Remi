@@ -66,3 +66,62 @@ describe("MultiremiDaemonClient HTTP failures", () => {
     expect(error).toMatchObject({ status: 404, code: "runtime_not_found" });
   });
 });
+
+describe("MultiremiDaemonClient SSH Mesh wire", () => {
+  it("advertises the protocol and reports machine state on heartbeat", async () => {
+    let requestBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({ status: "ok" });
+    }) as unknown as typeof globalThis.fetch;
+
+    await new MultiremiDaemonClient("https://remi.example", "daemon-token").heartbeatRuntime("runtime-1", {
+      status: "ready",
+      key_version: 3,
+      config_revision: "rev-3",
+      probe_revision: 4,
+      hostname: "n37-206-133",
+      ssh_user: "hehuajie",
+      port: 22,
+      addresses: ["10.37.206.133"],
+      host_keys: [`ssh-ed25519 ${"A".repeat(64)}`],
+      peers: [{ daemon_id: "daemon-peer", status: "ready", latency_ms: 8 }],
+    });
+
+    expect(requestBody).toMatchObject({
+      runtime_id: "runtime-1",
+      ssh_mesh_protocol: 1,
+      ssh_mesh_status: {
+        status: "ready",
+        key_version: 3,
+        probe_revision: 4,
+        peers: [{ daemon_id: "daemon-peer", status: "ready" }],
+      },
+    });
+  });
+
+  it("fetches private configuration only from the authenticated daemon route", async () => {
+    let requestedUrl = "";
+    let authorization = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrl = String(input);
+      authorization = new Headers(init?.headers).get("authorization") ?? "";
+      return Response.json({
+        protocol_version: 1,
+        enabled: false,
+        key_version: 0,
+        config_revision: "disabled",
+        rotation_state: "stable",
+        probe_revision: 0,
+        probe_target_daemon_ids: [],
+        authorized_public_keys: [],
+        hosts: [],
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    await new MultiremiDaemonClient("https://remi.example/", "daemon-token").getSshMeshConfig("runtime/a");
+
+    expect(requestedUrl).toBe("https://remi.example/api/daemon/ssh-mesh/config?runtime_id=runtime%2Fa");
+    expect(authorization).toBe("Bearer daemon-token");
+  });
+});

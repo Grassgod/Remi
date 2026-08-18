@@ -173,6 +173,11 @@ export function runMigrations(db: SqlDatabase): void {
       retired_at TEXT NOT NULL,
       runtime_ids TEXT NOT NULL DEFAULT '[]',
       impact TEXT NOT NULL DEFAULT '{}',
+      ssh_mesh_rekey_status TEXT NOT NULL DEFAULT 'not_required',
+      ssh_mesh_compromised_key_version INTEGER,
+      ssh_mesh_replacement_key_version INTEGER,
+      ssh_mesh_rekey_operation_id TEXT,
+      ssh_mesh_rekey_updated_at TEXT,
       PRIMARY KEY(workspace_id, daemon_id)
     );
 
@@ -186,6 +191,54 @@ export function runMigrations(db: SqlDatabase): void {
       updated_at TEXT NOT NULL,
       PRIMARY KEY(workspace_id, daemon_id)
     );
+
+    CREATE TABLE IF NOT EXISTS multiremi_workspace_ssh_mesh (
+      workspace_id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      active_key_version INTEGER NOT NULL DEFAULT 0,
+      active_private_key_encrypted TEXT,
+      active_public_key TEXT,
+      active_fingerprint TEXT,
+      active_operation_id TEXT,
+      previous_key_version INTEGER,
+      previous_private_key_encrypted TEXT,
+      previous_public_key TEXT,
+      previous_fingerprint TEXT,
+      rotation_state TEXT NOT NULL DEFAULT 'stable',
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_daemon_ssh_mesh_states (
+      workspace_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      runtime_id TEXT,
+      protocol_version INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'setup_required',
+      key_version INTEGER,
+      config_revision TEXT,
+      ssh_user TEXT,
+      hostname TEXT,
+      ssh_port INTEGER NOT NULL DEFAULT 22,
+      addresses TEXT NOT NULL DEFAULT '[]',
+      host_keys TEXT NOT NULL DEFAULT '[]',
+      public_key_installed INTEGER NOT NULL DEFAULT 0,
+      config_installed INTEGER NOT NULL DEFAULT 0,
+      peer_tests TEXT NOT NULL DEFAULT '[]',
+      probe_revision INTEGER NOT NULL DEFAULT 0,
+      desired_probe_revision INTEGER NOT NULL DEFAULT 0,
+      probe_target_daemon_ids TEXT NOT NULL DEFAULT '[]',
+      last_error_code TEXT,
+      last_error TEXT,
+      last_reported_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(workspace_id, daemon_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_daemon_ssh_mesh_status
+      ON multiremi_daemon_ssh_mesh_states(workspace_id, status, updated_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_agent_plugin_runtime_states (
       id TEXT PRIMARY KEY,
@@ -1300,6 +1353,16 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "owner_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
   addColumnIfMissing(db, "multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(
+    db,
+    "multiremi_daemon_retirements",
+    "ssh_mesh_rekey_status TEXT NOT NULL DEFAULT 'not_required'",
+  );
+  addColumnIfMissing(db, "multiremi_daemon_retirements", "ssh_mesh_compromised_key_version INTEGER");
+  addColumnIfMissing(db, "multiremi_daemon_retirements", "ssh_mesh_replacement_key_version INTEGER");
+  addColumnIfMissing(db, "multiremi_daemon_retirements", "ssh_mesh_rekey_operation_id TEXT");
+  addColumnIfMissing(db, "multiremi_daemon_retirements", "ssh_mesh_rekey_updated_at TEXT");
+  addColumnIfMissing(db, "multiremi_workspace_ssh_mesh", "active_operation_id TEXT");
   addColumnIfMissing(db, "multiremi_daemon_lifecycle_locks", "owner_user_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");
@@ -1318,6 +1381,7 @@ export function runMigrations(db: SqlDatabase): void {
       "UPDATE multiremi_access_tokens SET purpose = 'cli' WHERE type = 'pat' AND (name = 'CLI token' OR name = 'Multiremi daemon' OR name LIKE 'Remi daemon %')",
     );
   }
+  normalizeActiveDaemonTokenExpiry(db);
   backfillDaemonIdentityOwners(db);
   addColumnIfMissing(db, "multiremi_issues", "assignee_type TEXT");
   addColumnIfMissing(db, "multiremi_issues", "assignee_id TEXT");
@@ -1825,6 +1889,25 @@ function backfillDaemonIdentityOwners(db: SqlDatabase): void {
       [ownerUserId, now, workspaceId, daemonId],
     );
   }
+}
+
+// Daemon credentials represent machine trust and are revoked through daemon
+// retirement, which also rotates SSH Mesh keys. Normalize only credentials
+// that are still valid at migration time; expired or revoked credentials must
+// never be revived by an upgrade.
+function normalizeActiveDaemonTokenExpiry(db: SqlDatabase): void {
+  const now = new Date().toISOString();
+  db.run(
+    `UPDATE multiremi_access_tokens
+     SET expires_at = NULL
+     WHERE type = 'daemon'
+       AND daemon_id IS NOT NULL
+       AND daemon_id != ''
+       AND revoked_at IS NULL
+       AND expires_at IS NOT NULL
+       AND expires_at > ?`,
+    [now],
+  );
 }
 
 function nextIssueNumber(db: SqlDatabase, workspaceId: string): number {

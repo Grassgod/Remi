@@ -14,9 +14,14 @@ import type {
   TaskUsageEntry,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
+  MultiremiDaemonSshMeshConfig,
+  MultiremiDaemonSshMeshStatus,
   ReportAgentPluginRuntimeStateInput,
 } from "@multiremi/contracts/types.js";
-import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
+import {
+  MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+  MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
+} from "@multiremi/contracts/types.js";
 
 export interface MultiremiWorkspaceReposResponse {
   workspace_id: string;
@@ -33,6 +38,7 @@ export interface MultiremiDaemonRegisterRuntimeInput {
   cliVersion?: string;
   launchedBy?: string | null;
   agentPluginProtocol?: number;
+  sshMeshProtocol?: number;
   runtime: {
     name: string;
     type: string;
@@ -122,6 +128,7 @@ export class MultiremiDaemonClient {
       launched_by: input.launchedBy ?? "",
       capabilities: {
         agent_plugins: input.agentPluginProtocol ?? MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+        ssh_mesh: input.sshMeshProtocol ?? MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
       },
       runtimes: [input.runtime],
     });
@@ -136,7 +143,10 @@ export class MultiremiDaemonClient {
     return normalizeDaemonClaimTask(resp.task);
   }
 
-  async heartbeatRuntime(runtimeId: string): Promise<MultiremiDaemonHeartbeatAck> {
+  async heartbeatRuntime(
+    runtimeId: string,
+    sshMeshStatus?: MultiremiDaemonSshMeshStatus,
+  ): Promise<MultiremiDaemonHeartbeatAck> {
     let resp: Partial<MultiremiDaemonHeartbeatAck>;
     try {
       resp = await this.post<Partial<MultiremiDaemonHeartbeatAck>>("/api/daemon/heartbeat", {
@@ -144,6 +154,8 @@ export class MultiremiDaemonClient {
         supports_batch_import: true,
         supports_directory_scan: true,
         agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+        ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
+        ...(sshMeshStatus ? { ssh_mesh_status: sshMeshStatus } : {}),
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
@@ -156,6 +168,12 @@ export class MultiremiDaemonClient {
       status: resp.status ?? "ok",
       ...resp,
     } as MultiremiDaemonHeartbeatAck;
+  }
+
+  async getSshMeshConfig(runtimeId: string): Promise<MultiremiDaemonSshMeshConfig> {
+    return this.get<MultiremiDaemonSshMeshConfig>(
+      `/api/daemon/ssh-mesh/config?runtime_id=${encodeURIComponent(runtimeId)}`,
+    );
   }
 
   async getRuntimeAgentPluginDesired(

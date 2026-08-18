@@ -77,6 +77,8 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_project_doc_revisions")).toEqual(expect.arrayContaining([
       "content_uri", "content_sha256", "snapshot_oid",
     ]));
+    expect(columnNames(database, "multiremi_daemon_retirements")).toContain("ssh_mesh_rekey_operation_id");
+    expect(columnNames(database, "multiremi_workspace_ssh_mesh")).toContain("active_operation_id");
   });
 
   it("classifies legacy access tokens by their actual purpose", () => {
@@ -216,6 +218,38 @@ describe("store migrations", () => {
        FROM multiremi_daemon_lifecycle_locks
        WHERE workspace_id = ? AND daemon_id = ?`,
     ).get("local", "daemon-owner-backfill")).toEqual({ owner_user_id: null });
+  });
+
+  it("makes only still-valid daemon credentials non-expiring without reviving expired or revoked tokens", () => {
+    const database = freshDb();
+    migrate(database);
+    const createdAt = "2026-08-01T00:00:00.000Z";
+    const future = "2999-01-01T00:00:00.000Z";
+    const expired = "2000-01-01T00:00:00.000Z";
+    const insert = database.prepare(
+      `INSERT INTO multiremi_access_tokens (
+         id, workspace_id, daemon_id, user_id, name, type, purpose,
+         token_hash, token_prefix, expires_at, revoked_at, created_at
+       ) VALUES (?, 'local', ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run("daemon-active", "daemon-active", "Active daemon", "daemon", "daemon", "hash-active", "mdt_active", future, null, createdAt);
+    insert.run("daemon-expired", "daemon-expired", "Expired daemon", "daemon", "daemon", "hash-expired", "mdt_expired", expired, null, createdAt);
+    insert.run("daemon-revoked", "daemon-revoked", "Revoked daemon", "daemon", "daemon", "hash-revoked", "mdt_revoked", future, createdAt, createdAt);
+    insert.run("daemon-unbound", null, "Unbound daemon", "daemon", "daemon", "hash-unbound", "mdt_unbound", future, null, createdAt);
+    insert.run("pat-active", null, "Active PAT", "pat", "personal", "hash-pat", "mul_active", future, null, createdAt);
+
+    migrate(database);
+
+    const rows = database.query(
+      "SELECT id, expires_at FROM multiremi_access_tokens ORDER BY id",
+    ).all() as Array<{ id: string; expires_at: string | null }>;
+    expect(rows).toEqual([
+      { id: "daemon-active", expires_at: null },
+      { id: "daemon-expired", expires_at: expired },
+      { id: "daemon-revoked", expires_at: future },
+      { id: "daemon-unbound", expires_at: future },
+      { id: "pat-active", expires_at: future },
+    ]);
   });
 
   it("adds Plugin source subdirectories without losing existing catalog rows", () => {

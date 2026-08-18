@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import {
   backfillWorkspaceRepositoryDefaultBranches,
   denyCurrentUserWorkspaceAccess,
@@ -12,6 +12,7 @@ import {
   publishWorkspaceEvent,
   readJson,
   readJsonStrict,
+  readJsonStrictAllowEmpty,
   removeWorkspaceRepository,
   requireWorkspaceAdmin,
   safeCreateWorkspace,
@@ -26,9 +27,19 @@ import type {
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
+  currentAccessToken,
   currentRequestUserId,
   memberRemovedPayload,
 } from "../wire/index.js";
+import {
+  generateSshMeshKeyMaterial,
+  SshMeshKeyError,
+} from "@multiremi/ssh-mesh/keys.js";
+import {
+  WorkspaceDaemonRetirementRequiredError,
+  WorkspaceSshMeshCleanupRequiredError,
+} from "@multiremi/store/repos/workspaces-repo.js";
+import { SshMeshProbeConflictError } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type {
   CreateWorkspaceInput,
 } from "@multiremi/contracts/types.js";
@@ -193,11 +204,42 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.delete("/api/workspaces/:id", (c) => {
-    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
+    const workspaceId = c.req.param("id");
+    const actorToken = currentAccessToken(c);
+    if (actorToken?.type === "task" || actorToken?.type === "daemon") {
+      return c.json({
+        error: `forbidden for ${actorToken.type} token`,
+        code: "human_admin_required",
+      }, 403);
+    }
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
-    const deleted = store.deleteWorkspace(c.req.param("id"));
-    if (!deleted) return c.json({ error: "workspace not found" }, 404);
-    return c.body(null, 204);
+    try {
+      const deleted = store.deleteWorkspace(workspaceId);
+      if (!deleted) return c.json({ error: "workspace not found" }, 404);
+      return c.body(null, 204);
+    } catch (error) {
+      if (error instanceof WorkspaceDaemonRetirementRequiredError) {
+        return c.json({
+          error: error.message,
+          code: error.code,
+          daemon_ids: error.daemonIds,
+        }, 409);
+      }
+      if (error instanceof WorkspaceSshMeshCleanupRequiredError) {
+        return c.json({
+          error: error.message,
+          code: error.code,
+          ssh_mesh: {
+            enabled: error.enabled,
+            rotation_state: error.rotationState,
+            uncleared_daemon_ids: error.daemonIds,
+          },
+        }, 409);
+      }
+      throw error;
+    }
   });
 
   // ── Workspace env (owner/admin only) ───────────────────────────
@@ -222,6 +264,95 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const nextEnv = mergeAgentEnv(store.getWorkspaceEnv(workspaceId), body.env ?? {});
     c.header("Cache-Control", "no-store");
     return c.json({ workspace_id: workspaceId, env: store.setWorkspaceEnv(workspaceId, nextEnv) });
+  });
+
+  // ── Trusted-machine SSH Mesh (owner/admin only) ───────────────
+  // Browser routes intentionally expose only fingerprints and rollout state.
+  // Private key material is generated server-side and only leaves through the
+  // authenticated daemon config endpoint.
+  app.get("/api/workspaces/:id/ssh-mesh", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    c.header("Cache-Control", "no-store");
+    return c.json(store.getSshMeshOverview(workspaceId));
+  });
+  app.put("/api/workspaces/:id/ssh-mesh", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{ enabled?: boolean }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400);
+    if (Object.keys(body).some((key) => key !== "enabled")) {
+      return c.json({ error: "only server-generated SSH Mesh keys are supported" }, 400);
+    }
+    if (body.enabled) {
+      const expiringCredentials = store.listExpiringBoundDaemonTokens(workspaceId);
+      if (expiringCredentials.length) {
+        return c.json({
+          error: "SSH Mesh requires non-expiring daemon credentials; retire and reprovision the affected daemons",
+          code: "ssh_mesh_expiring_daemon_credentials",
+          daemon_ids: [...new Set(expiringCredentials.map((token) => token.daemonId).filter(Boolean))],
+        }, 409);
+      }
+    }
+    try {
+      const current = store.getSshMeshOverview(workspaceId);
+      const keyMaterial = body.enabled && (current.key_version === 0 || current.rotation_state === "rekey_required")
+        ? await generateSshMeshKeyMaterial(workspaceId)
+        : null;
+      c.header("Cache-Control", "no-store");
+      return c.json(store.setSshMeshEnabled(
+        workspaceId,
+        body.enabled,
+        keyMaterial,
+        currentRequestUserId(c),
+      ));
+    } catch (error) {
+      return sshMeshErrorResponse(c, error);
+    }
+  });
+  app.post("/api/workspaces/:id/ssh-mesh/rotate", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrictAllowEmpty<Record<string, never>>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (Object.keys(body).length) return c.json({ error: "rotate does not accept key material" }, 400);
+    try {
+      const keyMaterial = await generateSshMeshKeyMaterial(workspaceId);
+      c.header("Cache-Control", "no-store");
+      return c.json(store.rotateSshMeshKey(workspaceId, keyMaterial));
+    } catch (error) {
+      return sshMeshErrorResponse(c, error);
+    }
+  });
+  app.post("/api/workspaces/:id/ssh-mesh/test", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{ source_daemon_id?: string; target_daemon_id?: string }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const sourceDaemonId = String(body.source_daemon_id ?? "").trim();
+    const targetDaemonId = String(body.target_daemon_id ?? "").trim() || null;
+    if (!sourceDaemonId) return c.json({ error: "source_daemon_id is required" }, 400);
+    try {
+      return c.json(store.requestSshMeshProbe(workspaceId, sourceDaemonId, targetDaemonId), 202);
+    } catch (error) {
+      if (error instanceof SshMeshProbeConflictError) {
+        return c.json({
+          error: error.message,
+          code: error.code,
+          source_daemon_id: error.sourceDaemonId,
+        }, 409);
+      }
+      return c.json({ error: error instanceof Error ? error.message : "could not request SSH test" }, 400);
+    }
   });
 
   // ── Model gateway: relay config (owner/admin only) ─────────────
@@ -331,4 +462,17 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     session_id: c.req.param("sessionId"),
   }));
   app.delete("/api/workspaces/:id/lark/installations/:installationId", (c) => c.body(null, 204));
+}
+
+function sshMeshErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof SshMeshKeyError) {
+    const unavailable = error.code === "encryption_key_missing"
+      || error.code === "encryption_key_invalid"
+      || error.code === "ssh_keygen_missing"
+      || error.code === "key_generation_failed";
+    return c.json({ error: error.message, code: error.code }, unavailable ? 503 : 400);
+  }
+  const message = error instanceof Error ? error.message : "SSH Mesh operation failed";
+  const status = message === "workspace not found" ? 404 : 409;
+  return c.json({ error: message }, status);
 }

@@ -24,8 +24,15 @@ import {
   DaemonRetirementRepo,
   type DaemonInventoryEntry,
   type DaemonRetirementPlan,
+  type DaemonRetirementSshMeshRekey,
+  type DaemonRetirementSshMeshRekeyStatus,
   type RetireDaemonResult,
 } from "@multiremi/store/repos/daemon-retirement-repo.js";
+import {
+  SshMeshRepo,
+  type SshMeshBrowserOverview,
+} from "@multiremi/store/repos/ssh-mesh-repo.js";
+import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import {
   AutopilotsRepo,
@@ -129,6 +136,9 @@ import type {
   MultiremiCloudRuntimeNode,
   MultiremiCommentReaction,
   MultiremiDaemonHeartbeatAck,
+  MultiremiDaemonSshMeshConfig,
+  MultiremiDaemonSshMeshStatus,
+  MultiremiSshMeshHeartbeatAck,
   MultiremiInboxItem,
   MultiremiIssueActivity,
   MultiremiIssueChildProgress,
@@ -264,6 +274,7 @@ export class MultiremiStore {
   private issueWorkspaces: IssueWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private daemonRetirement: DaemonRetirementRepo;
+  private sshMesh: SshMeshRepo;
   private autopilots: AutopilotsRepo;
   private tasks: TasksRepo;
 
@@ -291,6 +302,7 @@ export class MultiremiStore {
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.daemonRetirement = new DaemonRetirementRepo(this.ctx);
+    this.sshMesh = new SshMeshRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
     this.tasks = new TasksRepo(this.ctx);
     this.migrate();
@@ -690,6 +702,71 @@ runMigrations(this.db);
     return this.workspaces.setWorkspaceEnv(workspaceId, env);
   }
 
+  getSshMeshOverview(workspaceId: string): SshMeshBrowserOverview {
+    return this.sshMesh.getOverview(workspaceId);
+  }
+
+  setSshMeshEnabled(
+    workspaceId: string,
+    enabled: boolean,
+    keyMaterial: SshMeshKeyMaterial | null,
+    createdBy: string | null,
+  ): SshMeshBrowserOverview {
+    return this.withSshMeshLifecycleLock(workspaceId, () => {
+      this.assertNoDaemonRetirementRekeyInProgress(workspaceId);
+      return this.sshMesh.setEnabled(workspaceId, enabled, keyMaterial, createdBy);
+    });
+  }
+
+  rotateSshMeshKey(workspaceId: string, keyMaterial: SshMeshKeyMaterial): SshMeshBrowserOverview {
+    return this.withSshMeshLifecycleLock(workspaceId, () => {
+      this.assertNoDaemonRetirementRekeyInProgress(workspaceId);
+      return this.sshMesh.rotate(workspaceId, keyMaterial);
+    });
+  }
+
+  invalidateSshMeshKey(workspaceId: string): SshMeshBrowserOverview {
+    return this.withSshMeshLifecycleLock(workspaceId, () => {
+      this.assertNoDaemonRetirementRekeyInProgress(workspaceId);
+      return this.sshMesh.invalidate(workspaceId);
+    });
+  }
+
+  recordSshMeshHeartbeat(
+    runtimeId: string,
+    protocolVersion: number,
+    status?: MultiremiDaemonSshMeshStatus,
+  ): MultiremiSshMeshHeartbeatAck | null {
+    const workspaceId = this.sshMesh.getRuntimeWorkspaceId(runtimeId);
+    if (!workspaceId) return null;
+    return this.withSshMeshLifecycleLock(workspaceId, () => {
+      const ack = this.sshMesh.recordHeartbeat(runtimeId, protocolVersion, status);
+      const mutation = this.sshMesh.getMutationState(workspaceId);
+      if (mutation.overview.rotation_state === "stable") {
+        this.daemonRetirement.completeSshMeshRekeyForOperation(
+          workspaceId,
+          mutation.activeOperationId,
+          mutation.overview.key_version,
+        );
+      }
+      return ack;
+    });
+  }
+
+  getSshMeshConfigForDaemon(runtimeId: string): MultiremiDaemonSshMeshConfig | null {
+    return this.sshMesh.getDaemonConfig(runtimeId);
+  }
+
+  requestSshMeshProbe(
+    workspaceId: string,
+    sourceDaemonId: string,
+    targetDaemonId?: string | null,
+  ): { request_id: string; probe_revision: number; status: "pending" } {
+    return this.withSshMeshLifecycleLock(workspaceId, () => (
+      this.sshMesh.requestProbe(workspaceId, sourceDaemonId, targetDaemonId)
+    ));
+  }
+
   getRelayConfigForDaemon(workspaceId: string): RelayConfigForDaemon {
     return this.workspaces.getRelayConfigForDaemon(workspaceId);
   }
@@ -868,6 +945,10 @@ runMigrations(this.db);
     return this.accessTokens.listPersonalAccessTokens(workspaceId, userId);
   }
 
+  listExpiringBoundDaemonTokens(workspaceId: string): MultiremiAccessToken[] {
+    return this.accessTokens.listExpiringBoundDaemonTokens(workspaceId);
+  }
+
   getAccessToken(id: string): MultiremiAccessToken | null {
     return this.accessTokens.getAccessToken(id);
   }
@@ -876,7 +957,7 @@ runMigrations(this.db);
     const normalizedDaemonId = daemonId.trim();
     if (!normalizedDaemonId) return null;
     const initial = this.accessTokens.getAccessToken(id);
-    if (!initial || initial.type !== "daemon") return null;
+    if (!initial || initial.type !== "daemon" || initial.expiresAt) return null;
     return this.db.transaction(() => {
       this.daemonRetirement.lockLifecycle(initial.workspaceId, normalizedDaemonId);
       this.daemonRetirement.assertCanRegister(initial.workspaceId, normalizedDaemonId);
@@ -908,6 +989,7 @@ runMigrations(this.db);
         || current.workspaceId !== normalizedWorkspaceId
         || current.type !== "pat"
         || current.purpose !== "cli"
+        || current.expiresAt
       ) return null;
       this.daemonRetirement.claimIdentityOwnerWithinLock(
         normalizedWorkspaceId,
@@ -933,6 +1015,7 @@ runMigrations(this.db);
         !token ||
         token.type !== "pat" ||
         token.purpose !== "cli" ||
+        token.expiresAt ||
         !runtime
       ) {
         return null;
@@ -1055,6 +1138,128 @@ runMigrations(this.db);
 
   getDaemonRetirementPlan(workspaceId: string, daemonId: string): DaemonRetirementPlan {
     return this.daemonRetirement.getPlan(workspaceId, daemonId);
+  }
+
+  getDaemonRetirementSshMeshRekey(
+    workspaceId: string,
+    daemonId: string,
+  ): DaemonRetirementSshMeshRekey | null {
+    return this.daemonRetirement.getSshMeshRekey(workspaceId, daemonId);
+  }
+
+  setDaemonRetirementSshMeshRekey(
+    workspaceId: string,
+    daemonId: string,
+    status: DaemonRetirementSshMeshRekeyStatus,
+    replacementKeyVersion: number | null,
+  ): DaemonRetirementSshMeshRekey {
+    return this.withSshMeshLifecycleLock(workspaceId, () => this.daemonRetirement.setSshMeshRekey(
+      workspaceId,
+      daemonId,
+      status,
+      replacementKeyVersion,
+    ));
+  }
+
+  reconcileDaemonRetirementSshMeshRekey(
+    workspaceId: string,
+    daemonId: string,
+    keyMaterial: SshMeshKeyMaterial | null,
+  ): {
+    status: DaemonRetirementSshMeshRekeyStatus;
+    keyVersion: number | null;
+    rotationState: string;
+  } {
+    return this.withSshMeshLifecycleLock(workspaceId, () => {
+      let rekey = this.daemonRetirement.ensureSshMeshRekeyOperationId(workspaceId, daemonId);
+      let mutation = this.sshMesh.getMutationState(workspaceId);
+      if (rekey.status === "not_required" || rekey.status === "completed" || rekey.status === "rekey_required") {
+        return {
+          status: rekey.status,
+          keyVersion: rekey.replacementKeyVersion ?? mutation.overview.key_version,
+          rotationState: mutation.overview.rotation_state,
+        };
+      }
+
+      if (rekey.status === "rolling_out") {
+        const exactReplacement = rekey.operationId !== null
+          && mutation.activeOperationId === rekey.operationId
+          && rekey.replacementKeyVersion !== null
+          && mutation.overview.key_version === rekey.replacementKeyVersion
+          && mutation.overview.fingerprint !== null;
+        if (exactReplacement) {
+          const status = mutation.overview.rotation_state === "stable" ? "completed" : "rolling_out";
+          rekey = this.daemonRetirement.setSshMeshRekey(
+            workspaceId,
+            daemonId,
+            status,
+            rekey.replacementKeyVersion,
+          );
+          return {
+            status: rekey.status,
+            keyVersion: rekey.replacementKeyVersion,
+            rotationState: mutation.overview.rotation_state,
+          };
+        }
+        return this.invalidateDaemonRetirementSshMeshRekey(workspaceId, daemonId, rekey.operationId);
+      }
+
+      const canReplaceCompromisedGeneration = rekey.operationId !== null
+        && rekey.compromisedKeyVersion !== null
+        && keyMaterial !== null
+        && mutation.overview.enabled
+        && mutation.overview.rotation_state === "stable"
+        && mutation.overview.fingerprint !== null
+        && mutation.overview.key_version === rekey.compromisedKeyVersion;
+      if (!canReplaceCompromisedGeneration) {
+        return this.invalidateDaemonRetirementSshMeshRekey(workspaceId, daemonId, rekey.operationId);
+      }
+
+      const overview = this.sshMesh.rotate(workspaceId, keyMaterial, rekey.operationId);
+      const status = overview.rotation_state === "stable" ? "completed" : "rolling_out";
+      rekey = this.daemonRetirement.setSshMeshRekey(
+        workspaceId,
+        daemonId,
+        status,
+        overview.key_version,
+      );
+      return {
+        status: rekey.status,
+        keyVersion: rekey.replacementKeyVersion,
+        rotationState: overview.rotation_state,
+      };
+    });
+  }
+
+  private withSshMeshLifecycleLock<T>(workspaceId: string, operation: () => T): T {
+    return this.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      return operation();
+    })();
+  }
+
+  private assertNoDaemonRetirementRekeyInProgress(workspaceId: string): void {
+    if (this.daemonRetirement.hasSshMeshRekeyInProgress(workspaceId)) {
+      throw new Error("A daemon retirement SSH key replacement is in progress");
+    }
+  }
+
+  private invalidateDaemonRetirementSshMeshRekey(
+    workspaceId: string,
+    daemonId: string,
+    operationId: string | null,
+  ): {
+    status: DaemonRetirementSshMeshRekeyStatus;
+    keyVersion: number | null;
+    rotationState: string;
+  } {
+    const invalidated = this.sshMesh.invalidate(workspaceId, operationId);
+    this.daemonRetirement.setSshMeshRekey(workspaceId, daemonId, "rekey_required", null);
+    return {
+      status: "rekey_required",
+      keyVersion: invalidated.key_version,
+      rotationState: invalidated.rotation_state,
+    };
   }
 
   retireDaemon(

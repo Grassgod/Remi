@@ -13,6 +13,7 @@ import type {
   DaemonRetirementImpact,
   DaemonRetirementPlan,
 } from "@multiremi/store/repos/daemon-retirement-repo.js";
+import { generateSshMeshKeyMaterial, SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): void {
@@ -114,6 +115,11 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
         actorId: currentRequestUserId(c),
       });
     }
+    const sshMeshRotation = await reconcileRetirementSshMeshKey(
+      store,
+      workspaceId,
+      daemonId,
+    );
     return c.json({
       status: "retired",
       workspace_id: workspaceId,
@@ -121,8 +127,62 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
       retired_at: result.retiredAt,
       already_retired: result.alreadyRetired,
       impact: retirementImpactResponse(result.impact),
+      ssh_mesh_key_rotation: sshMeshRotation,
     });
   });
+}
+
+async function reconcileRetirementSshMeshKey(
+  store: RouterDeps["store"],
+  workspaceId: string,
+  daemonId: string,
+): Promise<Record<string, unknown>> {
+  const rekey = store.getDaemonRetirementSshMeshRekey(workspaceId, daemonId);
+  if (!rekey || rekey.status === "not_required") return { status: "not_required" };
+
+  try {
+    const nextKey = rekey.status === "pending"
+      ? await generateSshMeshKeyMaterial(workspaceId)
+      : null;
+    const reconciled = store.reconcileDaemonRetirementSshMeshRekey(
+      workspaceId,
+      daemonId,
+      nextKey,
+    );
+    return retirementRekeyResponse(
+      reconciled.status,
+      reconciled.keyVersion,
+      reconciled.rotationState,
+    );
+  } catch (error) {
+    // Re-read under the workspace lifecycle lock. If another request committed
+    // this retirement's exact operation, preserve it; otherwise fail closed.
+    const failed = store.reconcileDaemonRetirementSshMeshRekey(workspaceId, daemonId, null);
+    if (failed.status !== "rekey_required") {
+      return retirementRekeyResponse(
+        failed.status,
+        failed.keyVersion,
+        failed.rotationState,
+      );
+    }
+    return {
+      ...retirementRekeyResponse("rekey_required", failed.keyVersion, failed.rotationState),
+      status: "failed_rekey_required",
+      code: error instanceof SshMeshKeyError ? error.code : "rotation_failed",
+    };
+  }
+}
+
+function retirementRekeyResponse(
+  status: "not_required" | "pending" | "rolling_out" | "completed" | "rekey_required",
+  keyVersion: number | null,
+  rotationState: string,
+): Record<string, unknown> {
+  return {
+    status,
+    ...(keyVersion === null ? {} : { key_version: keyVersion }),
+    rotation_state: rotationState,
+  };
 }
 
 function requestedWorkspaceId(

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { nowIso } from "@multiremi/ids.js";
+import { createId, nowIso } from "@multiremi/ids.js";
 import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { RUNTIME_AUXILIARY_TABLES } from "@multiremi/store/runtime-lifecycle-tables.js";
@@ -92,6 +92,21 @@ export type RetireDaemonResult =
   | { status: "blocked"; plan: DaemonRetirementPlan }
   | { status: "forbidden" };
 
+export type DaemonRetirementSshMeshRekeyStatus =
+  | "not_required"
+  | "pending"
+  | "rolling_out"
+  | "completed"
+  | "rekey_required";
+
+export interface DaemonRetirementSshMeshRekey {
+  status: DaemonRetirementSshMeshRekeyStatus;
+  compromisedKeyVersion: number | null;
+  replacementKeyVersion: number | null;
+  operationId: string | null;
+  updatedAt: string | null;
+}
+
 export class DaemonRetiredError extends Error {
   readonly code = "daemon_retired";
 
@@ -123,6 +138,76 @@ export class DaemonRetirementRepo {
     return Boolean(this.ctx.db.query(
       "SELECT 1 FROM multiremi_daemon_retirements WHERE workspace_id = ? AND daemon_id = ?",
     ).get(workspaceId, daemonId));
+  }
+
+  getSshMeshRekey(workspaceId: string, daemonId: string): DaemonRetirementSshMeshRekey | null {
+    const row = this.ctx.db.query(
+      `SELECT ssh_mesh_rekey_status, ssh_mesh_compromised_key_version,
+              ssh_mesh_replacement_key_version, ssh_mesh_rekey_operation_id,
+              ssh_mesh_rekey_updated_at
+       FROM multiremi_daemon_retirements
+       WHERE workspace_id = ? AND daemon_id = ?`,
+    ).get(workspaceId, daemonId) as Row | null;
+    return row ? hydrateSshMeshRekey(row) : null;
+  }
+
+  setSshMeshRekey(
+    workspaceId: string,
+    daemonId: string,
+    status: DaemonRetirementSshMeshRekeyStatus,
+    replacementKeyVersion: number | null,
+  ): DaemonRetirementSshMeshRekey {
+    const updatedAt = nowIso();
+    const updated = this.ctx.db.run(
+      `UPDATE multiremi_daemon_retirements
+       SET ssh_mesh_rekey_status = ?, ssh_mesh_replacement_key_version = ?,
+           ssh_mesh_rekey_updated_at = ?
+       WHERE workspace_id = ? AND daemon_id = ?`,
+      [status, replacementKeyVersion, updatedAt, workspaceId, daemonId],
+    );
+    if (updated.changes !== 1) throw new Error("daemon retirement not found");
+    return this.getSshMeshRekey(workspaceId, daemonId)!;
+  }
+
+  ensureSshMeshRekeyOperationId(workspaceId: string, daemonId: string): DaemonRetirementSshMeshRekey {
+    const current = this.getSshMeshRekey(workspaceId, daemonId);
+    if (!current) throw new Error("daemon retirement not found");
+    if (current.operationId || current.status === "not_required" || current.status === "completed") return current;
+    const operationId = createId("sshrekey");
+    this.ctx.db.run(
+      `UPDATE multiremi_daemon_retirements
+       SET ssh_mesh_rekey_operation_id = ?, ssh_mesh_rekey_updated_at = ?
+       WHERE workspace_id = ? AND daemon_id = ?
+         AND ssh_mesh_rekey_operation_id IS NULL
+         AND ssh_mesh_rekey_status IN ('pending', 'rolling_out', 'rekey_required')`,
+      [operationId, nowIso(), workspaceId, daemonId],
+    );
+    return this.getSshMeshRekey(workspaceId, daemonId)!;
+  }
+
+  hasSshMeshRekeyInProgress(workspaceId: string): boolean {
+    return Boolean(this.ctx.db.query(
+      `SELECT 1 FROM multiremi_daemon_retirements
+       WHERE workspace_id = ? AND ssh_mesh_rekey_status IN ('pending', 'rolling_out')
+       LIMIT 1`,
+    ).get(workspaceId));
+  }
+
+  completeSshMeshRekeyForOperation(
+    workspaceId: string,
+    operationId: string | null,
+    replacementKeyVersion: number,
+  ): void {
+    if (!operationId) return;
+    this.ctx.db.run(
+      `UPDATE multiremi_daemon_retirements
+       SET ssh_mesh_rekey_status = 'completed', ssh_mesh_rekey_updated_at = ?
+       WHERE workspace_id = ?
+         AND ssh_mesh_rekey_status = 'rolling_out'
+         AND ssh_mesh_rekey_operation_id = ?
+         AND ssh_mesh_replacement_key_version = ?`,
+      [nowIso(), workspaceId, operationId, replacementKeyVersion],
+    );
   }
 
   listInventory(workspaceId: string): DaemonInventoryEntry[] {
@@ -588,11 +673,43 @@ export class DaemonRetirementRepo {
         issueWorkspacesAbandoned,
         tokensRevoked,
       };
+      const sshMesh = this.ctx.db.query(
+        `SELECT active_key_version, active_private_key_encrypted, active_public_key,
+                previous_private_key_encrypted, previous_public_key
+         FROM multiremi_workspace_ssh_mesh
+         WHERE workspace_id = ?`,
+      ).get(workspaceId) as Row | null;
+      const sshMeshKeyMayRemainUsable = Boolean(
+        sshMesh?.active_private_key_encrypted
+        || sshMesh?.active_public_key
+        || sshMesh?.previous_private_key_encrypted
+        || sshMesh?.previous_public_key,
+      );
+      const sshMeshCompromisedKeyVersion = sshMeshKeyMayRemainUsable
+        ? Number(sshMesh?.active_key_version ?? 0)
+        : null;
+      const sshMeshRekeyStatus: DaemonRetirementSshMeshRekeyStatus = sshMeshKeyMayRemainUsable
+        ? "pending"
+        : "not_required";
       this.ctx.db.run(
         `INSERT INTO multiremi_daemon_retirements (
-           workspace_id, daemon_id, retired_by, retired_at, runtime_ids, impact
-         ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [workspaceId, daemonId, retiredBy, now, toJson(runtimeIds), toJson(impact)],
+           workspace_id, daemon_id, retired_by, retired_at, runtime_ids, impact,
+           ssh_mesh_rekey_status, ssh_mesh_compromised_key_version,
+           ssh_mesh_replacement_key_version, ssh_mesh_rekey_operation_id,
+           ssh_mesh_rekey_updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+        [
+          workspaceId,
+          daemonId,
+          retiredBy,
+          now,
+          toJson(runtimeIds),
+          toJson(impact),
+          sshMeshRekeyStatus,
+          sshMeshCompromisedKeyVersion,
+          sshMeshKeyMayRemainUsable ? createId("sshrekey") : null,
+          now,
+        ],
       );
       return { status: "retired", retiredAt: now, impact, alreadyRetired: false };
     });
@@ -662,5 +779,28 @@ function normalizeImpact(value: Record<string, unknown>): DaemonRetirementImpact
       value.issueWorkspacesAbandoned ?? value.issue_workspaces_abandoned ?? 0,
     ),
     tokensRevoked: Number(value.tokensRevoked ?? value.tokens_revoked ?? 0),
+  };
+}
+
+function hydrateSshMeshRekey(row: Row): DaemonRetirementSshMeshRekey {
+  const rawStatus = String(row.ssh_mesh_rekey_status ?? "not_required");
+  const status: DaemonRetirementSshMeshRekeyStatus = rawStatus === "pending"
+    || rawStatus === "rolling_out"
+    || rawStatus === "completed"
+    || rawStatus === "rekey_required"
+    ? rawStatus
+    : "not_required";
+  return {
+    status,
+    compromisedKeyVersion: row.ssh_mesh_compromised_key_version == null
+      ? null
+      : Number(row.ssh_mesh_compromised_key_version),
+    replacementKeyVersion: row.ssh_mesh_replacement_key_version == null
+      ? null
+      : Number(row.ssh_mesh_replacement_key_version),
+    operationId: row.ssh_mesh_rekey_operation_id == null
+      ? null
+      : String(row.ssh_mesh_rekey_operation_id),
+    updatedAt: row.ssh_mesh_rekey_updated_at == null ? null : String(row.ssh_mesh_rekey_updated_at),
   };
 }
