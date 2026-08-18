@@ -82,7 +82,11 @@ export class OpenVikingClient implements OpenVikingClientContract {
   }
 
   async replace(uri: string, rootUri: string, content: string, baseHash: string): Promise<void> {
-    await this.batchWrite(rootUri, [{ uri, content, precondition: { kind: "replace_if_hash", base_hash: baseHash } }]);
+    await this.batchWrite(rootUri, [{
+      uri,
+      content,
+      precondition: { kind: "replace_if_hash", base_hash: openVikingContentHash(baseHash) },
+    }]);
   }
 
   async remove(uri: string): Promise<void> {
@@ -152,7 +156,12 @@ export class OpenVikingClient implements OpenVikingClientContract {
 
   async show(targetRef: string, path: string): Promise<string> {
     const params = new URLSearchParams({ target_ref: targetRef, path, raw: "true" });
-    const result = await this.request<unknown>(`/api/v1/snapshot/show?${params.toString()}`, { method: "GET" });
+    const result = await this.request<unknown>(
+      `/api/v1/snapshot/show?${params.toString()}`,
+      { method: "GET" },
+      false,
+      true,
+    );
     if (typeof result === "string") return result;
     if (isRecord(result)) {
       const content = stringField(result, "content", "body", "text");
@@ -164,11 +173,16 @@ export class OpenVikingClient implements OpenVikingClientContract {
   private async batchWrite(rootUri: string, operations: unknown[]): Promise<void> {
     await this.request("/api/v1/content/batch-write", {
       method: "POST",
-      body: JSON.stringify({ root_uri: rootUri, operations, wait: true, timeout: this.timeoutMs / 1_000 }),
+      body: JSON.stringify({ root_uri: rootUri, operations, wait: false }),
     });
   }
 
-  private async request<T = unknown>(path: string, init: RequestInit, allowPlainJson = false): Promise<T> {
+  private async request<T = unknown>(
+    path: string,
+    init: RequestInit,
+    allowPlainJson = false,
+    rawText = false,
+  ): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       const controller = new AbortController();
@@ -183,6 +197,7 @@ export class OpenVikingClient implements OpenVikingClientContract {
             ...init.headers,
           },
         });
+        if (response.ok && rawText) return await response.text() as T;
         const payload = await response.json().catch(() => null) as OpenVikingEnvelope<T> | null;
         if (response.ok && allowPlainJson && payload?.status !== "error") {
           return (payload?.status === "ok" ? payload.result : payload) as T;
@@ -195,7 +210,12 @@ export class OpenVikingClient implements OpenVikingClientContract {
             ? payload.error.message
             : `HTTP ${response.status}`;
         const detail = rawDetail.replaceAll(this.apiKey, "[REDACTED]");
-        const retryable = response.status === 429 || response.status >= 500;
+        const errorDetails = isRecord(payload?.error) && isRecord(payload.error.details)
+          ? payload.error.details
+          : null;
+        const retryable = response.status === 429
+          || response.status >= 500
+          || errorDetails?.retryable === true;
         throw new OpenVikingClientError(`OpenViking request failed: ${detail}`, response.status, code, retryable);
       } catch (error) {
         const normalized = error instanceof OpenVikingClientError
@@ -226,6 +246,12 @@ function stringField(value: Record<string, unknown>, ...keys: string[]): string 
     if (typeof value[key] === "string" && String(value[key]).trim()) return String(value[key]);
   }
   return null;
+}
+
+function openVikingContentHash(value: string): string {
+  const digest = value.startsWith("sha256:") ? value.slice("sha256:".length) : value;
+  if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error("OpenViking base hash must be a SHA-256 digest");
+  return `sha256:${digest}`;
 }
 
 function delay(ms: number): Promise<void> {
