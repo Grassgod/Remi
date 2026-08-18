@@ -1744,7 +1744,7 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
-  it("waits for SSH Mesh cleanup before stopping after daemon authority is revoked", async () => {
+  it("retries SSH Mesh cleanup and waits for success before stopping after daemon authority is revoked", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-authority-cleanup-");
     const daemonToken = await store.createAccessToken({
       name: "Authority cleanup daemon",
@@ -1781,9 +1781,11 @@ describe("Bun Multiremi daemon smoke", () => {
         reconcile: async () => {},
         cleanupForRetirement: async () => {
           cleanupCalls++;
+          if (cleanupCalls === 1) throw new Error("temporary SSH Mesh cleanup lock timeout");
           await cleanupBlocked;
         },
       },
+      terminalAuthorityCleanupRetryDelaysMs: [10],
     });
     let settled = false;
     const daemonRun = daemon.start().finally(() => { settled = true; });
@@ -1798,16 +1800,108 @@ describe("Bun Multiremi daemon smoke", () => {
         retirementPlan.snapshot,
         "local",
       )).toMatchObject({ status: "retired" });
-      await waitForCondition(() => cleanupCalls === 1, 5_000);
+      await waitForCondition(() => cleanupCalls === 2, 5_000);
       await Bun.sleep(20);
       expect(settled).toBe(false);
 
       releaseCleanup();
       await daemonRun;
-      expect(cleanupCalls).toBe(1);
+      expect(cleanupCalls).toBe(2);
       expect(settled).toBe(true);
     } finally {
       releaseCleanup();
+      daemon.stop();
+      await daemonRun.catch(() => {});
+      server.stop(true);
+    }
+  });
+
+  it("stays cleanup-only and stops claiming while terminal SSH Mesh cleanup keeps failing", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-authority-cleanup-failure-");
+    const daemonToken = await store.createAccessToken({
+      name: "Authority cleanup failure daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-authority-cleanup-failure-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    let cleanupCalls = 0;
+    let claimCalls = 0;
+    let claimCallsAtCleanup = -1;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      daemonId: "daemon-authority-cleanup-failure",
+      runtimeName: "authority-cleanup-failure-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 10,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory: () => ({
+        async *sendStream() {},
+        getLastResponse: () => null,
+        discoverModelCapabilities: async () => [{ id: "claude-test", label: "Claude Test", default: true }],
+      }),
+      sshMeshManager: {
+        getHeartbeatStatus: () => ({ status: "disabled" }),
+        reconcile: async () => {},
+        cleanupForRetirement: async () => {
+          cleanupCalls++;
+          if (claimCallsAtCleanup < 0) claimCallsAtCleanup = claimCalls;
+          throw new Error("persistent SSH Mesh cleanup failure");
+        },
+      },
+      terminalAuthorityCleanupRetryDelaysMs: [10],
+    });
+    const daemonClient = (daemon as unknown as {
+      client: { claimTask: (runtimeId: string) => Promise<unknown> };
+    }).client;
+    const originalClaimTask = daemonClient.claimTask.bind(daemonClient);
+    daemonClient.claimTask = async (runtimeId) => {
+      claimCalls++;
+      return await originalClaimTask(runtimeId);
+    };
+    let settled = false;
+    const daemonRun = daemon.start().finally(() => { settled = true; });
+
+    try {
+      const port = await waitForLocalPort(daemon);
+      await waitForRunningHealth(port);
+      const retirementPlan = store.getDaemonRetirementPlan("local", "daemon-authority-cleanup-failure");
+      expect(store.retireDaemon(
+        "local",
+        "daemon-authority-cleanup-failure",
+        retirementPlan.snapshot,
+        "local",
+      )).toMatchObject({ status: "retired" });
+      await waitForCondition(() => cleanupCalls >= 3, 5_000);
+      const claimsAfterTerminal = claimCalls;
+      await Bun.sleep(30);
+      const cleanupHealth = await fetch(`http://127.0.0.1:${port}/health`).then(
+        (response) => response.json() as Promise<Record<string, unknown>>,
+      );
+      const checkoutResponse = await fetch(`http://127.0.0.1:${port}/repo/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      expect(claimCallsAtCleanup).toBe(claimsAfterTerminal);
+      expect(claimCalls).toBe(claimsAfterTerminal);
+      expect(checkoutResponse.status).toBe(503);
+      expect(cleanupHealth).toMatchObject({
+        status: "starting",
+        mode: "cleanup_only",
+      });
+      expect(Number(cleanupHealth.ssh_mesh_cleanup_attempts)).toBeGreaterThanOrEqual(3);
+      expect(settled).toBe(false);
+    } finally {
       daemon.stop();
       await daemonRun.catch(() => {});
       server.stop(true);

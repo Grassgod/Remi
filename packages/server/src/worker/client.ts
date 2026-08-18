@@ -170,9 +170,10 @@ export class MultiremiDaemonClient {
     } as MultiremiDaemonHeartbeatAck;
   }
 
-  async getSshMeshConfig(runtimeId: string): Promise<MultiremiDaemonSshMeshConfig> {
+  async getSshMeshConfig(runtimeId: string, signal?: AbortSignal): Promise<MultiremiDaemonSshMeshConfig> {
     return this.get<MultiremiDaemonSshMeshConfig>(
       `/api/daemon/ssh-mesh/config?runtime_id=${encodeURIComponent(runtimeId)}`,
+      signal,
     );
   }
 
@@ -416,8 +417,8 @@ export class MultiremiDaemonClient {
     return this.get<MultiremiDaemonGcStatus>(`/api/daemon/tasks/${encodeURIComponent(taskId)}/gc-check`);
   }
 
-  private async get<T>(path: string): Promise<T> {
-    const resp = await fetch(this.baseUrl + path, { headers: this.headers() });
+  private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
+    const resp = await fetch(this.baseUrl + path, { headers: this.headers(), signal });
     return parseResponse<T>(resp, "GET", path);
   }
 

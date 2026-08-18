@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useRef } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -37,6 +37,7 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@multiremi/ui/components/ui/alert-dialog";
@@ -44,11 +45,6 @@ import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Switch } from "@multiremi/ui/components/ui/switch";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multiremi/ui/components/ui/tooltip";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT, useTimeAgo } from "../../i18n";
 
@@ -64,6 +60,7 @@ export function SshMeshPanel({
   const { t } = useT("runtimes");
   const wsId = useWorkspaceId();
   const toggleId = useId();
+  const [emergencyDisableOpen, setEmergencyDisableOpen] = useState(false);
   const user = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
   const lastHeartbeatRefreshRef = useRef(0);
@@ -173,7 +170,6 @@ export function SshMeshPanel({
   const sourceIsTesting =
     !!source && source.desired_probe_revision > source.probe_revision;
   const rotationInProgress = overview.rotation_state === "rolling_out";
-  const disableBlockedByRotation = overview.enabled && rotationInProgress;
   const canProbe = Boolean(
     source &&
     source.status === "ready" &&
@@ -185,9 +181,11 @@ export function SshMeshPanel({
     !testMutation.isPending,
   );
 
-  const toggleMesh = (enabled: boolean) => {
-    if (!enabled && disableBlockedByRotation) return;
-    toggleMutation.mutate(enabled, {
+  const submitToggle = (enabled: boolean, invalidateKeys = false) => {
+    toggleMutation.mutate({
+      enabled,
+      ...(invalidateKeys ? { invalidateKeys: true } : {}),
+    }, {
       onSuccess: () =>
         toast.success(
           enabled
@@ -202,6 +200,19 @@ export function SshMeshPanel({
           ),
         ),
     });
+  };
+
+  const toggleMesh = (enabled: boolean) => {
+    if (!enabled && rotationInProgress) {
+      setEmergencyDisableOpen(true);
+      return;
+    }
+    submitToggle(enabled);
+  };
+
+  const confirmEmergencyDisable = () => {
+    setEmergencyDisableOpen(false);
+    submitToggle(false, true);
   };
 
   const testConnection = (targetDaemonId?: string) => {
@@ -225,7 +236,7 @@ export function SshMeshPanel({
     <Switch
       id={toggleId}
       checked={overview.enabled === true}
-      disabled={toggleMutation.isPending || disableBlockedByRotation}
+      disabled={toggleMutation.isPending || rotateMutation.isPending}
       onCheckedChange={toggleMesh}
     />
   );
@@ -254,20 +265,7 @@ export function SshMeshPanel({
             <label htmlFor={toggleId}>
               {t(($) => $.ssh_mesh.enabled_label)}
             </label>
-            {disableBlockedByRotation ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <span className="inline-flex cursor-not-allowed" tabIndex={0}>
-                      {toggleControl}
-                    </span>
-                  }
-                />
-                <TooltipContent side="bottom">
-                  {t(($) => $.ssh_mesh.disable_during_rotation)}
-                </TooltipContent>
-              </Tooltip>
-            ) : toggleControl}
+            {toggleControl}
           </div>
         </div>
 
@@ -449,6 +447,42 @@ export function SshMeshPanel({
           </section>
         </>
       )}
+
+      <AlertDialog
+        open={emergencyDisableOpen}
+        onOpenChange={setEmergencyDisableOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <ShieldAlert />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {t(($) => $.ssh_mesh.emergency_disable_title)}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.ssh_mesh.emergency_disable_description)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="space-y-2 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-xs text-foreground">
+            <li>{t(($) => $.ssh_mesh.emergency_disable_revoke_keys)}</li>
+            <li>{t(($) => $.ssh_mesh.emergency_disable_break_trust)}</li>
+            <li>{t(($) => $.ssh_mesh.emergency_disable_new_key)}</li>
+          </ul>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={toggleMutation.isPending}>
+              {t(($) => $.ssh_mesh.cancel)}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={toggleMutation.isPending}
+              onClick={confirmEmergencyDisable}
+            >
+              {t(($) => $.ssh_mesh.emergency_disable_confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

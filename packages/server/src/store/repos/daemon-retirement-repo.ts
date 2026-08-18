@@ -193,6 +193,18 @@ export class DaemonRetirementRepo {
     ).get(workspaceId));
   }
 
+  markSshMeshRekeysRequiredAfterInvalidation(workspaceId: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_daemon_retirements
+       SET ssh_mesh_rekey_status = 'rekey_required',
+           ssh_mesh_replacement_key_version = NULL,
+           ssh_mesh_rekey_updated_at = ?
+       WHERE workspace_id = ?
+         AND ssh_mesh_rekey_status IN ('pending', 'rolling_out')`,
+      [nowIso(), workspaceId],
+    );
+  }
+
   completeSshMeshRekeyForOperation(
     workspaceId: string,
     operationId: string | null,
@@ -576,6 +588,7 @@ export class DaemonRetirementRepo {
         "SELECT retired_at, impact FROM multiremi_daemon_retirements WHERE workspace_id = ? AND daemon_id = ?",
       ).get(workspaceId, daemonId) as Row | null;
       if (existingRetirement) {
+        this.cleanSshMeshState(workspaceId, daemonId, nowIso());
         return {
           status: "retired",
           retiredAt: String(existingRetirement.retired_at),
@@ -664,6 +677,7 @@ export class DaemonRetirementRepo {
          WHERE workspace_id = ? AND type = 'daemon' AND daemon_id = ? AND revoked_at IS NULL`,
         [now, workspaceId, daemonId],
       ).changes;
+      this.cleanSshMeshState(workspaceId, daemonId, now);
       const impact: DaemonRetirementImpact = {
         runtimesRemoved: runtimeIds.length,
         agentsDetached,
@@ -714,6 +728,33 @@ export class DaemonRetirementRepo {
       return { status: "retired", retiredAt: now, impact, alreadyRetired: false };
     });
     return tx();
+  }
+
+  private cleanSshMeshState(workspaceId: string, daemonId: string, updatedAt: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_daemon_ssh_mesh_states
+       SET runtime_id = NULL,
+           protocol_version = 0,
+           status = 'cleaned',
+           key_version = NULL,
+           config_revision = NULL,
+           ssh_user = NULL,
+           hostname = NULL,
+           ssh_port = 22,
+           addresses = '[]',
+           host_keys = '[]',
+           public_key_installed = 0,
+           config_installed = 0,
+           peer_tests = '[]',
+           probe_revision = 0,
+           desired_probe_revision = 0,
+           probe_target_daemon_ids = '[]',
+           last_error_code = NULL,
+           last_error = NULL,
+           updated_at = ?
+       WHERE workspace_id = ? AND daemon_id = ?`,
+      [updatedAt, workspaceId, daemonId],
+    );
   }
 
   private rowsForRuntimeIds(sql: string, runtimeIds: string[], trailingParams: unknown[] = []): Row[] {

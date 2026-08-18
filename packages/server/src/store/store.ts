@@ -713,7 +713,9 @@ runMigrations(this.db);
     createdBy: string | null,
   ): SshMeshBrowserOverview {
     return this.withSshMeshLifecycleLock(workspaceId, () => {
-      this.assertNoDaemonRetirementRekeyInProgress(workspaceId);
+      const rollingDisable = !enabled
+        && this.sshMesh.getMutationState(workspaceId).overview.rotation_state === "rolling_out";
+      if (!rollingDisable) this.assertNoDaemonRetirementRekeyInProgress(workspaceId);
       return this.sshMesh.setEnabled(workspaceId, enabled, keyMaterial, createdBy);
     });
   }
@@ -727,8 +729,9 @@ runMigrations(this.db);
 
   invalidateSshMeshKey(workspaceId: string): SshMeshBrowserOverview {
     return this.withSshMeshLifecycleLock(workspaceId, () => {
-      this.assertNoDaemonRetirementRekeyInProgress(workspaceId);
-      return this.sshMesh.invalidate(workspaceId);
+      const overview = this.sshMesh.invalidate(workspaceId);
+      this.daemonRetirement.markSshMeshRekeysRequiredAfterInvalidation(workspaceId);
+      return overview;
     });
   }
 
@@ -1201,7 +1204,7 @@ runMigrations(this.db);
             rotationState: mutation.overview.rotation_state,
           };
         }
-        return this.invalidateDaemonRetirementSshMeshRekey(workspaceId, daemonId, rekey.operationId);
+        return this.invalidateDaemonRetirementSshMeshRekey(workspaceId, rekey.operationId);
       }
 
       const canReplaceCompromisedGeneration = rekey.operationId !== null
@@ -1212,7 +1215,7 @@ runMigrations(this.db);
         && mutation.overview.fingerprint !== null
         && mutation.overview.key_version === rekey.compromisedKeyVersion;
       if (!canReplaceCompromisedGeneration) {
-        return this.invalidateDaemonRetirementSshMeshRekey(workspaceId, daemonId, rekey.operationId);
+        return this.invalidateDaemonRetirementSshMeshRekey(workspaceId, rekey.operationId);
       }
 
       const overview = this.sshMesh.rotate(workspaceId, keyMaterial, rekey.operationId);
@@ -1246,7 +1249,6 @@ runMigrations(this.db);
 
   private invalidateDaemonRetirementSshMeshRekey(
     workspaceId: string,
-    daemonId: string,
     operationId: string | null,
   ): {
     status: DaemonRetirementSshMeshRekeyStatus;
@@ -1254,7 +1256,7 @@ runMigrations(this.db);
     rotationState: string;
   } {
     const invalidated = this.sshMesh.invalidate(workspaceId, operationId);
-    this.daemonRetirement.setSshMeshRekey(workspaceId, daemonId, "rekey_required", null);
+    this.daemonRetirement.markSshMeshRekeysRequiredAfterInvalidation(workspaceId);
     return {
       status: "rekey_required",
       keyVersion: invalidated.key_version,

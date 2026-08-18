@@ -549,13 +549,29 @@ export class WorkspacesRepo {
     if (activeDaemonIds.length) throw new WorkspaceDaemonRetirementRequiredError(activeDaemonIds);
 
     const config = this.ctx.db.query(
-      `SELECT enabled, rotation_state
+      `SELECT enabled, rotation_state,
+              active_private_key_encrypted, active_public_key, active_fingerprint,
+              previous_private_key_encrypted, previous_public_key, previous_fingerprint
        FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?`,
-    ).get(workspaceId) as { enabled: number | boolean; rotation_state: string } | null;
+    ).get(workspaceId) as {
+      enabled: number | boolean;
+      rotation_state: string;
+      active_private_key_encrypted: string | null;
+      active_public_key: string | null;
+      active_fingerprint: string | null;
+      previous_private_key_encrypted: string | null;
+      previous_public_key: string | null;
+      previous_fingerprint: string | null;
+    } | null;
     const unclearedStates = this.ctx.db.query(
       `SELECT daemon_id
        FROM multiremi_daemon_ssh_mesh_states
        WHERE workspace_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM multiremi_daemon_retirements retired
+           WHERE retired.workspace_id = multiremi_daemon_ssh_mesh_states.workspace_id
+             AND retired.daemon_id = multiremi_daemon_ssh_mesh_states.daemon_id
+         )
          AND (status NOT IN ('disabled', 'cleaned')
            OR public_key_installed != 0
            OR config_installed != 0)
@@ -564,10 +580,18 @@ export class WorkspacesRepo {
     const unclearedDaemonIds = [...new Set(unclearedStates.map((row) => String(row.daemon_id)).filter(Boolean))];
     const enabled = Boolean(config?.enabled);
     const rotationState = String(config?.rotation_state ?? "stable");
+    const hasKeyMaterial = Boolean(
+      config?.active_private_key_encrypted
+      || config?.active_public_key
+      || config?.active_fingerprint
+      || config?.previous_private_key_encrypted
+      || config?.previous_public_key
+      || config?.previous_fingerprint,
+    );
     if (
       enabled
       || rotationState === "rolling_out"
-      || rotationState === "rekey_required"
+      || (rotationState === "rekey_required" && hasKeyMaterial)
       || unclearedDaemonIds.length
     ) {
       throw new WorkspaceSshMeshCleanupRequiredError(enabled, rotationState, unclearedDaemonIds);

@@ -115,7 +115,7 @@ interface ManagedFileDigests {
 export interface SshMeshManagerOptions {
   workspaceId: string;
   daemonId: string;
-  getConfig: () => Promise<MultiremiDaemonSshMeshConfig>;
+  getConfig: (signal?: AbortSignal) => Promise<MultiremiDaemonSshMeshConfig>;
   paths?: Partial<SshMeshPaths>;
   commandRunner?: SshMeshCommandRunner;
   discoverIdentity?: () => Promise<SshMeshLocalIdentity>;
@@ -189,7 +189,7 @@ export function defaultSshMeshPaths(workspaceId: string, home = homedir()): SshM
 export class SshMeshManager {
   private readonly workspaceId: string;
   private readonly daemonId: string;
-  private readonly getConfigWire: () => Promise<MultiremiDaemonSshMeshConfig>;
+  private readonly getConfigWire: (signal?: AbortSignal) => Promise<MultiremiDaemonSshMeshConfig>;
   private readonly paths: SshMeshPaths;
   private readonly commandRunner: SshMeshCommandRunner;
   private readonly discoverIdentity: () => Promise<SshMeshLocalIdentity>;
@@ -270,8 +270,8 @@ export class SshMeshManager {
       };
       this.persistState(lease.assertOwner);
 
-      const config = await withSshMeshTimeout(
-        this.getConfigWire(),
+      const config = await fetchSshMeshConfigWithTimeout(
+        this.getConfigWire,
         this.configFetchTimeoutMs,
         "ssh_mesh_config_timeout",
         "timed out fetching SSH Mesh configuration",
@@ -1279,20 +1279,27 @@ function writeLockOwner(fd: number, owner: SshMeshLockOwner): void {
   fsyncSync(fd);
 }
 
-async function withSshMeshTimeout<T>(
-  promise: Promise<T>,
+async function fetchSshMeshConfigWithTimeout<T>(
+  load: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   code: string,
   message: string,
 ): Promise<T> {
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
-      promise,
+      load(controller.signal),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new SshMeshError(code, message, "error")), timeoutMs);
+        timer = setTimeout(() => {
+          reject(new SshMeshError(code, message, "error"));
+        }, timeoutMs);
+        timer.unref?.();
       }),
     ]);
+  } catch (error) {
+    if (error instanceof SshMeshError && error.code === code) controller.abort(error);
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
   }

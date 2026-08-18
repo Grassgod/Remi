@@ -2,7 +2,14 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiContractError, ApiError } from "@multiremi/core/api";
@@ -227,7 +234,10 @@ describe("SshMeshPanel", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 
     await user.click(toggle);
-    expect(actions.toggle).toHaveBeenCalledWith(true, expect.any(Object));
+    expect(actions.toggle).toHaveBeenCalledWith(
+      { enabled: true },
+      expect.any(Object),
+    );
   });
 
   it("requires an explicit confirmation before rotating the shared key", async () => {
@@ -242,28 +252,78 @@ describe("SshMeshPanel", () => {
     expect(actions.rotate).toHaveBeenCalledWith(undefined, expect.any(Object));
   });
 
-  it("blocks disabling and probes while key rotation is in progress", async () => {
+  it("requires emergency confirmation before disabling during key rotation", async () => {
     fixture.overview = { ...overview(), rotation_state: "rolling_out" };
     const user = userEvent.setup();
     renderPanel();
 
     const toggle = await screen.findByRole("switch", { name: "Enabled" });
-    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).not.toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Rolling out key" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Test all" })).toBeDisabled();
 
-    const toggleWrapper = toggle.parentElement;
-    expect(toggleWrapper).not.toBeNull();
-    await user.hover(toggleWrapper!);
+    await user.click(toggle);
     expect(
       await screen.findByText(
-        "Wait for key rotation to finish before disabling SSH access.",
+        "Disable SSH access during key rotation?",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Revoke both the current and previous workspace keys immediately.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "All daemons will lose mutual SSH trust until access is enabled again.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Enabling SSH access again will generate and distribute a new workspace key.",
+      ),
+    ).toBeInTheDocument();
+    expect(actions.toggle).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Disable SSH access during key rotation?"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(actions.toggle).not.toHaveBeenCalled();
 
     await user.click(toggle);
-    expect(actions.toggle).not.toHaveBeenCalled();
-    expect(actions.test).not.toHaveBeenCalled();
+    act(() => {
+      queryClients.at(-1)?.setQueryData(
+        ["ssh-mesh", "ws-1"],
+        overview(),
+      );
+    });
+    await user.click(
+      await screen.findByRole("button", { name: "Revoke keys and disable" }),
+    );
+    expect(actions.toggle).toHaveBeenCalledTimes(1);
+    expect(actions.toggle).toHaveBeenCalledWith(
+      { enabled: false, invalidateKeys: true },
+      expect.any(Object),
+    );
+  });
+
+  it("disables immediately without a warning when key state is stable", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("switch", { name: "Enabled" }));
+
+    expect(
+      screen.queryByText("Disable SSH access during key rotation?"),
+    ).not.toBeInTheDocument();
+    expect(actions.toggle).toHaveBeenCalledTimes(1);
+    expect(actions.toggle).toHaveBeenCalledWith(
+      { enabled: false },
+      expect.any(Object),
+    );
   });
 
   it("does not start a probe from an offline source", async () => {

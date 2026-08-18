@@ -105,8 +105,14 @@ export function useSetSshMeshEnabled(wsId: string) {
   const qc = useQueryClient();
   const queryKey = runtimeKeys.sshMesh(wsId);
   return useMutation({
-    mutationFn: (enabled: boolean) => api.setSshMeshEnabled(wsId, enabled),
-    onMutate: async (enabled) => {
+    mutationFn: ({
+      enabled,
+      invalidateKeys,
+    }: {
+      enabled: boolean;
+      invalidateKeys?: boolean;
+    }) => api.setSshMeshEnabled(wsId, enabled, { invalidateKeys }),
+    onMutate: async ({ enabled }) => {
       await qc.cancelQueries({ queryKey });
       const previous = qc.getQueryData<SshMeshOverview>(queryKey);
       qc.setQueryData<SshMeshOverview>(queryKey, (current) =>
@@ -114,7 +120,7 @@ export function useSetSshMeshEnabled(wsId: string) {
       );
       return { previous };
     },
-    onError: (_error, _enabled, context) => {
+    onError: (_error, _variables, context) => {
       if (context?.previous) qc.setQueryData(queryKey, context.previous);
     },
     onSuccess: (overview) => qc.setQueryData(queryKey, overview),

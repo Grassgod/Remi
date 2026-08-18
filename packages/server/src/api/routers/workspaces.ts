@@ -39,7 +39,10 @@ import {
   WorkspaceDaemonRetirementRequiredError,
   WorkspaceSshMeshCleanupRequiredError,
 } from "@multiremi/store/repos/workspaces-repo.js";
-import { SshMeshProbeConflictError } from "@multiremi/store/repos/ssh-mesh-repo.js";
+import {
+  SshMeshMutationConflictError,
+  SshMeshProbeConflictError,
+} from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type {
   CreateWorkspaceInput,
 } from "@multiremi/contracts/types.js";
@@ -283,11 +286,17 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
-    const body = await readJsonStrict<{ enabled?: boolean }>(c);
+    const body = await readJsonStrict<{ enabled?: boolean; invalidate_keys?: boolean }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400);
-    if (Object.keys(body).some((key) => key !== "enabled")) {
+    if (Object.keys(body).some((key) => key !== "enabled" && key !== "invalidate_keys")) {
       return c.json({ error: "only server-generated SSH Mesh keys are supported" }, 400);
+    }
+    if (body.invalidate_keys !== undefined && body.invalidate_keys !== true) {
+      return c.json({ error: "invalidate_keys must be true when provided" }, 400);
+    }
+    if (body.invalidate_keys === true && body.enabled) {
+      return c.json({ error: "invalidate_keys is only valid when enabled is false" }, 400);
     }
     if (body.enabled) {
       const expiringCredentials = store.listExpiringBoundDaemonTokens(workspaceId);
@@ -300,6 +309,10 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       }
     }
     try {
+      if (body.invalidate_keys === true) {
+        c.header("Cache-Control", "no-store");
+        return c.json(store.invalidateSshMeshKey(workspaceId));
+      }
       const current = store.getSshMeshOverview(workspaceId);
       const keyMaterial = body.enabled && (current.key_version === 0 || current.rotation_state === "rekey_required")
         ? await generateSshMeshKeyMaterial(workspaceId)
@@ -465,6 +478,9 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
 }
 
 function sshMeshErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof SshMeshMutationConflictError) {
+    return c.json({ error: error.message, code: error.code }, 409);
+  }
   if (error instanceof SshMeshKeyError) {
     const unavailable = error.code === "encryption_key_missing"
       || error.code === "encryption_key_invalid"

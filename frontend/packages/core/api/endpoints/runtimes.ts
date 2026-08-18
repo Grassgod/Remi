@@ -258,12 +258,20 @@ export class RuntimesEndpoints {
   async setSshMeshEnabled(
     workspaceId: string,
     enabled: boolean,
+    options?: { invalidateKeys?: boolean },
   ): Promise<SshMeshOverview> {
+    const invalidateKeys = options?.invalidateKeys === true;
+    if (enabled && invalidateKeys) {
+      throw new TypeError("SSH Mesh keys can only be invalidated while disabling");
+    }
     const raw = await this.http.fetch<unknown>(
       `/api/workspaces/${workspaceId}/ssh-mesh`,
       {
         method: "PUT",
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({
+          enabled,
+          ...(invalidateKeys ? { invalidate_keys: true } : {}),
+        }),
       },
     );
     const endpoint = "PUT /api/workspaces/:id/ssh-mesh";
@@ -272,12 +280,16 @@ export class RuntimesEndpoints {
       SshMeshOverviewSchema,
       { endpoint },
     );
-    if (
-      response.workspace_id !== workspaceId ||
-      response.enabled !== enabled ||
-      response.rotation_state !== "stable" ||
-      (enabled && (response.key_version <= 0 || !response.fingerprint))
-    ) {
+    const responseMatchesCommand = invalidateKeys
+      ? response.workspace_id === workspaceId &&
+        response.enabled === false &&
+        response.rotation_state === "rekey_required" &&
+        response.fingerprint === null
+      : response.workspace_id === workspaceId &&
+        response.enabled === enabled &&
+        response.rotation_state === "stable" &&
+        (!enabled || (response.key_version > 0 && !!response.fingerprint));
+    if (!responseMatchesCommand) {
       throw new ApiContractError(endpoint, "SSH Mesh state did not match the requested update");
     }
     return response;

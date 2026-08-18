@@ -675,10 +675,60 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(completedSkill.skill?.name).toBe("PG imported skill");
     const localSkillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "pg-retired-skill" });
     const skillCountBeforeRetirement = store.listSkills(ws).length;
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO multiremi_daemon_ssh_mesh_states (
+         workspace_id, daemon_id, runtime_id, protocol_version, status, key_version,
+         config_revision, ssh_user, hostname, addresses, host_keys,
+         public_key_installed, config_installed, peer_tests,
+         probe_revision, desired_probe_revision, probe_target_daemon_ids,
+         last_error_code, last_error, last_reported_at, created_at, updated_at
+       ) VALUES (?, ?, ?, 1, 'ready', 7, ?, 'pg-user', 'pg-host', ?, ?, 1, 1, ?, 3, 4, ?,
+                 'old-error', 'old detail', ?, ?, ?)`,
+      [
+        ws,
+        daemonId,
+        runtime.id,
+        "pg-config-revision",
+        JSON.stringify(["10.0.0.8"]),
+        JSON.stringify(["ssh-ed25519 AAAAPG"]),
+        JSON.stringify([{ daemon_id: "peer", status: "ready" }]),
+        JSON.stringify(["peer"]),
+        now,
+        now,
+        now,
+      ],
+    );
 
     const plan = store.getDaemonRetirementPlan(ws, daemonId);
     expect(plan.canRetire).toBeTrue();
     expect(store.retireDaemon(ws, daemonId, plan.snapshot, null).status).toBe("retired");
+    expect(db.query(
+      `SELECT runtime_id, protocol_version, status, key_version, config_revision,
+              ssh_user, hostname, addresses, host_keys, public_key_installed,
+              config_installed, peer_tests, probe_revision, desired_probe_revision,
+              probe_target_daemon_ids, last_error_code, last_error
+       FROM multiremi_daemon_ssh_mesh_states
+       WHERE workspace_id = ? AND daemon_id = ?`,
+    ).get(ws, daemonId)).toMatchObject({
+      runtime_id: null,
+      protocol_version: 0,
+      status: "cleaned",
+      key_version: null,
+      config_revision: null,
+      ssh_user: null,
+      hostname: null,
+      addresses: "[]",
+      host_keys: "[]",
+      public_key_installed: 0,
+      config_installed: 0,
+      peer_tests: "[]",
+      probe_revision: 0,
+      desired_probe_revision: 0,
+      probe_target_daemon_ids: "[]",
+      last_error_code: null,
+      last_error: null,
+    });
     expect(() => store.updateProjectResource(project.id, localDirectory.id, {
       resourceRef: { localPath: "/abs/pg-retired-machine", daemonId },
     })).toThrow("has been retired");
@@ -711,6 +761,88 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       daemonId,
     })).rejects.toThrow("has been retired");
+  });
+
+  it("rejects ordinary disable and explicitly invalidates an SSH Mesh rollout on Postgres", () => {
+    const previousKey = process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY;
+    process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    try {
+      const ws = freshWorkspace();
+      const daemonId = `daemon-pg-ssh-emergency-${wsCounter}`;
+      store.registerRuntime({
+        id: `rt-pg-ssh-emergency-${wsCounter}`,
+        name: "PG SSH emergency daemon",
+        provider: "claude",
+        workspaceId: ws,
+        daemonId,
+      });
+      store.setSshMeshEnabled(ws, true, {
+        privateKey: "test-private-key-v1",
+        publicKey: "ssh-ed25519 test-v1",
+        fingerprint: "SHA256:test-v1",
+      }, null);
+      expect(store.rotateSshMeshKey(ws, {
+        privateKey: "test-private-key-v2",
+        publicKey: "ssh-ed25519 test-v2",
+        fingerprint: "SHA256:test-v2",
+      })).toMatchObject({ key_version: 2, rotation_state: "rolling_out" });
+
+      const rollingRow = db.query(
+        `SELECT active_key_version, active_operation_id, active_private_key_encrypted,
+                active_public_key, active_fingerprint, previous_private_key_encrypted,
+                previous_public_key, previous_fingerprint, enabled, rotation_state
+         FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?`,
+      ).get(ws);
+      expect(() => store.setSshMeshEnabled(ws, false, null, null))
+        .toThrow("SSH Mesh key rotation is in progress; confirm key invalidation to disable");
+      expect(db.query(
+        `SELECT active_key_version, active_operation_id, active_private_key_encrypted,
+                active_public_key, active_fingerprint, previous_private_key_encrypted,
+                previous_public_key, previous_fingerprint, enabled, rotation_state
+         FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?`,
+      ).get(ws)).toEqual(rollingRow);
+
+      expect(store.invalidateSshMeshKey(ws)).toMatchObject({
+        enabled: false,
+        key_version: 3,
+        fingerprint: null,
+        rotation_state: "rekey_required",
+      });
+      const row = db.query(
+        `SELECT active_operation_id, active_private_key_encrypted, active_public_key, active_fingerprint,
+                previous_private_key_encrypted, previous_public_key, previous_fingerprint
+         FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?`,
+      ).get(ws) as Record<string, unknown>;
+      expect(String(row.active_operation_id)).toStartWith("sshinvalidate_");
+      expect(Object.entries(row)
+        .filter(([column]) => column !== "active_operation_id")
+        .every(([, value]) => value === null)).toBeTrue();
+
+      const plan = store.getDaemonRetirementPlan(ws, daemonId);
+      expect(store.retireDaemon(ws, daemonId, plan.snapshot, null)).toMatchObject({ status: "retired" });
+      expect(store.deleteWorkspace(ws)).toBeTrue();
+    } finally {
+      if (previousKey === undefined) delete process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY = previousKey;
+    }
+  });
+
+  it("records an idempotent explicit SSH key invalidation on Postgres", () => {
+    const ws = freshWorkspace();
+    const first = store.invalidateSshMeshKey(ws);
+    expect(first).toMatchObject({
+      enabled: false,
+      key_version: 1,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+    expect(store.invalidateSshMeshKey(ws)).toMatchObject({
+      enabled: false,
+      key_version: 1,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+    expect(store.deleteWorkspace(ws)).toBeTrue();
   });
 
   it("migrates and cleans complete Runtime auxiliary state on Postgres", () => {

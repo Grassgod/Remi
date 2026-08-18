@@ -400,6 +400,8 @@ describe("SSH Mesh file reconciliation", () => {
   it("bounds a hung config fetch and releases the reconciliation lease for retry", async () => {
     const home = tempHome();
     const paths = defaultSshMeshPaths("workspace-a", home);
+    let fetchSignal: AbortSignal | null = null;
+    let fetchReleased = false;
     const manager = new SshMeshManager({
       workspaceId: "workspace-a",
       daemonId: "daemon-source",
@@ -408,7 +410,16 @@ describe("SSH Mesh file reconciliation", () => {
       retryDelaysMs: [1],
       discoverIdentity: async () => localIdentity(),
       commandRunner: fakeRunner([]),
-      getConfig: async () => await new Promise<MultiremiDaemonSshMeshConfig>(() => {}),
+      getConfig: async (signal) => {
+        if (!signal) throw new Error("missing config fetch abort signal");
+        fetchSignal = signal;
+        return await new Promise<MultiremiDaemonSshMeshConfig>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            fetchReleased = true;
+            reject(signal.reason);
+          }, { once: true });
+        });
+      },
     });
     const startedAt = Date.now();
 
@@ -419,6 +430,9 @@ describe("SSH Mesh file reconciliation", () => {
       status: "error",
       last_error_code: "ssh_mesh_config_timeout",
     });
+    expect(fetchSignal).not.toBeNull();
+    expect(fetchSignal!.aborted).toBe(true);
+    expect(fetchReleased).toBe(true);
     const retryOwner = tryAcquireReconcileLock(paths.lockDirectory);
     expect(retryOwner).not.toBeNull();
     retryOwner!.release();

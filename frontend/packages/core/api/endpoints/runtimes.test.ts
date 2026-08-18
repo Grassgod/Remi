@@ -430,6 +430,80 @@ describe("RuntimesEndpoints SSH mesh", () => {
     ).rejects.toBeInstanceOf(ApiContractError);
   });
 
+  it("accepts the rekey-required response from an emergency disable", async () => {
+    const emergencyDisabled = {
+      ...overview,
+      enabled: false,
+      key_version: 3,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+      config_revision: "revision-4",
+      runtimes: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(emergencyDisabled));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(
+      endpoints.setSshMeshEnabled("ws-1", false, { invalidateKeys: true }),
+    ).resolves.toMatchObject({
+      enabled: false,
+      key_version: 3,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PUT",
+      body: JSON.stringify({ enabled: false, invalidate_keys: true }),
+    });
+  });
+
+  it("rejects a stable response to an explicit emergency invalidation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({
+        ...overview,
+        enabled: false,
+        fingerprint: null,
+        rotation_state: "stable",
+      })),
+    );
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(
+      endpoints.setSshMeshEnabled("ws-1", false, { invalidateKeys: true }),
+    ).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it("keeps an ordinary disable on the stable command path", async () => {
+    const stableDisabled = {
+      ...overview,
+      enabled: false,
+      rotation_state: "stable",
+      runtimes: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(stableDisabled));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    await expect(
+      endpoints.setSshMeshEnabled("ws-1", false),
+    ).resolves.toMatchObject({
+      enabled: false,
+      rotation_state: "stable",
+    });
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "PUT",
+      body: JSON.stringify({ enabled: false }),
+    });
+  });
+
   it.each([
     {},
     { ...overview, enabled: false },

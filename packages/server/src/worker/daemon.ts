@@ -164,6 +164,7 @@ function providerBootstrapEnv(
 }
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
+const TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
 
 export interface MultiremiDaemonOptions {
   serverUrl: string;
@@ -210,6 +211,8 @@ export interface MultiremiDaemonOptions {
   runtimeModelRetryMaxMs?: number;
   /** Injectable SSH Mesh lifecycle for daemon integration tests. */
   sshMeshManager?: MultiremiDaemonSshMeshRuntime;
+  /** Injectable retry schedule for terminal-authority SSH Mesh cleanup tests. */
+  terminalAuthorityCleanupRetryDelaysMs?: number[];
 }
 
 export interface MultiremiDaemonSshMeshRuntime {
@@ -269,7 +272,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -300,6 +303,7 @@ export class MultiremiDaemon {
   private ready = false;
   private activeTaskCount = 0;
   private inflight = new Set<Promise<void>>();
+  private activeTaskAborts = new Set<AbortController>();
   private claimsPaused = false;
   private restartRequestedFlag = false;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
@@ -311,7 +315,11 @@ export class MultiremiDaemon {
   private readonly agentPluginReconciler: AgentPluginRuntimeReconciler;
   private readonly agentPluginProviderPreflight: MultiremiAgentPluginProviderPreflight;
   private readonly sshMeshManager: MultiremiDaemonSshMeshRuntime;
+  private readonly terminalAuthorityCleanupRetryDelaysMs: number[];
   private terminalAuthorityCleanup: Promise<void> | null = null;
+  private terminalAuthorityCleanupRetryWake: (() => void) | null = null;
+  private terminalAuthorityMode = false;
+  private terminalAuthorityCleanupAttempts = 0;
   private agentPluginReconcileAbort: AbortController | null = null;
   private runtimeModels: MultiremiRuntimeModel[] | null = null;
   private runtimeRegistrationGeneration = 0;
@@ -374,15 +382,21 @@ export class MultiremiDaemon {
     this.onRestartRequested = options.onRestartRequested ?? null;
     this.agentPluginProviderPreflight = options.agentPluginProviderPreflight
       ?? ((provider, signal) => preflightAgentPluginProvider(provider, {}, signal));
+    const cleanupRetryDelays = (options.terminalAuthorityCleanupRetryDelaysMs ?? [])
+      .filter((delay) => Number.isFinite(delay) && delay > 0)
+      .map((delay) => Math.max(1, Math.floor(delay)));
+    this.terminalAuthorityCleanupRetryDelaysMs = cleanupRetryDelays.length
+      ? cleanupRetryDelays
+      : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
     this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token);
     this.sshMeshManager = options.sshMeshManager ?? new SshMeshManager({
       workspaceId: this.options.workspaceId ?? "local",
       daemonId: this.options.daemonId ?? this.options.runtimeName,
-      getConfig: async () => {
+      getConfig: async (signal) => {
         const runtimeId = this.options.runtimeId;
         if (!runtimeId) throw new Error("SSH Mesh configuration requested before Runtime registration");
-        return await this.client.getSshMeshConfig(runtimeId);
+        return await this.client.getSshMeshConfig(runtimeId, signal);
       },
     });
     this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot);
@@ -409,6 +423,8 @@ export class MultiremiDaemon {
     this.ready = false;
     this.stopped = false;
     this.claimsPaused = false;
+    this.terminalAuthorityMode = false;
+    this.terminalAuthorityCleanupAttempts = 0;
     this.restartRequestedFlag = false;
     this.startRepoCheckoutServer();
     this.startGcLoop();
@@ -476,7 +492,7 @@ export class MultiremiDaemon {
           // one-shot runs) still surfaces the error.
           if (isTerminalDaemonAuthorityError(err)) {
             log.error(
-              `daemon authorization was revoked or retired; stopping: ${err instanceof Error ? err.message : String(err)}`,
+              `daemon authorization was revoked or retired; entering cleanup-only mode: ${err instanceof Error ? err.message : String(err)}`,
             );
             await this.stopAfterTerminalAuthority();
             break;
@@ -489,7 +505,7 @@ export class MultiremiDaemon {
     } catch (error) {
       if (isTerminalDaemonAuthorityError(error)) {
         log.error(
-          `daemon authorization was revoked or retired during startup; stopping: ${error instanceof Error ? error.message : String(error)}`,
+          `daemon authorization was revoked or retired during startup; entering cleanup-only mode: ${error instanceof Error ? error.message : String(error)}`,
         );
         await this.stopAfterTerminalAuthority();
       }
@@ -640,7 +656,7 @@ export class MultiremiDaemon {
         this.reregisterGate.recordRegisterCompletion(workspaceId, Date.now(), error);
         if (isTerminalDaemonAuthorityError(error)) {
           log.error(
-            `Runtime cannot re-register because daemon authorization was revoked or retired; stopping: ${error instanceof Error ? error.message : String(error)}`,
+            `Runtime cannot re-register because daemon authorization was revoked or retired; entering cleanup-only mode: ${error instanceof Error ? error.message : String(error)}`,
           );
           await this.stopAfterTerminalAuthority();
           return false;
@@ -1053,20 +1069,63 @@ export class MultiremiDaemon {
 
   stop(): void {
     this.stopped = true;
+    this.terminalAuthorityCleanupRetryWake?.();
     this.agentPluginReconcileAbort?.abort();
     this.cancelRuntimeModelRefresh();
   }
 
   private async stopAfterTerminalAuthority(): Promise<void> {
     this.claimsPaused = true;
-    this.terminalAuthorityCleanup ??= this.sshMeshManager.cleanupForRetirement();
-    try {
-      await this.terminalAuthorityCleanup;
-    } catch (error) {
-      log.error(`SSH Mesh retirement cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      this.stop();
+    this.ready = false;
+    this.terminalAuthorityMode = true;
+    this.stopGcLoop();
+    for (const abort of this.activeTaskAborts) abort.abort();
+    this.agentPluginReconcileAbort?.abort();
+    this.cancelRuntimeModelRefresh();
+    this.terminalAuthorityCleanup ??= this.retryTerminalAuthorityCleanup();
+    await this.terminalAuthorityCleanup;
+  }
+
+  private async retryTerminalAuthorityCleanup(): Promise<void> {
+    let attempt = 0;
+    while (!this.stopped) {
+      attempt++;
+      this.terminalAuthorityCleanupAttempts = attempt;
+      try {
+        await this.sshMeshManager.cleanupForRetirement();
+        log.info(`SSH Mesh retirement cleanup completed after ${attempt} attempt${attempt === 1 ? "" : "s"}`);
+        this.stop();
+        return;
+      } catch (error) {
+        if (this.stopped) return;
+        const delay = this.terminalAuthorityCleanupRetryDelaysMs[
+          Math.min(attempt - 1, this.terminalAuthorityCleanupRetryDelaysMs.length - 1)
+        ]!;
+        log.error(
+          `SSH Mesh retirement cleanup attempt ${attempt} failed; retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await this.waitForTerminalAuthorityCleanupRetry(delay);
+      }
     }
+  }
+
+  private async waitForTerminalAuthorityCleanupRetry(delayMs: number): Promise<void> {
+    if (this.stopped) return;
+    await new Promise<void>((resolveWait) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.terminalAuthorityCleanupRetryWake === finish) {
+          this.terminalAuthorityCleanupRetryWake = null;
+        }
+        resolveWait();
+      };
+      const timer = setTimeout(finish, delayMs);
+      this.terminalAuthorityCleanupRetryWake = finish;
+      if (this.stopped) finish();
+    });
   }
 
   async runGcOnce(): Promise<MultiremiDaemonGcSummary> {
@@ -1109,6 +1168,7 @@ export class MultiremiDaemon {
     this.activeTaskCount++;
     log.info(`Claimed task ${task.id}`);
     const abort = new AbortController();
+    this.activeTaskAborts.add(abort);
     const cancelWatcher = this.watchCancellation(task.id, abort);
     let timedOut = false;
     const timeoutMs = Number.isFinite(this.options.taskTimeoutMs) ? Math.max(0, this.options.taskTimeoutMs) : 0;
@@ -1200,6 +1260,7 @@ export class MultiremiDaemon {
         });
       }
       resolvedWorkDir?.release?.();
+      this.activeTaskAborts.delete(abort);
       this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
       clearInterval(cancelWatcher);
       if (timeout) clearTimeout(timeout);
@@ -1721,6 +1782,9 @@ export class MultiremiDaemon {
     if (url.pathname === "/health") return this.handleHealthRequest(request);
     if (url.pathname === "/shutdown") return this.handleShutdownRequest(request);
     if (url.pathname !== "/repo/checkout") return jsonResponse({ error: "not found" }, 404);
+    if (this.terminalAuthorityMode) {
+      return jsonResponse({ error: "daemon is in terminal cleanup-only mode" }, 503);
+    }
     if (request.method !== "POST") return jsonResponse({ error: "method not allowed" }, 405);
     let body: Record<string, unknown>;
     try {
@@ -1757,6 +1821,8 @@ export class MultiremiDaemon {
     if (request.method !== "GET") return jsonResponse({ error: "method not allowed" }, 405);
     return jsonResponse({
       status: this.ready ? "running" : "starting",
+      mode: this.terminalAuthorityMode ? "cleanup_only" : this.ready ? "serving" : "starting",
+      ssh_mesh_cleanup_attempts: this.terminalAuthorityCleanupAttempts,
       pid: process.pid,
       uptime: formatDuration(Date.now() - this.startedAt.getTime()),
       runtime_id: this.options.runtimeId,

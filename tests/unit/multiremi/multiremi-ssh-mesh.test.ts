@@ -248,11 +248,15 @@ describe("Multiremi SSH Mesh", () => {
     });
   });
 
-  it("serializes concurrent key rotations and rejects another rotation while rollout is active", async () => {
+  it("rejects a stale ordinary disable after rotation and honors explicit invalidation", async () => {
     const { store, app, runtimeA, daemonA } = await setupFleet();
     await enableMesh(app);
     const initialConfig = await daemonConfig(app, runtimeA.id, daemonA.token);
     await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(initialConfig));
+    const uiObserved = await (await app.request("/api/workspaces/local/ssh-mesh", {
+      headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
+    })).json() as any;
+    expect(uiObserved).toMatchObject({ enabled: true, key_version: 1, rotation_state: "stable" });
 
     const responses = await Promise.all([
       app.request("/api/workspaces/local/ssh-mesh/rotate", {
@@ -269,6 +273,14 @@ describe("Multiremi SSH Mesh", () => {
       key_version: 2,
       rotation_state: "rolling_out",
     });
+    const rollingKeys = db!.query(
+      `SELECT active_key_version, active_operation_id, active_private_key_encrypted,
+              active_public_key, active_fingerprint, previous_private_key_encrypted,
+              previous_public_key, previous_fingerprint, enabled, rotation_state
+       FROM multiremi_workspace_ssh_mesh WHERE workspace_id = 'local'`,
+    ).get() as Record<string, unknown>;
+    expect(rollingKeys.active_private_key_encrypted).toBeString();
+    expect(rollingKeys.previous_private_key_encrypted).toBeString();
 
     const disableDuringRollout = await app.request("/api/workspaces/local/ssh-mesh", {
       method: "PUT",
@@ -277,17 +289,218 @@ describe("Multiremi SSH Mesh", () => {
     });
     expect(disableDuringRollout.status).toBe(409);
     expect(await disableDuringRollout.json()).toMatchObject({
-      error: "SSH Mesh key rotation is in progress; wait for rollout or invalidate the key",
+      code: "ssh_mesh_rotation_in_progress",
+      error: "SSH Mesh key rotation is in progress; confirm key invalidation to disable",
     });
-    expect(store.getSshMeshOverview("local")).toMatchObject({ enabled: true, rotation_state: "rolling_out" });
+    expect(db!.query(
+      `SELECT active_key_version, active_operation_id, active_private_key_encrypted,
+              active_public_key, active_fingerprint, previous_private_key_encrypted,
+              previous_public_key, previous_fingerprint, enabled, rotation_state
+       FROM multiremi_workspace_ssh_mesh WHERE workspace_id = 'local'`,
+    ).get()).toEqual(rollingKeys);
+    expect(store.getSshMeshOverview("local")).toMatchObject({
+      enabled: true,
+      key_version: 2,
+      rotation_state: "rolling_out",
+    });
+
+    const explicitInvalidation = await app.request("/api/workspaces/local/ssh-mesh", {
+      method: "PUT",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ enabled: false, invalidate_keys: true }),
+    });
+    expect(explicitInvalidation.status).toBe(200);
+    expect(await explicitInvalidation.json()).toMatchObject({
+      enabled: false,
+      key_version: 3,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+    const invalidated = db!.query(
+      `SELECT active_operation_id, active_private_key_encrypted, active_public_key, active_fingerprint,
+              previous_private_key_encrypted, previous_public_key, previous_fingerprint
+       FROM multiremi_workspace_ssh_mesh WHERE workspace_id = 'local'`,
+    ).get() as Record<string, unknown>;
+    expect(invalidated.active_operation_id).toBeString();
+    expect(invalidated.active_operation_id).not.toBe(rollingKeys.active_operation_id);
+    expect(String(invalidated.active_operation_id)).toStartWith("sshinvalidate_");
+    expect(Object.entries(invalidated)
+      .filter(([column]) => column !== "active_operation_id")
+      .every(([, value]) => value === null)).toBeTrue();
 
     const continuous = await app.request("/api/workspaces/local/ssh-mesh/rotate", {
       method: "POST",
       headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
     });
     expect(continuous.status).toBe(409);
-    expect(await continuous.json()).toMatchObject({ error: "SSH Mesh key rotation is already in progress" });
-    expect(store.getSshMeshOverview("local").key_version).toBe(2);
+    expect(await continuous.json()).toMatchObject({ error: "SSH Mesh must be enabled before its key can be rotated" });
+    expect(store.getSshMeshOverview("local").key_version).toBe(3);
+  });
+
+  it("makes concurrent emergency disables idempotent", async () => {
+    const { store, app, runtimeA, daemonA } = await setupFleet();
+    await enableMesh(app);
+    const initialConfig = await daemonConfig(app, runtimeA.id, daemonA.token);
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(initialConfig));
+    expect((await app.request("/api/workspaces/local/ssh-mesh/rotate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
+    })).status).toBe(200);
+
+    const disable = () => app.request("/api/workspaces/local/ssh-mesh", {
+      method: "PUT",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ enabled: false, invalidate_keys: true }),
+    });
+    const responses = await Promise.all([disable(), disable()]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(store.getSshMeshOverview("local")).toMatchObject({
+      enabled: false,
+      key_version: 3,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+  });
+
+  it("honors explicit key invalidation after a rollout becomes stable", async () => {
+    const { store, app, runtimeA, runtimeB, daemonA, daemonB } = await setupFleet();
+    await enableMesh(app);
+    await daemonHeartbeat(
+      app,
+      runtimeA.id,
+      daemonA.token,
+      readyStatusFor(await daemonConfig(app, runtimeA.id, daemonA.token)),
+    );
+    await daemonHeartbeat(
+      app,
+      runtimeB.id,
+      daemonB.token,
+      readyStatusFor(await daemonConfig(app, runtimeB.id, daemonB.token)),
+    );
+    await daemonHeartbeat(
+      app,
+      runtimeA.id,
+      daemonA.token,
+      readyStatusFor(await daemonConfig(app, runtimeA.id, daemonA.token)),
+    );
+    await daemonHeartbeat(
+      app,
+      runtimeB.id,
+      daemonB.token,
+      readyStatusFor(await daemonConfig(app, runtimeB.id, daemonB.token)),
+    );
+
+    const observedRolling = await app.request("/api/workspaces/local/ssh-mesh/rotate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
+    });
+    expect(observedRolling.status).toBe(200);
+    expect(await observedRolling.json()).toMatchObject({ key_version: 2, rotation_state: "rolling_out" });
+    const rolloutA = await daemonConfig(app, runtimeA.id, daemonA.token);
+    const rolloutB = await daemonConfig(app, runtimeB.id, daemonB.token);
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(rolloutA));
+    await daemonHeartbeat(app, runtimeB.id, daemonB.token, readyStatusFor(rolloutB));
+    expect(store.getSshMeshOverview("local")).toMatchObject({
+      enabled: true,
+      key_version: 2,
+      rotation_state: "stable",
+    });
+
+    const memberId = "ssh-invalidate-member-user";
+    store.createWorkspaceMember({
+      id: "ssh-invalidate-member",
+      workspaceId: "local",
+      userId: memberId,
+      name: "SSH invalidate member",
+      role: "member",
+    });
+    const memberToken = await store.createAccessToken({
+      name: "SSH invalidate member",
+      type: "pat",
+      workspaceId: "local",
+      userId: memberId,
+    });
+    const invalidate = (authorization: string, body: Record<string, unknown>) => app.request(
+      "/api/workspaces/local/ssh-mesh",
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${authorization}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    expect((await invalidate(daemonA.token, { enabled: false, invalidate_keys: true })).status).toBe(403);
+    expect((await invalidate(memberToken.token, { enabled: false, invalidate_keys: true })).status).toBe(403);
+    for (const body of [
+      { enabled: false, invalidate_keys: false },
+      { enabled: false, invalidate_keys: "true" },
+      { enabled: true, invalidate_keys: true },
+      { enabled: false, invalidate_keys: true, private_key: "forbidden" },
+      { invalidate_keys: true },
+    ]) {
+      expect((await invalidate(ROOT_TOKEN, body)).status).toBe(400);
+    }
+    expect(store.getSshMeshOverview("local")).toMatchObject({
+      enabled: true,
+      key_version: 2,
+      rotation_state: "stable",
+    });
+
+    const invalidatedResponse = await invalidate(ROOT_TOKEN, {
+      enabled: false,
+      invalidate_keys: true,
+    });
+    expect(invalidatedResponse.status).toBe(200);
+    expect(await invalidatedResponse.json()).toMatchObject({
+      enabled: false,
+      key_version: 3,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+    const firstInvalidation = db!.query(
+      `SELECT active_key_version, active_operation_id, active_private_key_encrypted,
+              active_public_key, active_fingerprint, previous_private_key_encrypted,
+              previous_public_key, previous_fingerprint
+       FROM multiremi_workspace_ssh_mesh WHERE workspace_id = 'local'`,
+    ).get() as Record<string, unknown>;
+    expect(String(firstInvalidation.active_operation_id)).toStartWith("sshinvalidate_");
+    expect(Object.entries(firstInvalidation)
+      .filter(([column]) => column !== "active_key_version" && column !== "active_operation_id")
+      .every(([, value]) => value === null)).toBeTrue();
+
+    const repeated = await invalidate(ROOT_TOKEN, { enabled: false, invalidate_keys: true });
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toMatchObject({
+      enabled: false,
+      key_version: 3,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+    const repeatedState = db!.query(
+      `SELECT active_key_version, active_operation_id
+       FROM multiremi_workspace_ssh_mesh WHERE workspace_id = 'local'`,
+    ).get() as Record<string, unknown>;
+    expect(repeatedState).toEqual({
+      active_key_version: firstInvalidation.active_key_version,
+      active_operation_id: firstInvalidation.active_operation_id,
+    });
+  });
+
+  it("records explicit invalidation before a mesh has ever been enabled", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const app = createMultiremiApp({ store, authToken: ROOT_TOKEN });
+    const response = await app.request("/api/workspaces/local/ssh-mesh", {
+      method: "PUT",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ enabled: false, invalidate_keys: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      enabled: false,
+      key_version: 1,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
   });
 
   it("fails closed when the server encryption key is not configured", async () => {
@@ -348,6 +561,47 @@ describe("Multiremi SSH Mesh", () => {
       key_version: 2,
       rotation_state: "rolling_out",
     });
+  });
+
+  it("fails a retirement rollout closed when an administrator disables the mesh", async () => {
+    const { store, app, runtimeA, daemonA } = await setupFleet();
+    await enableMesh(app);
+    const plan = store.getDaemonRetirementPlan("local", "daemon-b");
+    const retired = await app.request("/api/multiremi/daemons/daemon-b/retire", {
+      method: "POST",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ workspace_id: "local", expected_snapshot: plan.snapshot }),
+    });
+    expect(retired.status).toBe(200);
+    const rollingConfig = await daemonConfig(app, runtimeA.id, daemonA.token);
+    const retirementOperation = store.getDaemonRetirementSshMeshRekey("local", "daemon-b")?.operationId;
+
+    const disabled = await app.request("/api/workspaces/local/ssh-mesh", {
+      method: "PUT",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ enabled: false, invalidate_keys: true }),
+    });
+    expect(disabled.status).toBe(200);
+    expect(await disabled.json()).toMatchObject({
+      enabled: false,
+      key_version: 3,
+      fingerprint: null,
+      rotation_state: "rekey_required",
+    });
+    expect(store.getDaemonRetirementSshMeshRekey("local", "daemon-b")).toMatchObject({
+      status: "rekey_required",
+      operationId: retirementOperation,
+      replacementKeyVersion: null,
+    });
+    const activeOperation = (db!.query(
+      "SELECT active_operation_id FROM multiremi_workspace_ssh_mesh WHERE workspace_id = 'local'",
+    ).get() as { active_operation_id: string }).active_operation_id;
+    expect(activeOperation).toStartWith("sshinvalidate_");
+    expect(activeOperation).not.toBe(retirementOperation);
+
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(rollingConfig));
+    expect(store.getDaemonRetirementSshMeshRekey("local", "daemon-b"))
+      .toMatchObject({ status: "rekey_required", replacementKeyVersion: null });
   });
 
   it("invalidates all shared key material when retirement rotation fails and creates a fresh key on re-enable", async () => {
@@ -654,7 +908,7 @@ describe("Multiremi SSH Mesh", () => {
     expect(localAlias).not.toBe(remoteAlias);
   });
 
-  it("requires daemon retirement and confirmed SSH cleanup before deleting a workspace", async () => {
+  it("cleans retired daemon SSH state and deletes after the surviving daemon removes access", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const workspace = store.createWorkspace({
@@ -662,28 +916,74 @@ describe("Multiremi SSH Mesh", () => {
       name: "SSH Delete Guard",
       slug: "ssh-delete-guard",
     });
-    const runtime = store.registerRuntime({
-      id: "rt-ssh-delete-guard",
-      name: "Delete guard daemon",
+    const runtimeA = store.registerRuntime({
+      id: "rt-ssh-delete-guard-a",
+      name: "Delete guard daemon A",
       provider: "claude",
-      daemonId: "daemon-delete-guard",
+      daemonId: "daemon-delete-guard-a",
       workspaceId: workspace.id,
     });
-    const daemon = await store.createAccessToken({
-      name: "Delete guard daemon",
+    const runtimeB = store.registerRuntime({
+      id: "rt-ssh-delete-guard-b",
+      name: "Delete guard daemon B",
+      provider: "claude",
+      daemonId: "daemon-delete-guard-b",
+      workspaceId: workspace.id,
+    });
+    const daemonA = await store.createAccessToken({
+      name: "Delete guard daemon A",
       type: "daemon",
-      daemonId: "daemon-delete-guard",
+      daemonId: "daemon-delete-guard-a",
+      workspaceId: workspace.id,
+      userId: "local",
+    });
+    const daemonB = await store.createAccessToken({
+      name: "Delete guard daemon B",
+      type: "daemon",
+      daemonId: "daemon-delete-guard-b",
       workspaceId: workspace.id,
       userId: "local",
     });
     const app = createMultiremiApp({ store, authToken: ROOT_TOKEN });
     const meshPath = `/api/workspaces/${workspace.id}/ssh-mesh`;
 
-    expect((await app.request(meshPath, {
+    const enabled = await (await app.request(meshPath, {
       method: "PUT",
       headers: rootJsonHeaders(),
       body: JSON.stringify({ enabled: true }),
-    })).status).toBe(200);
+    })).json() as any;
+    expect(enabled).toMatchObject({ enabled: true, rotation_state: "stable" });
+
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, {
+      ...readyStatusFor(await daemonConfig(app, runtimeA.id, daemonA.token)),
+      ssh_user: "mesh-user-a",
+      hostname: "mesh-a",
+      addresses: ["10.0.0.1"],
+      host_keys: ["ssh-ed25519 AAAATEST-A"],
+    });
+    await daemonHeartbeat(app, runtimeB.id, daemonB.token, {
+      ...readyStatusFor(await daemonConfig(app, runtimeB.id, daemonB.token)),
+      ssh_user: "mesh-user-b",
+      hostname: "mesh-b",
+      addresses: ["10.0.0.2"],
+      host_keys: ["ssh-ed25519 AAAATEST-B"],
+      peers: [{ daemon_id: "daemon-delete-guard-a", status: "ready", latency_ms: 4 }],
+      public_key_installed: true,
+      config_installed: true,
+    });
+    await daemonHeartbeat(
+      app,
+      runtimeA.id,
+      daemonA.token,
+      readyStatusFor(await daemonConfig(app, runtimeA.id, daemonA.token)),
+    );
+    await daemonHeartbeat(
+      app,
+      runtimeB.id,
+      daemonB.token,
+      readyStatusFor(await daemonConfig(app, runtimeB.id, daemonB.token)),
+    );
+
     const activeDelete = await app.request(`/api/workspaces/${workspace.id}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
@@ -691,49 +991,95 @@ describe("Multiremi SSH Mesh", () => {
     expect(activeDelete.status).toBe(409);
     expect(await activeDelete.json()).toMatchObject({
       code: "daemon_retirement_required",
-      daemon_ids: ["daemon-delete-guard"],
+      daemon_ids: ["daemon-delete-guard-a", "daemon-delete-guard-b"],
     });
+
+    const planB = store.getDaemonRetirementPlan(workspace.id, "daemon-delete-guard-b");
+    const retiredB = await app.request("/api/multiremi/daemons/daemon-delete-guard-b/retire", {
+      method: "POST",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ workspace_id: workspace.id, expected_snapshot: planB.snapshot }),
+    });
+    expect(retiredB.status).toBe(200);
+    expect(await retiredB.json()).toMatchObject({
+      ssh_mesh_key_rotation: { status: "rolling_out", key_version: 2 },
+    });
+    const cleanedB = db!.query(
+      `SELECT runtime_id, protocol_version, status, key_version, config_revision,
+              ssh_user, hostname, addresses, host_keys, public_key_installed,
+              config_installed, peer_tests, probe_revision, desired_probe_revision,
+              probe_target_daemon_ids, last_error_code, last_error
+       FROM multiremi_daemon_ssh_mesh_states
+       WHERE workspace_id = ? AND daemon_id = 'daemon-delete-guard-b'`,
+    ).get(workspace.id) as Record<string, unknown>;
+    expect(cleanedB).toMatchObject({
+      runtime_id: null,
+      protocol_version: 0,
+      status: "cleaned",
+      key_version: null,
+      config_revision: null,
+      ssh_user: null,
+      hostname: null,
+      addresses: "[]",
+      host_keys: "[]",
+      public_key_installed: 0,
+      config_installed: 0,
+      peer_tests: "[]",
+      probe_revision: 0,
+      desired_probe_revision: 0,
+      probe_target_daemon_ids: "[]",
+      last_error_code: null,
+      last_error: null,
+    });
+    expect((await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${daemonB.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: runtimeB.id,
+        ssh_mesh_protocol: 1,
+        ssh_mesh_status: readyStatusFor(enabled),
+      }),
+    })).status).toBe(401);
+    expect((db!.query(
+      `SELECT status FROM multiremi_daemon_ssh_mesh_states
+       WHERE workspace_id = ? AND daemon_id = 'daemon-delete-guard-b'`,
+    ).get(workspace.id) as { status: string }).status).toBe("cleaned");
+
+    const rolloutConfig = await daemonConfig(app, runtimeA.id, daemonA.token);
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(rolloutConfig));
+    expect(store.getDaemonRetirementSshMeshRekey(workspace.id, "daemon-delete-guard-b"))
+      .toMatchObject({ status: "completed", replacementKeyVersion: 2 });
+    await daemonHeartbeat(
+      app,
+      runtimeA.id,
+      daemonA.token,
+      readyStatusFor(await daemonConfig(app, runtimeA.id, daemonA.token)),
+    );
 
     const disabled = await (await app.request(meshPath, {
       method: "PUT",
       headers: rootJsonHeaders(),
       body: JSON.stringify({ enabled: false }),
     })).json() as any;
-    await daemonHeartbeat(app, runtime.id, daemon.token, {
+    expect(disabled).toMatchObject({ enabled: false, rotation_state: "stable", key_version: 2 });
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, {
       status: "disabled",
       key_version: disabled.key_version,
       config_revision: disabled.config_revision,
       public_key_installed: false,
       config_installed: false,
     });
-    const plan = store.getDaemonRetirementPlan(workspace.id, "daemon-delete-guard");
-    const retired = await app.request("/api/multiremi/daemons/daemon-delete-guard/retire", {
+
+    const planA = store.getDaemonRetirementPlan(workspace.id, "daemon-delete-guard-a");
+    const retiredA = await app.request("/api/multiremi/daemons/daemon-delete-guard-a/retire", {
       method: "POST",
       headers: rootJsonHeaders(),
-      body: JSON.stringify({ workspace_id: workspace.id, expected_snapshot: plan.snapshot }),
+      body: JSON.stringify({ workspace_id: workspace.id, expected_snapshot: planA.snapshot }),
     });
-    expect(retired.status).toBe(200);
-
-    const cleanupRequired = await app.request(`/api/workspaces/${workspace.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
+    expect(retiredA.status).toBe(200);
+    expect(await retiredA.json()).toMatchObject({
+      ssh_mesh_key_rotation: { status: "rekey_required", key_version: 3 },
     });
-    expect(cleanupRequired.status).toBe(409);
-    expect(await cleanupRequired.json()).toMatchObject({
-      code: "ssh_mesh_cleanup_required",
-      ssh_mesh: { enabled: false, rotation_state: "rekey_required" },
-    });
-
-    expect((await app.request(meshPath, {
-      method: "PUT",
-      headers: rootJsonHeaders(),
-      body: JSON.stringify({ enabled: true }),
-    })).status).toBe(200);
-    expect((await app.request(meshPath, {
-      method: "PUT",
-      headers: rootJsonHeaders(),
-      body: JSON.stringify({ enabled: false }),
-    })).status).toBe(200);
     expect((await app.request(`/api/workspaces/${workspace.id}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${ROOT_TOKEN}` },

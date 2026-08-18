@@ -74,6 +74,13 @@ export class SshMeshProbeConflictError extends Error {
   }
 }
 
+export class SshMeshMutationConflictError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "SshMeshMutationConflictError";
+  }
+}
+
 interface SshMeshWorkspaceConfigRow {
   workspaceId: string;
   enabled: boolean;
@@ -273,7 +280,10 @@ export class SshMeshRepo {
       return this.getOverview(workspaceId);
     }
     if (!enabled && current.rotationState === "rolling_out") {
-      throw new Error("SSH Mesh key rotation is in progress; wait for rollout or invalidate the key");
+      throw new SshMeshMutationConflictError(
+        "ssh_mesh_rotation_in_progress",
+        "SSH Mesh key rotation is in progress; confirm key invalidation to disable",
+      );
     }
     if (enabled && !current.activePrivateKeyEncrypted) {
       throw new Error("SSH Mesh key material is missing");
@@ -285,9 +295,23 @@ export class SshMeshRepo {
     return this.getOverview(workspaceId);
   }
 
-  invalidate(workspaceId: string, operationId: string | null = null): SshMeshBrowserOverview {
+  invalidate(
+    workspaceId: string,
+    operationId: string | null = createId("sshinvalidate"),
+  ): SshMeshBrowserOverview {
+    this.assertWorkspaceExists(workspaceId);
     const current = this.getWorkspaceConfig(workspaceId);
-    if (!current) return this.getOverview(workspaceId);
+    if (!current) {
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_workspace_ssh_mesh (
+           workspace_id, enabled, active_key_version, active_operation_id,
+           rotation_state, created_at, updated_at
+         ) VALUES (?, 0, 1, ?, 'rekey_required', ?, ?)`,
+        [workspaceId, operationId, now, now],
+      );
+      return this.getOverview(workspaceId);
+    }
     this.ctx.db.run(
       `UPDATE multiremi_workspace_ssh_mesh
        SET enabled = 0, active_key_version = active_key_version + 1,

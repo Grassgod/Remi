@@ -14,6 +14,8 @@ export type SupportedDaemonProvider = typeof SUPPORTED_DAEMON_PROVIDERS[number];
 
 export interface MultiremiDaemonHealth {
   status?: string;
+  mode?: "starting" | "serving" | "cleanup_only";
+  ssh_mesh_cleanup_attempts?: number;
   pid?: number;
   uptime?: string;
   runtime_id?: string | null;

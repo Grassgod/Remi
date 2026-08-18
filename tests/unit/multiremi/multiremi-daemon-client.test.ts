@@ -124,4 +124,28 @@ describe("MultiremiDaemonClient SSH Mesh wire", () => {
     expect(requestedUrl).toBe("https://remi.example/api/daemon/ssh-mesh/config?runtime_id=runtime%2Fa");
     expect(authorization).toBe("Bearer daemon-token");
   });
+
+  it("forwards cancellation to the SSH Mesh configuration request", async () => {
+    let requestSignal: AbortSignal | null = null;
+    let requestReleased = false;
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? null;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => {
+          requestReleased = true;
+          reject(requestSignal?.reason);
+        }, { once: true });
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const controller = new AbortController();
+    const request = new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .getSshMeshConfig("runtime-1", controller.signal);
+
+    controller.abort(new Error("test cancellation"));
+
+    await expect(request).rejects.toThrow("test cancellation");
+    expect(requestSignal).not.toBeNull();
+    expect(requestSignal as unknown as AbortSignal).toBe(controller.signal);
+    expect(requestReleased).toBe(true);
+  });
 });
