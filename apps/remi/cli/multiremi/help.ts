@@ -54,19 +54,22 @@ Commands:
   issue metadata get <id> --key <k>
   issue metadata set <id> --key <k> --value <v> [--type string|number|bool]
   issue metadata delete <id> --key <k>
-  project doc list <project-id> List project wiki pages and memory entries
-  project doc get <project-id> <slug-or-id>
-  project doc create <project-id> --kind wiki|memory --title <t>
-  project doc update <project-id> <slug-or-id>
-  project doc delete <project-id> <slug-or-id>
-  project doc search <project-id> <query>
-  project doc revisions <project-id> <slug-or-id>
-  project memory recall <project-id> <query>
-  project memory remember <project-id> --title <one-sentence fact>
-  project memory forget <project-id> <slug-or-id>
-  project memory backlinks <project-id> <slug-or-id>
+  memory list            List memory in the workspace or --project scope
+  memory recall <query>  Semantically recall memory
+  memory read <ref>      Read memory (requires --project)
+  memory remember        Store memory (requires --project and --title)
+  memory update <ref>    Update memory (requires --project)
+  memory forget <ref>    Delete memory (requires --project)
+  memory backlinks <ref> List pages linking to memory (requires --project)
+  wiki list              List wiki pages in the workspace or --project scope
+  wiki search <query>    Semantically search wiki pages
+  wiki read <ref>        Read a wiki page (requires --project)
+  wiki create            Create a wiki page (requires --project and --title)
+  wiki update <ref>      Update a wiki page (requires --project)
+  wiki delete <ref>      Delete a wiki page (requires --project)
+  wiki history <ref>     Read wiki revision history (requires --project)
+  wiki backlinks <ref>   List pages linking to a wiki page (requires --project)
   project knowledge status|backfill|verify|retry-failed [project-id]
-  seed                   Create a default local agent
   version                Print Multiremi version
 
 Options:
@@ -113,17 +116,17 @@ Agent edit options:
   --description-file <p> Read description from a file
   --instructions-file <p> Read instructions from a file
 
-Project knowledge options:
-  --kind wiki|memory     Doc kind for project doc create/list/search
-  --title <text>         Doc title (a one-sentence fact for memory add)
-  --slug <slug>          Explicit slug for project doc create instead of one derived from the title
-  --summary <text>       Short summary shown in listings and prompt injection
+Memory and wiki options:
+  --project <id>         Restrict reads, or select the project for mutations
+  --title <text>         Page title or one-sentence memory fact
+  --slug <slug>          Explicit slug instead of one derived from the title
+  --summary <text>       Short summary shown in listings
   --tags a,b             Comma-separated tags
   --pinned [true|false]  Pin the doc into the prompt injection index
   --ref <type>:<value>   Cite a source: issue:<id>, task:<id>, url:<url> (repeatable;
                          also links a published Session result)
   --expected-version <n> Fail the update when the doc moved on (409)
-  --limit <n>            Result cap for project doc search
+  --limit <n>            Result cap for search or recall
   --dry-run              Report knowledge migration work without writing
   --resume               Resume SQL/pending/failed knowledge migration rows
 `);

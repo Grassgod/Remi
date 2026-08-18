@@ -411,9 +411,9 @@ function appendProjectKnowledgeSections(sections: string[], projectId: string): 
   sections.push("## Project Knowledge");
   sections.push("Project Memory and Wiki bodies are intentionally not embedded in this prompt. Retrieve only what this task needs.");
   sections.push("Preferred path: use the `multiremi-project-knowledge` MCP tools in two steps: call `recall` with a focused query, then call `read` for relevant hits before relying on them.");
-  sections.push(`CLI fallback: \`remi project memory recall ${projectId} "<query>"\`, then \`remi project doc get ${projectId} <slug-or-id>\`.`);
+  sections.push(`CLI fallback: \`remi memory recall "<query>" --project ${projectId}\`, then \`remi memory read <slug-or-id> --project ${projectId}\` or \`remi wiki read <slug-or-id> --project ${projectId}\`.`);
   sections.push("");
-  sections.push("When durable knowledge changes, search before writing. Update an existing entry rather than creating a duplicate; use MCP `remember`/`update` or the equivalent `remi project doc` commands, cite `issue:`/`task:`/`url:` provenance, and skip one-off details.");
+  sections.push("When durable knowledge changes, search before writing. Update an existing entry rather than creating a duplicate; use MCP `remember`/`update` or the equivalent `remi memory`/`remi wiki` commands, cite `issue:`/`task:`/`url:` provenance, and skip one-off details.");
 }
 
 function lastPathSegment(path: string): string {

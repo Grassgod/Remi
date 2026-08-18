@@ -46,13 +46,14 @@ export function printProjectDocCollection(value: unknown, options: CliOptions): 
     return;
   }
   printTable(extractList(value, "docs"), [
+    { header: "PROJECT", value: (row) => field(row, "project_title", "projectTitle", "project_id", "projectId"), maxWidth: 24 },
     { header: "SLUG", value: (row) => field(row, "slug"), maxWidth: 28 },
     { header: "KIND", value: (row) => field(row, "kind") },
     { header: "TITLE", value: (row) => field(row, "title"), maxWidth: 48 },
     { header: "PINNED", value: (row) => field(row, "pinned") ? "yes" : "" },
     { header: "VERSION", value: (row) => field(row, "version") },
     { header: "UPDATED", value: (row) => shortDate(field(row, "updated_at", "updatedAt")) },
-  ], "No project docs found.");
+  ], "No knowledge found.");
 }
 
 export function printProjectKnowledgeHits(value: unknown, options: CliOptions): void {

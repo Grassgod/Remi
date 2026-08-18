@@ -30,7 +30,7 @@ Before migration, back up the SQL database and the OpenViking data, vector-store
 ## Phase 1: SQL Baseline
 
 1. Deploy the schema and service changes with mode `sql`.
-2. Confirm the existing REST, frontend, and `remi project doc` workflows.
+2. Confirm the REST, frontend, and top-level `remi memory` / `remi wiki` workflows.
 3. Check control-plane counts:
 
 ```bash

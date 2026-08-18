@@ -53,7 +53,7 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("## Available Repositories");
     expect(artifact.prompt).toContain("## Agent Instructions");
     expect(artifact.prompt).toContain("## Output");
-    expect(artifact.prompt).toContain(`remi project memory recall ${project.id}`);
+    expect(artifact.prompt).toContain(`remi memory recall "<query>" --project ${project.id}`);
   });
 
   it("does not embed Memory, Wiki, or schema bodies in a bootstrap prompt", () => {
