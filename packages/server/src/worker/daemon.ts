@@ -1502,6 +1502,7 @@ export class MultiremiDaemon {
       const session = new AgentSession(provider as any, config);
       const promptArtifact = buildTaskPromptArtifact(task, { repoCheckouts: preparedWorkspace.checkouts });
       await this.client.reportTaskPrompt(task.id, promptArtifact);
+      signal.throwIfAborted();
       for await (const event of session.run(promptArtifact.prompt)) {
         // One event may yield several messages (e.g. a completed tool_call →
         // tool_use + tool_result). Each gets its own seq so none collides.
