@@ -4,6 +4,7 @@ import type {
   AgentTask,
   IssueUsageSummary,
   TaskMessagePayload,
+  TaskPromptArtifact,
 } from "../../types";
 import { normalizeTaskMessages } from "../../chat/normalize-message";
 import type { HttpClient } from "../http";
@@ -45,6 +46,10 @@ export class TasksEndpoints {
     // GET returns the camelCase store object; the WS wire is snake_case. Funnel
     // both through the one normalizer so the cache holds a single shape.
     return normalizeTaskMessages(await this.http.fetch(`/api/tasks/${taskId}/messages`));
+  }
+
+  async getTaskPrompt(taskId: string): Promise<TaskPromptArtifact> {
+    return this.http.fetch(`/api/tasks/${taskId}/prompt`);
   }
 
   async listTaskHumanRequests(taskId: string): Promise<unknown> {

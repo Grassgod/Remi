@@ -63,6 +63,12 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining(["issue_kind", "source_issue_id"]));
     expect(columnNames(database, "multiremi_agent_plugin_bindings")).not.toContain("task_kind");
+    expect(columnNames(database, "multiremi_project_docs")).toEqual(expect.arrayContaining([
+      "storage_backend", "content_uri", "content_sha256", "sync_status", "sync_error", "snapshot_oid",
+    ]));
+    expect(columnNames(database, "multiremi_project_doc_revisions")).toEqual(expect.arrayContaining([
+      "content_uri", "content_sha256", "snapshot_oid",
+    ]));
   });
 
   it("classifies legacy access tokens by their actual purpose", () => {

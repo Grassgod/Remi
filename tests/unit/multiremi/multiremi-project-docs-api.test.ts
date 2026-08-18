@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
 import { createStore, db, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -26,6 +27,12 @@ describe("Bun Multiremi project docs API", () => {
 
     const searched = await app.request(`/api/projects/${project.id}/docs?q=arm64`);
     expect((await searched.json()).docs.map((doc: any) => doc.title)).toEqual(["The CI box is arm64"]);
+
+    const recalled = await app.request(`/api/projects/${project.id}/knowledge/recall?q=arm64&kind=memory`);
+    const recallHit = (await recalled.json()).hits[0];
+    expect(recallHit.title).toBe("The CI box is arm64");
+    expect(recallHit.body).toBeUndefined();
+    expect(recallHit.uri).toContain("/knowledge/memory/");
 
     const searchedLimit = await app.request(`/api/projects/${project.id}/docs?q=e&limit=1`);
     expect((await searchedLimit.json()).docs).toHaveLength(1);
@@ -53,6 +60,55 @@ describe("Bun Multiremi project docs API", () => {
 
     expect((await app.request(`/api/projects/${project.id}/docs/nope`)).status).toBe(404);
     expect((await app.request("/api/projects/prj_missing/docs")).status).toBe(404);
+  });
+
+  it("returns an explicit 503 when OpenViking content is not ready", async () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Unavailable knowledge" });
+    const doc = store.createProjectDoc(project.id, { kind: "wiki", title: "Runbook", body: "SQL rollback copy" });
+    const projectKnowledge = new ProjectKnowledgeService(store, {} as any, "openviking");
+    const app = createMultiremiApp({ store, projectKnowledge });
+
+    const read = await app.request(`/api/projects/${project.id}/docs/${doc.id}`);
+    expect(read.status).toBe(503);
+    expect((await read.json()).error).toContain("not ready");
+    const deleted = await app.request(`/api/projects/${project.id}/docs/${doc.id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(503);
+    expect(store.getProjectDoc(doc.id)).not.toBeNull();
+  });
+
+  it("exposes migration status and dry-run only to workspace administrators", async () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Migration API" });
+    store.createProjectDoc(project.id, { kind: "memory", title: "Fact", body: "legacy SQL" });
+    const agent = store.createAgent({ name: "Migration agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Migration task", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const rootHeaders = { Authorization: "Bearer root-secret" };
+
+    const status = await app.request("/api/project-knowledge/migration?workspace_id=local", { headers: rootHeaders });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ mode: "sql", openviking: "not_configured", total: 2, sql: 2 });
+    const dryRun = await app.request("/api/project-knowledge/migration/backfill", {
+      method: "POST",
+      headers: { ...rootHeaders, ...JSON_HEADERS },
+      body: JSON.stringify({ workspace_id: "local", project_id: project.id, dry_run: true }),
+    });
+    expect(dryRun.status).toBe(200);
+    expect(await dryRun.json()).toMatchObject({ dryRun: true, scanned: 2, migrated: 2, failed: 0 });
+    const verify = await app.request("/api/project-knowledge/migration/verify", {
+      method: "POST",
+      headers: { ...rootHeaders, ...JSON_HEADERS },
+      body: JSON.stringify({ workspace_id: "local" }),
+    });
+    expect(verify.status).toBe(503);
+
+    const forbidden = await app.request("/api/project-knowledge/migration?workspace_id=local", {
+      headers: { Authorization: `Bearer ${taskToken.token}` },
+    });
+    expect(forbidden.status).toBe(403);
   });
 
   it("creates docs with member provenance and round-trips refs", async () => {
@@ -508,7 +564,7 @@ describe("Bun Multiremi project docs API", () => {
     expect(await listed.json()).toEqual({ error: "forbidden" });
   });
 
-  it("attaches the project knowledge index to a daemon claim", async () => {
+  it("keeps project knowledge out of the daemon claim so agents retrieve it on demand", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const project = store.createProject({ title: "Claim docs" });
@@ -522,22 +578,10 @@ describe("Bun Multiremi project docs API", () => {
     const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
     expect(claim.status).toBe(200);
     const claimed = (await claim.json()).task;
-    expect(claimed.project_docs.memory).toEqual([
-      expect.objectContaining({
-        slug: "build-needs-bun-1-2",
-        title: "Build needs bun 1.2",
-        body: "install via curl",
-        kind: "memory",
-        pinned: true,
-        source_issue_id: null,
-      }),
-    ]);
-    // `_schema` rides the schema field instead of taking a wiki slot.
-    expect(claimed.project_docs.wiki.map((entry: any) => entry.slug)).toEqual(["architecture"]);
-    expect(claimed.project_docs.wiki[0]).toMatchObject({ summary: "Hub and spoke", body: null, kind: "wiki" });
-    expect(claimed.project_docs.schema).toContain("Wiki Schema");
+    expect(claimed.project_docs).toBeUndefined();
 
-    // The daemon client normalizes the wire shape back to camelCase entries.
+    // The daemon client keeps backward-compatible parsing for old servers, but
+    // new claims do not transport a bulk knowledge index or document bodies.
     store.completeTask(claimed.id, { output: "done" });
     store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "go again" });
     mockFetch((url, init) => {
@@ -545,18 +589,27 @@ describe("Bun Multiremi project docs API", () => {
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
     const normalized = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
-    const memoryEntry = normalized?.projectDocs?.memory[0];
-    const wikiEntry = normalized?.projectDocs?.wiki[0];
-    expect(memoryEntry).toMatchObject({
-      slug: "build-needs-bun-1-2",
-      title: "Build needs bun 1.2",
-      body: "install via curl",
-      kind: "memory",
-      pinned: true,
-      sourceIssueId: null,
+    expect(normalized?.projectDocs).toBeNull();
+  });
+
+  it("fails and retries a claimed task when project knowledge cannot be hydrated", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ name: "Knowledge runtime", provider: "claude" });
+    const agent = store.createAgent({ name: "Knowledge agent", provider: "claude", runtimeId: runtime.id });
+    const project = store.createProject({ title: "Knowledge project" });
+    const issue = store.createIssue({ title: "Needs knowledge", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", maxAttempts: 2 });
+    const projectKnowledge = new ProjectKnowledgeService(store, null, "sql");
+    projectKnowledge.hydrateTaskKnowledge = async () => { throw new Error("planned OpenViking outage"); };
+    const app = createMultiremiApp({ store, projectKnowledge });
+
+    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    expect(claim.status).toBe(503);
+    expect(await claim.json()).toEqual({ error: "project knowledge unavailable", retryable: true });
+    expect(store.getTask(task.id)).toMatchObject({
+      status: "failed",
+      failureReason: "project_knowledge_unavailable",
     });
-    expect(memoryEntry?.updatedAt).toBeString();
-    expect(wikiEntry).toMatchObject({ slug: "architecture", summary: "Hub and spoke", body: null, kind: "wiki" });
-    expect(normalized?.projectDocs?.schema).toContain("Wiki Schema");
+    expect(store.listTasks().some((candidate) => candidate.status === "queued" && candidate.issueId === issue.id)).toBe(true);
   });
 });

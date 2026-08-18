@@ -163,6 +163,14 @@ export interface AgentTask {
   }>;
 }
 
+export interface TaskPromptArtifact {
+  task_id: string;
+  mode: "bootstrap" | "delta";
+  prompt: string;
+  sha256: string;
+  assembled_at: string;
+}
+
 export interface Agent {
   id: string;
   workspace_id: string;

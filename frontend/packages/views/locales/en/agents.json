@@ -409,6 +409,13 @@
   },
   "transcript": {
     "dialog_title": "Agent Execution Transcript",
+    "execution_view": "Execution",
+    "prompt_view": "Input Prompt",
+    "copy_prompt": "Copy prompt",
+    "prompt_hash": "SHA-256: {{hash}}",
+    "prompt_loading": "Loading input prompt...",
+    "prompt_not_recorded": "No input prompt was recorded. This task may have run on an older runtime.",
+    "prompt_load_failed": "The input prompt could not be loaded. Try again later.",
     "status_queued": "Queued",
     "status_dispatched": "Starting",
     "status_waiting_local_directory": "Waiting for local directory",

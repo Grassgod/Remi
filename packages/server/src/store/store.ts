@@ -192,6 +192,7 @@ import type {
   MultiremiTaskActivityByHour,
   MultiremiTaskHumanRequest,
   MultiremiTaskMessage,
+  MultiremiTaskPromptArtifact,
   MultiremiTaskStatus,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
@@ -206,6 +207,7 @@ import type {
   MultiremiWorkspaceInvitation,
   MultiremiWorkspaceMember,
   RegisterRuntimeInput,
+  RecordTaskPromptInput,
   ReportAgentPluginRuntimeStateInput,
   ReportIssueWorkspaceInput,
   ReorderPinnedItemInput,
@@ -235,6 +237,7 @@ import type {
   UpdateSquadInput,
   UpdateWorkspaceMemberInput,
 } from "@multiremi/contracts/types.js";
+import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/types.js";
 
 // daemonRuntimeId / isTerminalStatus used to live here; api.ts and index.ts import them from this module.
 export { daemonRuntimeId, isTerminalStatus };
@@ -1825,8 +1828,38 @@ runMigrations(this.db);
     return this.projects.createProjectDoc(projectId, input);
   }
 
+  createProjectDocMetadata(
+    projectId: string,
+    input: CreateProjectDocInput,
+    control: ProjectKnowledgeWriteControl,
+  ): MultiremiProjectDoc {
+    return this.projects.createProjectDocMetadata(projectId, input, control);
+  }
+
   updateProjectDoc(projectId: string, ref: string, input: UpdateProjectDocInput): MultiremiProjectDoc {
     return this.projects.updateProjectDoc(projectId, ref, input);
+  }
+
+  replaceProjectDocMetadataExact(
+    prepared: MultiremiProjectDoc,
+    control: ProjectKnowledgeWriteControl,
+  ): MultiremiProjectDoc {
+    return this.projects.replaceProjectDocMetadataExact(prepared, control);
+  }
+
+  setProjectDocSyncState(
+    docId: string,
+    input: Partial<ProjectKnowledgeWriteControl> & { storageBackend?: "sql" | "openviking" },
+  ): MultiremiProjectDoc {
+    return this.projects.setProjectDocSyncState(docId, input);
+  }
+
+  setProjectDocRevisionStorage(docId: string, version: number, contentUri: string, contentSha256: string, snapshotOid: string | null): void {
+    this.projects.setProjectDocRevisionStorage(docId, version, contentUri, contentSha256, snapshotOid);
+  }
+
+  listProjectDocsForMigration(workspaceId: string, statuses: string[] = []): MultiremiProjectDoc[] {
+    return this.projects.listProjectDocsForMigration(workspaceId, statuses);
   }
 
   deleteProjectDoc(projectId: string, ref: string): void {
@@ -2185,6 +2218,14 @@ runMigrations(this.db);
 
   listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {
     return this.tasks.listTaskMessages(taskId, sinceSeq);
+  }
+
+  recordTaskPrompt(taskId: string, input: RecordTaskPromptInput): MultiremiTaskPromptArtifact {
+    return this.tasks.recordTaskPrompt(taskId, input);
+  }
+
+  getTaskPrompt(taskId: string): MultiremiTaskPromptArtifact | null {
+    return this.tasks.getTaskPrompt(taskId);
   }
 
   completeTask(taskId: string, input: {

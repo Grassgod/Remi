@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
+import { handleProjectKnowledgeMcpRequest } from "../../../apps/remi/cli/multiremi/project-knowledge-mcp.js";
 
 interface RecordedRequest {
   method: string;
@@ -64,6 +65,14 @@ async function withDocsServer(
       };
       if (request.method !== "GET" && request.method !== "DELETE") entry.body = await request.json();
       requests.push(entry);
+      if (url.pathname === "/api/project-docs" && request.method === "GET") {
+        return Response.json({
+          docs: [
+            doc({ project_title: "Project One" }),
+            doc({ id: "pdoc_2", kind: "memory", slug: "ci-is-arm64", title: "CI is arm64", pinned: true, version: 3, project_title: "Project One" }),
+          ],
+        });
+      }
       if (url.pathname === "/api/projects/prj_1/docs" && request.method === "GET") {
         return Response.json({
           docs: [doc(), doc({ id: "pdoc_2", kind: "memory", slug: "ci-is-arm64", title: "CI is arm64", pinned: true, version: 3 })],
@@ -81,6 +90,28 @@ async function withDocsServer(
       if (url.pathname === "/api/projects/prj_1/docs/build-guide" && request.method === "DELETE") {
         return Response.json({ deleted: true });
       }
+      if (url.pathname === "/api/projects/prj_1/knowledge/recall" && request.method === "GET") {
+        const kind = url.searchParams.get("kind") ?? "memory";
+        return Response.json({ hits: [{ ...doc({ kind }), score: 0.88, snippet: "semantic hit", uri: `viking://${kind}` }] });
+      }
+      if (url.pathname === "/api/projects/prj_1/docs/build-guide/backlinks" && request.method === "GET") {
+        return Response.json({ docs: [doc({ slug: "index", title: "Index" })] });
+      }
+      if (url.pathname === "/api/projects/prj_1/docs/build-guide/revisions" && request.method === "GET") {
+        return Response.json({ revisions: [{ version: 1, body: "v1" }] });
+      }
+      if (url.pathname === "/api/project-knowledge/migration" && request.method === "GET") {
+        return Response.json({ mode: "shadow", total: 2, failed: 0 });
+      }
+      if (url.pathname === "/api/project-knowledge/migration/backfill" && request.method === "POST") {
+        return Response.json({ dryRun: entry.body.dry_run, scanned: 2, migrated: 2, failed: 0 });
+      }
+      if (url.pathname === "/api/project-knowledge/migration/verify" && request.method === "POST") {
+        return Response.json({ scanned: 2, migrated: 2, failed: 0 });
+      }
+      if (url.pathname === "/api/project-knowledge/migration/retry-failed" && request.method === "POST") {
+        return Response.json({ scanned: 1, migrated: 1, failed: 0 });
+      }
       return Response.json({ error: "not found" }, { status: 404 });
     },
   });
@@ -96,19 +127,19 @@ async function withDocsServer(
 }
 
 describe("Multiremi CLI project knowledge commands", () => {
-  test("lists, reads, searches, and deletes project docs", async () => {
+  test("lists workspace knowledge and reads, searches, and deletes project wiki pages", async () => {
     await withDocsServer(async (serverUrl, requests, logs) => {
-      await runMultiremi(["project", "doc", "list", "prj_1", "--server", serverUrl, "--token", "tok_cli", "--kind", "wiki", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["project", "doc", "list", "prj_1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["project", "doc", "get", "prj_1", "build-guide", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
-      await runMultiremi(["project", "doc", "search", "prj_1", "arm64", "--server", serverUrl, "--token", "tok_cli", "--kind", "memory", "--limit", "5", "--output", "json"], { programName: "multiremi" });
-      await runMultiremi(["project", "doc", "delete", "prj_1", "build-guide", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
+      await runMultiremi(["wiki", "list", "--server", serverUrl, "--token", "tok_cli", "--workspace", "local", "--output", "json"], { programName: "multiremi" });
+      await runMultiremi(["wiki", "list", "--project", "prj_1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
+      await runMultiremi(["wiki", "read", "build-guide", "--project", "prj_1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
+      await runMultiremi(["wiki", "search", "arm64", "--project", "prj_1", "--server", serverUrl, "--token", "tok_cli", "--limit", "5", "--output", "json"], { programName: "multiremi" });
+      await runMultiremi(["wiki", "delete", "build-guide", "--project", "prj_1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" });
 
       expect(requests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
+        "GET /api/project-docs?kind=wiki&workspace_id=local",
         "GET /api/projects/prj_1/docs?kind=wiki",
-        "GET /api/projects/prj_1/docs",
         "GET /api/projects/prj_1/docs/build-guide",
-        "GET /api/projects/prj_1/docs?q=arm64&kind=memory&limit=5",
+        "GET /api/projects/prj_1/knowledge/recall?q=arm64&kind=wiki&limit=5",
         "DELETE /api/projects/prj_1/docs/build-guide",
       ]);
       expect(requests.every((entry) => entry.authorization === "Bearer tok_cli")).toBe(true);
@@ -120,7 +151,7 @@ describe("Multiremi CLI project knowledge commands", () => {
       expect(logs[1]).toContain("ci-is-arm64");
       expect(logs[1]).toContain("yes");
       expect(JSON.parse(logs[2]).doc.title).toBe("Build guide");
-      expect(JSON.parse(logs[3]).docs).toHaveLength(2);
+      expect(JSON.parse(logs[3]).hits[0].score).toBe(0.88);
       expect(JSON.parse(logs[4])).toEqual({ deleted: true });
     });
   });
@@ -128,7 +159,7 @@ describe("Multiremi CLI project knowledge commands", () => {
   test("maps create and update options onto the request body", async () => {
     await withDocsServer(async (serverUrl, requests, logs) => {
       await runMultiremi([
-        "project", "doc", "create", "prj_1",
+        "wiki", "create", "--project", "prj_1",
         "--server", serverUrl,
         "--token", "tok_cli",
         "--kind", "wiki",
@@ -144,7 +175,7 @@ describe("Multiremi CLI project knowledge commands", () => {
       ], { programName: "multiremi" });
 
       await runMultiremi([
-        "project", "doc", "update", "prj_1", "build-guide",
+        "wiki", "update", "build-guide", "--project", "prj_1",
         "--server", serverUrl,
         "--token", "tok_cli",
         "--title", "Build guide v2",
@@ -196,7 +227,7 @@ describe("Multiremi CLI project knowledge commands", () => {
     setTaskId("tsk_from_env");
     await withDocsServer(async (serverUrl, requests, logs) => {
       await runMultiremi([
-        "project", "memory", "add", "prj_1",
+        "memory", "remember", "--project", "prj_1",
         "--server", serverUrl,
         "--token", "tok_cli",
         "--title", "Node 18 breaks the build",
@@ -222,25 +253,111 @@ describe("Multiremi CLI project knowledge commands", () => {
     });
   });
 
+  test("supports recall, backlinks, revisions and migration maintenance", async () => {
+    await withDocsServer(async (serverUrl, requests, logs) => {
+      const base = ["--server", serverUrl, "--token", "tok_cli", "--workspace", "ws_cli", "--output", "json"];
+      await runMultiremi(["memory", "recall", "rollback owner", "--project", "prj_1", ...base, "--limit", "3"], { programName: "multiremi" });
+      await runMultiremi(["memory", "search", "global owner", ...base, "--limit", "4"], { programName: "multiremi" });
+      await runMultiremi(["memory", "backlinks", "build-guide", "--project", "prj_1", ...base], { programName: "multiremi" });
+      await runMultiremi(["wiki", "history", "build-guide", "--project", "prj_1", ...base], { programName: "multiremi" });
+      await runMultiremi(["project", "knowledge", "status", ...base], { programName: "multiremi" });
+      await runMultiremi(["project", "knowledge", "backfill", "prj_1", ...base, "--dry-run", "--resume"], { programName: "multiremi" });
+      await runMultiremi(["project", "knowledge", "verify", "prj_1", ...base], { programName: "multiremi" });
+      await runMultiremi(["project", "knowledge", "retry-failed", "prj_1", ...base], { programName: "multiremi" });
+
+      expect(requests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
+        "GET /api/projects/prj_1/knowledge/recall?q=rollback+owner&kind=memory&limit=3",
+        "GET /api/project-docs?kind=memory&workspace_id=ws_cli&q=global+owner&limit=4",
+        "GET /api/projects/prj_1/docs/build-guide/backlinks",
+        "GET /api/projects/prj_1/docs/build-guide/revisions",
+        "GET /api/project-knowledge/migration?workspace_id=ws_cli",
+        "POST /api/project-knowledge/migration/backfill",
+        "POST /api/project-knowledge/migration/verify",
+        "POST /api/project-knowledge/migration/retry-failed",
+      ]);
+      expect(JSON.parse(logs[0]).hits[0].score).toBe(0.88);
+      expect(JSON.parse(logs[1]).docs).toHaveLength(2);
+      expect(JSON.parse(logs[2]).docs[0].slug).toBe("index");
+      expect(JSON.parse(logs[3]).revisions[0].body).toBe("v1");
+      expect(JSON.parse(logs[4]).mode).toBe("shadow");
+      expect(requests[5]!.body).toEqual({ project_id: "prj_1", workspace_id: "ws_cli", dry_run: true, resume: true });
+      expect(requests[6]!.body).toEqual({ project_id: "prj_1", workspace_id: "ws_cli" });
+      expect(requests[7]!.body).toEqual({ project_id: "prj_1", workspace_id: "ws_cli" });
+    });
+  });
+
+  test("serves project-scoped knowledge tools over MCP", async () => {
+    await withDocsServer(async (serverUrl, requests) => {
+      const options = { server: serverUrl, token: "tok_mcp" };
+      const initialized = await handleProjectKnowledgeMcpRequest("prj_1", options, {
+        jsonrpc: "2.0", id: 1, method: "initialize",
+      });
+      expect((initialized as any).result.serverInfo.name).toBe("multiremi-project-knowledge");
+      const listed = await handleProjectKnowledgeMcpRequest("prj_1", options, {
+        jsonrpc: "2.0", id: 2, method: "tools/list",
+      });
+      expect((listed as any).result.tools.map((tool: any) => tool.name)).toEqual([
+        "recall", "read", "remember", "update", "backlinks",
+      ]);
+
+      await handleProjectKnowledgeMcpRequest("prj_1", options, {
+        jsonrpc: "2.0", id: 3, method: "tools/call",
+        params: { name: "recall", arguments: { query: "owner", kind: "wiki", limit: 2, project_id: "foreign" } },
+      });
+      await handleProjectKnowledgeMcpRequest("prj_1", options, {
+        jsonrpc: "2.0", id: 4, method: "tools/call",
+        params: { name: "read", arguments: { ref: "build-guide" } },
+      });
+      await handleProjectKnowledgeMcpRequest("prj_1", options, {
+        jsonrpc: "2.0", id: 5, method: "tools/call",
+        params: { name: "remember", arguments: { title: "Architecture", kind: "wiki", content: "Hub" } },
+      });
+      await handleProjectKnowledgeMcpRequest("prj_1", options, {
+        jsonrpc: "2.0", id: 6, method: "tools/call",
+        params: { name: "update", arguments: { ref: "build-guide", content: "v2", expected_version: 1 } },
+      });
+      await handleProjectKnowledgeMcpRequest("prj_1", options, {
+        jsonrpc: "2.0", id: 7, method: "tools/call",
+        params: { name: "backlinks", arguments: { ref: "build-guide" } },
+      });
+
+      expect(requests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
+        "GET /api/projects/prj_1/knowledge/recall?q=owner&kind=wiki&limit=2",
+        "GET /api/projects/prj_1/docs/build-guide",
+        "POST /api/projects/prj_1/docs",
+        "PUT /api/projects/prj_1/docs/build-guide",
+        "GET /api/projects/prj_1/docs/build-guide/backlinks",
+      ]);
+      expect(requests[2]!.body).toMatchObject({ kind: "wiki", pinned: false });
+      expect(requests.every((entry) => entry.authorization === "Bearer tok_mcp")).toBe(true);
+    });
+  });
+
   test("rejects malformed refs and incomplete usage", async () => {
     await withDocsServer(async (serverUrl, requests) => {
       const base = ["--server", serverUrl, "--token", "tok_cli"];
-      await expect(runMultiremi(["project", "doc", "create", "prj_1", ...base, "--title", "Bad ref", "--ref", "MUL-12"], { programName: "multiremi" }))
+      await expect(runMultiremi(["wiki", "create", "--project", "prj_1", ...base, "--title", "Bad ref", "--ref", "MUL-12"], { programName: "multiremi" }))
         .rejects.toThrow("--ref \"MUL-12\" must be <type>:<value>");
-      await expect(runMultiremi(["project", "doc", "create", "prj_1", ...base, "--title", "Bad pin", "--pinned", "maybe"], { programName: "multiremi" }))
+      await expect(runMultiremi(["wiki", "create", "--project", "prj_1", ...base, "--title", "Bad pin", "--pinned", "maybe"], { programName: "multiremi" }))
         .rejects.toThrow("--pinned must be true or false");
-      await expect(runMultiremi(["project", "doc", "create", "prj_1", ...base], { programName: "multiremi" }))
+      await expect(runMultiremi(["wiki", "create", "--project", "prj_1", ...base], { programName: "multiremi" }))
         .rejects.toThrow("--title is required");
-      await expect(runMultiremi(["project", "doc", "get", "prj_1", ...base], { programName: "multiremi" }))
-        .rejects.toThrow("usage: multiremi project doc get <project-id> <slug-or-id>");
-      await expect(runMultiremi(["project", "doc", "update", "prj_1", "build-guide", ...base], { programName: "multiremi" }))
+      await expect(runMultiremi(["wiki", "read", ...base, "--project", "prj_1"], { programName: "multiremi" }))
+        .rejects.toThrow("usage: multiremi wiki read <slug-or-id> --project <project-id>");
+      await expect(runMultiremi(["wiki", "update", "build-guide", "--project", "prj_1", ...base], { programName: "multiremi" }))
         .rejects.toThrow("no fields to update");
-      await expect(runMultiremi(["project", "doc", "explode", "prj_1", ...base], { programName: "multiremi" }))
-        .rejects.toThrow("usage: multiremi project doc list|get|create|update|delete|search <project-id> ...");
-      await expect(runMultiremi(["project", "memory", "prj_1", ...base], { programName: "multiremi" }))
-        .rejects.toThrow("usage: multiremi project memory add <project-id>");
+      await expect(runMultiremi(["wiki", "explode", ...base], { programName: "multiremi" }))
+        .rejects.toThrow("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks");
+      await expect(runMultiremi(["memory", "explode", ...base], { programName: "multiremi" }))
+        .rejects.toThrow("usage: multiremi memory list|search|recall|read|remember|update|forget|backlinks");
+      await expect(runMultiremi(["memory", "remember", ...base, "--title", "Missing scope"], { programName: "multiremi" }))
+        .rejects.toThrow("--project <project-id> is required for memory remember");
+      await expect(runMultiremi(["project", "doc", "list", "prj_1", ...base], { programName: "multiremi" }))
+        .rejects.toThrow("usage: multiremi project knowledge");
+      await expect(runMultiremi(["project", "memory", "recall", "prj_1", "query", ...base], { programName: "multiremi" }))
+        .rejects.toThrow("usage: multiremi project knowledge");
       await expect(runMultiremi(["project", "nonsense", ...base], { programName: "multiremi" }))
-        .rejects.toThrow("usage: multiremi project doc|memory ...");
+        .rejects.toThrow("usage: multiremi project knowledge");
 
       // Every one of those failed before reaching the network.
       expect(requests).toEqual([]);

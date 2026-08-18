@@ -46,6 +46,10 @@ import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
+  createProjectKnowledgeServiceFromEnv,
+  type ProjectKnowledgeServiceContract,
+} from "@multiremi/project-knowledge/service.js";
+import {
   inspectGitRemoteRepository,
   type GitRemoteInspector,
 } from "./helpers/repositories.js";
@@ -127,6 +131,7 @@ export interface MultiremiApiOptions {
   webhookIpRateLimit?: Partial<WebhookRateLimitConfig> | false;
   inspectGitRemoteRepository?: GitRemoteInspector;
   resolveAgentPluginGitSource?: AgentPluginGitSourceResolver;
+  projectKnowledge?: ProjectKnowledgeServiceContract;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -141,6 +146,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const webhookRateLimiter = createWebhookRateLimiter(options.webhookRateLimit, DEFAULT_WEBHOOK_RATE_LIMIT);
   const webhookIpRateLimiter = createWebhookRateLimiter(options.webhookIpRateLimit, DEFAULT_WEBHOOK_IP_RATE_LIMIT);
   const app = new Hono();
+  const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
     store,
@@ -153,6 +159,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       options.inspectGitRemoteRepository ?? inspectGitRemoteRepository,
     resolveAgentPluginGitSource:
       options.resolveAgentPluginGitSource ?? resolveAgentPluginGitSource,
+    projectKnowledge,
   };
 
   app.use("*", cors());

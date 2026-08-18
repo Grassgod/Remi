@@ -211,31 +211,33 @@ Create/Update 输入类型接受 camel/snake 双写（store 层 `input.x ?? inpu
 
 ## 5. CLI（apps/remi/cli/multiremi.ts）
 
-runMultiremi switch 加 `case "project"`。模板 = issue metadata 块（926-959）+ issueComment 的 content 读取。
+runMultiremi switch 加 `case "memory"` 和 `case "wiki"`。模板 = issue metadata 块（926-959）+ issueComment 的 content 读取。
 
 ```
-remi project doc list <project-id> [--kind wiki|memory] [--output json]
-remi project doc get <project-id> <slug-or-id> [--output json]
-remi project doc create <project-id> --kind wiki|memory --title <t>
+remi memory list|recall <query> [--project <project-id>] [--output json]
+remi memory read <slug-or-id> --project <project-id>
+remi memory remember --project <project-id> --title <t>
+remi wiki list|search <query> [--project <project-id>] [--output json]
+remi wiki read <slug-or-id> --project <project-id>
+remi wiki create --project <project-id> --title <t>
     [--slug <s>] [--summary <s>] [--tags a,b] [--pinned]
     [--ref issue:<id>] [--ref task:<id>] [--ref url:<url>]   # 可重复，冒号前为 type
     [--content <text> | --content-stdin | --content-file <path>]
-remi project doc update <project-id> <slug-or-id>
+remi wiki update <slug-or-id> --project <project-id>
     [--title <t>] [--summary <s>] [--tags a,b] [--pinned true|false]
     [--expected-version <n>] [--content <text> | --content-stdin | --content-file <path>]
-remi project doc delete <project-id> <slug-or-id>
-remi project doc search <project-id> <query> [--kind wiki|memory] [--limit n]
-remi project memory add <project-id> --title "一句话事实" [--summary <s>]
+remi wiki delete|history|backlinks <slug-or-id> --project <project-id>
+remi memory update|forget|backlinks <slug-or-id> --project <project-id>
     [--content <text> | --content-stdin | --content-file <path>]
 ```
 
-- `memory add` = doc create 的糖：kind=memory、pinned=true、**source_task_id 自动取 `process.env.MULTIREMI_TASK_ID`**（有则带）；同样支持 --ref。
+- `memory remember` = doc create 的糖：kind=memory、pinned=true、**source_task_id 自动取 `process.env.MULTIREMI_TASK_ID`**（有则带）；同样支持 --ref。
 - `--ref` 解析：`stringListOption(options, "ref")`，按第一个冒号切 type:value，无冒号视为 url（http 开头）否则报用法错误。update 传 --ref 则整体替换 refs。
 - content 读取：create/memory add 用 `readContentBody(options, "doc content")`（必填三选一，multiremi.ts:1265），但 doc create 允许无 content（wiki 骨架页/纯 title memory）→ 用 `readOptionalTextBody(options, "content")`（1127）取可选值。
 - 请求走 `multiremiApiRequest(method, path, body, options)`（1424，Bearer token 自动带；in-task 由 daemon 注入的 `MULTIREMI_SERVER_URL`/`MULTIREMI_TOKEN` 生效）。
 - list 的 table 输出照 `printAgentCollection`（1473）用 `printTable`+`extractList` 写 `printProjectDocCollection`：列 SLUG/KIND/TITLE/PINNED/VERSION/UPDATED。
-- help 文本（~1732-1760 区域）加 project 段。
-- 用法错误风格照抄：`throw new Error("usage: multiremi project doc list|get|create|update|delete|search <project-id> ...")`。
+- help 文本（~1732-1760 区域）加 memory/wiki 段。
+- workspace 级 list/search 不传 `--project`；read/write/delete/history 必须传 `--project`。
 
 ## 6. Daemon 注入（packages/daemon/src/…）
 
@@ -245,8 +247,8 @@ remi project memory add <project-id> --title "一句话事实" [--summary <s>]
   - `## Project Memory`：每条 `- <title>` + 若有 body 首行则 `: <body 首行截 200 字符>`。总字符预算 4000，超出截断并追加一行 `(more entries exist — use search)`。无条目则整段省略。
   - `## Project Wiki`：每条 `- <title> (slug: <slug>)` + summary 截 120；预算 2000，超出截断加提示。无页面省略。
   - `## Project Knowledge Commands`（**project 存在就给**，否则 agent 永远学不会第一条）：
-    - 读：`remi project doc get <projectId> <slug>`；搜：`remi project doc search <projectId> "<query>"`
-    - **写回纪律（Karpathy 整合式维护，替代旧版"追加式"指引）**：完成任务若学到跨 issue 复用的持久事实（构建命令、架构决策、坑）——(1) 先 `doc search` 查有没有相关条目；(2) 有相关条目 → `doc update` 整合修订，若与旧内容矛盾，在正文注明变化与依据，不要静默并存；(3) 确属新知识 → `remi project memory add`（heredoc 模板照 §5）；(4) 沉淀成体系的理解（架构说明、runbook）→ 写成 wiki 页 `doc create --kind wiki`；(5) 写入时用 --ref 引用来源 issue/task，页面间用 [[slug]] 互链；(6) 不要记录一次性细节。
+    - 读：`remi memory read <slug> --project <projectId>` / `remi wiki read <slug> --project <projectId>`；搜：`remi memory recall "<query>" --project <projectId>`
+    - **写回纪律（Karpathy 整合式维护，替代旧版"追加式"指引）**：完成任务若学到跨 issue 复用的持久事实（构建命令、架构决策、坑）——(1) 先 search/recall 查有没有相关条目；(2) 有相关条目 → `memory update` 或 `wiki update` 整合修订；(3) 确属新知识 → `remi memory remember`；(4) 沉淀成体系的理解 → `remi wiki create`；(5) 写入时用 --ref 引用来源，页面间用 [[slug]] 互链；(6) 不要记录一次性细节。
     - **schema 注入**：`projectDocs.schema` 存在时，在本段末尾附 `Maintenance rules for this project's wiki (from _schema):` + schema body（已截 1500），并注明可用 `doc update <projectId> _schema` 修订规则。
 - 读取顺序不动其他 section，将新段放在 Project Context 与 Available Repositories 之间。
 
@@ -281,7 +283,7 @@ remi project memory add <project-id> --title "一句话事实" [--summary <s>]
 ## 8.5 已核实的装置与链路事实（构建 agent 直接采用，勿再自行发明）
 
 - **测试装置**（共用装置统一从 `tests/unit/multiremi/helpers.ts` import，范式见 `tests/unit/multiremi/multiremi-api-issues.test.ts`）：`createStore()` 起 `:memory:` 的 `MultiremiStore`；API 测试用 `createMultiremiApp`（`@multiremi/api.js`）+ `app.request()`；member 鉴权用 `signTestJwt(payload)`（HS256，dev secret `multiremi-dev-secret-change-in-production`）；`mockFetch`/`jsonResponse` helper 现成。`buildTaskPrompt` 从 `@multiremi/prompt.js` 导出，已在 `multiremi-project-docs-prompt.test.ts` / `multiremi-issue-sessions.test.ts` 被测——daemon 注入断言可直接加在那里或新建同装置文件。
-- **任务内 CLI 鉴权链路**（已核实 packages/daemon/src/agent-runtime/env/injector.ts:29-41）：daemon 给 agent 子进程注入 `MULTIREMI_SERVER_URL` + `MULTIREMI_TOKEN`（task.authToken）+ `MULTIREMI_TASK_ID` + `MULTIREMI_WORKSPACE_ID` + `MULTIREMI_AGENT_NAME` + `MULTIREMI_DAEMON_PORT`。CLI 侧 `multiremiApiConnection`（multiremi.ts:1354）自动消费 SERVER_URL/TOKEN。**结论：`remi project doc/memory` 子命令零额外鉴权工作。**
+- **任务内 CLI 鉴权链路**（已核实 packages/daemon/src/agent-runtime/env/injector.ts:29-41）：daemon 给 agent 子进程注入 `MULTIREMI_SERVER_URL` + `MULTIREMI_TOKEN`（task.authToken）+ `MULTIREMI_TASK_ID` + `MULTIREMI_WORKSPACE_ID` + `MULTIREMI_AGENT_NAME` + `MULTIREMI_DAEMON_PORT`。CLI 侧 `multiremiApiConnection` 自动消费 SERVER_URL/TOKEN。**结论：`remi memory/wiki` 子命令零额外鉴权工作。**
 - **CLI 帮助文本**：showHelp 在 multiremi.ts:1712-1806，issue metadata 行(1757-1760)之后加 project doc 段。
 - **前端 query key 风格**（frontend/packages/core/issues/queries.ts:18-89）：`export const projectDocKeys = { all: (wsId) => ["project-docs", wsId] as const, list: (wsId, projectId) => [...all, projectId] as const, detail: (wsId, projectId, ref) => [...] }`，PREFIX 用于 invalidation / FULL KEY 用于 queryOptions 的注释惯例照抄。
 - **claim 归一**：packages/server/src/worker/client.ts:306-375 `normalizeDaemonClaimTask` —— B 在此加 `projectDocs` 归一（照 normalizeDaemonClaimProjectResources:437 的形状写 normalizeDaemonClaimProjectDocs）。

@@ -45,9 +45,11 @@ import type {
   UpdateProjectResourceInput,
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
+import { ProjectKnowledgeUnavailableError } from "@multiremi/project-knowledge/service.js";
+import { OpenVikingClientError } from "@multiremi/project-knowledge/openviking-client.js";
 
 export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
-  const { store } = deps;
+  const { store, projectKnowledge } = deps;
 
   app.get("/api/multiremi/projects", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? "local";
@@ -265,18 +267,18 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     publishProjectResourceDeleted(c, store, resource);
     return c.body(null, 204);
   });
-  app.get("/api/projects/:id/docs", (c) => {
+  app.get("/api/projects/:id/docs", async (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     const query = cleanString(c.req.query("q"));
     const kind = cleanString(c.req.query("kind"));
     try {
       const docs = query
-        ? store.searchProjectDocs(project.id, query, { kind, limit: parseOptionalInt(c.req.query("limit")) })
-        : store.listProjectDocs(project.id, { kind });
+        ? await projectKnowledge.searchProjectDocs(project.id, query, { kind, limit: parseOptionalInt(c.req.query("limit")) })
+        : await projectKnowledge.listProjectDocs(project.id, { kind });
       return c.json({ docs: docs.map(projectDocCompatibilityResponse) });
     } catch (err) {
-      const response = projectDocErrorResponse(c, err);
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
@@ -287,22 +289,28 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateProjectDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const doc = store.createProjectDoc(project.id, projectDocCreateInput(c, store, body));
+      const doc = await projectKnowledge.createProjectDoc(project.id, projectDocCreateInput(c, store, body));
       const response = projectDocCompatibilityResponse(doc);
       publishProjectDocCreated(c, store, doc, response);
       return c.json({ doc: response }, 201);
     } catch (err) {
-      const response = projectDocErrorResponse(c, err);
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
   });
-  app.get("/api/projects/:id/docs/:ref", (c) => {
+  app.get("/api/projects/:id/docs/:ref", async (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
-    const doc = store.getProjectDocByRef(project.id, c.req.param("ref"));
-    if (!doc) return c.json({ error: "project doc not found" }, 404);
-    return c.json({ doc: projectDocCompatibilityResponse(doc) });
+    try {
+      const doc = await projectKnowledge.getProjectDocByRef(project.id, c.req.param("ref"));
+      if (!doc) return c.json({ error: "project doc not found" }, 404);
+      return c.json({ doc: projectDocCompatibilityResponse(doc) });
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.put("/api/projects/:id/docs/:ref", async (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
@@ -310,34 +318,76 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<UpdateProjectDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const doc = store.updateProjectDoc(project.id, c.req.param("ref"), projectDocUpdateInput(c, body));
+      const doc = await projectKnowledge.updateProjectDoc(project.id, c.req.param("ref"), projectDocUpdateInput(c, body));
       const response = projectDocCompatibilityResponse(doc);
       publishProjectDocUpdated(c, store, doc, response);
       return c.json({ doc: response });
     } catch (err) {
-      const response = projectDocErrorResponse(c, err);
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
   });
-  app.delete("/api/projects/:id/docs/:ref", (c) => {
+  app.delete("/api/projects/:id/docs/:ref", async (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
-    // Read the doc before deleting it: the WS payload needs its id and workspace.
-    const doc = store.getProjectDocByRef(project.id, c.req.param("ref"));
-    if (!doc) return c.json({ error: "project doc not found" }, 404);
-    store.deleteProjectDoc(project.id, c.req.param("ref"));
-    publishProjectDocDeleted(c, store, doc);
-    return c.json({ deleted: true });
+    try {
+      // Read the doc before deleting it: the WS payload needs its id and workspace.
+      const doc = await projectKnowledge.getProjectDocByRef(project.id, c.req.param("ref"));
+      if (!doc) return c.json({ error: "project doc not found" }, 404);
+      await projectKnowledge.deleteProjectDoc(project.id, c.req.param("ref"));
+      publishProjectDocDeleted(c, store, doc);
+      return c.json({ deleted: true });
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
-  app.get("/api/projects/:id/docs/:ref/revisions", (c) => {
+  app.get("/api/projects/:id/docs/:ref/revisions", async (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
-    const doc = store.getProjectDocByRef(project.id, c.req.param("ref"));
-    if (!doc) return c.json({ error: "project doc not found" }, 404);
-    return c.json({ revisions: store.listProjectDocRevisions(doc.id).map(projectDocRevisionCompatibilityResponse) });
+    try {
+      const revisions = await projectKnowledge.listProjectDocRevisions(project.id, c.req.param("ref"));
+      return c.json({ revisions: revisions.map(projectDocRevisionCompatibilityResponse) });
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
-  app.get("/api/project-docs", (c) => {
+  app.get("/api/projects/:id/docs/:ref/backlinks", async (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    try {
+      const docs = await projectKnowledge.backlinks(project.id, c.req.param("ref"));
+      return c.json({ docs: docs.map(projectDocCompatibilityResponse) });
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.get("/api/projects/:id/knowledge/recall", async (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const query = cleanString(c.req.query("q"));
+    if (!query) return c.json({ error: "q is required" }, 400);
+    try {
+      const hits = await projectKnowledge.recallProjectDocs(project.id, query, {
+        kind: cleanString(c.req.query("kind")),
+        limit: parseOptionalInt(c.req.query("limit")),
+      });
+      return c.json({
+        hits: hits.map((hit) => projectKnowledgeRecallResponse(hit)),
+      });
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.get("/api/project-docs", async (c) => {
     const workspaceId = compatibilityWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
@@ -345,7 +395,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     // workspace-wide listing would silently widen it, so reject it outright.
     if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
     try {
-      const docs = store.listWorkspaceDocs(workspaceId, {
+      const docs = await projectKnowledge.listWorkspaceDocs(workspaceId, {
         kind: cleanString(c.req.query("kind")),
         q: cleanString(c.req.query("q")),
         limit: parseOptionalInt(c.req.query("limit")),
@@ -354,11 +404,94 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
         docs: docs.map((doc) => ({ ...projectDocCompatibilityResponse(doc), project_title: doc.projectTitle })),
       });
     } catch (err) {
-      const response = projectDocErrorResponse(c, err);
+      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
   });
+
+  app.get("/api/project-knowledge/migration", async (c) => {
+    const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
+    return c.json(await projectKnowledge.migrationStatus(workspaceId));
+  });
+  app.post("/api/project-knowledge/migration/backfill", async (c) => {
+    const body = await readJsonStrict<{ workspace_id?: string; project_id?: string | null; dry_run?: boolean; resume?: boolean }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
+    try {
+      return c.json(await projectKnowledge.backfill(workspaceId, {
+        projectId: cleanString(body.project_id),
+        dryRun: Boolean(body.dry_run),
+        resume: Boolean(body.resume),
+      }));
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.post("/api/project-knowledge/migration/verify", async (c) => {
+    const body = await readJsonStrict<{ workspace_id?: string; project_id?: string | null }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
+    try {
+      return c.json(await projectKnowledge.verify(workspaceId, cleanString(body.project_id)));
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.post("/api/project-knowledge/migration/retry-failed", async (c) => {
+    const body = await readJsonStrict<{ workspace_id?: string; project_id?: string | null }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
+    try {
+      return c.json(await projectKnowledge.backfill(workspaceId, {
+        projectId: cleanString(body.project_id),
+        statuses: ["failed"],
+      }));
+    } catch (err) {
+      const response = projectKnowledgeErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+}
+
+function projectKnowledgeRecallResponse(hit: {
+  doc: Parameters<typeof projectDocCompatibilityResponse>[0];
+  score: number | null;
+  snippet: string | null;
+  uri: string;
+}): Record<string, unknown> {
+  const response = projectDocCompatibilityResponse(hit.doc);
+  delete response.body;
+  return { ...response, score: hit.score, snippet: hit.snippet, uri: hit.uri };
+}
+
+function projectKnowledgeErrorResponse(c: any, err: unknown): Response | null {
+  if (err instanceof ProjectKnowledgeUnavailableError) return c.json({ error: err.message }, 503);
+  if (err instanceof OpenVikingClientError) {
+    if (err.status === 409 || err.status === 412) return c.json({ error: "project doc version conflict" }, 409);
+    return c.json({ error: "OpenViking is unavailable", code: err.code }, err.retryable ? 503 : 502);
+  }
+  if (err instanceof Error && err.message === "a doc with this slug already exists") {
+    return c.json({ error: err.message }, 409);
+  }
+  return null;
 }
 
 function isLocalDirectoryResourceInput(input: CreateProjectResourceInput): boolean {

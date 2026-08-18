@@ -55,7 +55,9 @@ forward("config", "Get/set agent config keys", ["config"]);
 forward("repo", "Check out an allowed workspace repository", ["repo"]);
 forward("issue", "Manage issues on the multiremi server", ["issue"]);
 forward("attachment", "Download an attachment", ["attachment"]);
-forward("project", "Manage project wiki pages and agent memory", ["project"]);
+forward("memory", "Recall and maintain workspace memory", ["memory"]);
+forward("wiki", "Search and maintain workspace wiki pages", ["wiki"]);
+forward("project", "Administer project knowledge migration", ["project"]);
 forward("seed", "Create a default local agent", ["seed"], true);
 
 // ── Monolith-native ──

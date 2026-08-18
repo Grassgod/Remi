@@ -400,6 +400,13 @@
   },
   "transcript": {
     "dialog_title": "智能体执行记录",
+    "execution_view": "执行过程",
+    "prompt_view": "输入 Prompt",
+    "copy_prompt": "复制 Prompt",
+    "prompt_hash": "SHA-256：{{hash}}",
+    "prompt_loading": "正在读取输入 Prompt...",
+    "prompt_not_recorded": "该任务未记录输入 Prompt，可能由旧版本运行时创建。",
+    "prompt_load_failed": "输入 Prompt 读取失败，请稍后重试。",
     "status_queued": "排队中",
     "status_dispatched": "启动中",
     "status_waiting_local_directory": "等待本地目录",

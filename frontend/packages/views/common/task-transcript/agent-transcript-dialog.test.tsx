@@ -1,11 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
 import type { TimelineItem } from "./build-timeline";
+
+const getTaskPrompt = vi.hoisted(() => vi.fn());
+vi.mock("@multiremi/core/api", () => ({
+  api: {
+    getTaskPrompt,
+    getAgent: vi.fn(),
+    listRuntimes: vi.fn(),
+  },
+}));
+
+beforeEach(() => {
+  getTaskPrompt.mockReset();
+});
 
 const MISSING_COMMAND_LABEL = "Command not recorded (task from an older version)";
 
@@ -51,15 +65,18 @@ function renderTranscript(
   items: TimelineItem[],
   overrides: { task?: Partial<AgentTask>; isLive?: boolean } = {},
 ) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
-    <AgentTranscriptDialog
-      open
-      onOpenChange={() => {}}
-      task={{ ...task, ...overrides.task }}
-      items={items}
-      agentName="Remi"
-      isLive={overrides.isLive}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <AgentTranscriptDialog
+        open
+        onOpenChange={() => {}}
+        task={{ ...task, ...overrides.task }}
+        items={items}
+        agentName="Remi"
+        isLive={overrides.isLive}
+      />
+    </QueryClientProvider>,
   );
 }
 
@@ -72,6 +89,44 @@ describe("transcript pending task state", () => {
     expect(screen.queryByText("Running")).not.toBeInTheDocument();
     expect(screen.queryByText("Waiting for events...")).not.toBeInTheDocument();
     expect(document.querySelector(".animate-spin")).toBeNull();
+  });
+});
+
+describe("task input prompt", () => {
+  it("loads the exact audited prompt on demand", async () => {
+    getTaskPrompt.mockResolvedValue({
+      task_id: task.id,
+      mode: "delta",
+      prompt: "# Delta Prompt\n\n## Current Request\nFix the review note.",
+      sha256: "a".repeat(64),
+      assembled_at: "2026-08-17T12:00:00.000Z",
+    });
+    renderTranscript([]);
+
+    expect(getTaskPrompt).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Input Prompt" }));
+
+    await waitFor(() => expect(getTaskPrompt).toHaveBeenCalledWith(task.id));
+    expect(await screen.findByText(/# Delta Prompt/)).toBeInTheDocument();
+    expect(screen.getByText("delta")).toBeInTheDocument();
+    expect(screen.getByText("SHA-256: aaaaaaaaaaaa")).toBeInTheDocument();
+  });
+
+  it("shows a clear legacy empty state when no prompt was recorded", async () => {
+    getTaskPrompt.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
+    renderTranscript([]);
+    fireEvent.click(screen.getByRole("button", { name: "Input Prompt" }));
+
+    expect(await screen.findByText(/No input prompt was recorded/)).toBeInTheDocument();
+  });
+
+  it("does not mislabel a transient load failure as a legacy task", async () => {
+    getTaskPrompt.mockRejectedValue(Object.assign(new Error("unavailable"), { status: 503 }));
+    renderTranscript([]);
+    fireEvent.click(screen.getByRole("button", { name: "Input Prompt" }));
+
+    expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument();
+    expect(screen.queryByText(/older runtime/)).not.toBeInTheDocument();
   });
 });
 

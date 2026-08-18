@@ -38,6 +38,7 @@ import type {
   UpdateProjectInput,
   UpdateProjectResourceInput,
 } from "@multiremi/contracts/types.js";
+import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/types.js";
 
 type Row = Record<string, unknown>;
 
@@ -49,9 +50,9 @@ const PROJECT_DOC_INDEX_SUMMARY_MAX = 160;
 const PROJECT_DOC_INDEX_SCHEMA_MAX = 1500;
 const PROJECT_DOC_REFS_MAX = 20;
 /** Reserved slug: the per-project doc that tells agents how to maintain the wiki. */
-const PROJECT_DOC_SCHEMA_SLUG = "_schema";
-const PROJECT_DOC_SCHEMA_TITLE = "Wiki Schema";
-const PROJECT_DOC_SCHEMA_TEMPLATE = `# Wiki Schema（本项目知识库维护规则）
+export const PROJECT_DOC_SCHEMA_SLUG = "_schema";
+export const PROJECT_DOC_SCHEMA_TITLE = "Wiki Schema";
+export const PROJECT_DOC_SCHEMA_TEMPLATE = `# Wiki Schema（本项目知识库维护规则）
 
 本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。
 
@@ -87,7 +88,7 @@ export class ProjectsRepo {
     );
     const tx = this.ctx.db.transaction(() => {
       if (hasLocalDirectory) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      this.ctx.db.run(
+      const result = this.ctx.db.run(
         `INSERT INTO multiremi_projects (
           id, title, description, icon, status, priority, workspace_id,
           lead_type, lead_id, default_assignee_type, default_assignee_id,
@@ -540,6 +541,66 @@ export class ProjectsRepo {
     return tx();
   }
 
+  /** Insert only relational control metadata after OpenViking has accepted the content. */
+  createProjectDocMetadata(
+    projectId: string,
+    input: CreateProjectDocInput,
+    control: ProjectKnowledgeWriteControl,
+  ): MultiremiProjectDoc {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const kind = normalizeProjectDocKind(input.kind ?? "wiki");
+    const title = String(input.title ?? "").trim();
+    if (!title) throw new Error("title is required");
+    const id = input.id ?? createId("pdoc");
+    const slug = projectDocSlug(input.slug, title, id);
+    const summary = cleanOptionalString(input.summary);
+    const pinned = input.pinned === undefined || input.pinned === null ? kind === "memory" : Boolean(input.pinned);
+    const authorType = cleanOptionalString(input.authorType ?? input.author_type);
+    const authorId = cleanOptionalString(input.authorId ?? input.author_id);
+    const now = nowIso();
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `INSERT INTO multiremi_project_docs (
+          id, project_id, workspace_id, kind, slug, title, summary, body, tags, pinned, refs,
+          source_task_id, source_issue_id, author_type, author_id,
+          updated_by_type, updated_by_id, version,
+          storage_backend, content_uri, content_sha256, sync_status, sync_error, snapshot_oid,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'openviking', ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          projectId,
+          project.workspaceId,
+          kind,
+          slug,
+          title,
+          summary,
+          toJson(normalizeProjectDocTags(input.tags)),
+          pinned ? 1 : 0,
+          toJson(normalizeProjectDocRefs(input.refs)),
+          cleanOptionalString(input.sourceTaskId ?? input.source_task_id),
+          cleanOptionalString(input.sourceIssueId ?? input.source_issue_id),
+          authorType,
+          authorId,
+          authorType,
+          authorId,
+          control.contentUri,
+          control.contentSha256,
+          control.syncStatus ?? "ready",
+          control.syncError ?? null,
+          control.snapshotOid,
+          now,
+          now,
+        ],
+      );
+      this.insertProjectDocRevision(id, 1, title, summary, "", authorType, authorId, now, control);
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+      return this.getProjectDoc(id)!;
+    });
+    return tx();
+  }
+
   updateProjectDoc(projectId: string, ref: string, input: UpdateProjectDocInput): MultiremiProjectDoc {
     if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
     const existing = this.getProjectDocByRef(projectId, ref);
@@ -587,6 +648,110 @@ export class ProjectsRepo {
       return this.getProjectDoc(existing.id)!;
     });
     return tx();
+  }
+
+  replaceProjectDocMetadataExact(
+    prepared: MultiremiProjectDoc,
+    control: ProjectKnowledgeWriteControl,
+  ): MultiremiProjectDoc {
+    const existing = this.getProjectDoc(prepared.id);
+    if (!existing || existing.projectId !== prepared.projectId) {
+      throw new Error(`Project doc not found: ${prepared.id}`);
+    }
+    if (prepared.version !== existing.version + 1) throw new Error("project doc version conflict");
+    const tx = this.ctx.db.transaction(() => {
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_project_docs
+         SET slug = ?, title = ?, summary = ?, tags = ?, pinned = ?, refs = ?,
+             updated_by_type = ?, updated_by_id = ?, version = ?,
+             storage_backend = 'openviking', content_uri = ?, content_sha256 = ?,
+             sync_status = ?, sync_error = ?, snapshot_oid = ?, updated_at = ?
+         WHERE id = ? AND version = ?`,
+        [
+          prepared.slug,
+          prepared.title,
+          prepared.summary,
+          toJson(prepared.tags),
+          prepared.pinned ? 1 : 0,
+          toJson(prepared.refs),
+          prepared.updatedByType,
+          prepared.updatedById,
+          prepared.version,
+          control.contentUri,
+          control.contentSha256,
+          control.syncStatus ?? "ready",
+          control.syncError ?? null,
+          control.snapshotOid,
+          prepared.updatedAt,
+          prepared.id,
+          existing.version,
+        ],
+      );
+      if (result.changes !== 1) throw new Error("project doc version conflict");
+      this.insertProjectDocRevision(
+        prepared.id,
+        prepared.version,
+        prepared.title,
+        prepared.summary,
+        "",
+        prepared.updatedByType,
+        prepared.updatedById,
+        prepared.updatedAt,
+        control,
+      );
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [prepared.updatedAt, prepared.projectId]);
+      return this.getProjectDoc(prepared.id)!;
+    });
+    return tx();
+  }
+
+  setProjectDocSyncState(
+    docId: string,
+    input: Partial<ProjectKnowledgeWriteControl> & { storageBackend?: "sql" | "openviking" },
+  ): MultiremiProjectDoc {
+    const existing = this.getProjectDoc(docId);
+    if (!existing) throw new Error(`Project doc not found: ${docId}`);
+    this.ctx.db.run(
+      `UPDATE multiremi_project_docs SET
+         storage_backend = ?, content_uri = ?, content_sha256 = ?, sync_status = ?, sync_error = ?, snapshot_oid = ?
+       WHERE id = ?`,
+      [
+        input.storageBackend ?? existing.storageBackend ?? "sql",
+        input.contentUri === undefined ? existing.contentUri ?? null : input.contentUri,
+        input.contentSha256 === undefined ? existing.contentSha256 ?? null : input.contentSha256,
+        input.syncStatus ?? existing.syncStatus ?? "sql",
+        input.syncError === undefined ? existing.syncError ?? null : input.syncError,
+        input.snapshotOid === undefined ? existing.snapshotOid ?? null : input.snapshotOid,
+        docId,
+      ],
+    );
+    return this.getProjectDoc(docId)!;
+  }
+
+  setProjectDocRevisionStorage(
+    docId: string,
+    version: number,
+    contentUri: string,
+    contentSha256: string,
+    snapshotOid: string | null,
+  ): void {
+    this.ctx.db.run(
+      "UPDATE multiremi_project_doc_revisions SET content_uri = ?, content_sha256 = ?, snapshot_oid = ? WHERE doc_id = ? AND version = ?",
+      [contentUri, contentSha256, snapshotOid, docId, version],
+    );
+  }
+
+  listProjectDocsForMigration(workspaceId: string, statuses: string[] = []): MultiremiProjectDoc[] {
+    const normalized = statuses.map((value) => value.trim()).filter(Boolean);
+    if (!normalized.length) {
+      return (this.ctx.db.query(
+        "SELECT * FROM multiremi_project_docs WHERE workspace_id = ? ORDER BY project_id, created_at",
+      ).all(workspaceId) as Row[]).map(toProjectDoc);
+    }
+    const placeholders = normalized.map(() => "?").join(", ");
+    return (this.ctx.db.query(
+      `SELECT * FROM multiremi_project_docs WHERE workspace_id = ? AND sync_status IN (${placeholders}) ORDER BY project_id, created_at`,
+    ).all(workspaceId, ...normalized) as Row[]).map(toProjectDoc);
   }
 
   deleteProjectDoc(projectId: string, ref: string): void {
@@ -716,12 +881,17 @@ export class ProjectsRepo {
     authorType: string | null,
     authorId: string | null,
     createdAt: string,
+    control?: Pick<ProjectKnowledgeWriteControl, "contentUri" | "contentSha256" | "snapshotOid">,
   ): void {
     this.ctx.db.run(
       `INSERT INTO multiremi_project_doc_revisions (
-        id, doc_id, version, title, summary, body, author_type, author_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [createId("pdrev"), docId, version, title, summary, body, authorType, authorId, createdAt],
+        id, doc_id, version, title, summary, body, author_type, author_id,
+        content_uri, content_sha256, snapshot_oid, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        createId("pdrev"), docId, version, title, summary, body, authorType, authorId,
+        control?.contentUri ?? null, control?.contentSha256 ?? null, control?.snapshotOid ?? null, createdAt,
+      ],
     );
   }
 
@@ -965,6 +1135,12 @@ function toProjectDoc(row: Row): MultiremiProjectDoc {
     version: Number(row.version ?? 1),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    storageBackend: row.storage_backend === "openviking" ? "openviking" : "sql",
+    contentUri: nullableString(row.content_uri),
+    contentSha256: nullableString(row.content_sha256),
+    syncStatus: normalizeProjectDocSyncStatus(row.sync_status),
+    syncError: nullableString(row.sync_error),
+    snapshotOid: nullableString(row.snapshot_oid),
   };
 }
 
@@ -979,7 +1155,15 @@ function toProjectDocRevision(row: Row): MultiremiProjectDocRevision {
     authorType: nullableString(row.author_type) as MultiremiProjectDocRevision["authorType"],
     authorId: nullableString(row.author_id),
     createdAt: String(row.created_at),
+    contentUri: nullableString(row.content_uri),
+    contentSha256: nullableString(row.content_sha256),
+    snapshotOid: nullableString(row.snapshot_oid),
   };
+}
+
+function normalizeProjectDocSyncStatus(value: unknown): NonNullable<MultiremiProjectDoc["syncStatus"]> {
+  const status = String(value ?? "sql");
+  return status === "pending" || status === "ready" || status === "failed" || status === "deleting" ? status : "sql";
 }
 
 function toProjectDocIndexEntry(doc: MultiremiProjectDoc): MultiremiProjectDocIndexEntry {
@@ -1000,13 +1184,13 @@ function trimProjectDocText(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
-function normalizeProjectDocKind(value: unknown): MultiremiProjectDocKind {
+export function normalizeProjectDocKind(value: unknown): MultiremiProjectDocKind {
   const kind = String(value ?? "").trim().toLowerCase();
   if (kind !== "wiki" && kind !== "memory") throw new Error(`unknown kind: ${value}`);
   return kind;
 }
 
-function normalizeProjectDocTags(value: unknown): string[] {
+export function normalizeProjectDocTags(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((tag) => String(tag).trim()).filter((tag) => tag.length > 0);
 }
@@ -1015,7 +1199,7 @@ function normalizeProjectDocTags(value: unknown): string[] {
  * Lenient by design: an unknown ref type is kept as written (the taxonomy is a
  * convention, not a constraint) — only a ref without a value is worthless.
  */
-function normalizeProjectDocRefs(value: unknown): MultiremiProjectDocRef[] {
+export function normalizeProjectDocRefs(value: unknown): MultiremiProjectDocRef[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((ref): ref is Record<string, unknown> => typeof ref === "object" && ref !== null)
@@ -1029,7 +1213,7 @@ function normalizeProjectDocRefs(value: unknown): MultiremiProjectDocRef[] {
  * alphanumerics (a pure CJK one, say) slugifies to nothing — fall back to the
  * doc id so the URL-ish ref always exists and stays unique.
  */
-function projectDocSlug(explicit: string | null | undefined, title: string, docId: string): string {
+export function projectDocSlug(explicit: string | null | undefined, title: string, docId: string): string {
   const source = String(explicit ?? "").trim() || title;
   // The reserved slug is the one ref that survives slugification verbatim —
   // otherwise its leading underscore would be shaved off into "schema".

@@ -56,16 +56,19 @@ describe("remi CLI dispatcher", () => {
     const result = await runDispatch(["project"]);
 
     // Reaching the project layer's own usage error proves the command resolved.
-    expect(String((result.error as Error | null)?.message ?? "")).toContain("usage: multiremi project doc|memory");
+    expect(String((result.error as Error | null)?.message ?? "")).toContain("usage: multiremi project knowledge");
     expect(result.exitCode).toBeNull();
     expect(result.stderr.join("\n")).not.toContain("Unknown command");
   });
 
-  it("routes `remi project doc list` past the dispatcher into the project layer", async () => {
-    const result = await runDispatch(["project", "doc", "list"]);
+  it("routes top-level memory and wiki commands into the knowledge layer", async () => {
+    const memoryResult = await runDispatch(["memory", "read", "entry"]);
+    const wikiResult = await runDispatch(["wiki", "read", "page"]);
 
-    expect(String((result.error as Error | null)?.message ?? "")).toContain("usage: multiremi project doc list <project-id>");
-    expect(result.stderr.join("\n")).not.toContain("Unknown command");
+    expect(String((memoryResult.error as Error | null)?.message ?? "")).toContain("--project <project-id> is required");
+    expect(String((wikiResult.error as Error | null)?.message ?? "")).toContain("--project <project-id> is required");
+    expect(memoryResult.stderr.join("\n")).not.toContain("Unknown command");
+    expect(wikiResult.stderr.join("\n")).not.toContain("Unknown command");
   });
 
   it("still rejects a command nobody registered", async () => {

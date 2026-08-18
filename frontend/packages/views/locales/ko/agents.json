@@ -409,6 +409,13 @@
   },
   "transcript": {
     "dialog_title": "에이전트 실행 트랜스크립트",
+    "execution_view": "실행 과정",
+    "prompt_view": "입력 프롬프트",
+    "copy_prompt": "프롬프트 복사",
+    "prompt_hash": "SHA-256: {{hash}}",
+    "prompt_loading": "입력 프롬프트를 불러오는 중...",
+    "prompt_not_recorded": "입력 프롬프트가 기록되지 않았습니다. 이전 런타임 버전에서 실행된 작업일 수 있습니다.",
+    "prompt_load_failed": "입력 프롬프트를 불러오지 못했습니다. 잠시 후 다시 시도하세요.",
     "status_queued": "대기 중",
     "status_dispatched": "시작 중",
     "status_waiting_local_directory": "로컬 디렉터리 대기 중",

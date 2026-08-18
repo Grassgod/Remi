@@ -10,6 +10,8 @@ export interface BuildSessionProjectionInput {
   events: MultiremiSessionEvent[];
   cursorSeq: number;
   providerSessionId: string | null;
+  /** The current request is rendered in its own prompt section, not replayed as history. */
+  currentTaskId?: string | null;
   resolveAuthorName?: (authorType: string, authorId: string | null) => string | null;
 }
 
@@ -31,6 +33,9 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
   const fromSeq = warm ? input.cursorSeq : 0;
   const projected = sorted.filter((event) => {
     if (event.seq <= fromSeq) return false;
+    if (input.currentTaskId && event.kind === "task_assigned" && event.taskId === input.currentTaskId) {
+      return false;
+    }
     if (mode === "delta" && event.authorType === "agent" && event.authorId === input.targetAgentId) {
       return false;
     }
@@ -57,6 +62,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
       author_name: input.resolveAuthorName?.(event.authorType, event.authorId) ?? null,
       body: event.body,
       task_id: event.taskId,
+      source_comment_id: event.sourceCommentId,
       metadata: stableJsonValue(event.metadata),
       created_at: event.createdAt,
     });
