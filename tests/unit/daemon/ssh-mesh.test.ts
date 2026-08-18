@@ -21,6 +21,7 @@ import type {
 import {
   classifySshProbeFailure,
   defaultSshMeshPaths,
+  discoverHostPublicKeys,
   replaceManagedBlock,
   SshMeshManager,
   tryAcquireReconcileLock,
@@ -605,6 +606,20 @@ describe("SSH Mesh file reconciliation", () => {
 });
 
 describe("SSH Mesh helpers", () => {
+  it("discovers standard host public-key files while rejecting unsafe entries", () => {
+    const root = tempHome();
+    const ecdsaHostKey = `ecdsa-sha2-nistp256 ${"E".repeat(64)}`;
+    writeFileSync(join(root, "ssh_host_ecdsa_key.pub"), `${ecdsaHostKey} runtime-host\r\n`);
+    writeFileSync(join(root, "ssh_host_ed25519_key.pub"), `${TEST_HOST_KEY} runtime-host\n`);
+    writeFileSync(
+      join(root, "ssh_host_rsa_key.pub"),
+      `ssh-rsa ${"C".repeat(64)}\nssh-ed25519 ${"D".repeat(64)}\n`,
+    );
+    symlinkSync(join(root, "ssh_host_ed25519_key.pub"), join(root, "ssh_host_link_key.pub"));
+
+    expect(discoverHostPublicKeys(root).sort()).toEqual([ecdsaHostKey, TEST_HOST_KEY].sort());
+  });
+
   it("derives a traversal-safe workspace path without storing the raw id in a directory name", () => {
     const home = tempHome();
     const paths = defaultSshMeshPaths("../../other workspace", home);

@@ -1404,7 +1404,7 @@ function isPrivateIpv4(address: string): boolean {
     || (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127);
 }
 
-function discoverHostPublicKeys(root = "/etc/ssh"): string[] {
+export function discoverHostPublicKeys(root = "/etc/ssh"): string[] {
   try {
     return uniqueStrings(readdirSync(root)
       .filter((name) => /^ssh_host_[a-z0-9_]+_key\.pub$/.test(name))
@@ -1413,7 +1413,8 @@ function discoverHostPublicKeys(root = "/etc/ssh"): string[] {
         try {
           const stat = lstatSync(path);
           if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) return [];
-          return [stripPublicKeyComment(requireHostKey(readFileSync(path, "utf8")))];
+          const contents = readFileSync(path, "utf8").replace(/[ \t\r\n]+$/, "");
+          return [stripPublicKeyComment(requireHostKey(contents))];
         } catch {
           return [];
         }
