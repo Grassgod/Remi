@@ -22,7 +22,11 @@ vi.mock("./issue-detail-header", () => ({
 }));
 
 vi.mock("./issue-session-list", () => ({
-  IssueSessionList: () => <aside data-testid="session-sidebar" />,
+  IssueSessionList: ({ onSelectSession }: { onSelectSession: (id: string) => void }) => (
+    <aside data-testid="session-sidebar">
+      <button type="button" onClick={() => onSelectSession("session-review")}>Select session</button>
+    </aside>
+  ),
 }));
 
 vi.mock("./issue-description-section", () => ({
@@ -39,7 +43,11 @@ vi.mock("./issue-activity-section", () => ({
 
 import { IssueDetailMain } from "./issue-detail-main";
 
-function renderMain(sessionSidebarOpen: boolean, onToggleSessionSidebar = vi.fn()) {
+function renderMain(
+  sessionSidebarOpen: boolean,
+  onToggleSessionSidebar = vi.fn(),
+  isMobile = false,
+) {
   const issue = { id: "issue-1", project_id: null } as Issue;
   const sessions: IssueSessionSelection = {
     list: [],
@@ -60,6 +68,7 @@ function renderMain(sessionSidebarOpen: boolean, onToggleSessionSidebar = vi.fn(
       actions={{} as UseIssueActionsResult}
       sidebarOpen
       onToggleSidebar={vi.fn()}
+      isMobile={isMobile}
       sessionSidebarOpen={sessionSidebarOpen}
       onToggleSessionSidebar={onToggleSessionSidebar}
       sessions={sessions}
@@ -90,6 +99,19 @@ describe("IssueDetailMain session sidebar", () => {
     renderMain(false, onToggleSessionSidebar);
 
     fireEvent.click(screen.getByRole("button", { name: "Toggle sessions" }));
+    expect(onToggleSessionSidebar).toHaveBeenCalledOnce();
+  });
+
+  it("renders the mobile session list in a left sheet and closes it after selection", () => {
+    const onToggleSessionSidebar = vi.fn();
+    renderMain(true, onToggleSessionSidebar, true);
+
+    const rail = screen.getByTestId("session-sidebar");
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]");
+    expect(rail.closest('[data-slot="sheet-content"]')).not.toBeNull();
+    expect(scrollRoot?.parentElement?.contains(rail)).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select session" }));
     expect(onToggleSessionSidebar).toHaveBeenCalledOnce();
   });
 });

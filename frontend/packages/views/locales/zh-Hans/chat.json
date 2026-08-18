@@ -123,6 +123,9 @@
     "permission_title": "需要权限审批",
     "question_title": "Agent 提问",
     "answer_placeholder": "输入回答…",
-    "submit": "提交"
+    "submit": "提交",
+    "load_failed": "无法加载该请求。",
+    "response_failed": "提交失败，请重试。",
+    "retry": "重试"
   }
 }

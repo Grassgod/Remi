@@ -54,18 +54,60 @@ describe("buildTaskEnv", () => {
       MULTIREMI_TASK_ID: "spoofed",
       MULTIREMI_SERVER_URL: "http://spoofed",
       MULTIREMI_TOKEN: "spoofed",
+      MULTIREMI_PROJECT_ID: "spoofed",
+      MULTIREMI_ISSUE_ID: "spoofed",
+      MULTIREMI_ISSUE_SESSION_ID: "spoofed",
+      MULTIREMI_WORKSPACE_ROOT: "/spoofed",
+      CODEX_HOME: "/spoofed/codex",
     };
     const env = buildTaskEnv(taskWith({
       workspaceEnv: { ...clash },
       agent: { customEnv: { ...clash } } as unknown as AgentTask["agent"],
       authToken: "real-token",
-    }), OPTS);
+      project: { id: "prj_real", title: "Project", description: null },
+      issueId: "iss_real",
+      issueSessionId: "ises_real",
+    }), {
+      ...OPTS,
+      workDir: "/workspaces/MUL-1",
+      providerHome: {
+        root: "/workspaces/MUL-1/.multiremi/sessions/ises_real/agt_real/1",
+        home: "/workspaces/MUL-1/.multiremi/sessions/ises_real/agt_real/1/home",
+        sessionId: "ises_real",
+        agentId: "agt_real",
+        generation: 1,
+        provider: "codex",
+      },
+      providerEnv: { OPENAI_API_KEY: "provider-secret" },
+    });
 
     expect(env.MULTIREMI_DAEMON_PORT).toBe("6200");
     expect(env.MULTIREMI_WORKSPACE_ID).toBe("local");
     expect(env.MULTIREMI_TASK_ID).toBe("tsk_env");
     expect(env.MULTIREMI_SERVER_URL).toBe("http://server:6120");
     expect(env.MULTIREMI_TOKEN).toBe("real-token");
+    expect(env.MULTIREMI_PROJECT_ID).toBe("prj_real");
+    expect(env.MULTIREMI_ISSUE_ID).toBe("iss_real");
+    expect(env.MULTIREMI_ISSUE_SESSION_ID).toBe("ises_real");
+    expect(env.MULTIREMI_WORKSPACE_ROOT).toBe("/workspaces/MUL-1");
+    expect(env.CODEX_HOME).toBe("/workspaces/MUL-1/.multiremi/sessions/ises_real/agt_real/1/home");
+    expect(env.OPENAI_API_KEY).toBe("provider-secret");
+  });
+
+  it("injects CLAUDE_CONFIG_DIR for a Claude Issue Session home", () => {
+    const env = buildTaskEnv(taskWith({ issueId: "iss_1", issueSessionId: "ises_1" }), {
+      ...OPTS,
+      providerHome: {
+        root: "/workspaces/MUL-1/.multiremi/sessions/ises_1/agt_1/2",
+        home: "/workspaces/MUL-1/.multiremi/sessions/ises_1/agt_1/2/home",
+        sessionId: "ises_1",
+        agentId: "agt_1",
+        generation: 2,
+        provider: "claude",
+      },
+    });
+    expect(env.CLAUDE_CONFIG_DIR).toBe("/workspaces/MUL-1/.multiremi/sessions/ises_1/agt_1/2/home");
+    expect(env.CODEX_HOME).toBeUndefined();
   });
 
   it("builds the same env as before when the task has no workspace env", () => {

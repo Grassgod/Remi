@@ -18,6 +18,7 @@ import {
 import { useT } from "../../i18n";
 import { TerminateTaskConfirmDialog } from "./terminate-task-confirm-dialog";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
+import { HumanRequestDock } from "../../common/human-request-dock";
 
 // AgentLiveCard renders a sticky banner at the top of the issue's main
 // column for every active task. Each banner shows "agent X is working",
@@ -49,6 +50,10 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
   const { t } = useT("issues");
   const { getActorName } = useActorName();
   const [taskStates, setTaskStates] = useState<Map<string, TaskState>>(new Map());
+  // AskUser requests belong to the Issue, not to whichever product Session is
+  // currently selected in the right panel. Keep this issue-wide view separate
+  // from the Session-filtered activity banner.
+  const [humanRequestTasks, setHumanRequestTasks] = useState<AgentTask[]>([]);
   // Cancel confirmation is hoisted here (not per-card) so a single dialog
   // serves both the inline single banner and the multi-agent popover. A
   // confirm dialog living inside the popover would be torn down the moment
@@ -97,6 +102,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
       // resolution order. Without this guard, a slow A then a fast B can
       // resolve in B-then-A order and A re-adds tasks B already cleared.
       if (mySeq !== reconcileSeq.current) return;
+      setHumanRequestTasks(issueTasks.filter((task) => task.status === "awaiting_human"));
       const activeIds = new Set(tasks.map((t) => t.id));
 
       setTaskStates((prev) => {
@@ -192,6 +198,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
       next.delete(p.task_id);
       return next;
     });
+    setHumanRequestTasks((prev) => prev.filter((task) => task.id !== p.task_id));
     reconcile();
   }, [issueId, reconcile]);
 
@@ -245,7 +252,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
     }
   }, [cancelTarget, issueId, t]);
 
-  if (taskStates.size === 0) return null;
+  if (taskStates.size === 0 && humanRequestTasks.length === 0) return null;
 
   // Order: running → awaiting human → dispatched → waiting → queued.
   // The most-active task takes the sticky slot; parked / queued tasks sit below so the
@@ -267,7 +274,6 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
     (a, b) => statusRank[a.task.status] - statusRank[b.task.status],
   );
   const firstEntry = entries[0];
-  if (!firstEntry) return null;
 
   const resolveName = (agentId: string | null) =>
     agentId ? getActorName("agent", agentId) : t(($) => $.agent_live.fallback_name);
@@ -293,7 +299,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
     // so the bar reads at one consistent width.
     <div className="mt-4 sticky top-4 z-10 rounded-lg bg-background/80 supports-[backdrop-filter]:bg-background/55 backdrop-blur-md">
       <div className="overflow-hidden rounded-lg border border-info/20 bg-info/5">
-        {isMulti ? (
+        {firstEntry && (isMulti ? (
           <>
             <button
               type="button"
@@ -339,7 +345,10 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
             onRequestCancel={() => setCancelTarget(firstEntry.task)}
             cancelling={cancellingIds.has(firstEntry.task.id)}
           />
-        )}
+        ))}
+        {humanRequestTasks.map((task) => (
+          <HumanRequestDock key={task.id} taskId={task.id} />
+        ))}
       </div>
       <TerminateTaskConfirmDialog
         open={cancelTarget !== null}
@@ -403,7 +412,7 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
   const toolCount = items.filter((i) => i.type === "tool_use").length;
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-muted-foreground">
       {task.agent_id ? (
         <ActorAvatar actorType="agent" actorId={task.agent_id} size={20} enableHoverCard showStatusDot />
       ) : (
@@ -411,7 +420,7 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
           <Bot className="h-3 w-3" />
         </div>
       )}
-      <div className="flex items-center gap-1.5 text-xs min-w-0">
+      <div className="flex min-w-[8rem] flex-1 items-center gap-1.5 text-xs">
         {isParked ? (
           <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
         ) : (
@@ -451,11 +460,12 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
           type="button"
           onClick={onRequestCancel}
           disabled={cancelling}
+          aria-label={t(($) => $.agent_live.stop_button)}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
           title={t(($) => $.agent_live.stop_tooltip)}
         >
           {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
-          <span>{t(($) => $.agent_live.stop_button)}</span>
+          <span className="hidden sm:inline">{t(($) => $.agent_live.stop_button)}</span>
         </button>
       </div>
     </div>

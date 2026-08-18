@@ -9,6 +9,7 @@
  */
 
 import type { AgentTask } from "@daemon/contracts/types.js";
+import type { IssueSessionProviderHome } from "../workspace/session-home.js";
 
 export interface BuildTaskEnvOptions {
   /** Port of the daemon's local repo-checkout server. */
@@ -17,6 +18,12 @@ export interface BuildTaskEnvOptions {
   serverUrl: string;
   /** Token used when the task carries none of its own. */
   fallbackToken?: string | null;
+  /** Resolved task workspace, independent of the agent's current repo cwd. */
+  workDir?: string;
+  /** Issue Session-scoped provider config/history root. */
+  providerHome?: IssueSessionProviderHome;
+  /** Daemon-resolved provider endpoint/auth; never persisted in the workspace. */
+  providerEnv?: Record<string, string>;
 }
 
 /**
@@ -34,11 +41,23 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
   return {
     ...(task.workspaceEnv ?? task.workspace_env),
     ...agent?.customEnv,
+    ...opts.providerEnv,
     MULTIREMI_DAEMON_PORT: String(opts.daemonPort),
     MULTIREMI_WORKSPACE_ID: task.workspaceId,
     MULTIREMI_AGENT_NAME: agent?.name ?? "",
     MULTIREMI_TASK_ID: task.id,
+    ...(task.project?.id ? { MULTIREMI_PROJECT_ID: task.project.id } : {}),
+    ...((task.issueId ?? task.issue_id) ? { MULTIREMI_ISSUE_ID: String(task.issueId ?? task.issue_id) } : {}),
+    ...((task.issueSessionId ?? task.issue_session_id)
+      ? { MULTIREMI_ISSUE_SESSION_ID: String(task.issueSessionId ?? task.issue_session_id) }
+      : {}),
+    ...(opts.workDir ? { MULTIREMI_WORKSPACE_ROOT: opts.workDir } : {}),
     MULTIREMI_SERVER_URL: opts.serverUrl,
+    ...(opts.providerHome?.provider === "claude"
+      ? { CLAUDE_CONFIG_DIR: opts.providerHome.home }
+      : opts.providerHome?.provider === "codex"
+        ? { CODEX_HOME: opts.providerHome.home }
+        : {}),
     ...(taskAuthToken ? { MULTIREMI_TOKEN: taskAuthToken } : {}),
   };
 }

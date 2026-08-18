@@ -6,7 +6,10 @@ export const agentPluginsBlock: CapabilityBlock = {
 
   ephemeral(ctx: EphemeralContext) {
     const prepared = ctx.pluginRuntime;
-    if (!prepared) return {};
+    const codexHome = ctx.task.agent?.provider === "codex"
+      ? ctx.providerHome?.home ?? prepared?.codexHome
+      : undefined;
+    if (!prepared) return codexHome ? { codexHome } : {};
     return {
       pluginPaths: prepared.pluginPaths,
       // The server-frozen execution fingerprint is the session reuse contract.
@@ -14,7 +17,7 @@ export const agentPluginsBlock: CapabilityBlock = {
       // remains stable across daemons; the local pluginFingerprint is retained
       // only for materialization diagnostics.
       pluginFingerprint: prepared.executionFingerprint,
-      codexHome: prepared.codexHome,
+      codexHome,
     };
   },
 };

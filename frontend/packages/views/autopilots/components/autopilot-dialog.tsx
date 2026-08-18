@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Check,
+  Activity,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -12,6 +13,7 @@ import {
   FilePlus2,
   FolderKanban,
   Maximize2,
+  MessagesSquare,
   Minimize2,
   Play,
   Rocket,
@@ -47,12 +49,22 @@ import {
   useUpdateAutopilot,
   useUpdateAutopilotTrigger,
 } from "@multiremi/core/autopilots/mutations";
-import { buildAutopilotWebhookUrl } from "@multiremi/core/autopilots";
+import {
+  buildAutopilotWebhookUrl,
+  getCompatibleAutopilotExecutionModes,
+  isAutopilotTriggerCompatible,
+  reconcileExecutionModeForTriggerKind,
+  reconcileTriggerKindForExecutionMode,
+  type ConfigurableAutopilotTriggerKind,
+} from "@multiremi/core/autopilots";
 import { api } from "@multiremi/core/api";
 import type {
   AutopilotAssigneeType,
   AutopilotExecutionMode,
+  AutopilotSessionPolicy,
+  AutopilotSystemEventConfig,
   AutopilotTrigger,
+  AutopilotWorkspacePolicy,
 } from "@multiremi/core/types";
 import { TitleEditor, ContentEditor } from "../../editor";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -71,6 +83,11 @@ import { WebhookEventFilterSection } from "./webhook-event-filter-section";
 import { useT } from "../../i18n";
 import { formatSchedulePartialFailureToast } from "./autopilot-dialog-toast";
 import type { WebhookEventFilter } from "@multiremi/core/types";
+import {
+  getDefaultSystemEventConfig,
+  serializeSystemEventConfig,
+  SystemEventConfigSection,
+} from "./system-event-config";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,6 +100,8 @@ export interface AutopilotInitial {
   assignee_type: AutopilotAssigneeType;
   assignee_id: string;
   execution_mode: AutopilotExecutionMode;
+  session_policy: AutopilotSessionPolicy;
+  workspace_policy: AutopilotWorkspacePolicy;
 }
 
 export type AutopilotDialogProps =
@@ -145,10 +164,15 @@ const TIMEZONE_OPTIONS = [
   "Pacific/Auckland",
 ];
 
-const OUTPUT_MODE_KEYS: AutopilotExecutionMode[] = ["create_issue", "run_only"];
+const OUTPUT_MODE_KEYS: AutopilotExecutionMode[] = [
+  "create_issue",
+  "trigger_issue",
+  "run_only",
+];
 
 const OUTPUT_MODE_ICONS: Record<AutopilotExecutionMode, typeof FilePlus2> = {
   create_issue: FilePlus2,
+  trigger_issue: MessagesSquare,
   run_only: Play,
 };
 
@@ -285,6 +309,12 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   const [executionMode, setExecutionMode] = useState<AutopilotExecutionMode>(
     initial.execution_mode ?? "create_issue",
   );
+  const [sessionPolicy, setSessionPolicy] = useState<AutopilotSessionPolicy>(
+    initial.session_policy ?? "new",
+  );
+  const [workspacePolicy] = useState<AutopilotWorkspacePolicy>(
+    initial.workspace_policy ?? "reuse_issue",
+  );
 
   const initialCfg: TriggerConfig = (() => {
     if (isCreate) {
@@ -305,26 +335,61 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   // updates), so the toggle is hidden when editing. The kind is
   // initialized from the first existing trigger so we render the right
   // panel without surprising the user.
-  const initialKind: "schedule" | "webhook" = (() => {
+  const initialKind: ConfigurableAutopilotTriggerKind = (() => {
     if (isCreate) return "schedule";
     const first = props.triggers[0];
     if (first?.kind === "webhook") return "webhook";
+    if (first?.kind === "system_event") return "system_event";
     return "schedule";
   })();
-  const [triggerKind, setTriggerKind] = useState<"schedule" | "webhook">(initialKind);
+  const [triggerKind, setTriggerKind] =
+    useState<ConfigurableAutopilotTriggerKind>(initialKind);
+
+  const allowedExecutionModes = isCreate
+    ? OUTPUT_MODE_KEYS
+    : getCompatibleAutopilotExecutionModes(props.triggers.map((trigger) => trigger.kind));
+
+  const handleExecutionModeChange = (nextMode: AutopilotExecutionMode) => {
+    setExecutionMode(nextMode);
+    if (isCreate) {
+      setTriggerKind((currentKind) =>
+        reconcileTriggerKindForExecutionMode(nextMode, currentKind),
+      );
+    }
+  };
+
+  const handleTriggerKindChange = (nextKind: ConfigurableAutopilotTriggerKind) => {
+    setTriggerKind(nextKind);
+    if (isCreate) {
+      setExecutionMode((currentMode) =>
+        reconcileExecutionModeForTriggerKind(nextKind, currentMode),
+      );
+    }
+  };
 
   const initialEventFilters: WebhookEventFilter[] =
     !isCreate && props.triggers[0]?.event_filters ? props.triggers[0].event_filters : [];
   const [eventFilters, setEventFilters] = useState<WebhookEventFilter[]>(initialEventFilters);
+  const initialSystemEventConfig: AutopilotSystemEventConfig =
+    !isCreate && props.triggers[0]?.event_config
+      ? props.triggers[0].event_config
+      : getDefaultSystemEventConfig();
+  const [systemEventConfig, setSystemEventConfig] =
+    useState<AutopilotSystemEventConfig>(initialSystemEventConfig);
 
   const initialCronRef = useRef(toCronExpression(initialCfg));
   const initialTimezoneRef = useRef(initialCfg.timezone);
   const initialEventFiltersRef = useRef(serializeEventFilters(initialEventFilters));
+  const initialSystemEventConfigRef = useRef(
+    serializeSystemEventConfig(initialSystemEventConfig),
+  );
   const scheduleDirty =
     toCronExpression(triggerConfig) !== initialCronRef.current ||
     triggerConfig.timezone !== initialTimezoneRef.current;
   const eventFiltersDirty =
     serializeEventFilters(eventFilters) !== initialEventFiltersRef.current;
+  const systemEventConfigDirty =
+    serializeSystemEventConfig(systemEventConfig) !== initialSystemEventConfigRef.current;
 
   const firstTriggerIdRef = useRef(
     !isCreate && props.triggers[0] ? props.triggers[0].id : null,
@@ -364,8 +429,14 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   // and click into it to grab the URL" friction.
   const [createdWebhookTrigger, setCreatedWebhookTrigger] = useState<AutopilotTrigger | null>(null);
 
+  const modeAndTriggerAreCompatible = isCreate
+    ? isAutopilotTriggerCompatible(executionMode, triggerKind)
+    : allowedExecutionModes.includes(executionMode);
   const canSubmit =
-    title.trim().length > 0 && assigneeId.length > 0 && !submitting;
+    title.trim().length > 0 &&
+    assigneeId.length > 0 &&
+    modeAndTriggerAreCompatible &&
+    !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -379,6 +450,8 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
           assignee_type: assigneeType,
           assignee_id: assigneeId,
           execution_mode: executionMode,
+          session_policy: sessionPolicy,
+          workspace_policy: workspacePolicy,
         });
         let triggerOk = true;
         let triggerErrMessage: string | null = null;
@@ -389,6 +462,12 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
               autopilotId: autopilot.id,
               kind: "webhook",
               event_filters: eventFilters.length > 0 ? eventFilters : undefined,
+            });
+          } else if (triggerKind === "system_event") {
+            await createTrigger.mutateAsync({
+              autopilotId: autopilot.id,
+              kind: "system_event",
+              event_config: systemEventConfig,
             });
           } else {
             await createTrigger.mutateAsync({
@@ -428,6 +507,8 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
           assignee_type: assigneeType,
           assignee_id: assigneeId,
           execution_mode: executionMode,
+          session_policy: sessionPolicy,
+          workspace_policy: workspacePolicy,
         });
         let triggerOk = true;
         let triggerErrMessage: string | null = null;
@@ -473,6 +554,23 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
               autopilotId: props.autopilotId,
               triggerId: firstTriggerIdRef.current,
               event_filters: eventFilters,
+            });
+          } catch (err) {
+            triggerOk = false;
+            triggerErrMessage =
+              err instanceof Error && err.message ? err.message : null;
+          }
+        }
+        if (
+          triggerKind === "system_event" &&
+          systemEventConfigDirty &&
+          firstTriggerIdRef.current
+        ) {
+          try {
+            await updateTrigger.mutateAsync({
+              autopilotId: props.autopilotId,
+              triggerId: firstTriggerIdRef.current,
+              event_config: systemEventConfig,
             });
           } catch (err) {
             triggerOk = false;
@@ -635,7 +733,11 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
               selectedDescription={selectedAssignee?.description}
             />
 
-            <OutputModeSection mode={executionMode} onChange={setExecutionMode} />
+            <OutputModeSection
+              mode={executionMode}
+              onChange={handleExecutionModeChange}
+              allowedModes={allowedExecutionModes}
+            />
 
             {executionMode === "create_issue" && (
               <ProjectSection
@@ -645,8 +747,15 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
               />
             )}
 
+            {executionMode === "trigger_issue" && (
+              <TriggerIssueContextSection
+                sessionPolicy={sessionPolicy}
+                onSessionPolicyChange={setSessionPolicy}
+              />
+            )}
+
             {isCreate && (
-              <TriggerKindSection kind={triggerKind} onChange={setTriggerKind} />
+              <TriggerKindSection kind={triggerKind} onChange={handleTriggerKindChange} />
             )}
 
             {triggerKind === "schedule" ? (
@@ -660,11 +769,16 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
                     : undefined
                 }
               />
-            ) : (
+            ) : triggerKind === "webhook" ? (
               <WebhookSection
                 isCreate={isCreate}
                 eventFilters={eventFilters}
                 onEventFiltersChange={setEventFilters}
+              />
+            ) : (
+              <SystemEventSection
+                config={systemEventConfig}
+                onChange={setSystemEventConfig}
               />
             )}
           </aside>
@@ -773,9 +887,11 @@ function AgentSection({
 function OutputModeSection({
   mode,
   onChange,
+  allowedModes,
 }: {
   mode: AutopilotExecutionMode;
   onChange: (mode: AutopilotExecutionMode) => void;
+  allowedModes: readonly AutopilotExecutionMode[];
 }) {
   const { t } = useT("autopilots");
   return (
@@ -784,17 +900,23 @@ function OutputModeSection({
       <div className="space-y-1.5">
         {OUTPUT_MODE_KEYS.map((key) => {
           const selected = key === mode;
+          const compatible = allowedModes.includes(key);
           const Icon = OUTPUT_MODE_ICONS[key];
           return (
             <button
               key={key}
               type="button"
               onClick={() => onChange(key)}
+              disabled={!compatible}
+              title={!compatible ? t(($) => $.dialog.output_mode_incompatible) : undefined}
               className={cn(
-                "w-full flex items-start gap-2.5 rounded-md border px-3 py-2 text-left cursor-pointer transition-colors",
+                "w-full flex items-start gap-2.5 rounded-md border px-3 py-2 text-left transition-colors",
                 selected
                   ? "border-primary bg-primary/5"
                   : "bg-background hover:bg-accent/40",
+                compatible
+                  ? "cursor-pointer"
+                  : "cursor-not-allowed opacity-45 hover:bg-background",
               )}
             >
               <span
@@ -822,6 +944,60 @@ function OutputModeSection({
             </button>
           );
         })}
+      </div>
+      {allowedModes.length < OUTPUT_MODE_KEYS.length && (
+        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          {t(($) => $.dialog.output_mode_compatibility_hint)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TriggerIssueContextSection({
+  sessionPolicy,
+  onSessionPolicyChange,
+}: {
+  sessionPolicy: AutopilotSessionPolicy;
+  onSessionPolicyChange: (policy: AutopilotSessionPolicy) => void;
+}) {
+  const { t } = useT("autopilots");
+  return (
+    <div>
+      <SectionLabel>{t(($) => $.dialog.trigger_issue_context.title)}</SectionLabel>
+      <div className="space-y-2 rounded-md border bg-background p-3">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            {t(($) => $.dialog.trigger_issue_context.session_label)}
+          </label>
+          <Select
+            value={sessionPolicy}
+            onValueChange={(value) => onSessionPolicyChange(value as AutopilotSessionPolicy)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="new">
+                {t(($) => $.dialog.trigger_issue_context.session_new)}
+              </SelectItem>
+              <SelectItem value="reuse_latest">
+                {t(($) => $.dialog.trigger_issue_context.session_reuse_latest)}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            {t(($) => $.dialog.trigger_issue_context.workspace_label)}
+          </label>
+          <div className="flex min-h-9 items-center rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            {t(($) => $.dialog.trigger_issue_context.workspace_reuse_issue)}
+          </div>
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {t(($) => $.dialog.trigger_issue_context.hint)}
+        </p>
       </div>
     </div>
   );
@@ -1008,19 +1184,25 @@ function TriggerKindSection({
   kind,
   onChange,
 }: {
-  kind: "schedule" | "webhook";
-  onChange: (kind: "schedule" | "webhook") => void;
+  kind: ConfigurableAutopilotTriggerKind;
+  onChange: (kind: ConfigurableAutopilotTriggerKind) => void;
 }) {
   const { t } = useT("autopilots");
   return (
     <div>
       <SectionLabel>{t(($) => $.dialog.section_trigger_kind)}</SectionLabel>
-      <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
+      <div className="grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
         <TriggerKindButton
           active={kind === "schedule"}
           onClick={() => onChange("schedule")}
           icon={<Clock className="h-3.5 w-3.5" />}
           label={t(($) => $.dialog.trigger_kind_schedule)}
+        />
+        <TriggerKindButton
+          active={kind === "system_event"}
+          onClick={() => onChange("system_event")}
+          icon={<Activity className="h-3.5 w-3.5" />}
+          label={t(($) => $.dialog.trigger_kind_system_event)}
         />
         <TriggerKindButton
           active={kind === "webhook"}
@@ -1029,6 +1211,22 @@ function TriggerKindSection({
           label={t(($) => $.dialog.trigger_kind_webhook)}
         />
       </div>
+    </div>
+  );
+}
+
+function SystemEventSection({
+  config,
+  onChange,
+}: {
+  config: AutopilotSystemEventConfig;
+  onChange: (config: AutopilotSystemEventConfig) => void;
+}) {
+  const { t } = useT("autopilots");
+  return (
+    <div>
+      <SectionLabel>{t(($) => $.dialog.section_system_event)}</SectionLabel>
+      <SystemEventConfigSection config={config} onChange={onChange} />
     </div>
   );
 }

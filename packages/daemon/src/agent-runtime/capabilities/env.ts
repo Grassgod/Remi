@@ -11,6 +11,9 @@ export const envBlock: CapabilityBlock = {
         daemonPort: daemonOptions.daemonPort,
         serverUrl: daemonOptions.serverUrl,
         fallbackToken: daemonOptions.fallbackToken,
+        workDir: ctx.workDir,
+        providerHome: ctx.providerHome,
+        providerEnv: ctx.providerEnv,
       }),
     };
   },

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -114,7 +115,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       sessionProjection: firstProjection,
       issueSessionResults: [],
     } as any);
-    expect(firstPrompt).toContain("Sibling Session transcripts are private");
+    expect(firstPrompt).toContain("Historical transcripts are supporting evidence");
     expect(firstPrompt).toContain("## Current Request\nImplement the projection.");
     expect(firstPrompt).toContain(
       `remi issue session result publish ${issue.id} --session ${session.id}`,
@@ -159,6 +160,80 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(secondProjection.jsonl).toContain("Please add deterministic ordering.");
     expect(secondProjection.jsonl).not.toContain("Add deterministic ordering.");
     expect(secondProjection.jsonl).not.toContain("Projection implemented.");
+  });
+
+  it("rebinds a queued task to the lane promoted while it was waiting", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_queued_lane",
+      name: "Queued lane runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({ name: "Queued lane agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Queued lane race", workspaceId: "local" });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Initial context" });
+
+    const first = store.createSessionTask(session.id, { agentId: agent.id, prompt: "First turn" });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    expect(store.buildTaskSessionProjection(first.id)?.mode).toBe("bootstrap");
+    store.startTask(first.id);
+
+    // This task is queued while the first run owns the Issue. At enqueue time
+    // the lane is still empty, so only claim-time rebinding can see the ACP
+    // session promoted by the first completion.
+    const queued = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Second turn" });
+    expect(queued.sessionId).toBeNull();
+    expect(queued.issueSessionGeneration).toBe(1);
+
+    store.completeTask(first.id, {
+      output: "First result",
+      sessionId: "acp_promoted_while_queued",
+      workDir: "/tmp/queued-lane",
+    });
+
+    const claimed = store.claimTask(runtime.id);
+    expect(claimed).toMatchObject({
+      id: queued.id,
+      sessionId: "acp_promoted_while_queued",
+      workDir: "/tmp/queued-lane",
+      issueSessionGeneration: 1,
+    });
+    expect(store.buildTaskSessionProjection(queued.id)?.mode).toBe("delta");
+  });
+
+  it("freezes the claimed lane generation and rejects a late promotion after reset", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_frozen_lane",
+      name: "Frozen lane runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({ name: "Frozen lane agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Frozen lane", workspaceId: "local" });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const created = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Run once" });
+    const claimed = store.claimTask(runtime.id)!;
+    expect(claimed.issueSessionGeneration).toBe(1);
+
+    store.resetSessionAgentLane(session.id, agent.id);
+    expect(store.getSessionAgentLane(session.id, agent.id)?.generation).toBe(2);
+    const response = daemonTaskClaimResponse(store, store.getTaskWithAgent(created.id)!);
+    expect(response.issue_session_generation).toBe(1);
+
+    store.startTask(created.id);
+    store.completeTask(created.id, {
+      output: "Late result",
+      sessionId: "late_old_generation",
+      workDir: "/tmp/old-generation",
+    });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      generation: 2,
+      providerSessionId: null,
+      runtimeId: null,
+    });
   });
 
   it("abandons a stale provider lineage and retries from a bootstrap projection", () => {

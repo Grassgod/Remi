@@ -50,9 +50,16 @@ describe("ApiClient", () => {
       title: "Daily triage",
       project_id: "project-1",
       assignee_id: "agent-1",
-      execution_mode: "create_issue",
+      execution_mode: "trigger_issue",
+      session_policy: "new",
+      workspace_policy: "reuse_issue",
     });
-    await client.updateAutopilot("ap-1", { status: "paused", project_id: null });
+    await client.updateAutopilot("ap-1", {
+      status: "paused",
+      project_id: null,
+      session_policy: "reuse_latest",
+      workspace_policy: "reuse_issue",
+    });
     await client.deleteAutopilot("ap-1");
     await client.triggerAutopilot("ap-1");
     await client.listAutopilotRuns("ap-1", { limit: 10, offset: 20 });
@@ -61,7 +68,24 @@ describe("ApiClient", () => {
       cron_expression: "0 9 * * *",
       timezone: "UTC",
     });
-    await client.updateAutopilotTrigger("ap-1", "tr-1", { enabled: false });
+    await client.createAutopilotTrigger("ap-1", {
+      kind: "system_event",
+      event_config: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+        project_id: "project-1",
+      },
+    });
+    await client.updateAutopilotTrigger("ap-1", "tr-1", {
+      enabled: false,
+      event_config: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "in_review" }],
+        project_id: null,
+      },
+    });
     await client.deleteAutopilotTrigger("ap-1", "tr-1");
     await client.rotateAutopilotTriggerWebhookToken("ap-1", "tr-1");
 
@@ -81,13 +105,20 @@ describe("ApiClient", () => {
           title: "Daily triage",
           project_id: "project-1",
           assignee_id: "agent-1",
-          execution_mode: "create_issue",
+          execution_mode: "trigger_issue",
+          session_policy: "new",
+          workspace_policy: "reuse_issue",
         }),
       },
       {
         url: "https://api.example.test/api/autopilots/ap-1",
         method: "PATCH",
-        body: JSON.stringify({ status: "paused", project_id: null }),
+        body: JSON.stringify({
+          status: "paused",
+          project_id: null,
+          session_policy: "reuse_latest",
+          workspace_policy: "reuse_issue",
+        }),
       },
       { url: "https://api.example.test/api/autopilots/ap-1", method: "DELETE" },
       { url: "https://api.example.test/api/autopilots/ap-1/trigger", method: "POST" },
@@ -102,9 +133,30 @@ describe("ApiClient", () => {
         }),
       },
       {
+        url: "https://api.example.test/api/autopilots/ap-1/triggers",
+        method: "POST",
+        body: JSON.stringify({
+          kind: "system_event",
+          event_config: {
+            resource: "issue",
+            event: "status_changed",
+            conditions: [{ field: "status", operator: "becomes", value: "done" }],
+            project_id: "project-1",
+          },
+        }),
+      },
+      {
         url: "https://api.example.test/api/autopilots/ap-1/triggers/tr-1",
         method: "PATCH",
-        body: JSON.stringify({ enabled: false }),
+        body: JSON.stringify({
+          enabled: false,
+          event_config: {
+            resource: "issue",
+            event: "status_changed",
+            conditions: [{ field: "status", operator: "becomes", value: "in_review" }],
+            project_id: null,
+          },
+        }),
       },
       { url: "https://api.example.test/api/autopilots/ap-1/triggers/tr-1", method: "DELETE" },
       {
@@ -112,6 +164,99 @@ describe("ApiClient", () => {
         method: "POST",
       },
     ]);
+  });
+
+  it("normalizes Autopilot fields omitted by older servers", async () => {
+    const legacyAutopilot = {
+      id: "ap-legacy",
+      workspace_id: "ws-1",
+      title: "Legacy automation",
+      description: null,
+      project_id: null,
+      assignee_id: "agent-1",
+      status: "active",
+      execution_mode: "create_issue",
+      issue_title_template: null,
+      created_by_type: "member",
+      created_by_id: "user-1",
+      last_run_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    const legacyTrigger = {
+      id: "trigger-legacy",
+      autopilot_id: "ap-legacy",
+      kind: "schedule",
+      enabled: true,
+      cron_expression: "0 9 * * *",
+      timezone: "UTC",
+      next_run_at: null,
+      webhook_token: null,
+      label: null,
+      last_fired_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    const legacyRun = {
+      id: "run-legacy",
+      autopilot_id: "ap-legacy",
+      source: "schedule",
+      status: "completed",
+      issue_id: "issue-1",
+      task_id: null,
+      triggered_at: "2026-01-01T09:00:00Z",
+      completed_at: "2026-01-01T09:01:00Z",
+      failure_reason: null,
+      created_at: "2026-01-01T09:00:00Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        autopilots: [legacyAutopilot],
+        total: 1,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        autopilot: legacyAutopilot,
+        triggers: [legacyTrigger],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        runs: [legacyRun],
+        total: 1,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    const list = await client.listAutopilots();
+    const detail = await client.getAutopilot("ap-legacy");
+    const runs = await client.listAutopilotRuns("ap-legacy");
+
+    expect(list.autopilots[0]).toMatchObject({
+      assignee_type: "agent",
+      session_policy: "new",
+      workspace_policy: "reuse_issue",
+    });
+    expect(detail.triggers[0]?.event_config).toBeNull();
+    expect(runs.runs[0]).toMatchObject({
+      trigger_id: null,
+      issue_session_id: null,
+      trigger_payload: null,
+      result: null,
+    });
+  });
+
+  it("falls back to an empty Autopilot list when its response is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ autopilots: [{ id: 42 }], total: 1 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.listAutopilots()).resolves.toEqual({ autopilots: [], total: 0 });
   });
 
   it("emits X-Client-* headers when identity is configured", async () => {

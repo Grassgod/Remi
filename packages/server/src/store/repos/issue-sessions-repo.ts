@@ -60,6 +60,11 @@ export class IssueSessionsRepo {
   }
 
   createIssueSession(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
+    return this.ctx.db.transaction(() => this.createIssueSessionWithinTransaction(issueId, input))();
+  }
+
+  /** Caller already owns the transaction for the session + first event. */
+  createIssueSessionWithinTransaction(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const title = input.title?.trim() || `Session ${this.listIssueSessions(issueId, true).length + 1}`;
@@ -85,7 +90,7 @@ export class IssueSessionsRepo {
     for (const agentId of participantAgentIds) {
       this.addSessionParticipant(id, { participantType: "agent", participantId: agentId });
     }
-    this.appendSessionEvent(id, {
+    this.appendSessionEventWithinTransaction(id, {
       authorType: "system",
       authorId: null,
       kind: "session_created",
@@ -93,6 +98,17 @@ export class IssueSessionsRepo {
       metadata: { created_by_type: createdByType, created_by_id: createdById },
     });
     return this.getIssueSession(id)!;
+  }
+
+  getLatestActiveIssueSession(issueId: string): MultiremiIssueSession | null {
+    if (!this.ctx.issues().getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const row = this.ctx.db.query(
+      `SELECT * FROM multiremi_issue_sessions
+       WHERE issue_id = ? AND status = 'active'
+       ORDER BY updated_at DESC, created_at DESC, id DESC
+       LIMIT 1`,
+    ).get(issueId) as Row | null;
+    return row ? toIssueSession(row) : null;
   }
 
   getIssueSession(id: string): MultiremiIssueSession | null {

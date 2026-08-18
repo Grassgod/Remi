@@ -34,6 +34,9 @@ export interface MaterializeTaskPluginsOptions {
    * user's Git cwd is never polluted with Runtime state.
    */
   runtimeBase?: string;
+  /** Session-scoped CODEX_HOME. When present, native Plugin installation and
+   * provider JSONL share this one home instead of creating a second runtime home. */
+  codexHome?: string;
 }
 
 /**
@@ -153,7 +156,7 @@ export async function materializeTaskPlugins(
   if (provider === "codex" && snapshots.length) {
     // CODEX_HOME is deliberately session-stable for an exact server-frozen
     // execution fingerprint. Marketplace input remains task-private.
-    codexHome = join(ownerRuntimeRoot, "codex-home", fingerprintSegment);
+    codexHome = options.codexHome ? resolve(options.codexHome) : join(ownerRuntimeRoot, "codex-home", fingerprintSegment);
     codexMarketplaceRoot = join(runtimeRoot, "codex-marketplace");
     const marketplace = await buildCodexMarketplace(
       codexMarketplaceRoot,

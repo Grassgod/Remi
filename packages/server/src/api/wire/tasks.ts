@@ -217,6 +217,7 @@ export function daemonTaskWireResponse(
   if (task.progressTotal != null) response.progress_total = task.progressTotal;
   if (task.chatSessionId) response.chat_session_id = task.chatSessionId;
   if (task.issueSessionId) response.issue_session_id = task.issueSessionId;
+  if (task.issueSessionGeneration != null) response.issue_session_generation = task.issueSessionGeneration;
   if (task.autopilotRunId) response.autopilot_run_id = task.autopilotRunId;
   if (task.triggerCommentId) response.trigger_comment_id = task.triggerCommentId;
   if (task.triggerSummary) response.trigger_summary = task.triggerSummary;
@@ -270,6 +271,10 @@ export function daemonTaskClaimResponse(
           jsonl: projection.jsonl,
         };
       }
+      if (task.issueSessionGeneration == null) {
+        const lane = store.getSessionAgentLane(task.issueSessionId, task.agentId);
+        if (lane) response.issue_session_generation = lane.generation;
+      }
     }
     if (task.issueId) {
       const since = projectionMode === "delta"
@@ -297,6 +302,9 @@ export function daemonTaskClaimResponse(
   }
   if (task.projectResources.length) {
     response.project_resources = task.projectResources.map(projectResourceCompatibilityResponse);
+  }
+  if (task.projectWikiDocs?.length) {
+    response.project_wiki_docs = task.projectWikiDocs.map(projectDocCompatibilityResponse);
   }
   if (task.projectContexts.length) {
     response.project_contexts = task.projectContexts.map((context) => ({

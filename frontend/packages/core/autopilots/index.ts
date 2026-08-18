@@ -18,3 +18,13 @@ export {
   useReplayAutopilotDelivery,
 } from "./mutations";
 export { buildAutopilotWebhookUrl } from "./webhook";
+export {
+  canRunAutopilotFromDashboard,
+  getCompatibleAutopilotExecutionModes,
+  getCompatibleConfigurableTriggerKinds,
+  isAutopilotTriggerCompatible,
+  reconcileExecutionModeForTriggerKind,
+  reconcileTriggerKindForExecutionMode,
+  type ConfigurableAutopilotTriggerKind,
+} from "./compatibility";
+export { getAutopilotRunHref } from "./run-link";

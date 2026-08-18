@@ -80,7 +80,15 @@ export function IssueDetail({
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const sessions = useIssueSessionSelection(id, initialIssueSessionId);
+  const handleSessionSelection = useCallback(
+    (sessionId: string) => router.replace(paths.issueSession(id, sessionId)),
+    [id, paths, router],
+  );
+  const sessions = useIssueSessionSelection(
+    id,
+    initialIssueSessionId,
+    handleSessionSelection,
+  );
   // Workspace owners and admins moderate any comment authored by anyone
   // (mirrors backend `comment.go:507-512`). Computed here so per-comment
   // rendering doesn't have to re-derive it for every row.
@@ -103,13 +111,18 @@ export function IssueDetail({
   );
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(defaultSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileSessionSidebarOpen, setMobileSessionSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (isMobile) {
       setMobileSidebarOpen(false);
+      setMobileSessionSidebarOpen(false);
     }
-  }, [isMobile]);
+  }, [id, isMobile]);
   const sidebarOpen = isMobile ? mobileSidebarOpen : desktopSidebarOpen;
+  const visibleSessionSidebarOpen = isMobile
+    ? mobileSessionSidebarOpen
+    : sessionSidebarOpen;
   const sections = useSidebarSections();
   const githubSettings = useGitHubSettings();
 
@@ -223,6 +236,14 @@ export function IssueDetail({
     else panel.collapse();
   }, [isMobile, sidebarRef]);
 
+  const handleToggleSessionSidebar = useCallback(() => {
+    if (isMobile) {
+      setMobileSessionSidebarOpen((open) => !open);
+      return;
+    }
+    toggleSessionSidebar();
+  }, [isMobile, toggleSessionSidebar]);
+
   // A timeline "published a result" line points at the panel section that
   // holds the result itself. Open the panel first when it is closed —
   // otherwise the click would scroll to something the user can't see.
@@ -281,8 +302,9 @@ export function IssueDetail({
       onDeletedNavigateTo={onDelete ? undefined : paths.issues()}
       sidebarOpen={sidebarOpen}
       onToggleSidebar={handleToggleSidebar}
-      sessionSidebarOpen={sessionSidebarOpen}
-      onToggleSessionSidebar={toggleSessionSidebar}
+      isMobile={isMobile}
+      sessionSidebarOpen={visibleSessionSidebarOpen}
+      onToggleSessionSidebar={handleToggleSessionSidebar}
       sessions={sessions}
       members={members}
       agents={agents}

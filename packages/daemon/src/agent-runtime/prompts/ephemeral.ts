@@ -35,7 +35,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   sections.push(currentTaskRequest(task));
 
   appendClaimContextSections(sections, task, mode);
-  appendSessionContextSections(sections, task);
+  appendSessionContextSections(sections, task, mode);
 
   if (task.issue) {
     sections.push("");
@@ -181,16 +181,19 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
 
   const autopilotTitle = stringField(task, "autopilotTitle", "autopilot_title");
   const autopilotDescription = stringField(task, "autopilotDescription", "autopilot_description");
+  const uniqueAutopilotDescription = autopilotDescription === currentTaskRequest(task)
+    ? null
+    : autopilotDescription;
   const autopilotSource = stringField(task, "autopilotSource", "autopilot_source");
   const autopilotPayload = unknownField(task, "autopilotTriggerPayload", "autopilot_trigger_payload");
-  if (autopilotTitle || autopilotDescription || autopilotSource || autopilotPayload != null) {
+  if (autopilotTitle || uniqueAutopilotDescription || autopilotSource || autopilotPayload != null) {
     sections.push("");
     sections.push("## Autopilot Context");
     if (autopilotTitle) sections.push(`Title: ${autopilotTitle}`);
     if (autopilotSource) sections.push(`Source: ${autopilotSource}`);
-    if (autopilotDescription) {
+    if (uniqueAutopilotDescription) {
       sections.push("");
-      sections.push(autopilotDescription);
+      sections.push(uniqueAutopilotDescription);
     }
     if (autopilotPayload != null) {
       sections.push("");
@@ -207,7 +210,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
   }
 }
 
-function appendSessionContextSections(sections: string[], task: AgentTask): void {
+function appendSessionContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
   const issueSession = task.issueSession ?? task.issue_session ?? null;
   const projection = task.sessionProjection ?? task.session_projection ?? null;
   if (projection?.jsonl?.trim()) {
@@ -231,7 +234,7 @@ function appendSessionContextSections(sections: string[], task: AgentTask): void
     sections.push(projection?.mode === "delta"
       ? "## New Published Results From Other Sessions"
       : "## Published Results From Other Sessions");
-    sections.push("These are read-only published outputs. They do not include the other sessions' private working transcripts.");
+    sections.push("These are curated, read-only outputs published for reuse across Sessions.");
     for (const result of results) {
       const title = result.title?.trim() || result.id;
       sections.push("");
@@ -242,10 +245,15 @@ function appendSessionContextSections(sections: string[], task: AgentTask): void
 
   const issueId = stringField(task, "issueId", "issue_id") ?? task.issue?.id ?? "";
   const sessionId = issueSession?.id ?? "";
+  if (mode === "bootstrap" && hasIssueWorkspaceProviderHistory(task)) {
+    sections.push("");
+    sections.push("## Issue Workspace Session History");
+    sections.push("Provider-native historical JSONL for this Issue workspace is available read-only under `./.multiremi/sessions/`. Inspect relevant sibling histories when the current task needs their evidence, but do not modify historical files.");
+  }
   if (issueId && sessionId && projection?.mode !== "delta") {
     sections.push("");
     sections.push("## Sharing Results Across Sessions");
-    sections.push("Sibling Session transcripts are private. If you produce a durable decision, artifact, or finding that other Sessions should reuse, explicitly publish only that result. Do not republish an unchanged result.");
+    sections.push("Historical transcripts are supporting evidence, while published Session results are the canonical cross-session handoff. If you produce a durable decision, artifact, or finding that other Sessions should reuse, explicitly publish only that result. Do not republish an unchanged result.");
     if (process.platform === "win32") {
       sections.push(`Write the result body to a UTF-8 file, then run: \`remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-file ./session-result.md\`.`);
     } else {
@@ -259,6 +267,17 @@ function appendSessionContextSections(sections: string[], task: AgentTask): void
     }
     sections.push("Tag the result with `--type mr|report|deploy|decision|doc|other` so it is filed under the right icon, and link what it points at with repeatable `--ref issue:<id>` / `--ref task:<id>` / `--ref url:https://…` (a merge request, a document, a task).");
   }
+}
+
+function hasIssueWorkspaceProviderHistory(task: AgentTask): boolean {
+  const issueId = stringField(task, "issueId", "issue_id") ?? task.issue?.id ?? "";
+  const issueSessionId = stringField(task, "issueSessionId", "issue_session_id")
+    ?? task.issueSession?.id
+    ?? task.issue_session?.id
+    ?? "";
+  const agentId = task.agent?.id?.trim() ?? "";
+  const provider = task.agent?.provider;
+  return Boolean(issueId && issueSessionId && agentId && (provider === "claude" || provider === "codex"));
 }
 
 function appendTriggerCommentSection(sections: string[], task: AgentTask): void {
@@ -409,11 +428,12 @@ function formatProjectResource(resource: AgentTask["projectResources"][number]):
 function appendProjectKnowledgeSections(sections: string[], projectId: string): void {
   sections.push("");
   sections.push("## Project Knowledge");
-  sections.push("Project Memory and Wiki bodies are intentionally not embedded in this prompt. Retrieve only what this task needs.");
-  sections.push("Preferred path: use the `multiremi-project-knowledge` MCP tools in two steps: call `recall` with a focused query, then call `read` for relevant hits before relying on them.");
-  sections.push(`CLI fallback: \`remi memory recall "<query>" --project ${projectId}\`, then \`remi memory read <slug-or-id> --project ${projectId}\` or \`remi wiki read <slug-or-id> --project ${projectId}\`.`);
+  sections.push("Project Memory is not embedded in this prompt. Use the `remi memory` CLI only: first run `remi memory recall \"<query>\"`, then `remi memory read <slug-or-id>` for relevant hits before relying on them.");
+  sections.push("Do not use an MCP server for Project Memory. The task environment already scopes these commands to the current project.");
   sections.push("");
-  sections.push("When durable knowledge changes, search before writing. Update an existing entry rather than creating a duplicate; use MCP `remember`/`update` or the equivalent `remi memory`/`remi wiki` commands, cite `issue:`/`task:`/`url:` provenance, and skip one-off details.");
+  sections.push("Wiki is materialized in `./wiki`. Edit files only in that directory; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+  sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
+  sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory remember|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
 }
 
 function lastPathSegment(path: string): string {
@@ -431,11 +451,24 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
     sections.push("Available agent teammates:");
     for (const member of teammates) {
       const details = [member.role, member.description].filter(Boolean).join(" - ");
-      sections.push(`- ${member.name} (agent: ${member.agentId})${details ? ` - ${details}` : ""}`);
+      sections.push(`- ${member.name} (agent: ${member.agentId})${details ? ` - ${details}` : ""}; mention token: \`${agentMentionToken(member.name, member.agentId)}\``);
     }
   } else {
     sections.push("No other runnable agent teammates are currently configured.");
   }
   sections.push("Delegate when there are independent workstreams, a teammate has relevant specialization, or parallel work will materially shorten delivery. Keep small or tightly coupled work yourself.");
-  sections.push(`Create bounded child issues with \`remi issue create --title <title> --parent ${task.issue?.id ?? "<issue-id>"} --assignee-id <agent-id> --assignee-type agent\`. State the deliverable, constraints, and verification in each child description, then integrate the returned results.`);
+  if (teammates.length) {
+    const example = teammates[0]!;
+    sections.push("Delegate inside this Issue by posting a rich @mention comment. Use the exact mention token from the roster; plain `@name` is not sufficient. State the deliverable, constraints, and verification, then integrate the teammate's response.");
+    sections.push("```sh");
+    sections.push(`cat <<'MULTIREMI_COMMENT' | remi issue comment add ${task.issue?.id ?? "<issue-id>"} --content-stdin`);
+    sections.push(`${agentMentionToken(example.name, example.agentId)} <bounded task, constraints, and verification>`);
+    sections.push("MULTIREMI_COMMENT");
+    sections.push("```");
+  }
+}
+
+function agentMentionToken(name: string, agentId: string): string {
+  const label = name.replace(/([\\\[\]])/g, "\\$1");
+  return `[@${label}](mention://agent/${agentId})`;
 }

@@ -70,7 +70,11 @@ interface Harness {
  * AskUserQuestion elicitation — mid-stream, exactly where a real ACP agent
  * would. The returned promise resolves when the daemon's one-shot run ends.
  */
-async function startHarness(options: { humanRequestTimeoutMs?: number; withElicitation?: boolean } = {}): Promise<Harness> {
+async function startHarness(options: {
+  humanRequestTimeoutMs?: number;
+  withElicitation?: boolean;
+  approvalMode?: "ask" | "auto";
+} = {}): Promise<Harness> {
   db = new Database(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-approval-e2e-"));
   const store = new MultiremiStore(db);
@@ -125,7 +129,7 @@ async function startHarness(options: { humanRequestTimeoutMs?: number; withElici
     once: true,
     daemonPort: 0,
     repoCacheRoot: join(workDir, ".repo-cache"),
-    approvalMode: "ask",
+    approvalMode: options.approvalMode ?? "ask",
     humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? 60_000,
     providerFactory,
   });
@@ -233,6 +237,27 @@ describe("Multiremi approval routing e2e", () => {
       const types = h.store.listTaskMessages(h.taskId).map((m) => m.type);
       expect(types).toContain("question_request");
       expect(types).toContain("question_response");
+    } finally {
+      h.server.stop(true);
+    }
+  });
+
+  it("routes AskUserQuestion in auto approval mode while tools remain auto-approved", async () => {
+    const h = await startHarness({ withElicitation: true, approvalMode: "auto" });
+    try {
+      const question = await waitFor(
+        () => h.store.listTaskHumanRequests(h.taskId).find((r) => r.kind === "question" && r.status === "pending"),
+        "pending question request",
+      );
+      expect(h.store.listTaskHumanRequests(h.taskId).some((r) => r.kind === "permission")).toBe(false);
+      const questions = (question.payload as { questions: Array<{ question: { question: string } }> }).questions;
+      await respond(h.baseUrl, h.taskId, question.id, {
+        answers: { [questions[0]!.question.question]: "production" },
+      });
+
+      await h.run;
+      expect(h.outcomes).toEqual([{ outcome: "selected", optionId: "opt-allow-always" }]);
+      expect(h.elicitationResults).toEqual([{ action: "accept", content: { question_0: "production" } }]);
     } finally {
       h.server.stop(true);
     }

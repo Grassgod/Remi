@@ -61,6 +61,10 @@ const QUESTION_REQUEST = {
 
 function renderDock(requests: unknown[]) {
   listTaskHumanRequests.mockResolvedValue({ requests });
+  mountDock();
+}
+
+function mountDock() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -110,5 +114,44 @@ describe("HumanRequestDock", () => {
         answers: { "Which environment should I deploy to?": "staging" },
       }),
     );
+  });
+
+  it("allows long answer labels to wrap within a narrow request card", async () => {
+    const longLabel = "Keep the Issue version after reviewing every conflicting paragraph";
+    renderDock([{
+      ...QUESTION_REQUEST,
+      payload: {
+        ...QUESTION_REQUEST.payload,
+        questions: [{
+          ...QUESTION_REQUEST.payload.questions[0],
+          question: {
+            ...QUESTION_REQUEST.payload.questions[0]!.question,
+            options: [{ label: longLabel }],
+          },
+        }],
+      },
+    }]);
+
+    const option = await screen.findByRole("button", { name: longLabel });
+    expect(option).toHaveClass("max-w-full", "whitespace-normal", "break-words");
+  });
+
+  it("shows a retry action when the request cannot be loaded", async () => {
+    listTaskHumanRequests.mockRejectedValueOnce(new Error("forbidden"));
+    mountDock();
+
+    expect(await screen.findByText("Could not load this request.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("keeps the request actionable and shows feedback after a response failure", async () => {
+    respondTaskHumanRequest.mockRejectedValueOnce(new Error("network down"));
+    renderDock([PERMISSION_REQUEST]);
+    await screen.findByText("Permission required");
+
+    fireEvent.click(screen.getByText("Allow once"));
+
+    expect(await screen.findByText("Response failed. Try again.")).toBeTruthy();
+    expect(screen.getByText("Allow once").closest("button")?.disabled).toBe(false);
   });
 });

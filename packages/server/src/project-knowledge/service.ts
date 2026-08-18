@@ -49,7 +49,7 @@ export interface ProjectKnowledgeServiceContract {
   getProjectDocByRef(projectId: string, ref: string): Promise<ProjectKnowledgeDoc | null>;
   createProjectDoc(projectId: string, input: CreateProjectDocInput): Promise<ProjectKnowledgeDoc>;
   updateProjectDoc(projectId: string, ref: string, input: UpdateProjectDocInput): Promise<ProjectKnowledgeDoc>;
-  deleteProjectDoc(projectId: string, ref: string): Promise<ProjectKnowledgeDoc>;
+  deleteProjectDoc(projectId: string, ref: string, input?: { expectedVersion?: number | null }): Promise<ProjectKnowledgeDoc>;
   listProjectDocRevisions(projectId: string, ref: string): Promise<ProjectKnowledgeRevision[]>;
   searchProjectDocs(projectId: string, query: string, input?: ProjectKnowledgeSearchOptions): Promise<ProjectKnowledgeDoc[]>;
   recallProjectDocs(projectId: string, query: string, input?: ProjectKnowledgeSearchOptions): Promise<ProjectKnowledgeSearchHit[]>;
@@ -161,8 +161,15 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     return { ...asKnowledgeDoc(metadata), body: prepared.body };
   }
 
-  async deleteProjectDoc(projectId: string, ref: string): Promise<ProjectKnowledgeDoc> {
+  async deleteProjectDoc(
+    projectId: string,
+    ref: string,
+    input: { expectedVersion?: number | null } = {},
+  ): Promise<ProjectKnowledgeDoc> {
     const existing = await this.requireDoc(projectId, ref);
+    if (input.expectedVersion != null && input.expectedVersion !== existing.version) {
+      throw new Error("project doc version conflict");
+    }
     if (this.mode !== "sql") {
       const client = this.requireClient();
       const uri = this.docUri(existing);
@@ -377,6 +384,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     if (task.project) {
       const docs = await this.listProjectDocs(task.project.id);
       next.projectDocs = projectDocsIndex(docs);
+      next.projectWikiDocs = docs.filter((doc) => doc.kind === "wiki");
     }
     if (task.projectContexts.length) {
       next.projectContexts = await Promise.all(task.projectContexts.map(async (context) => ({

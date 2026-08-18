@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { IssueSession } from "@multiremi/core/types";
 import { issueSessionsOptions } from "@multiremi/core/issues/queries";
@@ -24,6 +24,7 @@ export interface IssueSessionSelection {
 export function useIssueSessionSelection(
   issueId: string,
   initialIssueSessionId?: string,
+  onSelectionChange?: (sessionId: string) => void,
 ): IssueSessionSelection {
   const sessionsQuery = useQuery(issueSessionsOptions(issueId));
   // Stable reference: `?? []` inline would hand children a fresh array on
@@ -41,17 +42,26 @@ export function useIssueSessionSelection(
   useEffect(() => {
     if (activeId && activeId !== selectedId) {
       setSelectedId(activeId);
+      onSelectionChange?.(activeId);
     }
-  }, [activeId, selectedId]);
+  }, [activeId, onSelectionChange, selectedId]);
   useEffect(() => {
     setSelectedId(initialIssueSessionId ?? "");
   }, [issueId, initialIssueSessionId]);
+
+  const select = useCallback(
+    (sessionId: string) => {
+      setSelectedId(sessionId);
+      onSelectionChange?.(sessionId);
+    },
+    [onSelectionChange],
+  );
 
   return {
     list,
     activeId,
     active,
-    select: setSelectedId,
+    select,
     pending: sessionsQuery.isPending,
     fetching: sessionsQuery.isFetching,
     refetch: () => void sessionsQuery.refetch(),

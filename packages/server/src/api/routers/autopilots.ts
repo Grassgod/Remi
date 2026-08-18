@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import {
   boundedQueryInt,
   denyCurrentUserWorkspaceAccess,
@@ -34,11 +34,23 @@ import type {
 import type {
   CreateAutopilotInput,
   CreateAutopilotTriggerInput,
+  MultiremiAutopilot,
   RunAutopilotInput,
   UpdateAutopilotInput,
   UpdateAutopilotTriggerInput,
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
+
+function loadAutopilotForCurrentUser(
+  c: Context,
+  store: RouterDeps["store"],
+  autopilotId: string,
+): { autopilot: MultiremiAutopilot } | Response {
+  const autopilot = store.getAutopilot(autopilotId);
+  if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+  const denied = denyCurrentUserWorkspaceAccess(c, store, autopilot.workspaceId);
+  return denied ?? { autopilot };
+}
 
 export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   const { store, scheduler } = deps;
@@ -82,13 +94,18 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const input = autopilotCreateInput(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
     if (denied) return denied;
-    const autopilot = store.createAutopilot(input);
-    scheduler?.sync();
-    return c.json({ autopilot }, 201);
+    try {
+      const autopilot = store.createAutopilot(input);
+      scheduler?.sync();
+      return c.json({ autopilot }, 201);
+    } catch (error) {
+      return autopilotCompatibilityErrorResponse(c, error);
+    }
   });
   app.get("/api/multiremi/autopilots/:id", (c) => {
-    const autopilot = store.getAutopilot(c.req.param("id"));
-    if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const { autopilot } = loaded;
     return c.json({
       autopilot,
       triggers: store.listAutopilotTriggers(autopilot.id).map(autopilotTriggerResponse),
@@ -97,37 +114,61 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     });
   });
   app.patch("/api/multiremi/autopilots/:id", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJson<UpdateAutopilotInput>(c);
-    const autopilot = store.updateAutopilot(c.req.param("id"), body);
-    scheduler?.sync();
-    return c.json({ autopilot });
+    try {
+      const autopilot = store.updateAutopilot(c.req.param("id"), body);
+      scheduler?.sync();
+      return c.json({ autopilot });
+    } catch (error) {
+      return autopilotCompatibilityErrorResponse(c, error);
+    }
   });
   app.delete("/api/multiremi/autopilots/:id", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const autopilot = store.archiveAutopilot(c.req.param("id"));
     scheduler?.sync();
     return c.json({ autopilot });
   });
   app.get("/api/multiremi/autopilots/:id/runs", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     return c.json({ runs: store.listAutopilotRuns(c.req.param("id")) });
   });
   app.get("/api/multiremi/autopilots/:id/deliveries", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const deliveries = store.listWebhookDeliveries(c.req.param("id"));
     return c.json({ deliveries, total: deliveries.length });
   });
   app.get("/api/multiremi/autopilots/:id/deliveries/:deliveryId", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const delivery = store.getWebhookDelivery(c.req.param("deliveryId"));
     if (!delivery || delivery.autopilotId !== c.req.param("id")) return c.json({ error: "delivery not found" }, 404);
     return c.json({ delivery });
   });
   app.post("/api/multiremi/autopilots/:id/deliveries/:deliveryId/replay", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
     return c.json({ ...webhookDeliveryResponse(result) }, 201);
   });
   app.post("/api/multiremi/autopilots/:id/run", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJson<RunAutopilotInput>(c);
-    return c.json({ run: store.runAutopilot(c.req.param("id"), body) }, 201);
+    try {
+      return c.json({ run: store.runAutopilot(c.req.param("id"), body) }, 201);
+    } catch (error) {
+      return autopilotCompatibilityErrorResponse(c, error);
+    }
   });
   app.post("/api/multiremi/autopilots/:id/run-scheduled", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const run = scheduler?.trigger(c.req.param("id")) ?? store.runAutopilot(c.req.param("id"), { source: "schedule" });
     return c.json({ run }, 201);
   });
@@ -139,12 +180,20 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     });
   });
   app.post("/api/multiremi/autopilots/:id/trigger", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJson<RunAutopilotInput>(c);
-    return c.json({
-      run: store.runAutopilot(c.req.param("id"), { ...body, source: body.source ?? "api" }),
-    }, 201);
+    try {
+      return c.json({
+        run: store.runAutopilot(c.req.param("id"), { ...body, source: body.source ?? "api" }),
+      }, 201);
+    } catch (error) {
+      return autopilotCompatibilityErrorResponse(c, error);
+    }
   });
   app.post("/api/multiremi/autopilots/:id/webhook", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const rawBody = await c.req.raw.text();
     let body: RunAutopilotInput & { payload?: unknown };
     try {
@@ -167,14 +216,17 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(webhookDeliveryResponse(result), statusCode);
   });
   app.get("/api/autopilots/:id", (c) => {
-    const autopilot = store.getAutopilot(c.req.param("id"));
-    if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const { autopilot } = loaded;
     return c.json({
       autopilot: autopilotCompatibilityResponse(autopilot),
       triggers: store.listAutopilotTriggers(autopilot.id).map(autopilotTriggerCompatibilityResponse),
     });
   });
   app.patch("/api/autopilots/:id", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<UpdateAutopilotInput & AutopilotCompatibilityUpdateInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = autopilotUpdateCompatibilityInput(body);
@@ -190,6 +242,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.delete("/api/autopilots/:id", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     try {
       const autopilot = store.archiveAutopilot(c.req.param("id"));
       scheduler?.sync();
@@ -200,10 +254,11 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.post("/api/autopilots/:id/trigger", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJsonStrictAllowEmpty<RunAutopilotInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const autopilot = store.getAutopilot(c.req.param("id"));
-    if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+    const { autopilot } = loaded;
     if (autopilot.status !== "active") return c.json({ error: "autopilot is not active" }, 400);
     try {
       return c.json(autopilotRunCompatibilityResponse(store.runAutopilot(autopilot.id, { ...body, source: body.source ?? "manual" })));
@@ -212,31 +267,43 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/autopilots/:id/runs", (c) => {
-    const autopilot = store.getAutopilot(c.req.param("id"));
-    if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const { autopilot } = loaded;
     const limit = boundedQueryInt(c.req.query("limit"), 20, 100);
     const offset = Math.max(0, queryInt(c.req.query("offset"), 0));
     const runs = store.listAutopilotRuns(autopilot.id).slice(offset, offset + limit).map((run) => autopilotRunCompatibilityResponse(run, { slim: true }));
     return c.json({ runs, total: runs.length });
   });
   app.get("/api/autopilots/:id/runs/:runId", (c) => {
-    const autopilot = store.getAutopilot(c.req.param("id"));
-    if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const { autopilot } = loaded;
     const run = store.getAutopilotRun(c.req.param("runId"));
     if (!run || run.autopilotId !== autopilot.id) return c.json({ error: "run not found" }, 404);
     return c.json(autopilotRunCompatibilityResponse(run));
   });
-  app.get("/api/autopilots/:id/deliveries", (c) => c.json(store.listWebhookDeliveries(c.req.param("id"))));
+  app.get("/api/autopilots/:id/deliveries", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    return c.json(store.listWebhookDeliveries(c.req.param("id")));
+  });
   app.get("/api/autopilots/:id/deliveries/:deliveryId", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const delivery = store.getWebhookDelivery(c.req.param("deliveryId"));
     if (!delivery || delivery.autopilotId !== c.req.param("id")) return c.json({ error: "delivery not found" }, 404);
     return c.json(delivery);
   });
   app.post("/api/autopilots/:id/deliveries/:deliveryId/replay", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
     return c.json(webhookDeliveryResponse(result), 201);
   });
   app.post("/api/autopilots/:id/triggers", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<CreateAutopilotTriggerInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const invalid = validateAutopilotTriggerCompatibilityInput(body);
@@ -253,6 +320,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.patch("/api/autopilots/:id/triggers/:triggerId", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<UpdateAutopilotTriggerInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const current = store.getAutopilotTrigger(c.req.param("triggerId"));
@@ -272,12 +341,16 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.delete("/api/autopilots/:id/triggers/:triggerId", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const deleted = store.deleteAutopilotTrigger(c.req.param("id"), c.req.param("triggerId"));
     if (!deleted) return c.json({ error: "trigger not found" }, 404);
     scheduler?.sync();
     return c.body(null, 204);
   });
   app.post("/api/autopilots/:id/triggers/:triggerId/rotate-webhook-token", (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const current = store.getAutopilotTrigger(c.req.param("triggerId"));
     if (!current || current.autopilotId !== c.req.param("id")) return c.json({ error: "trigger not found" }, 404);
     if (current.kind !== "webhook") return c.json({ error: "trigger is not a webhook trigger" }, 400);
@@ -288,6 +361,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.put("/api/autopilots/:id/triggers/:triggerId/signing-secret", async (c) => {
+    const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<{ signing_secret?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const current = store.getAutopilotTrigger(c.req.param("triggerId"));

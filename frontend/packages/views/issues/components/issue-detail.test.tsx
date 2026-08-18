@@ -10,6 +10,7 @@ import enIssues from "../../locales/en/issues.json";
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
+const mockNavigationReplace = vi.hoisted(() => vi.fn());
 
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -103,6 +104,7 @@ vi.mock("../../navigation", () => ({
   ),
   useNavigation: () => ({
     push: vi.fn(),
+    replace: mockNavigationReplace,
     pathname: "/issues/issue-1",
     getShareableUrl: (p: string) => `https://app.multimira.com${p}`,
   }),
@@ -358,6 +360,7 @@ vi.mock("react-virtuoso", () => ({
 // jsdom's HTMLElement.prototype.scrollIntoView is a no-op stub; replace it
 // with a spy so the deep-link effect's call can be observed.
 beforeEach(() => {
+  mockNavigationReplace.mockClear();
   scrollIntoViewSpy.mockClear();
   virtuosoScrollToIndexSpy.mockClear();
   virtuosoLatestProps.current = null;
@@ -865,6 +868,11 @@ describe("IssueDetail (shared)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Review/ }));
     expect(await screen.findByPlaceholderText("Comment in Review…")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockNavigationReplace).toHaveBeenLastCalledWith(
+        "/test/issues/issue-1?session=session-review",
+      );
+    });
   });
 
   it("creates a second session from the rail header and switches to it", async () => {
@@ -1385,6 +1393,13 @@ describe("IssueDetail (shared)", () => {
 
     expect(screen.queryByTestId("panel-group")).not.toBeInTheDocument();
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
+    const sessionsToggle = screen.getByRole("button", { name: "Toggle sessions" });
+    expect(sessionsToggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
+
+    fireEvent.click(sessionsToggle);
+    expect(await screen.findByText("Sessions")).toBeInTheDocument();
+    expect(sessionsToggle).toHaveAttribute("aria-pressed", "true");
   });
 
   it("hides metadata content from the sidebar and shows a button when the bag has keys", async () => {

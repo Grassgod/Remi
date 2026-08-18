@@ -9,6 +9,7 @@ import type { AgentTask } from "@daemon/contracts/types.js";
 import type { LocalPathLocker } from "./workspace/ephemeral.js";
 import type { AcpMcpServer } from "./mcp/ephemeral.js";
 import type { PreparedAgentPluginRuntime } from "./agent-plugins/types.js";
+import type { IssueSessionProviderHome } from "./workspace/session-home.js";
 
 // ── AgentSessionConfig ───────────────────────────────────
 
@@ -74,6 +75,10 @@ export interface EphemeralContext {
   approvalMode?: "auto" | "ask";
   /** Async cache/materialization result prepared before synchronous assembly. */
   pluginRuntime?: PreparedAgentPluginRuntime;
+  /** Provider-native config/session root owned by this Issue Session lane. */
+  providerHome?: IssueSessionProviderHome;
+  /** In-memory endpoint/auth overlay for an isolated provider home. */
+  providerEnv?: Record<string, string>;
 }
 
 export interface EphemeralDaemonOptions {

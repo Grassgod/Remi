@@ -153,6 +153,8 @@ export interface AgentTaskProjectDocsIndex {
 
 export interface AgentTaskProjectDoc {
   id: string;
+  projectId?: string;
+  workspaceId?: string;
   kind: "wiki" | "memory";
   slug: string;
   title: string;
@@ -160,6 +162,8 @@ export interface AgentTaskProjectDoc {
   body: string;
   tags: string[];
   pinned: boolean;
+  refs?: Array<{ type: string; value: string }>;
+  version?: number;
   updatedAt: string;
 }
 
@@ -206,6 +210,8 @@ export interface AgentTask {
   issue_id?: string | null;
   issueSessionId?: string | null;
   issue_session_id?: string | null;
+  issueSessionGeneration?: number | null;
+  issue_session_generation?: number | null;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   completedAt: string | null;
@@ -223,6 +229,9 @@ export interface AgentTask {
   projectResources: AgentTaskProjectResource[];
   projectDocs?: AgentTaskProjectDocsIndex | null;
   project_docs?: AgentTaskProjectDocsIndex | null;
+  /** Full Wiki bodies transported outside the prompt for local workspace materialization. */
+  projectWikiDocs?: AgentTaskProjectDoc[];
+  project_wiki_docs?: AgentTaskProjectDoc[];
   projectContexts?: AgentTaskProjectContext[];
   project_contexts?: AgentTaskProjectContext[];
   squadContext?: AgentTaskSquadContext | null;
@@ -333,6 +342,9 @@ export interface AutopilotRun {
   status: string;
   issueId: string | null;
   taskId: string | null;
+  triggerId: string | null;
+  eventId: string | null;
+  issueSessionId: string | null;
   triggeredAt: string;
   completedAt: string | null;
   failureReason: string | null;
@@ -367,6 +379,7 @@ export interface AutopilotStore {
   advanceScheduleTriggerNextRun(triggerId: string, from?: Date): AutopilotTrigger | null;
   getAutopilot(id: string): Autopilot | null;
   runAutopilot(autopilotId: string, input?: RunAutopilotInput): AutopilotRun;
+  dispatchPendingSystemEvents(now?: Date, limit?: number): AutopilotRun[];
   pauseAutopilotsExceedingFailureThreshold(
     options?: AutopilotFailureThresholdOptions,
   ): AutopilotFailureThresholdCandidate[];

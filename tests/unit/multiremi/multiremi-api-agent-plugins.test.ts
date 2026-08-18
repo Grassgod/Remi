@@ -966,6 +966,8 @@ describe("Multiremi API — agent plugins", () => {
         prompt: "bypass the required Plugin",
         provider: "claude",
         execution_fingerprint: "f".repeat(64),
+        assignmentSourceEventId: "sev_forged_camel",
+        assignment_source_event_id: "sev_forged_snake",
         plugin_snapshot: [{
           bindingId: "forged-binding",
           pluginId: decoy.id,
@@ -985,6 +987,7 @@ describe("Multiremi API — agent plugins", () => {
     expect((await response.json()).task).toMatchObject({
       pluginSnapshot: [],
       executionFingerprint: null,
+      assignmentSourceEventId: null,
     });
     expect(store.claimTask(runtime.id)).toBeNull();
   });

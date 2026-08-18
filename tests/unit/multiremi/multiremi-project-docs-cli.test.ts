@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
-import { handleProjectKnowledgeMcpRequest } from "../../../apps/remi/cli/multiremi/project-knowledge-mcp.js";
 
 interface RecordedRequest {
   method: string;
@@ -10,16 +9,25 @@ interface RecordedRequest {
 }
 
 let previousTaskId: string | undefined;
+let previousProjectId: string | undefined;
 
 afterEach(() => {
   if (previousTaskId === undefined) delete process.env.MULTIREMI_TASK_ID;
   else process.env.MULTIREMI_TASK_ID = previousTaskId;
   previousTaskId = undefined;
+  if (previousProjectId === undefined) delete process.env.MULTIREMI_PROJECT_ID;
+  else process.env.MULTIREMI_PROJECT_ID = previousProjectId;
+  previousProjectId = undefined;
 });
 
 function setTaskId(taskId: string): void {
   previousTaskId = process.env.MULTIREMI_TASK_ID;
   process.env.MULTIREMI_TASK_ID = taskId;
+}
+
+function setProjectId(projectId: string): void {
+  previousProjectId = process.env.MULTIREMI_PROJECT_ID;
+  process.env.MULTIREMI_PROJECT_ID = projectId;
 }
 
 function doc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -253,6 +261,22 @@ describe("Multiremi CLI project knowledge commands", () => {
     });
   });
 
+  test("uses the task project environment when --project is omitted", async () => {
+    setProjectId("prj_1");
+    await withDocsServer(async (serverUrl, requests, logs) => {
+      await runMultiremi([
+        "memory", "read", "build-guide",
+        "--server", serverUrl,
+        "--token", "tok_cli",
+      ], { programName: "multiremi" });
+
+      expect(requests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
+        "GET /api/projects/prj_1/docs/build-guide",
+      ]);
+      expect(JSON.parse(logs[0]).doc.title).toBe("Build guide");
+    });
+  });
+
   test("supports recall, backlinks, revisions and migration maintenance", async () => {
     await withDocsServer(async (serverUrl, requests, logs) => {
       const base = ["--server", serverUrl, "--token", "tok_cli", "--workspace", "ws_cli", "--output", "json"];
@@ -283,53 +307,6 @@ describe("Multiremi CLI project knowledge commands", () => {
       expect(requests[5]!.body).toEqual({ project_id: "prj_1", workspace_id: "ws_cli", dry_run: true, resume: true });
       expect(requests[6]!.body).toEqual({ project_id: "prj_1", workspace_id: "ws_cli" });
       expect(requests[7]!.body).toEqual({ project_id: "prj_1", workspace_id: "ws_cli" });
-    });
-  });
-
-  test("serves project-scoped knowledge tools over MCP", async () => {
-    await withDocsServer(async (serverUrl, requests) => {
-      const options = { server: serverUrl, token: "tok_mcp" };
-      const initialized = await handleProjectKnowledgeMcpRequest("prj_1", options, {
-        jsonrpc: "2.0", id: 1, method: "initialize",
-      });
-      expect((initialized as any).result.serverInfo.name).toBe("multiremi-project-knowledge");
-      const listed = await handleProjectKnowledgeMcpRequest("prj_1", options, {
-        jsonrpc: "2.0", id: 2, method: "tools/list",
-      });
-      expect((listed as any).result.tools.map((tool: any) => tool.name)).toEqual([
-        "recall", "read", "remember", "update", "backlinks",
-      ]);
-
-      await handleProjectKnowledgeMcpRequest("prj_1", options, {
-        jsonrpc: "2.0", id: 3, method: "tools/call",
-        params: { name: "recall", arguments: { query: "owner", kind: "wiki", limit: 2, project_id: "foreign" } },
-      });
-      await handleProjectKnowledgeMcpRequest("prj_1", options, {
-        jsonrpc: "2.0", id: 4, method: "tools/call",
-        params: { name: "read", arguments: { ref: "build-guide" } },
-      });
-      await handleProjectKnowledgeMcpRequest("prj_1", options, {
-        jsonrpc: "2.0", id: 5, method: "tools/call",
-        params: { name: "remember", arguments: { title: "Architecture", kind: "wiki", content: "Hub" } },
-      });
-      await handleProjectKnowledgeMcpRequest("prj_1", options, {
-        jsonrpc: "2.0", id: 6, method: "tools/call",
-        params: { name: "update", arguments: { ref: "build-guide", content: "v2", expected_version: 1 } },
-      });
-      await handleProjectKnowledgeMcpRequest("prj_1", options, {
-        jsonrpc: "2.0", id: 7, method: "tools/call",
-        params: { name: "backlinks", arguments: { ref: "build-guide" } },
-      });
-
-      expect(requests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
-        "GET /api/projects/prj_1/knowledge/recall?q=owner&kind=wiki&limit=2",
-        "GET /api/projects/prj_1/docs/build-guide",
-        "POST /api/projects/prj_1/docs",
-        "PUT /api/projects/prj_1/docs/build-guide",
-        "GET /api/projects/prj_1/docs/build-guide/backlinks",
-      ]);
-      expect(requests[2]!.body).toMatchObject({ kind: "wiki", pinned: false });
-      expect(requests.every((entry) => entry.authorization === "Bearer tok_mcp")).toBe(true);
     });
   });
 

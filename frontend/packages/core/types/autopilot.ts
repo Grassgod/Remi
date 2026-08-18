@@ -1,6 +1,12 @@
+import type { IssueStatus } from "./issue";
+
 export type AutopilotStatus = "active" | "paused" | "archived";
 
-export type AutopilotExecutionMode = "create_issue" | "run_only";
+export type AutopilotExecutionMode = "create_issue" | "trigger_issue" | "run_only";
+
+export type AutopilotSessionPolicy = "new" | "reuse_latest";
+
+export type AutopilotWorkspacePolicy = "reuse_issue";
 
 // `assignee_type` selects which polymorphic actor backs the autopilot:
 // "agent" → assignee_id references agent(id); "squad" → assignee_id references
@@ -8,7 +14,7 @@ export type AutopilotExecutionMode = "create_issue" | "run_only";
 // Path A). Older servers omit this field — callers should default to "agent".
 export type AutopilotAssigneeType = "agent" | "squad";
 
-export type AutopilotTriggerKind = "schedule" | "webhook" | "api";
+export type AutopilotTriggerKind = "schedule" | "webhook" | "system_event" | "api";
 
 // `skipped` is emitted by the backend pre-flight admission check
 // (assignee runtime offline at dispatch time, MUL-1899). The frontend MUST
@@ -21,7 +27,20 @@ export type AutopilotRunStatus =
   | "failed"
   | "skipped";
 
-export type AutopilotRunSource = "schedule" | "manual" | "webhook" | "api";
+export type AutopilotRunSource = "schedule" | "manual" | "webhook" | "system_event" | "api";
+
+export interface AutopilotSystemEventCondition {
+  field: "status";
+  operator: "becomes";
+  value: IssueStatus;
+}
+
+export interface AutopilotSystemEventConfig {
+  resource: "issue";
+  event: "status_changed";
+  conditions: AutopilotSystemEventCondition[];
+  project_id?: string | null;
+}
 
 export interface Autopilot {
   id: string;
@@ -33,6 +52,8 @@ export interface Autopilot {
   assignee_id: string;
   status: AutopilotStatus;
   execution_mode: AutopilotExecutionMode;
+  session_policy: AutopilotSessionPolicy;
+  workspace_policy: AutopilotWorkspacePolicy;
   issue_title_template: string | null;
   created_by_type: string;
   created_by_id: string;
@@ -67,6 +88,7 @@ export interface AutopilotTrigger {
   // event_filters is only present for webhook triggers. Null/empty means
   // "accept all events".
   event_filters?: WebhookEventFilter[] | null;
+  event_config: AutopilotSystemEventConfig | null;
   last_fired_at: string | null;
   created_at: string;
   updated_at: string;
@@ -79,6 +101,7 @@ export interface AutopilotRun {
   source: AutopilotRunSource;
   status: AutopilotRunStatus;
   issue_id: string | null;
+  issue_session_id: string | null;
   task_id: string | null;
   triggered_at: string;
   completed_at: string | null;
@@ -97,6 +120,8 @@ export interface CreateAutopilotRequest {
   assignee_type?: AutopilotAssigneeType;
   assignee_id: string;
   execution_mode: AutopilotExecutionMode;
+  session_policy?: AutopilotSessionPolicy;
+  workspace_policy?: AutopilotWorkspacePolicy;
   issue_title_template?: string;
 }
 
@@ -110,6 +135,8 @@ export interface UpdateAutopilotRequest {
   assignee_id?: string;
   status?: AutopilotStatus;
   execution_mode?: AutopilotExecutionMode;
+  session_policy?: AutopilotSessionPolicy;
+  workspace_policy?: AutopilotWorkspacePolicy;
   issue_title_template?: string | null;
 }
 
@@ -120,6 +147,7 @@ export interface CreateAutopilotTriggerRequest {
   label?: string;
   // event_filters is only meaningful for webhook triggers.
   event_filters?: WebhookEventFilter[];
+  event_config?: AutopilotSystemEventConfig;
 }
 
 export interface UpdateAutopilotTriggerRequest {
@@ -129,6 +157,7 @@ export interface UpdateAutopilotTriggerRequest {
   label?: string;
   // event_filters is only meaningful for webhook triggers.
   event_filters?: WebhookEventFilter[] | null;
+  event_config?: AutopilotSystemEventConfig | null;
 }
 
 export interface ListAutopilotsResponse {

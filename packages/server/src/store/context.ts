@@ -16,6 +16,7 @@ import type {
   AddSessionParticipantInput,
   CreateIssueCommentInput,
   CreateIssueInput,
+  CreateIssueSessionInput,
   CreateSkillInput,
   CreateTaskInput,
   ListIssuesInput,
@@ -47,6 +48,7 @@ import type {
   MultiremiRuntime,
   MultiremiSessionEvent,
   MultiremiSessionParticipant,
+  MultiremiSystemEvent,
   MultiremiSquad,
   MultiremiSquadMember,
   MultiremiTask,
@@ -88,7 +90,7 @@ const METRIC_AUTOPILOT_CREATED = "multiremi_autopilot_created_total";
 const METRIC_AUTOPILOT_RUN_STARTED = "multiremi_autopilot_run_started_total";
 const METRIC_AUTOPILOT_RUN_TERMINAL = "multiremi_autopilot_run_terminal_total";
 export const METRIC_WEBHOOK_DELIVERY = "multiremi_webhook_delivery_total";
-const KNOWN_ANALYTICS_SOURCES = new Set(["issue", "chat", "autopilot", "autopilot_issue", "quick_create", "manual", "api", "other"]);
+const KNOWN_ANALYTICS_SOURCES = new Set(["issue", "chat", "autopilot", "autopilot_issue", "quick_create", "manual", "api", "system_event", "other"]);
 const KNOWN_RUNTIME_MODES = new Set(["local", "cloud", "unknown"]);
 const KNOWN_RUNTIME_PROVIDERS = new Set([
   "antigravity",
@@ -138,8 +140,8 @@ const KNOWN_FAILURE_REASONS = new Set([
   "timeout",
   "unknown",
 ]);
-const KNOWN_AUTOPILOT_CADENCES = new Set(["hourly", "daily", "weekly", "monthly", "manual", "webhook", "unknown"]);
-const KNOWN_AUTOPILOT_TRIGGERS = new Set(["schedule", "webhook", "manual", "unknown"]);
+const KNOWN_AUTOPILOT_CADENCES = new Set(["hourly", "daily", "weekly", "monthly", "manual", "webhook", "system_event", "unknown"]);
+const KNOWN_AUTOPILOT_TRIGGERS = new Set(["schedule", "webhook", "system_event", "manual", "unknown"]);
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
@@ -236,6 +238,14 @@ export interface ProjectsSurface {
 export interface AutopilotsSurface {
   getAutopilot(id: string): MultiremiAutopilot | null;
   getAutopilotRun(id: string): MultiremiAutopilotRun | null;
+  enqueueIssueStatusChangedEvent(input: {
+    issue: MultiremiIssue;
+    previousStatus: string;
+    actorType?: string | null;
+    actorId?: string | null;
+    automationSourceEventId?: string | null;
+    automationSourceTaskId?: string | null;
+  }): MultiremiSystemEvent | null;
 }
 
 export interface AccessTokensSurface {
@@ -244,6 +254,8 @@ export interface AccessTokensSurface {
 
 export interface TasksSurface {
   createTask(input: CreateTaskInput): MultiremiTask;
+  /** Internal primitive for a caller that already owns a database transaction. */
+  createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask;
   getTask(id: string): MultiremiTask | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
@@ -259,6 +271,8 @@ export interface ChatSurface {
 export interface IssueSessionsSurface {
   getIssueSession(id: string): MultiremiIssueSession | null;
   getOrCreateDefaultIssueSession(issueId: string, createdById?: string | null): MultiremiIssueSession;
+  createIssueSessionWithinTransaction(issueId: string, input?: CreateIssueSessionInput): MultiremiIssueSession;
+  getLatestActiveIssueSession(issueId: string): MultiremiIssueSession | null;
   addSessionParticipant(sessionId: string, input: AddSessionParticipantInput): MultiremiSessionParticipant;
   getOrCreateSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane;
   getSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null;

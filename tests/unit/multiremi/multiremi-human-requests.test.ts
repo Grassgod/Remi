@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -191,5 +192,68 @@ describe("task human requests (store)", () => {
     store.createTaskHumanRequest({ taskId: task.id, kind: "permission", payload: {} });
     const runtime = store.getRuntime("rt_test")!;
     expect(runtime.activeTaskCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("guards Human Request read and response with task transcript visibility", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
+    const aliceToken = await store.createAccessToken({
+      name: "Alice",
+      type: "pat",
+      workspaceId: "local",
+      userId: "alice",
+    });
+    const bobToken = await store.createAccessToken({
+      name: "Bob",
+      type: "pat",
+      workspaceId: "local",
+      userId: "bob",
+    });
+    const runtime = store.registerRuntime({
+      id: "rt_private_request",
+      name: "Alice runtime",
+      provider: "claude",
+      workspaceId: "local",
+      ownerId: "alice",
+      visibility: "private",
+    });
+    const agent = store.createAgent({
+      name: "Alice private agent",
+      provider: "claude",
+      ownerId: "alice",
+      visibility: "private",
+    });
+    const task = store.createTask({ agentId: agent.id, prompt: "Ask Alice" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    const request = store.createTaskHumanRequest({
+      taskId: task.id,
+      kind: "question",
+      payload: { questions: [{ question: "Proceed?" }] },
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const aliceAuth = { Authorization: `Bearer ${aliceToken.token}` };
+    const bobAuth = { Authorization: `Bearer ${bobToken.token}` };
+
+    expect((await app.request(`/api/tasks/${task.id}/human-requests`, { headers: bobAuth })).status).toBe(403);
+    expect((await app.request(`/api/tasks/${task.id}/human-requests/${request.id}/respond`, {
+      method: "POST",
+      headers: { ...bobAuth, "Content-Type": "application/json" },
+      body: JSON.stringify({ response: { answers: { "Proceed?": "yes" } } }),
+    })).status).toBe(403);
+    expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+
+    const visible = await app.request(`/api/tasks/${task.id}/human-requests`, { headers: aliceAuth });
+    expect(visible.status).toBe(200);
+    expect((await visible.json()).requests).toEqual([expect.objectContaining({ id: request.id })]);
+    const responded = await app.request(`/api/tasks/${task.id}/human-requests/${request.id}/respond`, {
+      method: "POST",
+      headers: { ...aliceAuth, "Content-Type": "application/json" },
+      body: JSON.stringify({ response: { answers: { "Proceed?": "yes" } } }),
+    });
+    expect(responded.status).toBe(200);
+    expect(store.getTaskHumanRequest(request.id)?.status).toBe("responded");
+    expect(store.getTaskHumanRequest(request.id)?.respondedBy).toBe("alice");
   });
 });

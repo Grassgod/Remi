@@ -51,6 +51,7 @@ describe("store migrations", () => {
       "multiremi_workspace_members",
       "multiremi_runtimes",
       "multiremi_autopilots",
+      "multiremi_system_events",
       "multiremi_projects",
       "multiremi_chat_sessions",
       "multiremi_feedback",
@@ -61,6 +62,13 @@ describe("store migrations", () => {
     expect(tables.some((name) => name.startsWith("multica_"))).toBe(false);
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
+    expect(columnNames(database, "multiremi_autopilots")).toEqual(expect.arrayContaining([
+      "session_policy", "workspace_policy",
+    ]));
+    expect(columnNames(database, "multiremi_autopilot_triggers")).toContain("event_config");
+    expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
+      "trigger_id", "event_id", "issue_session_id",
+    ]));
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining(["issue_kind", "source_issue_id"]));
     expect(columnNames(database, "multiremi_agent_plugin_bindings")).not.toContain("task_kind");
     expect(columnNames(database, "multiremi_project_docs")).toEqual(expect.arrayContaining([
@@ -131,6 +139,37 @@ describe("store migrations", () => {
     expect(tableNames(database)).toEqual(first);
     const row = database.query("SELECT name FROM multiremi_agents WHERE id = ?").get("agt_keep") as { name?: string } | null;
     expect(row?.name).toBe("Keep me");
+  });
+
+  it("adds system-event run columns before creating their unique index", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_autopilot_runs (
+        id TEXT PRIMARY KEY,
+        autopilot_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        issue_id TEXT,
+        task_id TEXT,
+        triggered_at TEXT NOT NULL,
+        completed_at TEXT,
+        failure_reason TEXT,
+        payload TEXT,
+        result TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
+      "trigger_id", "event_id", "issue_session_id",
+    ]));
+    expect(database.query(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+    ).get("idx_multiremi_autopilot_runs_system_event")).toEqual({
+      name: "idx_multiremi_autopilot_runs_system_event",
+    });
   });
 
   it("backfills a daemon owner claim only when existing active identities agree", () => {

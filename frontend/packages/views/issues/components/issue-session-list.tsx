@@ -38,6 +38,7 @@ interface IssueSessionListProps {
   selectedSessionId: string;
   agents: Agent[];
   onSelectSession: (sessionId: string) => void;
+  className?: string;
 }
 
 // Narrow session switcher rail on the far left of the issue detail panel.
@@ -56,11 +57,17 @@ export function IssueSessionList({
   selectedSessionId,
   agents,
   onSelectSession,
+  className,
 }: IssueSessionListProps) {
   const { t } = useT("issues");
 
   return (
-    <div className="w-44 shrink-0 overflow-y-auto border-r px-2 py-8 lg:w-56">
+    <div
+      className={cn(
+        "w-44 shrink-0 overflow-y-auto border-r px-2 py-8 lg:w-56",
+        className,
+      )}
+    >
       <div className="flex items-center gap-1 pl-2">
         {/* The header stays the bare word "Sessions" — the column is too
             narrow for "Sessions on this issue" — so the scope rides along

@@ -1,8 +1,169 @@
 import { z } from "zod";
 import type {
+  Autopilot,
+  AutopilotRun,
+  AutopilotTrigger,
+  GetAutopilotResponse,
+  ListAutopilotRunsResponse,
+  ListAutopilotsResponse,
   ListWebhookDeliveriesResponse,
   WebhookDelivery,
 } from "../../types";
+
+const AutopilotSystemEventConditionSchema = z.object({
+  field: z.literal("status"),
+  operator: z.literal("becomes"),
+  value: z.string(),
+}).loose();
+
+export const AutopilotSystemEventConfigSchema = z.object({
+  resource: z.literal("issue"),
+  event: z.literal("status_changed"),
+  conditions: z.array(AutopilotSystemEventConditionSchema).default([]),
+  project_id: z.string().nullable().optional().default(null),
+}).loose();
+
+export const AutopilotSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string(),
+  description: z.string().nullable(),
+  project_id: z.string().nullable().optional().default(null),
+  assignee_type: z.enum(["agent", "squad"]).catch("agent").default("agent"),
+  assignee_id: z.string(),
+  status: z.string(),
+  execution_mode: z.string(),
+  session_policy: z.enum(["new", "reuse_latest"]).catch("new").default("new"),
+  workspace_policy: z.literal("reuse_issue").catch("reuse_issue").default("reuse_issue"),
+  issue_title_template: z.string().nullable(),
+  created_by_type: z.string(),
+  created_by_id: z.string(),
+  last_run_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const AutopilotTriggerSchema = z.object({
+  id: z.string(),
+  autopilot_id: z.string(),
+  kind: z.string(),
+  enabled: z.boolean(),
+  cron_expression: z.string().nullable(),
+  timezone: z.string().nullable(),
+  next_run_at: z.string().nullable(),
+  webhook_token: z.string().nullable(),
+  webhook_path: z.string().nullable().optional(),
+  webhook_url: z.string().nullable().optional(),
+  label: z.string().nullable(),
+  event_filters: z.array(z.object({
+    event: z.string(),
+    actions: z.array(z.string()).optional(),
+  }).loose()).nullable().optional(),
+  event_config: AutopilotSystemEventConfigSchema.nullable().catch(null).default(null),
+  last_fired_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const AutopilotRunSchema = z.object({
+  id: z.string(),
+  autopilot_id: z.string(),
+  trigger_id: z.string().nullable().default(null),
+  source: z.string(),
+  status: z.string(),
+  issue_id: z.string().nullable(),
+  issue_session_id: z.string().nullable().default(null),
+  task_id: z.string().nullable(),
+  triggered_at: z.string(),
+  completed_at: z.string().nullable(),
+  failure_reason: z.string().nullable(),
+  trigger_payload: z.unknown().default(null),
+  result: z.unknown().default(null),
+  created_at: z.string(),
+}).loose();
+
+export const ListAutopilotsResponseSchema = z.object({
+  autopilots: z.array(AutopilotSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const GetAutopilotResponseSchema = z.object({
+  autopilot: AutopilotSchema,
+  triggers: z.array(AutopilotTriggerSchema).default([]),
+}).loose();
+
+export const ListAutopilotRunsResponseSchema = z.object({
+  runs: z.array(AutopilotRunSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_AUTOPILOT: Autopilot = {
+  id: "",
+  workspace_id: "",
+  title: "",
+  description: null,
+  project_id: null,
+  assignee_type: "agent",
+  assignee_id: "",
+  status: "paused",
+  execution_mode: "create_issue",
+  session_policy: "new",
+  workspace_policy: "reuse_issue",
+  issue_title_template: null,
+  created_by_type: "system",
+  created_by_id: "",
+  last_run_at: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const EMPTY_AUTOPILOT_TRIGGER: AutopilotTrigger = {
+  id: "",
+  autopilot_id: "",
+  kind: "api",
+  enabled: false,
+  cron_expression: null,
+  timezone: null,
+  next_run_at: null,
+  webhook_token: null,
+  label: null,
+  event_config: null,
+  last_fired_at: null,
+  created_at: "",
+  updated_at: "",
+};
+
+export const EMPTY_AUTOPILOT_RUN: AutopilotRun = {
+  id: "",
+  autopilot_id: "",
+  trigger_id: null,
+  source: "api",
+  status: "failed",
+  issue_id: null,
+  issue_session_id: null,
+  task_id: null,
+  triggered_at: "",
+  completed_at: null,
+  failure_reason: null,
+  trigger_payload: null,
+  result: null,
+  created_at: "",
+};
+
+export const EMPTY_LIST_AUTOPILOTS_RESPONSE: ListAutopilotsResponse = {
+  autopilots: [],
+  total: 0,
+};
+
+export const EMPTY_GET_AUTOPILOT_RESPONSE: GetAutopilotResponse = {
+  autopilot: EMPTY_AUTOPILOT,
+  triggers: [],
+};
+
+export const EMPTY_LIST_AUTOPILOT_RUNS_RESPONSE: ListAutopilotRunsResponse = {
+  runs: [],
+  total: 0,
+};
 
 // ---------------------------------------------------------------------------
 // Webhook delivery schemas — backing the Autopilot Deliveries section. Enums

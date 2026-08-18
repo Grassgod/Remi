@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   rmSync,
   statSync,
@@ -409,7 +410,7 @@ describe("AgentPluginRuntimeReconciler", () => {
     });
     const baseHome = join(root, "base-codex");
     mkdirSync(baseHome);
-    writeFileSync(join(baseHome, "auth.json"), '{"token":"test"}\n');
+    writeFileSync(join(baseHome, "auth.json"), '{"token":"test"}\n', { mode: 0o600 });
     const commands: CodexPluginCommand[] = [];
     const reports: RuntimePluginState[] = [];
     const reconciler = new AgentPluginRuntimeReconciler({
@@ -660,14 +661,16 @@ describe("task-private Agent Plugin runtime", () => {
     await cache.ensure(snapshot);
     const issueRoot = join(root, "MUL-43");
     mkdirSync(issueRoot);
+    const sessionCodexHome = join(issueRoot, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
     const prepared = await materializeTaskPlugins(
       makeTask("codex", snapshot, { issueId: "iss_43", issueKey: "MUL-43" }),
       issueRoot,
       cache,
+      { codexHome: sessionCodexHome },
     );
     const baseHome = join(root, "base-codex");
     mkdirSync(join(baseHome, "plugins", "cache"), { recursive: true });
-    writeFileSync(join(baseHome, "auth.json"), '{"token":"test"}\n');
+    writeFileSync(join(baseHome, "auth.json"), '{"token":"test"}\n', { mode: 0o600 });
     writeFileSync(join(baseHome, "config.toml"), "unsafe_global = true\n");
     writeFileSync(join(baseHome, "plugins", "cache", "global.txt"), "do not copy\n");
     const commands: CodexPluginCommand[] = [];
@@ -677,16 +680,21 @@ describe("task-private Agent Plugin runtime", () => {
         baseHome,
         targetHome,
         configToml: "model = \"gpt-5.6\"\n",
+        copyAuth: false,
+        linkAuth: true,
       }),
       runCommand: async (command) => { commands.push(command); },
     });
 
-    expect(installed).toBe(prepared.codexHome!);
+    expect(prepared.codexHome).toBe(sessionCodexHome);
+    expect(installed).toBe(sessionCodexHome);
     expect(commands.map((command) => command.args.slice(0, 3))).toEqual([
       ["plugin", "marketplace", "add"],
       ["plugin", "add", `demo@${prepared.codexMarketplaceName}`],
     ]);
     expect(commands.every((command) => command.env.CODEX_HOME.includes(".tmp"))).toBe(true);
+    expect(lstatSync(join(installed!, "auth.json")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(installed!, "auth.json"))).toBe(join(baseHome, "auth.json"));
     expect(readFileSync(join(installed!, "auth.json"), "utf8")).toBe('{"token":"test"}\n');
     expect(readFileSync(join(installed!, "config.toml"), "utf8")).toBe("model = \"gpt-5.6\"\n");
     expect(existsSync(join(installed!, "plugins", "cache", "global.txt"))).toBe(false);

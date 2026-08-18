@@ -169,7 +169,9 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     expect(revisions.map((revision) => revision.body)).toEqual(["v2", "v1"]);
     expect([...client.files.keys()].some((uri) => uri.endsWith("/runbook.md"))).toBe(false);
 
-    await service.deleteProjectDoc(project.id, moved.slug);
+    await expect(service.deleteProjectDoc(project.id, moved.slug, { expectedVersion: moved.version - 1 }))
+      .rejects.toThrow("project doc version conflict");
+    await service.deleteProjectDoc(project.id, moved.slug, { expectedVersion: moved.version });
     expect(store.getProjectDoc(moved.id)).toBeNull();
     expect([...client.files.keys()].some((uri) => uri.endsWith("/release-runbook.md"))).toBe(false);
   });

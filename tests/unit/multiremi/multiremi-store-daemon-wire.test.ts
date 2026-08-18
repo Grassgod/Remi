@@ -50,6 +50,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       "execution_fingerprint",
       "id",
       "issue_id",
+      "issue_session_generation",
       "issue_session_id",
       "kind",
       "max_attempts",
@@ -148,6 +149,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       agent_id: agent.id,
       runtime_id: runtime.id,
       issue_id: issue.id,
+      issue_session_generation: 1,
       workspace_id: "local",
       status: "dispatched",
       prompt: "First claim",
@@ -218,6 +220,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       agentId: agent.id,
       runtimeId: runtime.id,
       issueId: secondIssue.id,
+      issueSessionGeneration: 1,
       workspaceId: "local",
       prompt: "Second claim",
       agent: {

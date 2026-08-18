@@ -64,6 +64,10 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       plugin_snapshot: _pluginSnapshotSnake,
       executionFingerprint: _executionFingerprint,
       execution_fingerprint: _executionFingerprintSnake,
+      issueSessionGeneration: _issueSessionGeneration,
+      issue_session_generation: _issueSessionGenerationSnake,
+      assignmentSourceEventId: _assignmentSourceEventId,
+      assignment_source_event_id: _assignmentSourceEventIdSnake,
       ...publicInput
     } = body;
     return c.json({ task: store.createTask(publicInput) }, 201);
@@ -104,6 +108,9 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyTaskTokenTaskAccess(c, task);
     if (taskDenied) return taskDenied;
+    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+      return c.json({ error: "forbidden" }, 403);
+    }
     return c.json({ requests: store.listTaskHumanRequests(task.id) });
   };
   const respondTaskHumanRequestRoute = async (c: any) => {
@@ -111,13 +118,16 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyTaskTokenTaskAccess(c, task);
     if (taskDenied) return taskDenied;
+    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+      return c.json({ error: "forbidden" }, 403);
+    }
     const requestId = c.req.param("requestId");
     const request = store.getTaskHumanRequest(requestId);
     if (!request || request.taskId !== task.id) return c.json({ error: "request not found" }, 404);
     const body = await readJson<{ response?: Record<string, unknown> }>(c);
     const responded = store.respondTaskHumanRequest(request.id, {
       response: body?.response ?? {},
-      respondedBy: store.getCurrentUser()?.id ?? null,
+      respondedBy: authenticatedRequestUserId(c) ?? store.getCurrentUser()?.id ?? null,
     });
     if (!responded) {
       return c.json({ error: "request already resolved", request: store.getTaskHumanRequest(request.id) }, 409);

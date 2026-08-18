@@ -253,6 +253,75 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
     expect((await replay.json()).delivery.replayedFromDeliveryId).toBe(webhookBody.deliveryId);
   });
 
+  it("hides every Autopilot id surface from callers in another workspace", async () => {
+    const store = createStore();
+    const callerWorkspace = store.createWorkspace({ name: "Caller", slug: "caller" });
+    const targetWorkspace = store.createWorkspace({ name: "Target", slug: "target" });
+    store.createWorkspaceMember({
+      workspaceId: callerWorkspace.id,
+      userId: "caller-user",
+      name: "Caller User",
+      role: "admin",
+    });
+    const callerToken = await store.createAccessToken({
+      name: "Caller token",
+      type: "pat",
+      workspaceId: callerWorkspace.id,
+      userId: "caller-user",
+    });
+    const agent = store.createAgent({
+      name: "Private target agent",
+      provider: "codex",
+      workspaceId: targetWorkspace.id,
+    });
+    const autopilot = store.createAutopilot({
+      title: "Target automation",
+      assigneeId: agent.id,
+      workspaceId: targetWorkspace.id,
+      executionMode: "run_only",
+    });
+    const trigger = store.createAutopilotTrigger(autopilot.id, { kind: "api" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const auth = { Authorization: `Bearer ${callerToken.token}` };
+    const json = { ...auth, "Content-Type": "application/json" };
+    const requests: Array<[string, RequestInit]> = [
+      [`/api/multiremi/autopilots/${autopilot.id}`, { headers: auth }],
+      [`/api/multiremi/autopilots/${autopilot.id}`, { method: "PATCH", headers: json, body: "{}" }],
+      [`/api/multiremi/autopilots/${autopilot.id}`, { method: "DELETE", headers: auth }],
+      [`/api/multiremi/autopilots/${autopilot.id}/runs`, { headers: auth }],
+      [`/api/multiremi/autopilots/${autopilot.id}/deliveries`, { headers: auth }],
+      [`/api/multiremi/autopilots/${autopilot.id}/deliveries/missing`, { headers: auth }],
+      [`/api/multiremi/autopilots/${autopilot.id}/deliveries/missing/replay`, { method: "POST", headers: auth }],
+      [`/api/multiremi/autopilots/${autopilot.id}/run`, { method: "POST", headers: json, body: "{}" }],
+      [`/api/multiremi/autopilots/${autopilot.id}/run-scheduled`, { method: "POST", headers: auth }],
+      [`/api/multiremi/autopilots/${autopilot.id}/trigger`, { method: "POST", headers: json, body: "{}" }],
+      [`/api/multiremi/autopilots/${autopilot.id}/webhook`, { method: "POST", headers: json, body: "{}" }],
+      [`/api/autopilots/${autopilot.id}`, { headers: auth }],
+      [`/api/autopilots/${autopilot.id}`, { method: "PATCH", headers: json, body: "{}" }],
+      [`/api/autopilots/${autopilot.id}`, { method: "DELETE", headers: auth }],
+      [`/api/autopilots/${autopilot.id}/trigger`, { method: "POST", headers: json, body: "{}" }],
+      [`/api/autopilots/${autopilot.id}/runs`, { headers: auth }],
+      [`/api/autopilots/${autopilot.id}/runs/missing`, { headers: auth }],
+      [`/api/autopilots/${autopilot.id}/deliveries`, { headers: auth }],
+      [`/api/autopilots/${autopilot.id}/deliveries/missing`, { headers: auth }],
+      [`/api/autopilots/${autopilot.id}/deliveries/missing/replay`, { method: "POST", headers: auth }],
+      [`/api/autopilots/${autopilot.id}/triggers`, { method: "POST", headers: json, body: JSON.stringify({ kind: "api" }) }],
+      [`/api/autopilots/${autopilot.id}/triggers/${trigger.id}`, { method: "PATCH", headers: json, body: JSON.stringify({ enabled: false }) }],
+      [`/api/autopilots/${autopilot.id}/triggers/${trigger.id}`, { method: "DELETE", headers: auth }],
+      [`/api/autopilots/${autopilot.id}/triggers/${trigger.id}/rotate-webhook-token`, { method: "POST", headers: auth }],
+      [`/api/autopilots/${autopilot.id}/triggers/${trigger.id}/signing-secret`, { method: "PUT", headers: json, body: JSON.stringify({ signing_secret: "0123456789abcdef" }) }],
+    ];
+
+    for (const [path, init] of requests) {
+      const response = await app.request(path, init);
+      expect(response.status, `${init.method ?? "GET"} ${path}`).toBe(404);
+      expect(await response.json()).toEqual({ error: "workspace not found" });
+    }
+    expect(store.getAutopilot(autopilot.id)?.status).toBe("active");
+    expect(store.getAutopilotTrigger(trigger.id)?.enabled).toBe(true);
+    expect(store.listAutopilotRuns(autopilot.id)).toEqual([]);
+  });
+
   it("rate limits public autopilot webhooks by token and source bucket", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
@@ -338,5 +407,90 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
     expect(paused.status).toBe(200);
     expect(scheduler.scheduledIds()).not.toContain(createdBody.autopilot.id);
     scheduler.stop();
+  });
+
+  it("validates and serializes trigger_issue system event configuration", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
+    const issue = store.createIssue({ title: "Completed evidence", status: "done" });
+    const app = createMultiremiApp({ store });
+
+    const created = await app.request("/api/autopilots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Maintain Wiki",
+        assignee_id: agent.id,
+        execution_mode: "trigger_issue",
+        session_policy: "new",
+        workspace_policy: "reuse_issue",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const autopilot = await created.json();
+    expect(autopilot).toMatchObject({
+      execution_mode: "trigger_issue",
+      session_policy: "new",
+      workspace_policy: "reuse_issue",
+    });
+
+    const missingConfig = await app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "system_event" }),
+    });
+    expect(missingConfig.status).toBe(400);
+
+    const invalidConfig = await app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "system_event",
+        event_config: {
+          resource: "issue",
+          event: "status_changed",
+          conditions: [{ field: "status", operator: "becomes", value: "done", extra: true }],
+        },
+      }),
+    });
+    expect(invalidConfig.status).toBe(400);
+    expect((await invalidConfig.json()).error).toContain("unsupported fields");
+
+    const createdTrigger = await app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "system_event",
+        event_config: {
+          resource: "issue",
+          event: "status_changed",
+          conditions: [{ field: "status", operator: "becomes", value: "done" }],
+        },
+      }),
+    });
+    expect(createdTrigger.status).toBe(201);
+    expect((await createdTrigger.json()).event_config).toEqual({
+      resource: "issue",
+      event: "status_changed",
+      conditions: [{ field: "status", operator: "becomes", value: "done" }],
+    });
+
+    const missingIssue = await app.request(`/api/autopilots/${autopilot.id}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(missingIssue.status).toBe(400);
+
+    const manual = await app.request(`/api/autopilots/${autopilot.id}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trigger_issue_id: issue.id }),
+    });
+    expect(manual.status).toBe(200);
+    expect(await manual.json()).toMatchObject({
+      issue_id: issue.id,
+      issue_session_id: expect.any(String),
+    });
   });
 });

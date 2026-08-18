@@ -60,7 +60,6 @@ export class MultiremiScheduler {
     this.running = true;
     this.store.recoverLostScheduleTriggers();
     this.sync();
-    this.tickDueTriggers();
     this.timer = setInterval(() => this.sync(), this.pollIntervalMs);
     this.timer.unref?.();
     this.startFailureMonitor();
@@ -80,6 +79,7 @@ export class MultiremiScheduler {
 
   sync(): void {
     this.tickDueTriggers();
+    this.tickSystemEvents();
     const active = new Map(
       this.store.listAutopilots()
         .filter(isSchedulable)
@@ -120,6 +120,10 @@ export class MultiremiScheduler {
       if (run) runs.push(run);
     }
     return runs;
+  }
+
+  tickSystemEvents(now: Date = new Date()): AutopilotRun[] {
+    return this.store.dispatchPendingSystemEvents(now);
   }
 
   runFailureMonitorOnce(

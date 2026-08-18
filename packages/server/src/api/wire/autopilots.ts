@@ -32,6 +32,8 @@ export type AutopilotCompatibilityUpdateInput = {
   assignee_type?: UpdateAutopilotInput["assigneeType"] | null;
   assignee_id?: string | null;
   execution_mode?: UpdateAutopilotInput["executionMode"] | null;
+  session_policy?: UpdateAutopilotInput["sessionPolicy"] | null;
+  workspace_policy?: UpdateAutopilotInput["workspacePolicy"] | null;
   issue_title_template?: string | null;
   trigger_kind?: string | null;
   trigger_label?: string | null;
@@ -49,6 +51,8 @@ export function autopilotCompatibilityResponse(autopilot: MultiremiAutopilot): R
     assignee_id: autopilot.assigneeId,
     status: autopilot.status,
     execution_mode: autopilot.executionMode,
+    session_policy: autopilot.sessionPolicy,
+    workspace_policy: autopilot.workspacePolicy,
     issue_title_template: autopilot.issueTitleTemplate,
     created_by_type: autopilot.createdByType,
     created_by_id: autopilot.createdById,
@@ -68,8 +72,12 @@ export function autopilotCreateCompatibilityInput(
   const executionMode = cleanString(input.execution_mode);
   if (!executionMode) return { apiError: "execution_mode is required", statusCode: 400 };
   if (!isAutopilotExecutionMode(executionMode)) {
-    return { apiError: "execution_mode must be create_issue or run_only", statusCode: 400 };
+    return { apiError: "execution_mode must be create_issue, trigger_issue, or run_only", statusCode: 400 };
   }
+  const sessionPolicy = cleanString(input.session_policy) ?? "new";
+  if (!isAutopilotSessionPolicy(sessionPolicy)) return { apiError: "session_policy must be new or reuse_latest", statusCode: 400 };
+  const workspacePolicy = cleanString(input.workspace_policy) ?? "reuse_issue";
+  if (!isAutopilotWorkspacePolicy(workspacePolicy)) return { apiError: "workspace_policy must be reuse_issue", statusCode: 400 };
   const assigneeType = cleanString(input.assignee_type) ?? "agent";
   if (!isAutopilotAssigneeType(assigneeType)) return { apiError: "assignee_type must be agent or squad", statusCode: 400 };
   const issueTitleTemplate = input.issue_title_template ?? null;
@@ -90,6 +98,10 @@ export function autopilotCreateCompatibilityInput(
     assignee_id: assigneeId,
     executionMode,
     execution_mode: executionMode,
+    sessionPolicy,
+    session_policy: sessionPolicy,
+    workspacePolicy,
+    workspace_policy: workspacePolicy,
     issueTitleTemplate,
     issue_title_template: issueTitleTemplate,
     triggerKind: input.trigger_kind,
@@ -131,9 +143,23 @@ export function autopilotUpdateCompatibilityInput(
   if (hasOwn(input, "execution_mode")) {
     const executionMode = cleanString(input.execution_mode);
     if (executionMode && !isAutopilotExecutionMode(executionMode)) {
-      return { apiError: "execution_mode must be create_issue or run_only", statusCode: 400 };
+      return { apiError: "execution_mode must be create_issue, trigger_issue, or run_only", statusCode: 400 };
     }
     if (executionMode && isAutopilotExecutionMode(executionMode)) output.executionMode = executionMode;
+  }
+  if (hasOwn(input, "session_policy")) {
+    const sessionPolicy = cleanString(input.session_policy);
+    if (sessionPolicy && !isAutopilotSessionPolicy(sessionPolicy)) {
+      return { apiError: "session_policy must be new or reuse_latest", statusCode: 400 };
+    }
+    if (sessionPolicy && isAutopilotSessionPolicy(sessionPolicy)) output.sessionPolicy = sessionPolicy;
+  }
+  if (hasOwn(input, "workspace_policy")) {
+    const workspacePolicy = cleanString(input.workspace_policy);
+    if (workspacePolicy && !isAutopilotWorkspacePolicy(workspacePolicy)) {
+      return { apiError: "workspace_policy must be reuse_issue", statusCode: 400 };
+    }
+    if (workspacePolicy && isAutopilotWorkspacePolicy(workspacePolicy)) output.workspacePolicy = workspacePolicy;
   }
   if (hasOwn(input, "issue_title_template")) {
     const issueTitleTemplate = input.issue_title_template ?? null;
@@ -167,6 +193,7 @@ export function autopilotTriggerCompatibilityResponse(trigger: MultiremiAutopilo
     last_fired_at: trigger.lastFiredAt,
     created_at: trigger.createdAt,
     updated_at: trigger.updatedAt,
+    event_config: trigger.eventConfig,
   };
   if (isWebhook && trigger.eventFilters?.length) response.event_filters = trigger.eventFilters;
   return response;
@@ -179,10 +206,12 @@ export function autopilotRunCompatibilityResponse(
   return {
     id: run.id,
     autopilot_id: run.autopilotId,
-    trigger_id: null,
+    trigger_id: run.triggerId,
+    event_id: run.eventId,
     source: run.source,
     status: run.status,
     issue_id: run.issueId,
+    issue_session_id: run.issueSessionId,
     task_id: run.taskId,
     triggered_at: run.triggeredAt,
     completed_at: run.completedAt,
@@ -195,7 +224,9 @@ export function autopilotRunCompatibilityResponse(
 
 export function validateAutopilotTriggerCompatibilityInput(input: CreateAutopilotTriggerInput): string | null {
   if (!input.kind) return "kind is required";
-  if (input.kind !== "schedule" && input.kind !== "webhook") return "kind must be schedule or webhook";
+  if (input.kind !== "schedule" && input.kind !== "webhook" && input.kind !== "system_event") {
+    return "kind must be schedule, webhook, or system_event";
+  }
   const cronExpression = cleanString(input.cron_expression);
   if (input.kind === "schedule" && !cronExpression) return "cron_expression is required for schedule triggers";
   if (input.kind === "webhook" && cleanString(input.timezone)) return "timezone is not valid for webhook triggers";
@@ -208,6 +239,9 @@ export function validateAutopilotTriggerCompatibilityInput(input: CreateAutopilo
   if (input.kind !== "webhook" && Array.isArray(eventFilters) && eventFilters.length > 0) {
     return "event_filters is only valid for webhook triggers";
   }
+  const eventConfig = input.event_config;
+  if (input.kind === "system_event") return validateSystemEventConfig(eventConfig);
+  if (eventConfig != null) return "event_config is only valid for system_event triggers";
   return null;
 }
 
@@ -219,12 +253,19 @@ export function validateAutopilotTriggerUpdateCompatibilityInput(trigger: Multir
   }
   const eventFilters = input.event_filters;
   if (trigger.kind !== "webhook" && eventFilters != null) return "event_filters is only valid for webhook triggers";
+  const eventConfig = input.event_config;
+  if (trigger.kind === "system_event") {
+    if (eventConfig !== undefined) return validateSystemEventConfig(eventConfig);
+  } else if (eventConfig != null) {
+    return "event_config is only valid for system_event triggers";
+  }
   return null;
 }
 
 export function autopilotTriggerCreateCompatibilityInput(input: CreateAutopilotTriggerInput): CreateAutopilotTriggerInput {
   const cronExpression = input.cron_expression ?? null;
   const eventFilters = input.event_filters ?? null;
+  const eventConfig = input.event_config ?? null;
   return {
     kind: input.kind,
     cronExpression,
@@ -235,6 +276,8 @@ export function autopilotTriggerCreateCompatibilityInput(input: CreateAutopilotT
     enabled: input.enabled,
     eventFilters,
     event_filters: eventFilters,
+    eventConfig,
+    event_config: eventConfig,
   };
 }
 
@@ -253,6 +296,11 @@ export function autopilotTriggerUpdateCompatibilityInput(input: UpdateAutopilotT
     output.eventFilters = eventFilters;
     output.event_filters = eventFilters;
   }
+  const eventConfig = input.event_config;
+  if (eventConfig !== undefined) {
+    output.eventConfig = eventConfig;
+    output.event_config = eventConfig;
+  }
   return output;
 }
 
@@ -266,14 +314,65 @@ export function autopilotCompatibilityErrorResponse(c: Context, error: unknown):
   if (message.startsWith("Squad not found")) return c.json({ error: "assignee must be a valid squad in this workspace" }, 400);
   if (message === "Autopilot title is required") return c.json({ error: "title is required" }, 400);
   if (message === "Autopilot assignee is required") return c.json({ error: "assignee_id is required" }, 400);
-  if (message.includes("event_filters") || message.includes("cron_expression") || message.includes("timezone")) {
+  if (message.startsWith("Invalid Autopilot")) return c.json({ error: message }, 400);
+  if (message.includes("event_filters") || message.includes("event_config") || message.includes("cron_expression") || message.includes("timezone") || message.includes("trigger_issue")) {
     return c.json({ error: message }, 400);
   }
   return c.json({ error: message }, 500);
 }
 
+const SYSTEM_EVENT_ISSUE_STATUSES = new Set([
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "done",
+  "blocked",
+  "cancelled",
+]);
+
+function validateSystemEventConfig(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "event_config is required for system_event triggers";
+  const config = value as Record<string, unknown>;
+  const allowedKeys = new Set(["resource", "event", "conditions", "project_id", "projectId"]);
+  if (Object.keys(config).some((key) => !allowedKeys.has(key))) return "event_config contains unsupported fields";
+  if (config.resource !== "issue") return "event_config.resource must be issue";
+  if (config.event !== "status_changed") return "event_config.event must be status_changed";
+  if (!Array.isArray(config.conditions) || config.conditions.length === 0) {
+    return "event_config.conditions must be a non-empty array";
+  }
+  for (let index = 0; index < config.conditions.length; index += 1) {
+    const condition = config.conditions[index];
+    if (!condition || typeof condition !== "object" || Array.isArray(condition)) {
+      return `event_config.conditions[${index}] must be an object`;
+    }
+    const record = condition as Record<string, unknown>;
+    if (Object.keys(record).some((key) => !["field", "operator", "value"].includes(key))) {
+      return `event_config.conditions[${index}] contains unsupported fields`;
+    }
+    if (record.field !== "status") return `event_config.conditions[${index}].field must be status`;
+    if (record.operator !== "becomes") return `event_config.conditions[${index}].operator must be becomes`;
+    if (typeof record.value !== "string" || !SYSTEM_EVENT_ISSUE_STATUSES.has(record.value)) {
+      return `event_config.conditions[${index}].value must be a valid issue status`;
+    }
+  }
+  const projectId = config.project_id ?? config.projectId;
+  if (projectId !== undefined && projectId !== null && (typeof projectId !== "string" || !projectId.trim())) {
+    return "event_config.project_id must be a non-empty string or null";
+  }
+  return null;
+}
+
 function isAutopilotExecutionMode(value: string): value is NonNullable<UpdateAutopilotInput["executionMode"]> {
-  return value === "create_issue" || value === "run_only";
+  return value === "create_issue" || value === "trigger_issue" || value === "run_only";
+}
+
+function isAutopilotSessionPolicy(value: string): value is NonNullable<UpdateAutopilotInput["sessionPolicy"]> {
+  return value === "new" || value === "reuse_latest";
+}
+
+function isAutopilotWorkspacePolicy(value: string): value is NonNullable<UpdateAutopilotInput["workspacePolicy"]> {
+  return value === "reuse_issue";
 }
 
 function isAutopilotAssigneeType(value: string): value is NonNullable<UpdateAutopilotInput["assigneeType"]> {
@@ -306,6 +405,7 @@ export function autopilotTriggerResponse(trigger: MultiremiAutopilotTrigger): Mu
   webhook_path: string | null;
   webhook_url: string | null;
   event_filters: MultiremiAutopilotTrigger["eventFilters"];
+  event_config: MultiremiAutopilotTrigger["eventConfig"];
   signing_secret_set: boolean;
   last_fired_at: string | null;
   created_at: string;
@@ -320,6 +420,7 @@ export function autopilotTriggerResponse(trigger: MultiremiAutopilotTrigger): Mu
     webhook_path: trigger.webhookPath,
     webhook_url: trigger.webhookUrl,
     event_filters: trigger.eventFilters,
+    event_config: trigger.eventConfig,
     signing_secret_set: trigger.signingSecretSet,
     last_fired_at: trigger.lastFiredAt,
     created_at: trigger.createdAt,

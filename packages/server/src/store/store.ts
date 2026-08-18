@@ -186,6 +186,7 @@ import type {
   MultiremiSessionParticipant,
   MultiremiSessionProjection,
   MultiremiSessionResult,
+  MultiremiSystemEvent,
   MultiremiSquad,
   MultiremiSquadMember,
   MultiremiTask,
@@ -1657,6 +1658,14 @@ runMigrations(this.db);
     return this.sessions.createIssueSession(issueId, input);
   }
 
+  createIssueSessionWithinTransaction(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
+    return this.sessions.createIssueSessionWithinTransaction(issueId, input);
+  }
+
+  getLatestActiveIssueSession(issueId: string): MultiremiIssueSession | null {
+    return this.sessions.getLatestActiveIssueSession(issueId);
+  }
+
   getIssueSession(id: string): MultiremiIssueSession | null {
     return this.sessions.getIssueSession(id);
   }
@@ -2003,6 +2012,29 @@ runMigrations(this.db);
     return this.autopilots.recoverLostScheduleTriggers(now);
   }
 
+  enqueueIssueStatusChangedEvent(input: {
+    issue: MultiremiIssue;
+    previousStatus: string;
+    actorType?: string | null;
+    actorId?: string | null;
+    automationSourceEventId?: string | null;
+    automationSourceTaskId?: string | null;
+  }): MultiremiSystemEvent | null {
+    return this.autopilots.enqueueIssueStatusChangedEvent(input);
+  }
+
+  getSystemEvent(id: string): MultiremiSystemEvent | null {
+    return this.autopilots.getSystemEvent(id);
+  }
+
+  claimPendingSystemEvents(now: Date = new Date(), limit = 25): MultiremiSystemEvent[] {
+    return this.autopilots.claimPendingSystemEvents(now, limit);
+  }
+
+  dispatchPendingSystemEvents(now: Date = new Date(), limit = 25): MultiremiAutopilotRun[] {
+    return this.autopilots.dispatchPendingSystemEvents(now, limit);
+  }
+
   listAutopilotRuns(autopilotId: string): MultiremiAutopilotRun[] {
     return this.autopilots.listAutopilotRuns(autopilotId);
   }
@@ -2113,6 +2145,10 @@ runMigrations(this.db);
 
   createTask(input: CreateTaskInput): MultiremiTask {
     return this.tasks.createTask(input);
+  }
+
+  createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask {
+    return this.tasks.createTaskWithinTransaction(input);
   }
 
   resetSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {

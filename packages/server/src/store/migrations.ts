@@ -968,6 +968,8 @@ export function runMigrations(db: SqlDatabase): void {
       assignee_id TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
       execution_mode TEXT NOT NULL DEFAULT 'create_issue',
+      session_policy TEXT NOT NULL DEFAULT 'new',
+      workspace_policy TEXT NOT NULL DEFAULT 'reuse_issue',
       issue_title_template TEXT,
       trigger_kind TEXT NOT NULL DEFAULT 'manual',
       trigger_label TEXT,
@@ -996,6 +998,7 @@ export function runMigrations(db: SqlDatabase): void {
       provider TEXT,
       label TEXT,
       event_filters TEXT,
+      event_config TEXT,
       signing_secret_hash TEXT,
       signing_secret_hint TEXT,
       last_fired_at TEXT,
@@ -1016,6 +1019,9 @@ export function runMigrations(db: SqlDatabase): void {
       status TEXT NOT NULL,
       issue_id TEXT,
       task_id TEXT,
+      trigger_id TEXT,
+      event_id TEXT,
+      issue_session_id TEXT,
       triggered_at TEXT NOT NULL,
       completed_at TEXT,
       failure_reason TEXT,
@@ -1028,6 +1034,28 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_autopilot ON multiremi_autopilot_runs(autopilot_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_system_events (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      resource TEXT NOT NULL,
+      event TEXT NOT NULL,
+      resource_id TEXT NOT NULL,
+      project_id TEXT,
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT NOT NULL,
+      lease_until TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      processed_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_system_events_pending
+      ON multiremi_system_events(status, available_at, lease_until, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_system_events_resource
+      ON multiremi_system_events(workspace_id, resource, event, resource_id, created_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_webhook_deliveries (
       id TEXT PRIMARY KEY,
@@ -1106,6 +1134,7 @@ export function runMigrations(db: SqlDatabase): void {
       runtime_id TEXT,
       issue_id TEXT,
       issue_session_id TEXT,
+      issue_session_generation INTEGER,
       chat_session_id TEXT,
       trigger_comment_id TEXT,
       trigger_summary TEXT,
@@ -1117,6 +1146,7 @@ export function runMigrations(db: SqlDatabase): void {
       max_attempts INTEGER NOT NULL DEFAULT 3,
       parent_task_id TEXT,
       assignment_event_id TEXT,
+      assignment_source_event_id TEXT,
       projection_from_seq INTEGER,
       projection_to_seq INTEGER,
       projection_mode TEXT,
@@ -1335,7 +1365,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "issue_session_generation INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "assignment_source_event_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
@@ -1356,9 +1388,20 @@ export function runMigrations(db: SqlDatabase): void {
   ensureInboxGenericSchema(db);
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
+  addColumnIfMissing(db, "multiremi_autopilots", "session_policy TEXT NOT NULL DEFAULT 'new'");
+  addColumnIfMissing(db, "multiremi_autopilots", "workspace_policy TEXT NOT NULL DEFAULT 'reuse_issue'");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "event_filters TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_triggers", "event_config TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "provider TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "signing_secret_hint TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "trigger_id TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "event_id TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "issue_session_id TEXT");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_system_event
+      ON multiremi_autopilot_runs(trigger_id, event_id)
+      WHERE trigger_id IS NOT NULL AND event_id IS NOT NULL;
+  `);
   addColumnIfMissing(db, "multiremi_runtime_update_requests", "scope TEXT NOT NULL DEFAULT 'cli'");
   // Source references on wiki/memory docs. The table itself is new enough that
   // only dev databases predate the column, but CREATE TABLE IF NOT EXISTS never

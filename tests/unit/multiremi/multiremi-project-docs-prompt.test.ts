@@ -53,7 +53,11 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("## Available Repositories");
     expect(artifact.prompt).toContain("## Agent Instructions");
     expect(artifact.prompt).toContain("## Output");
-    expect(artifact.prompt).toContain(`remi memory recall "<query>" --project ${project.id}`);
+    expect(artifact.prompt).toContain('remi memory recall "<query>"');
+    expect(artifact.prompt).toContain("Wiki is materialized in `./wiki`");
+    expect(artifact.prompt).toContain("`./.multiremi/sessions/`");
+    expect(artifact.prompt).toContain("`remi wiki status`");
+    expect(artifact.prompt).toContain("`remi wiki push`");
   });
 
   it("does not embed Memory, Wiki, or schema bodies in a bootstrap prompt", () => {
@@ -69,9 +73,8 @@ describe("bootstrap and delta task prompts", () => {
     } as any);
 
     expect(prompt).toContain("## Project Knowledge");
-    expect(prompt).toContain("`multiremi-project-knowledge` MCP");
-    expect(prompt).toContain("call `recall`");
-    expect(prompt).toContain("call `read`");
+    expect(prompt).toContain("Use the `remi memory` CLI only");
+    expect(prompt).toContain("Do not use an MCP server for Project Memory");
     expect(prompt).not.toContain("## Project Memory");
     expect(prompt).not.toContain("## Project Wiki");
     expect(prompt).not.toContain("MEMORY_BODY_MUST_NOT_SHIP");
@@ -106,6 +109,34 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).not.toContain("## Available Repositories");
     expect(prompt).not.toContain("## Agent Instructions");
     expect(prompt).not.toContain("## Output");
+    expect(prompt).not.toContain("Issue Workspace Session History");
+  });
+
+  it("does not duplicate an Autopilot Runbook already used as Current Request", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const runbook = "Review the merged Issue and update its Wiki.";
+    const prompt = buildTaskPrompt({
+      ...task,
+      prompt: runbook,
+      autopilotTitle: "Wiki Maintainer",
+      autopilotSource: "trigger_issue",
+      autopilotDescription: runbook,
+    } as any);
+
+    expect(prompt).toContain(`## Current Request\n${runbook}`);
+    expect(prompt.match(new RegExp(runbook.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
+    expect(prompt).toContain("## Autopilot Context");
+  });
+
+  it("does not advertise provider history without an Issue Session workspace", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Direct", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Direct task" });
+    const prompt = buildTaskPrompt(store.getTaskWithAgent(task.id)! as any);
+
+    expect(prompt).not.toContain("Issue Workspace Session History");
+    expect(prompt).not.toContain(".multiremi/sessions/");
   });
 
   it("renders one canonical triggering comment and strips legacy duplication", () => {
@@ -164,8 +195,11 @@ describe("bootstrap and delta task prompts", () => {
 
     expect(prompt).toContain("## Squad Coordination");
     expect(prompt).toContain("Reviewer (agent: agt_reviewer) - reviewer - Owns security reviews");
+    expect(prompt).toContain("`[@Reviewer](mention://agent/agt_reviewer)`");
     expect(prompt).toContain("independent workstreams");
-    expect(prompt).toContain(`--parent ${issue.id} --assignee-id <agent-id> --assignee-type agent`);
+    expect(prompt).toContain(`remi issue comment add ${issue.id} --content-stdin`);
+    expect(prompt).toContain("cat <<'MULTIREMI_COMMENT'");
+    expect(prompt).not.toContain("remi issue create");
   });
 
   it("marks pre-checked-out repositories in bootstrap prompts", () => {

@@ -17,8 +17,11 @@ import type {
   CreateAutopilotTriggerInput,
   MultiremiAutopilot,
   MultiremiAutopilotRun,
+  MultiremiAutopilotSystemEventConfig,
   MultiremiAutopilotTrigger,
   MultiremiIssue,
+  MultiremiSystemEvent,
+  MultiremiTask,
   MultiremiWebhookDelivery,
   MultiremiWebhookDeliveryResult,
   MultiremiWebhookDeliveryStatus,
@@ -56,6 +59,12 @@ export class AutopilotsRepo {
 
   createAutopilot(input: CreateAutopilotInput): MultiremiAutopilot {
     if (!input.title?.trim()) throw new Error("Autopilot title is required");
+    const executionMode = input.executionMode ?? input.execution_mode ?? "create_issue";
+    if (!isAutopilotExecutionMode(executionMode)) throw new Error("Invalid Autopilot execution_mode");
+    const sessionPolicy = input.sessionPolicy ?? input.session_policy ?? "new";
+    if (sessionPolicy !== "new" && sessionPolicy !== "reuse_latest") throw new Error("Invalid Autopilot session_policy");
+    const workspacePolicy = input.workspacePolicy ?? input.workspace_policy ?? "reuse_issue";
+    if (workspacePolicy !== "reuse_issue") throw new Error("Invalid Autopilot workspace_policy");
     const assigneeType = input.assigneeType ?? input.assignee_type ?? "agent";
     const assigneeId = input.assigneeId ?? input.assignee_id;
     if (!assigneeId) throw new Error("Autopilot assignee is required");
@@ -82,10 +91,10 @@ export class AutopilotsRepo {
     this.ctx.db.run(
       `INSERT INTO multiremi_autopilots (
         id, title, description, project_id, workspace_id, assignee_type,
-        assignee_id, status, execution_mode, issue_title_template,
+        assignee_id, status, execution_mode, session_policy, workspace_policy, issue_title_template,
         trigger_kind, trigger_label, cron_expression, created_by_type,
         created_by_id, last_run_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       [
         id,
         input.title.trim(),
@@ -95,7 +104,9 @@ export class AutopilotsRepo {
         assigneeType,
         assigneeId,
         input.status ?? "active",
-        input.executionMode ?? input.execution_mode ?? "create_issue",
+        executionMode,
+        sessionPolicy,
+        workspacePolicy,
         input.issueTitleTemplate ?? input.issue_title_template ?? null,
         input.triggerKind ?? input.trigger_kind ?? "manual",
         input.triggerLabel ?? input.trigger_label ?? null,
@@ -128,6 +139,12 @@ export class AutopilotsRepo {
     if (!current) throw new Error(`Autopilot not found: ${id}`);
     const nextAssigneeType = input.assigneeType ?? current.assigneeType;
     const nextAssigneeId = input.assigneeId ?? current.assigneeId;
+    const nextExecutionMode = input.executionMode ?? current.executionMode;
+    const nextSessionPolicy = input.sessionPolicy ?? current.sessionPolicy;
+    const nextWorkspacePolicy = input.workspacePolicy ?? current.workspacePolicy;
+    if (!isAutopilotExecutionMode(nextExecutionMode)) throw new Error("Invalid Autopilot execution_mode");
+    if (nextSessionPolicy !== "new" && nextSessionPolicy !== "reuse_latest") throw new Error("Invalid Autopilot session_policy");
+    if (nextWorkspacePolicy !== "reuse_issue") throw new Error("Invalid Autopilot workspace_policy");
     // Only validate the assignee when the request actually CHANGES it — the
     // edit dialog re-sends the current assignee_type/id on every save, so a
     // title/status/pause/archive update must not fail just because legacy or
@@ -149,6 +166,24 @@ export class AutopilotsRepo {
       if (!project) throw new Error(`Project not found: ${input.projectId}`);
       if (project.workspaceId !== current.workspaceId) throw new Error("Autopilot project is in a different workspace");
     }
+    const nextProjectId = input.projectId === undefined ? current.projectId : input.projectId;
+    const existingTriggers = this.listAutopilotTriggers(id);
+    const systemEventTriggers = existingTriggers.filter((trigger) => trigger.kind === "system_event");
+    if (systemEventTriggers.length && nextExecutionMode !== "trigger_issue") {
+      throw new Error("system_event triggers require execution_mode trigger_issue");
+    }
+    if (
+      nextExecutionMode === "trigger_issue"
+      && (
+        existingTriggers.some((trigger) => trigger.kind === "schedule" || trigger.kind === "webhook")
+        || (existingTriggers.length === 0 && Boolean(current.cronExpression))
+      )
+    ) {
+      throw new Error("trigger_issue execution does not support schedule or webhook triggers");
+    }
+    if (nextProjectId && systemEventTriggers.some((trigger) => trigger.eventConfig?.projectId && trigger.eventConfig.projectId !== nextProjectId)) {
+      throw new Error("event_config.project_id must match the Autopilot project");
+    }
     const now = nowIso();
     this.ctx.db.run(
       `UPDATE multiremi_autopilots SET
@@ -159,6 +194,8 @@ export class AutopilotsRepo {
         assignee_id = ?,
         status = ?,
         execution_mode = ?,
+        session_policy = ?,
+        workspace_policy = ?,
         issue_title_template = ?,
         trigger_kind = ?,
         trigger_label = ?,
@@ -172,7 +209,9 @@ export class AutopilotsRepo {
         nextAssigneeType,
         nextAssigneeId,
         input.status ?? current.status,
-        input.executionMode ?? current.executionMode,
+        nextExecutionMode,
+        nextSessionPolicy,
+        nextWorkspacePolicy,
         input.issueTitleTemplate === undefined ? current.issueTitleTemplate : input.issueTitleTemplate,
         input.triggerKind ?? current.triggerKind,
         input.triggerLabel === undefined ? current.triggerLabel : input.triggerLabel,
@@ -215,7 +254,31 @@ export class AutopilotsRepo {
     const autopilot = this.getAutopilot(autopilotId);
     if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
     const kind = input.kind ?? (input.cronExpression || input.cron_expression ? "schedule" : "webhook");
+    if (kind !== "schedule" && kind !== "webhook" && kind !== "api" && kind !== "system_event") {
+      throw new Error("Invalid Autopilot trigger kind");
+    }
     const eventFilters = normalizeWebhookEventFilters(input.eventFilters ?? input.event_filters ?? null);
+    const eventConfig = normalizeSystemEventConfig(input.eventConfig ?? input.event_config ?? null);
+    if (kind === "system_event" && !eventConfig) throw new Error("event_config is required for system_event triggers");
+    if (kind !== "system_event" && eventConfig) throw new Error("event_config is only valid for system_event triggers");
+    if (eventConfig?.projectId) {
+      const project = this.ctx.projects().getProject(eventConfig.projectId);
+      if (!project || project.workspaceId !== autopilot.workspaceId) {
+        throw new Error("event_config.project_id must reference a project in this workspace");
+      }
+      if (autopilot.projectId && autopilot.projectId !== eventConfig.projectId) {
+        throw new Error("event_config.project_id must match the Autopilot project");
+      }
+    }
+    if (kind === "system_event" && autopilot.executionMode !== "trigger_issue") {
+      throw new Error("system_event triggers require execution_mode trigger_issue");
+    }
+    if (
+      autopilot.executionMode === "trigger_issue"
+      && (kind === "schedule" || kind === "webhook")
+    ) {
+      throw new Error("trigger_issue execution does not support schedule or webhook triggers");
+    }
     const cronExpression = input.cronExpression ?? input.cron_expression ?? null;
     const timezone = normalizeOptionalTimezone(input.timezone);
     const provider = kind === "webhook" ? normalizeWebhookProvider(input.provider) : null;
@@ -229,8 +292,9 @@ export class AutopilotsRepo {
     this.ctx.db.run(
       `INSERT INTO multiremi_autopilot_triggers (
         id, autopilot_id, kind, enabled, cron_expression, timezone, next_run_at,
-        webhook_token, webhook_url, provider, label, event_filters, signing_secret_hash, signing_secret_hint, last_fired_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+        webhook_token, webhook_url, provider, label, event_filters, event_config,
+        signing_secret_hash, signing_secret_hint, last_fired_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
       [
         id,
         autopilotId,
@@ -243,6 +307,7 @@ export class AutopilotsRepo {
         provider,
         input.label ?? null,
         eventFilters ? toJson(eventFilters) : null,
+        eventConfig ? toJson(eventConfig) : null,
         now,
         now,
       ],
@@ -260,6 +325,20 @@ export class AutopilotsRepo {
     const now = nowIso();
     const eventFiltersInput = input.eventFilters !== undefined ? input.eventFilters : input.event_filters;
     const eventFilters = eventFiltersInput === undefined ? current.eventFilters : normalizeWebhookEventFilters(eventFiltersInput);
+    const eventConfigInput = input.eventConfig !== undefined ? input.eventConfig : input.event_config;
+    const eventConfig = eventConfigInput === undefined ? current.eventConfig : normalizeSystemEventConfig(eventConfigInput);
+    if (current.kind === "system_event" && !eventConfig) throw new Error("event_config is required for system_event triggers");
+    if (current.kind !== "system_event" && eventConfig) throw new Error("event_config is only valid for system_event triggers");
+    if (eventConfig?.projectId) {
+      const project = this.ctx.projects().getProject(eventConfig.projectId);
+      const autopilot = this.getAutopilot(autopilotId);
+      if (!project || project.workspaceId !== autopilot?.workspaceId) {
+        throw new Error("event_config.project_id must reference a project in this workspace");
+      }
+      if (autopilot.projectId && autopilot.projectId !== eventConfig.projectId) {
+        throw new Error("event_config.project_id must match the Autopilot project");
+      }
+    }
     const enabled = input.enabled === undefined ? current.enabled : input.enabled;
     const cronExpression = input.cronExpression ?? input.cron_expression ?? current.cronExpression;
     const timezone = input.timezone === undefined ? current.timezone : normalizeOptionalTimezone(input.timezone);
@@ -286,6 +365,7 @@ export class AutopilotsRepo {
         next_run_at = ?,
         label = ?,
         event_filters = ?,
+        event_config = ?,
         updated_at = ?
        WHERE id = ?`,
       [
@@ -295,6 +375,7 @@ export class AutopilotsRepo {
         nextRunAt,
         input.label === undefined ? current.label : input.label,
         eventFilters ? toJson(eventFilters) : null,
+        eventConfig ? toJson(eventConfig) : null,
         now,
         triggerId,
       ],
@@ -394,6 +475,113 @@ export class AutopilotsRepo {
       recovered += 1;
     }
     return recovered;
+  }
+
+  enqueueIssueStatusChangedEvent(input: {
+    issue: MultiremiIssue;
+    previousStatus: string;
+    actorType?: string | null;
+    actorId?: string | null;
+    automationSourceEventId?: string | null;
+    automationSourceTaskId?: string | null;
+  }): MultiremiSystemEvent | null {
+    if (input.previousStatus === input.issue.status) return null;
+    const id = createId("sev");
+    const now = nowIso();
+    const payload = {
+      issue_id: input.issue.id,
+      issue_key: input.issue.key,
+      workspace_id: input.issue.workspaceId,
+      project_id: input.issue.projectId,
+      previous_status: input.previousStatus,
+      status: input.issue.status,
+      actor_type: input.actorType ?? "system",
+      actor_id: input.actorId ?? null,
+      automation_source_event_id: cleanOptionalString(input.automationSourceEventId) ?? null,
+      automation_source_task_id: cleanOptionalString(input.automationSourceTaskId) ?? null,
+    };
+    this.ctx.db.run(
+      `INSERT INTO multiremi_system_events (
+        id, workspace_id, resource, event, resource_id, project_id, payload,
+        status, attempt_count, available_at, lease_until, last_error, created_at, processed_at
+      ) VALUES (?, ?, 'issue', 'status_changed', ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, NULL)`,
+      [id, input.issue.workspaceId, input.issue.id, input.issue.projectId, toJson(payload), now, now],
+    );
+    return this.getSystemEvent(id);
+  }
+
+  getSystemEvent(id: string): MultiremiSystemEvent | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_system_events WHERE id = ?").get(id) as Row | null;
+    return row ? toSystemEvent(row) : null;
+  }
+
+  claimPendingSystemEvents(now: Date = new Date(), limit = 25): MultiremiSystemEvent[] {
+    const claimedAt = now.toISOString();
+    const leaseUntil = new Date(now.getTime() + 60_000).toISOString();
+    const rows = this.ctx.db.query(
+      `UPDATE multiremi_system_events
+       SET status = 'processing',
+           attempt_count = attempt_count + 1,
+           lease_until = ?,
+           last_error = NULL
+       WHERE id IN (
+         SELECT id FROM multiremi_system_events
+         WHERE (status = 'pending' AND available_at <= ?)
+            OR (status = 'processing' AND lease_until IS NOT NULL AND lease_until <= ?)
+         ORDER BY created_at ASC, id ASC
+         LIMIT ?
+       )
+         AND ((status = 'pending' AND available_at <= ?)
+           OR (status = 'processing' AND lease_until IS NOT NULL AND lease_until <= ?))
+       RETURNING *`,
+    ).all(leaseUntil, claimedAt, claimedAt, Math.max(1, Math.min(100, Math.floor(limit))), claimedAt, claimedAt) as Row[];
+    return rows.map(toSystemEvent);
+  }
+
+  dispatchPendingSystemEvents(now: Date = new Date(), limit = 25): MultiremiAutopilotRun[] {
+    const runs: MultiremiAutopilotRun[] = [];
+    for (const event of this.claimPendingSystemEvents(now, limit)) {
+      try {
+        const triggerRows = this.ctx.db.query(
+          `SELECT t.*
+           FROM multiremi_autopilot_triggers t
+           JOIN multiremi_autopilots a ON a.id = t.autopilot_id
+           WHERE t.kind = 'system_event'
+             AND t.enabled = 1
+             AND a.status = 'active'
+             AND a.workspace_id = ?
+           ORDER BY t.created_at ASC, t.id ASC`,
+        ).all(event.workspaceId) as Row[];
+        for (const row of triggerRows) {
+          const trigger = toAutopilotTrigger(row);
+          if (!systemEventMatchesConfig(event, trigger.eventConfig)) continue;
+          runs.push(this.runAutopilot(trigger.autopilotId, {
+            source: "system_event",
+            triggerId: trigger.id,
+            eventId: event.id,
+            triggerIssueId: event.resourceId,
+            payload: event.payload,
+          }));
+        }
+        this.ctx.db.run(
+          `UPDATE multiremi_system_events
+           SET status = 'processed', processed_at = ?, lease_until = NULL, last_error = NULL
+           WHERE id = ? AND status = 'processing'`,
+          [nowIso(), event.id],
+        );
+      } catch (error) {
+        const message = (error instanceof Error ? error.message : String(error)).slice(0, 1_000);
+        const terminal = event.attemptCount >= 8;
+        const delayMs = Math.min(5 * 60_000, 1_000 * (2 ** Math.max(0, event.attemptCount - 1)));
+        this.ctx.db.run(
+          `UPDATE multiremi_system_events
+           SET status = ?, available_at = ?, lease_until = NULL, last_error = ?
+           WHERE id = ? AND status = 'processing'`,
+          [terminal ? "failed" : "pending", new Date(Date.now() + delayMs).toISOString(), message, event.id],
+        );
+      }
+    }
+    return runs;
   }
 
   listAutopilotRuns(autopilotId: string): MultiremiAutopilotRun[] {
@@ -530,70 +718,146 @@ export class AutopilotsRepo {
   }
 
   runAutopilot(autopilotId: string, input: RunAutopilotInput = {}): MultiremiAutopilotRun {
-    const autopilot = this.getAutopilot(autopilotId);
-    if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
-    const now = nowIso();
-    const runId = createId("run");
     const source = input.source ?? "manual";
-    const prompt = (input.prompt || autopilot.issueTitleTemplate || autopilot.title).trim();
-    const agent = this.ctx.resolveAutopilotAgent(autopilot);
-    if (!agent || autopilot.status !== "active") {
-      this.ctx.db.run(
-        `INSERT INTO multiremi_autopilot_runs (
-          id, autopilot_id, source, status, issue_id, task_id, triggered_at,
-          completed_at, failure_reason, payload, result, created_at
-        ) VALUES (?, ?, ?, 'skipped', NULL, NULL, ?, ?, ?, ?, NULL, ?)`,
+    const triggerId = cleanOptionalString(input.triggerId ?? input.trigger_id) ?? null;
+    const eventId = cleanOptionalString(input.eventId ?? input.event_id) ?? null;
+    const triggerIssueId = cleanOptionalString(input.triggerIssueId ?? input.trigger_issue_id) ?? null;
+    if ((triggerId == null) !== (eventId == null)) throw new Error("trigger_id and event_id must be provided together");
+    if (source === "system_event" && (!triggerId || !eventId)) {
+      throw new Error("system_event runs require trigger_id and event_id");
+    }
+
+    let taskToNotify: MultiremiTask | null = null;
+    let createdRun = false;
+    let startedAutopilot: MultiremiAutopilot | null = null;
+    const run = this.ctx.db.transaction(() => {
+      const autopilot = this.getAutopilot(autopilotId);
+      if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
+      if (triggerId) {
+        const trigger = this.getAutopilotTrigger(triggerId);
+        if (!trigger || trigger.autopilotId !== autopilot.id) throw new Error(`Autopilot trigger not found: ${triggerId}`);
+      }
+
+      if (triggerId && eventId) {
+        const duplicate = this.ctx.db.query(
+          "SELECT * FROM multiremi_autopilot_runs WHERE trigger_id = ? AND event_id = ? LIMIT 1",
+        ).get(triggerId, eventId) as Row | null;
+        if (duplicate) return toAutopilotRun(duplicate);
+      }
+
+      const now = nowIso();
+      const runId = createId("run");
+      const explicitPrompt = cleanOptionalString(input.prompt);
+      const prompt = explicitPrompt
+        ?? (autopilot.executionMode === "create_issue"
+          ? autopilot.issueTitleTemplate || autopilot.title
+          : autopilot.description || autopilot.issueTitleTemplate || autopilot.title);
+      const agent = this.ctx.resolveAutopilotAgent(autopilot);
+      const skippedReason = !agent
+        ? "No runnable agent"
+        : autopilot.status !== "active"
+          ? "Autopilot is not active"
+          : null;
+      const inserted = this.ctx.db.run(
+        `INSERT OR IGNORE INTO multiremi_autopilot_runs (
+          id, autopilot_id, source, status, issue_id, task_id, trigger_id, event_id,
+          issue_session_id, triggered_at, completed_at, failure_reason, payload, result, created_at
+        ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?, NULL, ?)`,
         [
           runId,
           autopilotId,
           source,
+          skippedReason ? "skipped" : "running",
+          triggerId,
+          eventId,
           now,
-          now,
-          agent ? "Autopilot is not active" : "No runnable agent",
+          skippedReason ? now : null,
+          skippedReason,
           input.payload == null ? null : toJson(input.payload),
           now,
         ],
       );
-      this.ctx.db.run("UPDATE multiremi_autopilots SET last_run_at = ?, updated_at = ? WHERE id = ?", [now, now, autopilotId]);
-      return this.getAutopilotRun(runId)!;
-    }
+      if (inserted.changes === 0 && triggerId && eventId) {
+        const duplicate = this.ctx.db.query(
+          "SELECT * FROM multiremi_autopilot_runs WHERE trigger_id = ? AND event_id = ? LIMIT 1",
+        ).get(triggerId, eventId) as Row | null;
+        if (duplicate) return toAutopilotRun(duplicate);
+      }
+      createdRun = true;
+      this.ctx.db.run(
+        "UPDATE multiremi_autopilots SET last_run_at = ?, updated_at = ? WHERE id = ?",
+        [now, now, autopilotId],
+      );
+      if (skippedReason || !agent) return this.getAutopilotRun(runId)!;
 
-    let issue: MultiremiIssue | null = null;
-    if (autopilot.executionMode === "create_issue") {
-      issue = this.ctx.issues().createIssue({
-        title: prompt,
-        description: autopilot.description,
+      let issue: MultiremiIssue | null = null;
+      let issueSessionId: string | null = null;
+      if (autopilot.executionMode === "create_issue") {
+        issue = this.ctx.issues().createIssue({
+          title: prompt,
+          description: autopilot.description,
+          workspaceId: autopilot.workspaceId,
+          projectId: autopilot.projectId,
+          createdBy: autopilot.id,
+        });
+      } else if (autopilot.executionMode === "trigger_issue") {
+        if (!triggerIssueId) throw new Error("trigger_issue runs require trigger_issue_id");
+        issue = this.ctx.issues().getIssue(triggerIssueId);
+        if (!issue) throw new Error(`Issue not found: ${triggerIssueId}`);
+        if (issue.workspaceId !== autopilot.workspaceId) throw new Error("Trigger issue belongs to another workspace");
+        if (autopilot.projectId && issue.projectId !== autopilot.projectId) {
+          throw new Error("Trigger issue does not belong to the Autopilot project");
+        }
+        if (eventId) {
+          const event = this.getSystemEvent(eventId);
+          if (!event || event.resourceId !== issue.id || event.workspaceId !== issue.workspaceId) {
+            throw new Error("System event does not belong to the trigger issue");
+          }
+        }
+        const issueSession = autopilot.sessionPolicy === "reuse_latest"
+          ? this.ctx.issueSessions().getLatestActiveIssueSession(issue.id)
+            ?? this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id)
+          : this.ctx.issueSessions().createIssueSessionWithinTransaction(issue.id, {
+            title: `${autopilot.title} · ${issue.key}`,
+            createdByType: "agent",
+            createdById: agent.id,
+            participantAgentIds: [agent.id],
+          });
+        issueSessionId = issueSession.id;
+      }
+
+      const task = this.ctx.tasks().createTaskWithinTransaction({
+        agentId: agent.id,
+        issueId: issue?.id ?? null,
+        issueSessionId,
         workspaceId: autopilot.workspaceId,
-        projectId: autopilot.projectId,
-        createdBy: autopilot.id,
+        prompt,
+        assignmentAuthorType: "system",
+        assignmentAuthorId: autopilot.id,
+        assignmentSourceEventId: eventId,
       });
+      taskToNotify = task;
+      issueSessionId = task.issueSessionId ?? issueSessionId;
+      this.ctx.db.run(
+        `UPDATE multiremi_autopilot_runs
+         SET issue_id = ?, task_id = ?, issue_session_id = ?, result = ?
+         WHERE id = ?`,
+        [
+          issue?.id ?? null,
+          task.id,
+          issueSessionId,
+          toJson({ taskId: task.id, issueId: issue?.id ?? null, issueSessionId }),
+          runId,
+        ],
+      );
+      startedAutopilot = autopilot;
+      return this.getAutopilotRun(runId)!;
+    })();
+
+    if (taskToNotify) this.ctx.notifyTaskEnqueued(taskToNotify);
+    if (createdRun && startedAutopilot && run.status === "running") {
+      this.ctx.analytics().recordAutopilotRunStartedAnalytics(startedAutopilot, run);
     }
-    const task = this.ctx.tasks().createTask({
-      agentId: agent.id,
-      issueId: issue?.id ?? null,
-      workspaceId: autopilot.workspaceId,
-      prompt,
-    });
-    this.ctx.db.run(
-      `INSERT INTO multiremi_autopilot_runs (
-        id, autopilot_id, source, status, issue_id, task_id, triggered_at,
-        completed_at, failure_reason, payload, result, created_at
-      ) VALUES (?, ?, ?, 'running', ?, ?, ?, NULL, NULL, ?, ?, ?)`,
-      [
-        runId,
-        autopilotId,
-        source,
-        issue?.id ?? null,
-        task.id,
-        now,
-        input.payload == null ? null : toJson(input.payload),
-        toJson({ taskId: task.id, issueId: issue?.id ?? null }),
-        now,
-      ],
-    );
-    this.ctx.db.run("UPDATE multiremi_autopilots SET last_run_at = ?, updated_at = ? WHERE id = ?", [now, now, autopilotId]);
-    const run = this.getAutopilotRun(runId)!;
-    this.ctx.analytics().recordAutopilotRunStartedAnalytics(autopilot, run);
     return run;
   }
 
@@ -826,6 +1090,10 @@ function normalizeAutopilotCreatorType(value: unknown): "member" | "agent" {
   return value === "agent" ? "agent" : "member";
 }
 
+function isAutopilotExecutionMode(value: unknown): value is MultiremiAutopilot["executionMode"] {
+  return value === "create_issue" || value === "run_only" || value === "trigger_issue";
+}
+
 function normalizeWebhookProvider(value: unknown): MultiremiWebhookProvider {
   return value === "github" ? "github" : "generic";
 }
@@ -956,6 +1224,52 @@ function parseWebhookEventFiltersRow(value: unknown): MultiremiWebhookEventFilte
   }
 }
 
+const SYSTEM_EVENT_ISSUE_STATUSES = new Set([
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "done",
+  "blocked",
+  "cancelled",
+]);
+
+function normalizeSystemEventConfig(value: unknown): MultiremiAutopilotSystemEventConfig | null {
+  if (value == null) return null;
+  if (!isRecord(value)) throw new Error("event_config must be an object");
+  if (value.resource !== "issue") throw new Error("event_config.resource must be issue");
+  if (value.event !== "status_changed") throw new Error("event_config.event must be status_changed");
+  if (!Array.isArray(value.conditions) || value.conditions.length === 0) {
+    throw new Error("event_config.conditions must be a non-empty array");
+  }
+  const conditions = value.conditions.map((condition, index) => {
+    if (!isRecord(condition)) throw new Error(`event_config.conditions[${index}] must be an object`);
+    if (condition.field !== "status") throw new Error(`event_config.conditions[${index}].field must be status`);
+    if (condition.operator !== "becomes") throw new Error(`event_config.conditions[${index}].operator must be becomes`);
+    const target = typeof condition.value === "string" ? condition.value.trim() : "";
+    if (!SYSTEM_EVENT_ISSUE_STATUSES.has(target)) {
+      throw new Error(`event_config.conditions[${index}].value must be a valid issue status`);
+    }
+    return { field: "status" as const, operator: "becomes" as const, value: target as MultiremiAutopilotSystemEventConfig["conditions"][number]["value"] };
+  });
+  const projectId = cleanOptionalString(value.projectId ?? value.project_id) ?? null;
+  return {
+    resource: "issue",
+    event: "status_changed",
+    conditions,
+    ...(projectId ? { projectId, project_id: projectId } : {}),
+  };
+}
+
+function parseSystemEventConfigRow(value: unknown): MultiremiAutopilotSystemEventConfig | null {
+  if (value == null || value === "") return null;
+  try {
+    return normalizeSystemEventConfig(parseJson(value, null));
+  } catch {
+    return null;
+  }
+}
+
 function webhookEventAllowedByTriggerScope(
   filters: MultiremiWebhookEventFilter[] | null,
   envelope: MultiremiWebhookEnvelope,
@@ -1083,6 +1397,8 @@ function toAutopilot(row: Row): MultiremiAutopilot {
   const assigneeType = String(row.assignee_type ?? "agent") as MultiremiAutopilot["assigneeType"];
   const assigneeId = String(row.assignee_id);
   const executionMode = String(row.execution_mode ?? "create_issue") as MultiremiAutopilot["executionMode"];
+  const sessionPolicy = String(row.session_policy ?? "new") as MultiremiAutopilot["sessionPolicy"];
+  const workspacePolicy = String(row.workspace_policy ?? "reuse_issue") as MultiremiAutopilot["workspacePolicy"];
   const issueTitleTemplate = nullableString(row.issue_title_template);
   const triggerKind = String(row.trigger_kind ?? "manual");
   const triggerLabel = nullableString(row.trigger_label);
@@ -1107,6 +1423,10 @@ function toAutopilot(row: Row): MultiremiAutopilot {
     status: String(row.status ?? "active") as MultiremiAutopilot["status"],
     executionMode,
     execution_mode: executionMode,
+    sessionPolicy,
+    session_policy: sessionPolicy,
+    workspacePolicy,
+    workspace_policy: workspacePolicy,
     issueTitleTemplate,
     issue_title_template: issueTitleTemplate,
     triggerKind,
@@ -1148,6 +1468,7 @@ function toAutopilotTrigger(row: Row): MultiremiAutopilotTrigger {
     provider: kind === "webhook" ? normalizeWebhookProvider(row.provider) : null,
     label: nullableString(row.label),
     eventFilters: parseWebhookEventFiltersRow(row.event_filters),
+    eventConfig: parseSystemEventConfigRow(row.event_config),
     signingSecretSet: Boolean(signingSecret),
     signingSecretHint: nullableString(row.signing_secret_hint),
     lastFiredAt: nullableString(row.last_fired_at),
@@ -1164,6 +1485,9 @@ function toAutopilotRun(row: Row): MultiremiAutopilotRun {
     status: String(row.status ?? "running") as MultiremiAutopilotRun["status"],
     issueId: nullableString(row.issue_id),
     taskId: nullableString(row.task_id),
+    triggerId: nullableString(row.trigger_id),
+    eventId: nullableString(row.event_id),
+    issueSessionId: nullableString(row.issue_session_id),
     triggeredAt: String(row.triggered_at),
     completedAt: nullableString(row.completed_at),
     failureReason: nullableString(row.failure_reason),
@@ -1171,6 +1495,43 @@ function toAutopilotRun(row: Row): MultiremiAutopilotRun {
     result: row.result == null ? null : parseJson(row.result, null),
     createdAt: String(row.created_at),
   };
+}
+
+function toSystemEvent(row: Row): MultiremiSystemEvent {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    resource: String(row.resource) as MultiremiSystemEvent["resource"],
+    event: String(row.event) as MultiremiSystemEvent["event"],
+    resourceId: String(row.resource_id),
+    projectId: nullableString(row.project_id),
+    payload: parseJson<Record<string, unknown>>(row.payload, {}),
+    status: String(row.status ?? "pending") as MultiremiSystemEvent["status"],
+    attemptCount: Number(row.attempt_count ?? 0),
+    availableAt: String(row.available_at),
+    leaseUntil: nullableString(row.lease_until),
+    lastError: nullableString(row.last_error),
+    createdAt: String(row.created_at),
+    processedAt: nullableString(row.processed_at),
+  };
+}
+
+function systemEventMatchesConfig(
+  event: MultiremiSystemEvent,
+  config: MultiremiAutopilotSystemEventConfig | null,
+): boolean {
+  if (!config || config.resource !== event.resource || config.event !== event.event) return false;
+  // Task lifecycle status writes belong to the automation run that assigned
+  // the task. Keep them in the outbox for audit/replay visibility, but never
+  // feed them back into system-event automations: otherwise an `in_review`
+  // trigger creates a task whose completion creates another identical run.
+  if (cleanOptionalString(event.payload.automation_source_event_id)) return false;
+  const projectId = config.projectId ?? config.project_id ?? null;
+  if (projectId && projectId !== event.projectId) return false;
+  return config.conditions.every((condition) => {
+    if (condition.field !== "status" || condition.operator !== "becomes") return false;
+    return event.payload.status === condition.value;
+  });
 }
 
 function toWebhookDelivery(row: Row): MultiremiWebhookDelivery {

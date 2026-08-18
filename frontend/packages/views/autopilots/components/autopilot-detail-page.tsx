@@ -1,14 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Zap, Play, Clock, Plus, Trash2, CheckCircle2, XCircle, Loader2, Pencil,
   Ban, ChevronDown, ChevronRight,
-  Webhook, Copy, Check, RotateCw,
+  Activity, Webhook, Copy, Check, RotateCw,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { autopilotDetailOptions, autopilotRunsOptions, autopilotRunOptions } from "@multiremi/core/autopilots/queries";
-import { projectDetailOptions } from "@multiremi/core/projects/queries";
+import { projectDetailOptions, projectListOptions } from "@multiremi/core/projects/queries";
 import {
   useUpdateAutopilot,
   useDeleteAutopilot,
@@ -17,7 +17,13 @@ import {
   useDeleteAutopilotTrigger,
   useRotateAutopilotTriggerWebhookToken,
 } from "@multiremi/core/autopilots/mutations";
-import { buildAutopilotWebhookUrl } from "@multiremi/core/autopilots";
+import {
+  buildAutopilotWebhookUrl,
+  canRunAutopilotFromDashboard,
+  getAutopilotRunHref,
+  getCompatibleConfigurableTriggerKinds,
+  type ConfigurableAutopilotTriggerKind,
+} from "@multiremi/core/autopilots";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
@@ -52,7 +58,13 @@ import {
   toCronExpression,
 } from "./trigger-config";
 import type { TriggerConfig } from "./trigger-config";
-import type { AutopilotExecutionMode, AutopilotRun, AutopilotTrigger } from "@multiremi/core/types";
+import type {
+  AutopilotExecutionMode,
+  AutopilotRun,
+  AutopilotRunSource,
+  AutopilotSystemEventConfig,
+  AutopilotTrigger,
+} from "@multiremi/core/types";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { ReadonlyContent } from "../../editor";
 import { TranscriptButton } from "../../common/task-transcript";
@@ -61,6 +73,10 @@ import { WebhookPayloadPreview } from "./webhook-payload-preview";
 import { WebhookDeliveriesSection } from "./webhook-deliveries-section";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
+import {
+  getDefaultSystemEventConfig,
+  SystemEventConfigSection,
+} from "./system-event-config";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleString(undefined, {
@@ -139,11 +155,13 @@ function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId: strin
         {t(($) => $.run_status[status])}
       </span>
       <span className="w-20 shrink-0 text-xs text-muted-foreground">
-        {t(($) => $.run_source[run.source as "schedule" | "manual" | "webhook" | "api"]) ?? run.source}
+        {t(($) => $.run_source[run.source as AutopilotRunSource]) ?? run.source}
       </span>
       <span className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
         {run.issue_id ? (
-          t(($) => $.run.issue_linked)
+          run.issue_session_id
+            ? t(($) => $.run.session_linked)
+            : t(($) => $.run.issue_linked)
         ) : run.failure_reason ? (
           <span className="text-destructive">{run.failure_reason}</span>
         ) : null}
@@ -170,8 +188,9 @@ function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId: strin
   const rowClass = "flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-accent/30 transition-colors";
 
   if (run.issue_id) {
+    const href = getAutopilotRunHref(wsPaths, run)!;
     return (
-      <AppLink href={wsPaths.issueDetail(run.issue_id)} className={cn(rowClass, "cursor-pointer")}>
+      <AppLink href={href} className={cn(rowClass, "cursor-pointer")}>
         {content}
       </AppLink>
     );
@@ -251,7 +270,15 @@ function SkippedRunsGroup({
   );
 }
 
-function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autopilotId: string }) {
+function TriggerRow({
+  trigger,
+  autopilotId,
+  systemEventProjectName,
+}: {
+  trigger: AutopilotTrigger;
+  autopilotId: string;
+  systemEventProjectName?: string;
+}) {
   const { t } = useT("autopilots");
   const deleteTrigger = useDeleteAutopilotTrigger();
   const rotateToken = useRotateAutopilotTriggerWebhookToken();
@@ -278,6 +305,7 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
   };
 
   const isWebhook = trigger.kind === "webhook";
+  const isSystemEvent = trigger.kind === "system_event";
   const isApi = trigger.kind === "api";
   // Resolve the URL from the server's webhook_url first, then compose
   // from the API base URL (desktop) or window.origin (web). Falls back
@@ -315,7 +343,7 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
     }
   };
 
-  const Icon = isWebhook ? Webhook : isApi ? Zap : Clock;
+  const Icon = isWebhook ? Webhook : isSystemEvent ? Activity : isApi ? Zap : Clock;
   const showWebhookUrlRow = isWebhook && webhookUrl;
 
   // Delete control extracted so a webhook trigger can render it inline
@@ -365,6 +393,17 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
         {trigger.next_run_at && (
           <div className="text-xs text-muted-foreground">
             {t(($) => $.trigger_row.next_label, { date: formatDate(trigger.next_run_at) })}
+          </div>
+        )}
+        {isSystemEvent && trigger.event_config && (
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {t(($) => $.trigger_row.system_event_summary, {
+              status: t(($) => $.dialog.system_event.statuses[
+                trigger.event_config?.conditions[0]?.value ?? "done"
+              ]),
+              project:
+                systemEventProjectName ?? t(($) => $.dialog.system_event.all_projects),
+            })}
           </div>
         )}
         {showWebhookUrlRow && (
@@ -448,17 +487,30 @@ function AddTriggerDialog({
   open,
   onOpenChange,
   autopilotId,
+  executionMode,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   autopilotId: string;
+  executionMode: AutopilotExecutionMode;
 }) {
   const { t } = useT("autopilots");
   const createTrigger = useCreateAutopilotTrigger();
-  const [kind, setKind] = useState<"schedule" | "webhook">("schedule");
+  const compatibleKinds = getCompatibleConfigurableTriggerKinds(executionMode);
+  const [kind, setKind] = useState<ConfigurableAutopilotTriggerKind>(
+    () => compatibleKinds[0]!,
+  );
   const [config, setConfig] = useState<TriggerConfig>(getDefaultTriggerConfig);
+  const [systemEventConfig, setSystemEventConfig] =
+    useState<AutopilotSystemEventConfig>(getDefaultSystemEventConfig);
   const [label, setLabel] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const nextCompatibleKinds = getCompatibleConfigurableTriggerKinds(executionMode);
+    if (!nextCompatibleKinds.includes(kind)) setKind(nextCompatibleKinds[0]!);
+  }, [executionMode, kind, open]);
 
   const handleSubmit = async () => {
     if (submitting) return;
@@ -478,17 +530,26 @@ function AddTriggerDialog({
           label: label.trim() || undefined,
         });
         toast.success(t(($) => $.add_trigger_dialog.toast_added_schedule));
-      } else {
+      } else if (kind === "webhook") {
         await createTrigger.mutateAsync({
           autopilotId,
           kind: "webhook",
           label: label.trim() || undefined,
         });
         toast.success(t(($) => $.add_trigger_dialog.toast_added_webhook));
+      } else {
+        await createTrigger.mutateAsync({
+          autopilotId,
+          kind: "system_event",
+          event_config: systemEventConfig,
+          label: label.trim() || undefined,
+        });
+        toast.success(t(($) => $.add_trigger_dialog.toast_added_system_event));
       }
       onOpenChange(false);
-      setKind("schedule");
+      setKind(getCompatibleConfigurableTriggerKinds(executionMode)[0]!);
       setConfig(getDefaultTriggerConfig());
+      setSystemEventConfig(getDefaultSystemEventConfig());
       setLabel("");
     } catch (err) {
       toast.error(
@@ -510,42 +571,71 @@ function AddTriggerDialog({
             <label className="text-xs font-medium text-muted-foreground">
               {t(($) => $.add_trigger_dialog.type_label)}
             </label>
-            <div className="mt-1 grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
-              <button
-                type="button"
-                onClick={() => setKind("schedule")}
-                className={cn(
-                  "flex items-center justify-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors",
-                  kind === "schedule"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Clock className="h-3.5 w-3.5" />
-                {t(($) => $.add_trigger_dialog.type_schedule)}
-              </button>
-              <button
-                type="button"
-                onClick={() => setKind("webhook")}
-                className={cn(
-                  "flex items-center justify-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors",
-                  kind === "webhook"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Webhook className="h-3.5 w-3.5" />
-                {t(($) => $.add_trigger_dialog.type_webhook)}
-              </button>
+            <div
+              className={cn(
+                "mt-1 grid gap-1 rounded-md bg-muted p-1",
+                compatibleKinds.length === 1 ? "grid-cols-1" : "grid-cols-2",
+              )}
+            >
+              {compatibleKinds.includes("schedule") && (
+                <button
+                  type="button"
+                  onClick={() => setKind("schedule")}
+                  className={cn(
+                    "flex items-center justify-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors",
+                    kind === "schedule"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Clock className="h-3.5 w-3.5" />
+                  {t(($) => $.add_trigger_dialog.type_schedule)}
+                </button>
+              )}
+              {compatibleKinds.includes("system_event") && (
+                <button
+                  type="button"
+                  onClick={() => setKind("system_event")}
+                  className={cn(
+                    "flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-sm transition-colors",
+                    kind === "system_event"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Activity className="h-3.5 w-3.5" />
+                  {t(($) => $.add_trigger_dialog.type_system_event)}
+                </button>
+              )}
+              {compatibleKinds.includes("webhook") && (
+                <button
+                  type="button"
+                  onClick={() => setKind("webhook")}
+                  className={cn(
+                    "flex items-center justify-center gap-1.5 rounded px-3 py-1.5 text-sm transition-colors",
+                    kind === "webhook"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Webhook className="h-3.5 w-3.5" />
+                  {t(($) => $.add_trigger_dialog.type_webhook)}
+                </button>
+              )}
             </div>
           </div>
 
           {kind === "schedule" ? (
             <TriggerConfigSection config={config} onChange={setConfig} />
-          ) : (
+          ) : kind === "webhook" ? (
             <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
               {t(($) => $.add_trigger_dialog.webhook_help)}
             </p>
+          ) : (
+            <SystemEventConfigSection
+              config={systemEventConfig}
+              onChange={setSystemEventConfig}
+            />
           )}
 
           <div>
@@ -582,6 +672,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
 
   const { data, isLoading } = useQuery(autopilotDetailOptions(wsId, autopilotId));
   const { data: runs = [], isLoading: runsLoading } = useQuery(autopilotRunsOptions(wsId, autopilotId));
+  const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const updateAutopilot = useUpdateAutopilot();
   const deleteAutopilot = useDeleteAutopilot();
   const triggerAutopilot = useTriggerAutopilot();
@@ -711,24 +802,26 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
               <Pencil className="h-3.5 w-3.5 sm:mr-1" />
               <span className="hidden sm:inline">{t(($) => $.detail.edit)}</span>
             </Button>
-            <Button
-              size="sm"
-              onClick={handleRunNow}
-              disabled={autopilot.status !== "active" || triggerAutopilot.isPending}
-              className="px-2 sm:px-2.5"
-              aria-label={triggerAutopilot.isPending ? t(($) => $.detail.running) : t(($) => $.detail.run_now)}
-            >
-              {triggerAutopilot.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 sm:mr-1 animate-spin" />
-              ) : (
-                <Play className="h-3.5 w-3.5 sm:mr-1" />
-              )}
-              <span className="hidden sm:inline">
-                {triggerAutopilot.isPending
-                  ? t(($) => $.detail.running)
-                  : t(($) => $.detail.run_now)}
-              </span>
-            </Button>
+            {canRunAutopilotFromDashboard(autopilot.execution_mode) && (
+              <Button
+                size="sm"
+                onClick={handleRunNow}
+                disabled={autopilot.status !== "active" || triggerAutopilot.isPending}
+                className="px-2 sm:px-2.5"
+                aria-label={triggerAutopilot.isPending ? t(($) => $.detail.running) : t(($) => $.detail.run_now)}
+              >
+                {triggerAutopilot.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 sm:mr-1 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5 sm:mr-1" />
+                )}
+                <span className="hidden sm:inline">
+                  {triggerAutopilot.isPending
+                    ? t(($) => $.detail.running)
+                    : t(($) => $.detail.run_now)}
+                </span>
+              </Button>
+            )}
           </>
         }
       />
@@ -762,6 +855,26 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
                   {t(($) => $.execution_mode[autopilot.execution_mode as AutopilotExecutionMode])}
                 </div>
               </div>
+              {autopilot.execution_mode === "trigger_issue" && (
+                <>
+                  <div>
+                    <label className="text-xs text-muted-foreground">
+                      {t(($) => $.detail.field_session_policy)}
+                    </label>
+                    <div className="mt-1">
+                      {t(($) => $.session_policy[autopilot.session_policy ?? "new"])}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">
+                      {t(($) => $.detail.field_workspace_policy)}
+                    </label>
+                    <div className="mt-1">
+                      {t(($) => $.workspace_policy[autopilot.workspace_policy ?? "reuse_issue"])}
+                    </div>
+                  </div>
+                </>
+              )}
               {autopilot.execution_mode === "create_issue" && (
                 <div>
                   <label className="text-xs text-muted-foreground">{t(($) => $.detail.field_project)}</label>
@@ -813,7 +926,18 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
             ) : (
               <div className="space-y-2">
                 {triggers.map((trig) => (
-                  <TriggerRow key={trig.id} trigger={trig} autopilotId={autopilotId} />
+                  <TriggerRow
+                    key={trig.id}
+                    trigger={trig}
+                    autopilotId={autopilotId}
+                    systemEventProjectName={
+                      trig.event_config?.project_id
+                        ? projects.find(
+                            (candidate) => candidate.id === trig.event_config?.project_id,
+                          )?.title ?? t(($) => $.detail.project_unavailable)
+                        : t(($) => $.dialog.system_event.all_projects)
+                    }
+                  />
                 ))}
               </div>
             )}
@@ -868,6 +992,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
         open={triggerDialogOpen}
         onOpenChange={setTriggerDialogOpen}
         autopilotId={autopilotId}
+        executionMode={autopilot.execution_mode}
       />
       {editDialogOpen && (
         <AutopilotDialog
@@ -882,6 +1007,8 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
             assignee_type: autopilot.assignee_type,
             assignee_id: autopilot.assignee_id,
             execution_mode: autopilot.execution_mode as AutopilotExecutionMode,
+            session_policy: autopilot.session_policy ?? "new",
+            workspace_policy: autopilot.workspace_policy ?? "reuse_issue",
           }}
           triggers={triggers}
         />

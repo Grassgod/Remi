@@ -23,7 +23,15 @@
   },
   "execution_mode": {
     "create_issue": "Create Issue",
+    "trigger_issue": "Run in Trigger Issue",
     "run_only": "Run Only"
+  },
+  "session_policy": {
+    "new": "Create a new Session each time",
+    "reuse_latest": "Reuse the latest Session"
+  },
+  "workspace_policy": {
+    "reuse_issue": "Reuse the trigger Issue workspace"
   },
   "relative_date": {
     "today": "Today",
@@ -72,6 +80,8 @@
     "section_danger": "Danger Zone",
     "field_agent": "Agent",
     "field_output_mode": "Output Mode",
+    "field_session_policy": "Session Policy",
+    "field_workspace_policy": "Workspace Policy",
     "field_project": "Project",
     "no_project": "No project",
     "project_unavailable": "Project unavailable",
@@ -102,10 +112,12 @@
     "schedule": "Schedule",
     "manual": "Manual",
     "webhook": "Webhook",
+    "system_event": "System Event",
     "api": "API"
   },
   "run": {
     "issue_linked": "Issue linked",
+    "session_linked": "Issue Session linked",
     "view_log": "View execution log",
     "skipped_group": {
       "label": "Skipped",
@@ -125,6 +137,7 @@
   },
   "trigger_kind": {
     "schedule": "Schedule",
+    "system_event": "System Event",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -132,6 +145,7 @@
     "disabled_badge": "Disabled",
     "deprecated_badge": "Deprecated",
     "next_label": "Next: {{date}}",
+    "system_event_summary": "Issue status becomes {{status}} · {{project}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "Copy URL",
     "url_copied": "Webhook URL copied",
@@ -203,6 +217,7 @@
     "title": "Add Trigger",
     "type_label": "Type",
     "type_schedule": "Schedule",
+    "type_system_event": "System Event",
     "type_webhook": "Webhook",
     "label_field": "Label (optional)",
     "label_placeholder": "e.g. Weekday morning",
@@ -210,6 +225,7 @@
     "submit": "Add trigger",
     "submitting": "Adding...",
     "toast_added_schedule": "Schedule trigger added",
+    "toast_added_system_event": "System event trigger added",
     "toast_added_webhook": "Webhook trigger added",
     "toast_add_failed": "Failed to add trigger"
   },
@@ -247,10 +263,14 @@
     "section_project": "Project",
     "no_project": "No project",
     "section_output_mode": "Output mode",
+    "output_mode_incompatible": "This trigger type does not support that output mode",
+    "output_mode_compatibility_hint": "Available output modes are determined by the current trigger type.",
     "section_schedule": "Schedule",
     "section_trigger_kind": "Trigger",
     "trigger_kind_schedule": "Schedule",
+    "trigger_kind_system_event": "System Event",
     "trigger_kind_webhook": "Webhook",
+    "section_system_event": "System Event",
     "section_webhook": "Webhook",
     "webhook_help_create": "Multiremi will generate a webhook URL after this autopilot is created. POST any JSON to that URL to fire it.",
     "webhook_help_edit": "This autopilot is fired by webhook. Manage the URL (copy / rotate) on the autopilot's detail page.",
@@ -265,10 +285,44 @@
     "event_filter_hint": "Only process webhooks matching these events. Leave empty to accept all.",
     "schedule_disabled_reason": "This autopilot has multiple schedules — edit them in the detail page.",
     "next_run_label": "Next run:",
+    "trigger_issue_context": {
+      "title": "Run context",
+      "session_label": "Session",
+      "session_new": "Create a new Session each time",
+      "session_reuse_latest": "Reuse the latest Session",
+      "workspace_label": "Workspace",
+      "workspace_reuse_issue": "Reuse the trigger Issue workspace",
+      "hint": "The agent runs inside the Issue that emitted the event and uses its prepared code workspace."
+    },
+    "system_event": {
+      "resource_label": "Object",
+      "resource_issue": "Issue",
+      "event_label": "Event",
+      "event_status_changed": "Status changed",
+      "condition_label": "Condition",
+      "field_status": "Status",
+      "operator_becomes": "Becomes",
+      "project_scope_label": "Project scope",
+      "all_projects": "All projects",
+      "hint": "Only Issues matching the event, condition, and project scope trigger this automation.",
+      "statuses": {
+        "backlog": "Backlog",
+        "todo": "Todo",
+        "in_progress": "In progress",
+        "in_review": "In review",
+        "done": "Done",
+        "blocked": "Blocked",
+        "cancelled": "Cancelled"
+      }
+    },
     "output_modes": {
       "create_issue": {
         "label": "Create issue",
         "description": "Each run creates a tracked issue"
+      },
+      "trigger_issue": {
+        "label": "Run in trigger Issue",
+        "description": "Create or reuse a Session in the original Issue workspace"
       },
       "run_only": {
         "label": "Run only",

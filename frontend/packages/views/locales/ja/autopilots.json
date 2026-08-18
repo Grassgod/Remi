@@ -23,7 +23,15 @@
   },
   "execution_mode": {
     "create_issue": "イシューを作成",
+    "trigger_issue": "トリガー元のイシューで実行",
     "run_only": "実行のみ"
+  },
+  "session_policy": {
+    "new": "毎回新しい Session を作成",
+    "reuse_latest": "最新の Session を再利用"
+  },
+  "workspace_policy": {
+    "reuse_issue": "トリガー元のイシューのワークスペースを再利用"
   },
   "relative_date": {
     "today": "今日",
@@ -72,6 +80,8 @@
     "section_danger": "危険な操作",
     "field_agent": "エージェント",
     "field_output_mode": "出力モード",
+    "field_session_policy": "Session ポリシー",
+    "field_workspace_policy": "ワークスペースポリシー",
     "field_project": "プロジェクト",
     "no_project": "プロジェクトなし",
     "project_unavailable": "プロジェクトを利用できません",
@@ -101,10 +111,12 @@
     "schedule": "スケジュール",
     "manual": "手動",
     "webhook": "Webhook",
+    "system_event": "システムイベント",
     "api": "API"
   },
   "run": {
     "issue_linked": "イシューをリンク済み",
+    "session_linked": "Issue Session をリンク済み",
     "view_log": "実行ログを表示",
     "skipped_group": {
       "label": "スキップ済み",
@@ -124,6 +136,7 @@
   },
   "trigger_kind": {
     "schedule": "スケジュール",
+    "system_event": "システムイベント",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -131,6 +144,7 @@
     "disabled_badge": "無効",
     "deprecated_badge": "非推奨",
     "next_label": "次回: {{date}}",
+    "system_event_summary": "イシューの状態が{{status}}になる · {{project}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "URL をコピー",
     "url_copied": "Webhook URL をコピーしました",
@@ -202,6 +216,7 @@
     "title": "トリガーを追加",
     "type_label": "種類",
     "type_schedule": "スケジュール",
+    "type_system_event": "システムイベント",
     "type_webhook": "Webhook",
     "label_field": "ラベル(任意)",
     "label_placeholder": "例: 平日の朝",
@@ -209,6 +224,7 @@
     "submit": "トリガーを追加",
     "submitting": "追加中...",
     "toast_added_schedule": "スケジュールトリガーを追加しました",
+    "toast_added_system_event": "システムイベントトリガーを追加しました",
     "toast_added_webhook": "Webhook トリガーを追加しました",
     "toast_add_failed": "トリガーを追加できませんでした"
   },
@@ -246,10 +262,14 @@
     "section_project": "プロジェクト",
     "no_project": "プロジェクトなし",
     "section_output_mode": "出力モード",
+    "output_mode_incompatible": "このトリガー種別では、その出力モードを使用できません",
+    "output_mode_compatibility_hint": "選択できる出力モードは、現在のトリガー種別によって決まります。",
     "section_schedule": "スケジュール",
     "section_trigger_kind": "トリガー",
     "trigger_kind_schedule": "スケジュール",
+    "trigger_kind_system_event": "システムイベント",
     "trigger_kind_webhook": "Webhook",
+    "section_system_event": "システムイベント",
     "section_webhook": "Webhook",
     "webhook_help_create": "このオートパイロットを作成すると、Multiremi が Webhook URL を生成します。その URL に任意の JSON を POST すると実行されます。",
     "webhook_help_edit": "このオートパイロットは Webhook で実行されます。URL の管理(コピー / 再生成)はオートパイロットの詳細ページで行ってください。",
@@ -264,10 +284,44 @@
     "event_filter_hint": "これらのイベントに一致する Webhook のみを処理します。空にするとすべて許可します。",
     "schedule_disabled_reason": "このオートパイロットには複数のスケジュールがあります。詳細ページで編集してください。",
     "next_run_label": "次回実行:",
+    "trigger_issue_context": {
+      "title": "実行コンテキスト",
+      "session_label": "Session",
+      "session_new": "毎回新しい Session を作成",
+      "session_reuse_latest": "最新の Session を再利用",
+      "workspace_label": "ワークスペース",
+      "workspace_reuse_issue": "トリガー元のイシューのワークスペースを再利用",
+      "hint": "エージェントはイベントを発生させたイシュー内で、そのイシューに準備済みのコードワークスペースを使用して実行されます。"
+    },
+    "system_event": {
+      "resource_label": "対象",
+      "resource_issue": "イシュー",
+      "event_label": "イベント",
+      "event_status_changed": "状態変更",
+      "condition_label": "条件",
+      "field_status": "状態",
+      "operator_becomes": "次になる",
+      "project_scope_label": "プロジェクト範囲",
+      "all_projects": "すべてのプロジェクト",
+      "hint": "イベント、条件、プロジェクト範囲のすべてに一致するイシューだけがこの自動化をトリガーします。",
+      "statuses": {
+        "backlog": "バックログ",
+        "todo": "未着手",
+        "in_progress": "進行中",
+        "in_review": "レビュー中",
+        "done": "完了",
+        "blocked": "ブロック中",
+        "cancelled": "キャンセル済み"
+      }
+    },
     "output_modes": {
       "create_issue": {
         "label": "イシューを作成",
         "description": "実行のたびに追跡可能なイシューを作成します"
+      },
+      "trigger_issue": {
+        "label": "トリガー元のイシューで実行",
+        "description": "元のイシューのワークスペースで Session を作成または再利用します"
       },
       "run_only": {
         "label": "実行のみ",

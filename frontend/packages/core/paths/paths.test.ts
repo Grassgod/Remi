@@ -8,6 +8,9 @@ describe("paths.workspace(slug)", () => {
     expect(ws.usage()).toBe("/acme/usage");
     expect(ws.issues()).toBe("/acme/issues");
     expect(ws.issueDetail("abc-123")).toBe("/acme/issues/abc-123");
+    expect(ws.issueSession("abc-123", "session-1")).toBe(
+      "/acme/issues/abc-123?session=session-1",
+    );
     expect(ws.projects()).toBe("/acme/projects");
     expect(ws.repositories()).toBe("/acme/repos");
     expect(ws.projectDetail("p1")).toBe("/acme/projects/p1");
@@ -35,6 +38,9 @@ describe("paths.workspace(slug)", () => {
 
   it("URL-encodes special characters in ids", () => {
     expect(ws.issueDetail("id with space")).toBe("/acme/issues/id%20with%20space");
+    expect(ws.issueSession("id with space", "session with space")).toBe(
+      "/acme/issues/id%20with%20space?session=session%20with%20space",
+    );
     expect(ws.pluginDetail("plugin with space")).toBe(
       "/acme/plugins/plugin%20with%20space",
     );

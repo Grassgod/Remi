@@ -577,6 +577,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/daemon/issues/:issueId/gc-check", (c) => {
     const issue = issueFromParam(store, c, "issueId");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const hasActiveTask = store.listTasksForIssue(issue.id).some(
+      (task) => !["completed", "failed", "cancelled"].includes(task.status),
+    );
+    if (hasActiveTask) return c.json({ status: "active", updated_at: issue.updatedAt });
     return c.json({ status: issue.status, updated_at: issue.updatedAt });
   });
   app.post("/api/daemon/issues/:issueId/workspace/cleaned", async (c) => {

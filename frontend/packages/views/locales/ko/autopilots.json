@@ -23,7 +23,15 @@
   },
   "execution_mode": {
     "create_issue": "이슈 생성",
+    "trigger_issue": "트리거 이슈에서 실행",
     "run_only": "실행만"
+  },
+  "session_policy": {
+    "new": "매번 새 Session 생성",
+    "reuse_latest": "최근 Session 재사용"
+  },
+  "workspace_policy": {
+    "reuse_issue": "트리거 이슈의 워크스페이스 재사용"
   },
   "relative_date": {
     "today": "오늘",
@@ -72,6 +80,8 @@
     "section_danger": "위험 영역",
     "field_agent": "에이전트",
     "field_output_mode": "출력 모드",
+    "field_session_policy": "Session 정책",
+    "field_workspace_policy": "워크스페이스 정책",
     "field_project": "프로젝트",
     "no_project": "프로젝트 없음",
     "project_unavailable": "프로젝트를 사용할 수 없습니다",
@@ -101,10 +111,12 @@
     "schedule": "일정",
     "manual": "수동",
     "webhook": "Webhook",
+    "system_event": "시스템 이벤트",
     "api": "API"
   },
   "run": {
     "issue_linked": "이슈 연결됨",
+    "session_linked": "Issue Session 연결됨",
     "view_log": "실행 로그 보기",
     "skipped_group": {
       "label": "건너뜀",
@@ -124,6 +136,7 @@
   },
   "trigger_kind": {
     "schedule": "일정",
+    "system_event": "시스템 이벤트",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -131,6 +144,7 @@
     "disabled_badge": "비활성",
     "deprecated_badge": "지원 중단",
     "next_label": "다음: {{date}}",
+    "system_event_summary": "이슈 상태가 {{status}}(으)로 변경 · {{project}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "URL 복사",
     "url_copied": "Webhook URL을 복사했습니다",
@@ -202,6 +216,7 @@
     "title": "트리거 추가",
     "type_label": "유형",
     "type_schedule": "일정",
+    "type_system_event": "시스템 이벤트",
     "type_webhook": "Webhook",
     "label_field": "라벨(선택 사항)",
     "label_placeholder": "예: 평일 오전",
@@ -209,6 +224,7 @@
     "submit": "트리거 추가",
     "submitting": "추가하는 중...",
     "toast_added_schedule": "일정 트리거를 추가했습니다",
+    "toast_added_system_event": "시스템 이벤트 트리거를 추가했습니다",
     "toast_added_webhook": "Webhook 트리거를 추가했습니다",
     "toast_add_failed": "트리거를 추가하지 못했습니다"
   },
@@ -246,10 +262,14 @@
     "section_project": "프로젝트",
     "no_project": "프로젝트 없음",
     "section_output_mode": "출력 모드",
+    "output_mode_incompatible": "현재 트리거 유형은 해당 출력 모드를 지원하지 않습니다",
+    "output_mode_compatibility_hint": "선택 가능한 출력 모드는 현재 트리거 유형에 따라 결정됩니다.",
     "section_schedule": "일정",
     "section_trigger_kind": "트리거",
     "trigger_kind_schedule": "일정",
+    "trigger_kind_system_event": "시스템 이벤트",
     "trigger_kind_webhook": "Webhook",
+    "section_system_event": "시스템 이벤트",
     "section_webhook": "Webhook",
     "webhook_help_create": "이 오토파일럿을 만들면 Multiremi가 Webhook URL을 생성합니다. 해당 URL로 JSON을 POST하면 실행됩니다.",
     "webhook_help_edit": "이 오토파일럿은 Webhook으로 실행됩니다. URL 복사와 재발급은 오토파일럿 상세 페이지에서 관리하세요.",
@@ -264,10 +284,44 @@
     "event_filter_hint": "이 이벤트와 일치하는 Webhook만 처리합니다. 비워 두면 모두 허용합니다.",
     "schedule_disabled_reason": "이 오토파일럿에는 여러 일정이 있습니다. 상세 페이지에서 수정하세요.",
     "next_run_label": "다음 실행:",
+    "trigger_issue_context": {
+      "title": "실행 컨텍스트",
+      "session_label": "Session",
+      "session_new": "매번 새 Session 생성",
+      "session_reuse_latest": "최근 Session 재사용",
+      "workspace_label": "워크스페이스",
+      "workspace_reuse_issue": "트리거 이슈의 워크스페이스 재사용",
+      "hint": "에이전트는 이벤트를 발생시킨 이슈 안에서 해당 이슈에 준비된 코드 워크스페이스를 사용해 실행됩니다."
+    },
+    "system_event": {
+      "resource_label": "대상",
+      "resource_issue": "이슈",
+      "event_label": "이벤트",
+      "event_status_changed": "상태 변경",
+      "condition_label": "조건",
+      "field_status": "상태",
+      "operator_becomes": "다음으로 변경",
+      "project_scope_label": "프로젝트 범위",
+      "all_projects": "모든 프로젝트",
+      "hint": "이벤트, 조건, 프로젝트 범위가 모두 일치하는 이슈만 이 자동화를 트리거합니다.",
+      "statuses": {
+        "backlog": "백로그",
+        "todo": "할 일",
+        "in_progress": "진행 중",
+        "in_review": "리뷰 중",
+        "done": "완료",
+        "blocked": "차단됨",
+        "cancelled": "취소됨"
+      }
+    },
     "output_modes": {
       "create_issue": {
         "label": "이슈 생성",
         "description": "실행할 때마다 추적 가능한 이슈를 만듭니다"
+      },
+      "trigger_issue": {
+        "label": "트리거 이슈에서 실행",
+        "description": "원래 이슈 워크스페이스에서 Session을 생성하거나 재사용합니다"
       },
       "run_only": {
         "label": "실행만",

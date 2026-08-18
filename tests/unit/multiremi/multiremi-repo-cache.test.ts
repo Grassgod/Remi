@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { MultiremiRepoCache, multiremiRepoCacheLockPath } from "@multiremi/repo-cache.js";
 
 const tempDirs: string[] = [];
@@ -42,6 +42,21 @@ describe("Multiremi repo cache", () => {
 
     expect(result.branchName).toStartWith("agent/codex/");
     expect(readFileSync(join(result.path, "README.md"), "utf8")).toContain("main content");
+  });
+
+  it("does not place repositories in reserved Issue workspace directories", () => {
+    const sourceParent = tempDir("multiremi-reserved-source-");
+    const source = join(sourceParent, "wiki");
+    initializeRepo(source, "main", "wiki repository");
+    const cacheRoot = tempDir("multiremi-reserved-cache-");
+    const workDir = tempDir("multiremi-reserved-work-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    cache.sync("local", [{ url: source }]);
+
+    const result = cache.createWorktree({ workspaceId: "local", repoUrl: source, workDir });
+
+    expect(basename(result.path)).toMatch(/^wiki-repo-[a-f0-9]{8}$/);
+    expect(existsSync(join(workDir, "wiki"))).toBe(false);
   });
 
   it("reuseExisting keeps an existing worktree's branch and uncommitted work", () => {
@@ -343,13 +358,17 @@ describe("Multiremi repo cache", () => {
 
 function createRepo(branch: string, readme: string): string {
   const dir = tempDir("multiremi-source-repo-");
+  initializeRepo(dir, branch, readme);
+  return dir;
+}
+
+function initializeRepo(dir: string, branch: string, readme: string): void {
   execFileSync("git", ["init", "-b", branch, dir], { env: gitEnv(), stdio: "pipe" });
   git(dir, ["config", "user.email", "multiremi@example.test"]);
   git(dir, ["config", "user.name", "Multiremi Test"]);
   writeFileSync(join(dir, "README.md"), `${readme}\n`);
   git(dir, ["add", "README.md"]);
   git(dir, ["commit", "-m", "initial"]);
-  return dir;
 }
 
 function tempDir(prefix: string): string {

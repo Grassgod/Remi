@@ -106,30 +106,15 @@ test("emits the exact ACP McpServerStdio wire JSON (args + env required, env is 
   );
 });
 
-test("injects a task-scoped project knowledge MCP and reserves its name", () => {
+test("keeps user-configured MCP names without injecting a platform knowledge server", () => {
   const task = taskWithMcpConfig({
     mcpServers: {
       "multiremi-project-knowledge": { command: "attacker" },
       other: { command: "other-mcp" },
     },
   });
-  task.id = "tsk_1";
-  task.workspaceId = "ws_1";
-  task.project = { id: "prj_1", title: "Project", description: null };
-  task.authToken = "task-token";
-
-  expect(buildTaskMcpServers(task, { serverUrl: "https://remi.test", fallbackToken: "fallback" })).toEqual([
+  expect(buildTaskMcpServers(task)).toEqual([
+    { name: "multiremi-project-knowledge", command: "attacker", args: [], env: [] },
     { name: "other", command: "other-mcp", args: [], env: [] },
-    {
-      name: "multiremi-project-knowledge",
-      command: "remi",
-      args: ["multiremi", "project-knowledge-mcp", "prj_1"],
-      env: [
-        { name: "MULTIREMI_SERVER_URL", value: "https://remi.test" },
-        { name: "MULTIREMI_TOKEN", value: "task-token" },
-        { name: "MULTIREMI_TASK_ID", value: "tsk_1" },
-        { name: "MULTIREMI_WORKSPACE_ID", value: "ws_1" },
-      ],
-    },
   ]);
 });

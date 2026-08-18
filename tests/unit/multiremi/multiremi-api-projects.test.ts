@@ -561,7 +561,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       body: JSON.stringify({ kind: "api" }),
     });
     expect(invalidTriggerKind.status).toBe(400);
-    expect(await invalidTriggerKind.json()).toEqual({ error: "kind must be schedule or webhook" });
+    expect(await invalidTriggerKind.json()).toEqual({ error: "kind must be schedule, webhook, or system_event" });
 
     const webhookTimezone = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, {
       method: "POST",

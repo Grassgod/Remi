@@ -1015,6 +1015,7 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({
       name: "Local Claude",
       provider: "claude",
+      customEnv: { ANTHROPIC_API_KEY: "test-provider-key" },
     });
     const issue = store.createIssue({ title: "Use local directory", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Read the local project" });
@@ -1034,6 +1035,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
     let providerCwd = "";
     let providerPrompt = "";
+    let providerOptions: AcpProviderOptions | null = null;
     try {
       const daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
@@ -1046,15 +1048,18 @@ describe("Bun Multiremi daemon smoke", () => {
         daemonPort: 0,
         workspacesRoot: join(workDir, "workspaces"),
         repoCacheRoot: join(workDir, ".repo-cache"),
-        providerFactory: messageProviderFactory({
-          text: () => `cwd=${providerCwd}`,
-          sessionId: "sess-local-dir",
-          requestId: "req-local-dir",
-          onSend: (message, options) => {
-            providerCwd = options.cwd!;
-            providerPrompt = message;
-          },
-        }),
+        providerFactory: (options) => {
+          providerOptions = options;
+          return messageProviderFactory({
+            text: () => `cwd=${providerCwd}`,
+            sessionId: "sess-local-dir",
+            requestId: "req-local-dir",
+            onSend: (message, sendOptions) => {
+              providerCwd = sendOptions.cwd!;
+              providerPrompt = message;
+            },
+          })(options);
+        },
       });
 
       await daemon.start();
@@ -1064,6 +1069,20 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(providerCwd).toBe(issueWorkDir);
       expect(completed.status).toBe("completed");
       expect(completed.workDir).toBe(issueWorkDir);
+      const laneGeneration = completed.issueSessionGeneration ?? completed.issue_session_generation;
+      const expectedProviderHome = join(
+        issueWorkDir,
+        ".multiremi",
+        "sessions",
+        completed.issueSessionId!,
+        agent.id,
+        String(laneGeneration),
+        "home",
+      );
+      const capturedProviderOptions = providerOptions as AcpProviderOptions | null;
+      expect(capturedProviderOptions?.env?.CLAUDE_CONFIG_DIR).toBe(expectedProviderHome);
+      expect(capturedProviderOptions?.env?.ANTHROPIC_API_KEY).toBe("test-provider-key");
+      expect(existsSync(join(expectedProviderHome, ".multiremi-session-home.json"))).toBe(true);
       expect(providerPrompt).not.toContain(localDir);
       expect(existsSync(join(localDir, ".multiremi"))).toBe(false);
       expect(JSON.parse(readFileSync(join(issueWorkDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
@@ -1073,6 +1092,81 @@ describe("Bun Multiremi daemon smoke", () => {
         version: 2,
       });
       expect(JSON.parse(readFileSync(join(issueWorkDir, ".multiremi", "project", "resources.json"), "utf8")).resources).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("passes an Issue-scoped CODEX_HOME and in-memory key to the ACP provider", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-codex-home-");
+    const workspacesRoot = join(workDir, "workspaces");
+    const agent = store.createAgent({
+      name: "Issue Codex",
+      provider: "codex",
+      customEnv: { OPENAI_API_KEY: "test-openai-key" },
+    });
+    const issue = store.createIssue({ title: "Capture Codex home", workspaceId: "local" });
+    const task = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      workspaceId: "local",
+      prompt: "Capture the provider environment",
+    });
+    const daemonToken = await store.createAccessToken({
+      name: "Codex home daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-codex-home-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+
+    let providerOptions: AcpProviderOptions | null = null;
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeName: "codex-home-runtime",
+        provider: "codex",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot,
+        repoCacheRoot: join(workDir, ".repo-cache"),
+        providerFactory: (options) => {
+          providerOptions = options;
+          return messageProviderFactory({
+            text: "Codex home captured",
+            sessionId: "sess-codex-home",
+            requestId: "req-codex-home",
+          })(options);
+        },
+      });
+
+      await daemon.start();
+
+      const completed = store.getTask(task.id)!;
+      expect(completed.status).toBe("completed");
+      const expectedHome = join(
+        workspacesRoot,
+        issue.key,
+        ".multiremi",
+        "sessions",
+        completed.issueSessionId!,
+        agent.id,
+        String(completed.issueSessionGeneration ?? completed.issue_session_generation),
+        "home",
+      );
+      const captured = providerOptions as AcpProviderOptions | null;
+      expect(captured?.env?.CODEX_HOME).toBe(expectedHome);
+      expect(captured?.env?.OPENAI_API_KEY).toBe("test-openai-key");
+      expect(captured?.codexHome).toBe(expectedHome);
+      expect(existsSync(join(expectedHome, "auth.json"))).toBe(false);
+      expect(existsSync(join(expectedHome, ".multiremi-session-home.json"))).toBe(true);
     } finally {
       server.stop(true);
     }

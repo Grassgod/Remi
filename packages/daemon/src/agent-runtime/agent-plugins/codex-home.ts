@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import type { PreparedAgentPluginRuntime } from "./types.js";
@@ -33,6 +33,12 @@ export interface SeedCodexHomeFromBaseOptions {
   targetHome: string;
   /** Sanitized config produced by the daemon/relay. Omit to inherit the local execution allowlist. */
   configToml?: string;
+  /** Plugin execution requires native auth; plain session homes may use env credentials. */
+  requireAuth?: boolean;
+  /** Copy auth.json into the isolated home. Defaults to true for native Plugin installation. */
+  copyAuth?: boolean;
+  /** Link auth.json to the daemon's base home so OAuth refreshes do not fork. */
+  linkAuth?: boolean;
 }
 
 const CODEX_EXECUTION_CONFIG_KEYS = new Set([
@@ -68,6 +74,39 @@ export async function seedCodexHomeFromBase(options: SeedCodexHomeFromBaseOption
   }
   await mkdir(targetHome, { recursive: true, mode: 0o700 });
   const sourceAuth = join(baseHome, "auth.json");
+  let authInfo: Awaited<ReturnType<typeof lstat>> | null = null;
+  try {
+    authInfo = await lstat(sourceAuth);
+  } catch (error) {
+    if (!isNotFound(error) || options.requireAuth !== false) {
+      throw new AgentPluginError(
+        `Codex authentication is missing at ${sourceAuth}`,
+        "plugin_codex_auth_missing",
+        "setup_required",
+        { cause: error },
+      );
+    }
+  }
+  if (authInfo && (!authInfo.isFile() || authInfo.isSymbolicLink())) {
+    throw new AgentPluginError(
+      `Codex authentication must be a regular file: ${sourceAuth}`,
+      "plugin_codex_auth_invalid",
+      "setup_required",
+    );
+  }
+  if (authInfo && options.linkAuth) {
+    await linkCodexAuthFromBase(baseHome, targetHome);
+  } else if (authInfo && options.copyAuth !== false) {
+    await copyFile(sourceAuth, join(targetHome, "auth.json"));
+    await chmod(join(targetHome, "auth.json"), 0o600);
+  }
+  const configToml = options.configToml ?? await readCodexExecutionConfig(baseHome);
+  await writeFile(join(targetHome, "config.toml"), configToml, { mode: 0o600 });
+}
+
+/** Reconcile the OAuth auth link independently from one-time home seeding. */
+export async function linkCodexAuthFromBase(baseHome: string, targetHome: string): Promise<void> {
+  const sourceAuth = join(resolve(baseHome), "auth.json");
   let authInfo: Awaited<ReturnType<typeof lstat>>;
   try {
     authInfo = await lstat(sourceAuth);
@@ -79,17 +118,41 @@ export async function seedCodexHomeFromBase(options: SeedCodexHomeFromBaseOption
       { cause: error },
     );
   }
-  if (!authInfo.isFile() || authInfo.isSymbolicLink()) {
+  if (!authInfo.isFile() || authInfo.isSymbolicLink() || (authInfo.mode & 0o077) !== 0) {
     throw new AgentPluginError(
-      `Codex authentication must be a regular file: ${sourceAuth}`,
+      `Codex authentication must be a private regular file: ${sourceAuth}`,
       "plugin_codex_auth_invalid",
       "setup_required",
     );
   }
-  await copyFile(sourceAuth, join(targetHome, "auth.json"));
-  await chmod(join(targetHome, "auth.json"), 0o600);
-  const configToml = options.configToml ?? await readCodexExecutionConfig(baseHome);
-  await writeFile(join(targetHome, "config.toml"), configToml, { mode: 0o600 });
+  await mkdir(resolve(targetHome), { recursive: true, mode: 0o700 });
+  await ensureCredentialLink(sourceAuth, join(resolve(targetHome), "auth.json"));
+}
+
+async function ensureCredentialLink(source: string, target: string): Promise<void> {
+  try {
+    await symlink(source, target, "file");
+    return;
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+  }
+
+  const targetInfo = await lstat(target);
+  if (!targetInfo.isSymbolicLink()) {
+    throw new AgentPluginError(
+      `Codex authentication target is not a managed link: ${target}`,
+      "plugin_codex_auth_invalid",
+      "setup_required",
+    );
+  }
+  const existingTarget = resolve(dirname(target), await readlink(target));
+  if (existingTarget !== resolve(source)) {
+    throw new AgentPluginError(
+      `Codex authentication link points to an unexpected file: ${target}`,
+      "plugin_codex_auth_invalid",
+      "setup_required",
+    );
+  }
 }
 
 async function readCodexExecutionConfig(baseHome: string): Promise<string> {
@@ -398,4 +461,8 @@ function assertContained(parent: string, child: string): void {
 
 function isNotFound(error: unknown): boolean {
   return !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error && error.code === "EEXIST";
 }

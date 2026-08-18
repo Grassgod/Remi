@@ -70,6 +70,12 @@ vi.mock("../../common/task-transcript", async () => {
   };
 });
 
+vi.mock("../../common/human-request-dock", () => ({
+  HumanRequestDock: ({ taskId }: { taskId: string }) => (
+    <div data-testid={`human-request-${taskId}`}>Human request for {taskId}</div>
+  ),
+}));
+
 const mockApi = vi.hoisted(() => ({
   getActiveTasksForIssue: vi.fn(),
   listTaskMessages: vi.fn(),
@@ -126,10 +132,10 @@ function fireEvent(event: string, payload: unknown) {
   for (const h of handlers) h(payload);
 }
 
-function renderCard(issueId = "issue-1") {
+function renderCard(issueId = "issue-1", issueSessionId?: string) {
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <AgentLiveCard issueId={issueId} />
+      <AgentLiveCard issueId={issueId} issueSessionId={issueSessionId} />
     </I18nProvider>,
   );
 }
@@ -255,7 +261,9 @@ describe("AgentLiveCard queued rendering", () => {
     // No execution transcript while queued — no log to show yet.
     expect(screen.queryByTestId("transcript-button")).toBeNull();
     // Cancel button is still available so users can drop a queued task.
-    expect(screen.getByText("Stop")).toBeTruthy();
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop).toBeTruthy();
+    expect(stop.querySelector("span")).toHaveClass("hidden", "sm:inline");
   });
 
   it("Stop button opens a confirm dialog and only calls cancelTask after the user confirms", async () => {
@@ -367,5 +375,31 @@ describe("AgentLiveCard queued rendering", () => {
       rtlFireEvent.click(screen.getByRole("button", { name: "Stop task" }));
     });
     expect(mockApi.cancelTask).toHaveBeenCalledWith("issue-1", "task-a");
+  });
+});
+
+describe("AgentLiveCard human requests", () => {
+  it("mounts the shared request dock for an awaiting task", async () => {
+    mockApi.getActiveTasksForIssue.mockResolvedValueOnce({
+      tasks: [makeTask("task-question", { status: "awaiting_human" })],
+    });
+
+    renderCard();
+
+    expect(await screen.findByTestId("human-request-task-question")).toBeTruthy();
+  });
+
+  it("shows an Issue-level request even when another Session is selected", async () => {
+    mockApi.getActiveTasksForIssue.mockResolvedValueOnce({
+      tasks: [makeTask("task-other-session", {
+        status: "awaiting_human",
+        issue_session_id: "session-other",
+      })],
+    });
+
+    renderCard("issue-1", "session-current");
+
+    expect(await screen.findByTestId("human-request-task-other-session")).toBeTruthy();
+    expect(screen.queryByText(/is waiting for your response/)).toBeNull();
   });
 });

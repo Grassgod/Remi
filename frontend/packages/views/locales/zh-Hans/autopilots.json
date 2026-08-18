@@ -23,7 +23,15 @@
   },
   "execution_mode": {
     "create_issue": "创建 issue",
+    "trigger_issue": "在触发 Issue 中运行",
     "run_only": "仅运行"
+  },
+  "session_policy": {
+    "new": "每次新建 Session",
+    "reuse_latest": "复用最近的 Session"
+  },
+  "workspace_policy": {
+    "reuse_issue": "复用触发 Issue 的工作区"
   },
   "relative_date": {
     "today": "今天",
@@ -72,6 +80,8 @@
     "section_danger": "危险操作",
     "field_agent": "智能体",
     "field_output_mode": "输出模式",
+    "field_session_policy": "Session 策略",
+    "field_workspace_policy": "Workspace 策略",
     "field_project": "关联项目",
     "no_project": "不关联项目",
     "project_unavailable": "项目不可用",
@@ -102,10 +112,12 @@
     "schedule": "时间表",
     "manual": "手动",
     "webhook": "Webhook",
+    "system_event": "系统事件",
     "api": "API"
   },
   "run": {
     "issue_linked": "已关联 issue",
+    "session_linked": "已关联 Issue Session",
     "view_log": "查看执行日志",
     "skipped_group": {
       "label": "已跳过",
@@ -125,6 +137,7 @@
   },
   "trigger_kind": {
     "schedule": "时间表",
+    "system_event": "系统事件",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -132,6 +145,7 @@
     "disabled_badge": "已禁用",
     "deprecated_badge": "已弃用",
     "next_label": "下次：{{date}}",
+    "system_event_summary": "Issue 状态变为{{status}} · {{project}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "复制 URL",
     "url_copied": "已复制 Webhook URL",
@@ -203,6 +217,7 @@
     "title": "添加触发器",
     "type_label": "类型",
     "type_schedule": "时间表",
+    "type_system_event": "系统事件",
     "type_webhook": "Webhook",
     "label_field": "标签（可选）",
     "label_placeholder": "例如：工作日早晨",
@@ -210,6 +225,7 @@
     "submit": "添加触发器",
     "submitting": "添加中...",
     "toast_added_schedule": "已添加时间表触发器",
+    "toast_added_system_event": "已添加系统事件触发器",
     "toast_added_webhook": "已添加 Webhook 触发器",
     "toast_add_failed": "添加触发器失败"
   },
@@ -247,10 +263,14 @@
     "section_project": "关联项目",
     "no_project": "不关联项目",
     "section_output_mode": "输出模式",
+    "output_mode_incompatible": "当前触发方式不支持此输出模式",
+    "output_mode_compatibility_hint": "可选输出模式由当前触发方式决定。",
     "section_schedule": "时间表",
     "section_trigger_kind": "触发方式",
     "trigger_kind_schedule": "时间表",
+    "trigger_kind_system_event": "系统事件",
     "trigger_kind_webhook": "Webhook",
+    "section_system_event": "系统事件",
     "section_webhook": "Webhook",
     "webhook_help_create": "Autopilot 创建后 Multiremi 会生成一个 Webhook URL。向它 POST 任意 JSON 即可触发。",
     "webhook_help_edit": "该 Autopilot 由 Webhook 触发。请在详情页复制或重新生成 URL。",
@@ -265,10 +285,44 @@
     "event_filter_hint": "只处理匹配这些事件的 webhook。留空则接受所有事件。",
     "schedule_disabled_reason": "该自动化有多个时间表——请到详情页编辑。",
     "next_run_label": "下次运行：",
+    "trigger_issue_context": {
+      "title": "运行上下文",
+      "session_label": "Session",
+      "session_new": "每次新建 Session",
+      "session_reuse_latest": "复用最近的 Session",
+      "workspace_label": "Workspace",
+      "workspace_reuse_issue": "复用触发 Issue 的工作区",
+      "hint": "智能体在触发事件的 Issue 中运行，并直接使用该 Issue 已准备好的代码工作区。"
+    },
+    "system_event": {
+      "resource_label": "对象",
+      "resource_issue": "Issue",
+      "event_label": "事件",
+      "event_status_changed": "状态变更",
+      "condition_label": "条件",
+      "field_status": "状态",
+      "operator_becomes": "变为",
+      "project_scope_label": "项目范围",
+      "all_projects": "所有项目",
+      "hint": "只有同时满足事件、条件和项目范围的 Issue 才会触发本自动化。",
+      "statuses": {
+        "backlog": "待规划",
+        "todo": "待办",
+        "in_progress": "进行中",
+        "in_review": "评审中",
+        "done": "已完成",
+        "blocked": "已阻塞",
+        "cancelled": "已取消"
+      }
+    },
     "output_modes": {
       "create_issue": {
         "label": "创建 issue",
         "description": "每次运行都创建一个可追踪的 issue"
+      },
+      "trigger_issue": {
+        "label": "在触发 Issue 中运行",
+        "description": "在原 Issue 工作区中新建或复用 Session"
       },
       "run_only": {
         "label": "仅运行",

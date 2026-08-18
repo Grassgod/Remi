@@ -123,6 +123,9 @@
     "permission_title": "許可が必要です",
     "question_title": "エージェントからの質問",
     "answer_placeholder": "回答を入力…",
-    "submit": "送信"
+    "submit": "送信",
+    "load_failed": "リクエストを読み込めませんでした。",
+    "response_failed": "送信に失敗しました。もう一度お試しください。",
+    "retry": "再試行"
   }
 }

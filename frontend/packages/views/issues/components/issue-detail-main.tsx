@@ -8,6 +8,7 @@ import { IssueDescriptionSection } from "./issue-description-section";
 import { IssueDetailHeader } from "./issue-detail-header";
 import { IssueSessionList } from "./issue-session-list";
 import { IssueSubIssuesSection } from "./issue-sub-issues-section";
+import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 
 interface IssueDetailMainProps {
   issue: Issue;
@@ -19,6 +20,7 @@ interface IssueDetailMainProps {
   onDeletedNavigateTo?: string;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  isMobile: boolean;
   sessionSidebarOpen: boolean;
   onToggleSessionSidebar: () => void;
   sessions: IssueSessionSelection;
@@ -53,6 +55,7 @@ export function IssueDetailMain({
   onDeletedNavigateTo,
   sidebarOpen,
   onToggleSidebar,
+  isMobile,
   sessionSidebarOpen,
   onToggleSessionSidebar,
   sessions,
@@ -65,6 +68,22 @@ export function IssueDetailMain({
   onScrollContainerRef,
   scrollContainerEl,
 }: IssueDetailMainProps) {
+  const handleSelectSession = (sessionId: string) => {
+    sessions.select(sessionId);
+    if (isMobile && sessionSidebarOpen) onToggleSessionSidebar();
+  };
+
+  const sessionList = (
+    <IssueSessionList
+      issueId={issueId}
+      sessions={sessions.list}
+      selectedSessionId={sessions.activeId}
+      agents={agents}
+      onSelectSession={handleSelectSession}
+      className={isMobile ? "h-full w-full border-r-0 pb-8 pt-14 lg:w-full" : undefined}
+    />
+  );
+
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
       <IssueDetailHeader
@@ -83,21 +102,25 @@ export function IssueDetailMain({
       />
 
       <div className="flex min-h-0 flex-1">
-        {sessionSidebarOpen && (
-          <IssueSessionList
-            issueId={issueId}
-            sessions={sessions.list}
-            selectedSessionId={sessions.activeId}
-            agents={agents}
-            onSelectSession={sessions.select}
-          />
+        {!isMobile && sessionSidebarOpen && sessionList}
+        {isMobile && (
+          <Sheet
+            open={sessionSidebarOpen}
+            onOpenChange={(open) => {
+              if (open !== sessionSidebarOpen) onToggleSessionSidebar();
+            }}
+          >
+            <SheetContent side="left" className="w-64 gap-0 p-0 sm:max-w-xs">
+              {sessionList}
+            </SheetContent>
+          </Sheet>
         )}
         <div
           ref={onScrollContainerRef}
           data-tab-scroll-root
           className="relative min-w-0 flex-1 overflow-y-auto"
         >
-          <div className="mx-auto w-full max-w-4xl px-8 py-8">
+          <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-8 sm:py-8">
             <IssueDescriptionSection
               issue={issue}
               issueId={issueId}

@@ -59,16 +59,12 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
       agentId: agent.id,
       issueId: retryIssue.id,
       prompt: "retry issue",
-      sessionId: "sess-issue",
-      workDir: "/tmp/issue",
     });
     const chat = store.createChatSession({ agentId: agent.id, title: "Retry chat" });
     const chatTask = store.createTask({
       agentId: agent.id,
       chatSessionId: chat.id,
       prompt: "retry chat",
-      sessionId: "sess-chat",
-      workDir: "/tmp/chat",
     });
     const autopilot = store.createAutopilot({
       title: "No double retry",
@@ -96,6 +92,12 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
       expect(pendingClaims.delete(claimed!.id)).toBeTrue();
     }
     expect(pendingClaims.size).toBe(0);
+
+    // Provider sessions are runtime-owned state. The daemon reports them only
+    // after a successful claim; pre-claim task input is not an established
+    // Issue Session lane and is deliberately discarded at claim time.
+    store.pinTaskSession(retryTask.id, "sess-issue", "/tmp/issue");
+    store.pinTaskSession(chatTask.id, "sess-chat", "/tmp/chat");
 
     expect(store.recoverOrphans(runtime.id)).toEqual({ orphaned: 5, retried: 2 });
 

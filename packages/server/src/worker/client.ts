@@ -479,6 +479,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     runtimeId: stringOrNull(raw.runtime_id ?? raw.runtimeId),
     issueId: stringOrNull(raw.issue_id ?? raw.issueId),
     issueSessionId: stringOrNull(raw.issue_session_id ?? raw.issueSessionId),
+    issueSessionGeneration: numberOrNull(raw.issue_session_generation ?? raw.issueSessionGeneration),
     chatSessionId: stringOrNull(raw.chat_session_id ?? raw.chatSessionId),
     autopilotRunId: stringOrNull(raw.autopilot_run_id ?? raw.autopilotRunId),
     triggerCommentId: stringOrNull(raw.trigger_comment_id ?? raw.triggerCommentId),
@@ -544,6 +545,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     project: normalizeDaemonClaimProject(raw.project),
     projectResources: normalizeDaemonClaimProjectResources(raw.project_resources ?? raw.projectResources),
     projectDocs: normalizeDaemonClaimProjectDocs(raw.project_docs ?? raw.projectDocs),
+    projectWikiDocs: normalizeDaemonClaimProjectWikiDocs(raw.project_wiki_docs ?? raw.projectWikiDocs),
     projectContexts: normalizeDaemonClaimProjectContexts(raw.project_contexts ?? raw.projectContexts),
     squadContext: normalizeDaemonClaimSquadContext(raw.squad_context ?? raw.squadContext),
     repos: Array.isArray(raw.repos) ? raw.repos : [],
@@ -652,6 +654,42 @@ function normalizeDaemonClaimProjectDocs(raw: any): MultiremiTaskWithAgent["proj
     wiki: normalizeDaemonClaimProjectDocEntries(raw.wiki),
     schema: stringOrNull(raw.schema),
   };
+}
+
+function normalizeDaemonClaimProjectWikiDocs(raw: any): NonNullable<MultiremiTaskWithAgent["projectWikiDocs"]> {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((doc: any) => {
+    if (!doc || typeof doc !== "object" || doc.kind !== "wiki") return [];
+    const id = stringOrNull(doc.id);
+    const projectId = stringOrNull(doc.project_id ?? doc.projectId);
+    const workspaceId = stringOrNull(doc.workspace_id ?? doc.workspaceId);
+    const slug = stringOrNull(doc.slug);
+    const title = stringOrNull(doc.title);
+    if (!id || !projectId || !workspaceId || !slug || !title) return [];
+    return [{
+      ...doc,
+      id,
+      projectId,
+      workspaceId,
+      kind: "wiki" as const,
+      slug,
+      title,
+      summary: stringOrNull(doc.summary),
+      body: typeof doc.body === "string" ? doc.body : "",
+      tags: Array.isArray(doc.tags) ? doc.tags.filter((value: unknown): value is string => typeof value === "string") : [],
+      pinned: doc.pinned === true || Number(doc.pinned) === 1,
+      refs: Array.isArray(doc.refs) ? doc.refs : [],
+      sourceTaskId: stringOrNull(doc.source_task_id ?? doc.sourceTaskId),
+      sourceIssueId: stringOrNull(doc.source_issue_id ?? doc.sourceIssueId),
+      authorType: stringOrNull(doc.author_type ?? doc.authorType) as "member" | "agent" | null,
+      authorId: stringOrNull(doc.author_id ?? doc.authorId),
+      updatedByType: stringOrNull(doc.updated_by_type ?? doc.updatedByType) as "member" | "agent" | null,
+      updatedById: stringOrNull(doc.updated_by_id ?? doc.updatedById),
+      version: numberOrDefault(doc.version, 1),
+      createdAt: stringOrNull(doc.created_at ?? doc.createdAt) ?? "",
+      updatedAt: stringOrNull(doc.updated_at ?? doc.updatedAt) ?? "",
+    }];
+  });
 }
 
 function normalizeDaemonClaimProjectDocEntries(raw: any): MultiremiProjectDocIndexEntry[] {

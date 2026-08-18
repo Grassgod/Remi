@@ -14,6 +14,7 @@ import {
   citationRefsOption,
   readOptionalTextBody,
 } from "./fields.js";
+import { wikiDiff, wikiPull, wikiPush, wikiStatus } from "./wiki-working-copy.js";
 
 type KnowledgeKind = "memory" | "wiki";
 
@@ -54,6 +55,22 @@ export async function memory(positional: string[], options: CliOptions): Promise
 
 export async function wiki(positional: string[], options: CliOptions): Promise<void> {
   const action = positional[0] ?? "";
+  if (action === "pull") {
+    await wikiPull(options, requireProject("wiki", "pull", options));
+    return;
+  }
+  if (action === "status") {
+    await wikiStatus(options, requireProject("wiki", "status", options));
+    return;
+  }
+  if (action === "diff") {
+    await wikiDiff(options, requireProject("wiki", "diff", options));
+    return;
+  }
+  if (action === "push") {
+    await wikiPush(options, requireProject("wiki", "push", options));
+    return;
+  }
   if (action === "list") {
     await listKnowledge("wiki", options);
     return;
@@ -88,7 +105,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await backlinks("wiki", positional[1], options);
     return;
   }
-  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks ...");
+  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|push ...");
 }
 
 async function listKnowledge(kind: KnowledgeKind, options: CliOptions): Promise<void> {
@@ -241,7 +258,9 @@ function workspaceKnowledgeParams(kind: KnowledgeKind, options: CliOptions): URL
 }
 
 function projectOption(options: CliOptions): string | null {
-  return rawStringOption(options, "project")?.trim() || null;
+  return rawStringOption(options, "project")?.trim()
+    || process.env.MULTIREMI_PROJECT_ID?.trim()
+    || null;
 }
 
 function requireProject(kind: KnowledgeKind, action: string, options: CliOptions): string {

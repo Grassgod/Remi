@@ -41,6 +41,14 @@ import {
   writeAgentSkillContext,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
+import {
+  loadIssueSessionProviderEnv,
+  prepareIssueSessionProviderHome,
+  resolveIssueSessionProviderHome,
+  resolveIssueRuntimeStateRoot,
+  type IssueSessionProviderHome,
+} from "@daemon/agent-runtime/workspace/session-home.js";
+import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
 import { mergeCodexConfig, syncRelayConfigs } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
@@ -123,6 +131,30 @@ function readResponseAnswers(response: Record<string, unknown> | null): Record<s
     if (typeof value === "string" && value.trim()) answers[key] = value;
   }
   return Object.keys(answers).length ? answers : null;
+}
+
+function providerBootstrapEnv(
+  task: MultiremiTaskWithAgent,
+  resolved: Record<string, string> | undefined,
+): Record<string, string> {
+  const keys = task.agent?.provider === "claude"
+    ? ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
+    : task.agent?.provider === "codex"
+      ? ["OPENAI_API_KEY"]
+      : [];
+  const result: Record<string, string> = {};
+  for (const source of [
+    process.env,
+    task.workspaceEnv ?? task.workspace_env,
+    task.agent?.customEnv,
+    resolved,
+  ]) {
+    for (const key of keys) {
+      const value = source?.[key];
+      if (typeof value === "string" && value.trim()) result[key] = value;
+    }
+  }
+  return result;
 }
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
@@ -1037,21 +1069,55 @@ export class MultiremiDaemon {
     let resolvedWorkDir: ResolvedTaskWorkDir | null = null;
     let pluginRuntimeBase: string | null = null;
     let pluginRuntime: PreparedAgentPluginRuntime | undefined;
+    let providerHome: IssueSessionProviderHome | null = null;
+    let providerEnv: Record<string, string> | undefined;
+    let providerInstallEnv: Record<string, string> | undefined;
 
     try {
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
+      const issueRuntimeStateRoot = resolveIssueRuntimeStateRoot(
+        task,
+        resolvedWorkDir.workDir,
+        this.options.workspacesRoot,
+        resolvedWorkDir.localDirectory,
+      );
+      providerHome = resolveIssueSessionProviderHome(task, issueRuntimeStateRoot, this.options.workspacesRoot);
+      const relay = task.agent?.provider === "claude"
+        ? this.workspaceRelays.get(task.workspaceId)?.claude
+        : task.agent?.provider === "codex"
+          ? this.workspaceRelays.get(task.workspaceId)?.codex
+          : null;
+      if (providerHome) {
+        providerEnv = await loadIssueSessionProviderEnv(providerHome, {
+          relayFragment: relay?.fragment,
+          relayAuthToken: relay?.auth_token,
+        });
+        providerInstallEnv = providerBootstrapEnv(task, providerEnv);
+      }
       if (resolveTaskPluginSnapshot(task).length) {
-        pluginRuntimeBase = resolveTaskPluginRuntimeBase(task, resolvedWorkDir.workDir, this.options.workspacesRoot);
+        pluginRuntimeBase = resolveTaskPluginRuntimeBase(task, issueRuntimeStateRoot, this.options.workspacesRoot);
         pluginRuntime = await this.prepareTaskPluginRuntime(
           task,
           resolvedWorkDir.workDir,
           pluginRuntimeBase,
           abort.signal,
+          providerHome,
+          providerInstallEnv,
         );
+      }
+      if (providerHome) {
+        await prepareIssueSessionProviderHome(providerHome, {
+          codexPluginInstalled: task.agent?.provider === "codex" && Boolean(pluginRuntime?.codexHome),
+          linkCodexAuth: !providerInstallEnv?.OPENAI_API_KEY,
+          linkClaudeCredentials: !providerInstallEnv?.ANTHROPIC_AUTH_TOKEN && !providerInstallEnv?.ANTHROPIC_API_KEY,
+          ...(task.agent?.provider === "codex" && relay?.fragment?.trim()
+            ? { codexConfigToml: mergeCodexConfig("", relay.fragment) }
+            : {}),
+        });
       }
       await this.client.startTask(task.id);
       await this.client.reportProgress(task.id, "Agent execution started", 1, 3);
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime);
+      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv);
       const poisonedReason = classifyPoisonedOutput(summary.output);
       if (poisonedReason) {
         await this.client.reportTaskUsage(task.id, summary.usage);
@@ -1092,10 +1158,13 @@ export class MultiremiDaemon {
     workDir: string,
     runtimeBase: string,
     signal: AbortSignal,
+    providerHome: IssueSessionProviderHome | null,
+    providerEnv?: Record<string, string>,
   ): Promise<PreparedAgentPluginRuntime> {
     const prepared = await materializeTaskPlugins(task, workDir, this.agentPluginCache, {
       runtimeBase,
       signal,
+      codexHome: task.agent?.provider === "codex" ? providerHome?.home : undefined,
     });
     if (!task.issueId) writeTaskGcContext(runtimeBase, task);
     if (task.agent?.provider === "codex" && prepared.codexHome) {
@@ -1107,8 +1176,12 @@ export class MultiremiDaemon {
         seedHome: (targetHome) => seedCodexHomeFromBase({
           baseHome,
           targetHome,
+          requireAuth: !providerEnv?.OPENAI_API_KEY,
+          copyAuth: false,
+          linkAuth: !providerEnv?.OPENAI_API_KEY,
           ...(configToml === undefined ? {} : { configToml }),
         }),
+        env: providerEnv,
       });
     }
     return prepared;
@@ -1215,7 +1288,11 @@ export class MultiremiDaemon {
     resolvedWorkDir: ResolvedTaskWorkDir,
   ): Promise<PreparedIssueWorkspace> {
     if (task.issue?.issueKind !== "intake") {
-      return this.autoCheckoutTaskRepos(task, resolvedWorkDir);
+      const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir);
+      if (!resolvedWorkDir.localDirectory) {
+        await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task);
+      }
+      return prepared;
     }
     if (!task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
       throw new Error("Intake tasks require a daemon-owned issue workspace");
@@ -1327,44 +1404,43 @@ export class MultiremiDaemon {
           allow ? { outcome: "selected", optionId: allow.optionId } : { outcome: "cancelled" },
         );
       });
-      // Elicitation stays unhandled in auto mode: the provider cancels it and
-      // the agent picks its own answer, matching pre-approval-routing behavior.
-      return;
+    } else {
+      provider.setPermissionHandler?.(async (params) => {
+        try {
+          const toolTitle = params.toolCall?.title ?? "tool call";
+          const request = await this.client.createTaskHumanRequest(task.id, {
+            kind: "permission",
+            payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
+          });
+          await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
+            request_id: request.id,
+            options: params.options,
+            tool_call: params.toolCall ?? null,
+          });
+          const settled = await this.awaitHumanDecision(task.id, request.id, signal);
+          const optionId = settled?.status === "responded" ? readResponseOptionId(settled.response) : null;
+          const chosen = optionId ? params.options.find((o) => o.optionId === optionId) ?? null : null;
+          await this.reportHumanRequestMessage(
+            task.id,
+            nextSeq(),
+            "permission_response",
+            chosen
+              ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
+              : `Permission request ${settled?.status ?? "cancelled"}`,
+            { request_id: request.id, option_id: optionId, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
+          );
+          if (optionId) return { outcome: "selected", optionId };
+          return { outcome: "cancelled" };
+        } catch (err) {
+          // Conservative deny when the routing infrastructure itself fails.
+          log.warn(`Permission routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+          return { outcome: "cancelled" };
+        }
+      });
     }
 
-    provider.setPermissionHandler?.(async (params) => {
-      try {
-        const toolTitle = params.toolCall?.title ?? "tool call";
-        const request = await this.client.createTaskHumanRequest(task.id, {
-          kind: "permission",
-          payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
-        });
-        await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
-          request_id: request.id,
-          options: params.options,
-          tool_call: params.toolCall ?? null,
-        });
-        const settled = await this.awaitHumanDecision(task.id, request.id, signal);
-        const optionId = settled?.status === "responded" ? readResponseOptionId(settled.response) : null;
-        const chosen = optionId ? params.options.find((o) => o.optionId === optionId) ?? null : null;
-        await this.reportHumanRequestMessage(
-          task.id,
-          nextSeq(),
-          "permission_response",
-          chosen
-            ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
-            : `Permission request ${settled?.status ?? "cancelled"}`,
-          { request_id: request.id, option_id: optionId, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
-        );
-        if (optionId) return { outcome: "selected", optionId };
-        return { outcome: "cancelled" };
-      } catch (err) {
-        // Conservative deny when the routing infrastructure itself fails.
-        log.warn(`Permission routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-        return { outcome: "cancelled" };
-      }
-    });
-
+    // AskUserQuestion is a collaboration primitive, not a tool permission.
+    // Always surface it, including when destructive-tool approvals are automatic.
     provider.setElicitationHandler?.(async (params) => {
       try {
         const questions = elicitationToQuestions(params);
@@ -1432,6 +1508,8 @@ export class MultiremiDaemon {
     signal: AbortSignal,
     resolvedWorkDir: ResolvedTaskWorkDir,
     pluginRuntime?: PreparedAgentPluginRuntime,
+    providerHome?: IssueSessionProviderHome | null,
+    providerEnv?: Record<string, string>,
   ): Promise<RunSummary> {
     const agent = task.agent;
     if (!agent) throw new Error(`Task ${task.id} has no agent`);
@@ -1472,6 +1550,8 @@ export class MultiremiDaemon {
       signal,
       approvalMode: this.options.approvalMode,
       pluginRuntime,
+      providerHome: providerHome ?? undefined,
+      providerEnv,
     };
     const config = runtime.assemble(ctx);
 

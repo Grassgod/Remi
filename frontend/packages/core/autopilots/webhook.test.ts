@@ -14,6 +14,7 @@ const baseTrigger: AutopilotTrigger = {
   webhook_path: "/api/webhooks/autopilots/awt_abc",
   webhook_url: null,
   label: null,
+  event_config: null,
   last_fired_at: null,
   created_at: "",
   updated_at: "",

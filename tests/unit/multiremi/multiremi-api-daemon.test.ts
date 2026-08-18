@@ -1099,11 +1099,12 @@ describe("Multiremi API — daemon endpoints", () => {
     const runtime = store.registerRuntime({ name: "local", provider: "claude", maxConcurrency: 3 });
     const runningIssue = store.createIssue({ title: "Retry running", assigneeType: "agent", assigneeId: runningAgent.id });
     const waitingIssue = store.createIssue({ title: "Retry waiting", assigneeType: "agent", assigneeId: waitingAgent.id });
-    const running = store.createTask({ agentId: runningAgent.id, issueId: runningIssue.id, prompt: "running", sessionId: "sess-running", workDir: "/tmp/running" });
+    const running = store.createTask({ agentId: runningAgent.id, issueId: runningIssue.id, prompt: "running" });
     const waiting = store.createTask({ agentId: waitingAgent.id, issueId: waitingIssue.id, prompt: "waiting" });
     const app = createMultiremiApp({ store });
 
     expect(store.claimTask(runtime.id)?.id).toBe(running.id);
+    store.pinTaskSession(running.id, "sess-running", "/tmp/running");
     store.startTask(running.id);
     expect(store.claimTask(runtime.id)?.id).toBe(waiting.id);
     store.markTaskWaitingLocalDirectory(waiting.id, "/tmp/project");
@@ -1321,6 +1322,25 @@ describe("Multiremi API — daemon endpoints", () => {
     });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const daemonHeaders = { Authorization: `Bearer ${daemonToken.token}` };
+
+    const completedIssueWithQueuedTask = store.createIssue({ title: "GC hold", workspaceId: "local" });
+    const queuedIssueTask = store.createTask({
+      agentId: agent.id,
+      issueId: completedIssueWithQueuedTask.id,
+      prompt: "Maintain Wiki before GC",
+    });
+    store.updateIssue(completedIssueWithQueuedTask.id, { status: "done" });
+    const heldGc = await app.request(
+      `/api/daemon/issues/${completedIssueWithQueuedTask.id}/gc-check`,
+      { headers: daemonHeaders },
+    );
+    expect((await heldGc.json()).status).toBe("active");
+    store.cancelTask(queuedIssueTask.id);
+    const releasedGc = await app.request(
+      `/api/daemon/issues/${completedIssueWithQueuedTask.id}/gc-check`,
+      { headers: daemonHeaders },
+    );
+    expect((await releasedGc.json()).status).toBe("done");
 
     const issueGc = await app.request(`/api/daemon/issues/${issue.id}/gc-check`, { headers: daemonHeaders });
     expect(await issueGc.json()).toEqual({ status: "todo", updated_at: issue.updatedAt });

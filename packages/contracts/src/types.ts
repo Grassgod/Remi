@@ -966,6 +966,10 @@ export interface MultiremiTask {
   issueId: string | null;
   issueSessionId: string | null;
   issue_session_id?: string | null;
+  /** Generation of this task's per-agent Issue Session lane, frozen at claim
+   * time and persisted so late completions cannot promote into a newer lane. */
+  issueSessionGeneration?: number | null;
+  issue_session_generation?: number | null;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   triggerCommentId: string | null;
@@ -1025,6 +1029,11 @@ export interface MultiremiTask {
   parentTaskId: string | null;
   assignmentEventId: string | null;
   assignment_event_id?: string | null;
+  /** System event that caused the automation-owned task to be assigned. This
+   * lineage is propagated to Issue status outbox events so task lifecycle
+   * write-backs cannot recursively trigger another automation run. */
+  assignmentSourceEventId: string | null;
+  assignment_source_event_id?: string | null;
   projectionFromSeq: number | null;
   projection_from_seq?: number | null;
   projectionToSeq: number | null;
@@ -1068,6 +1077,8 @@ export interface MultiremiTaskWithAgent extends MultiremiTask {
   project: MultiremiProject | null;
   projectResources: MultiremiProjectResource[];
   projectDocs: MultiremiProjectDocsIndex | null;
+  /** Full Wiki bodies used only to materialize the Issue workspace working copy. */
+  projectWikiDocs?: MultiremiProjectDoc[];
   projectContexts: MultiremiTaskProjectContext[];
   repos: MultiremiRepoData[];
 }
@@ -1124,6 +1135,9 @@ export interface CreateTaskInput {
   issueId?: string | null;
   issueSessionId?: string | null;
   issue_session_id?: string | null;
+  /** Server-internal lane generation. Public task creation strips this field. */
+  issueSessionGeneration?: number | null;
+  issue_session_generation?: number | null;
   chatSessionId?: string | null;
   triggerCommentId?: string | null;
   trigger_comment_id?: string | null;
@@ -2207,15 +2221,54 @@ export interface RemoveSquadMemberInput {
 
 export type MultiremiAutopilotStatus = "active" | "paused" | "archived";
 
-export type MultiremiAutopilotExecutionMode = "create_issue" | "run_only";
+export type MultiremiAutopilotExecutionMode = "create_issue" | "run_only" | "trigger_issue";
+
+export type MultiremiAutopilotSessionPolicy = "new" | "reuse_latest";
+
+export type MultiremiAutopilotWorkspacePolicy = "reuse_issue";
 
 export type MultiremiAutopilotAssigneeType = "agent" | "squad";
 
-export type MultiremiAutopilotTriggerKind = "schedule" | "webhook" | "api";
+export type MultiremiAutopilotTriggerKind = "schedule" | "webhook" | "api" | "system_event";
 
 export type MultiremiAutopilotRunStatus = "issue_created" | "running" | "completed" | "failed" | "skipped";
 
-export type MultiremiAutopilotRunSource = "manual" | "schedule" | "webhook" | "api";
+export type MultiremiAutopilotRunSource = "manual" | "schedule" | "webhook" | "api" | "system_event";
+
+export type MultiremiIssueStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done" | "blocked" | "cancelled";
+
+export interface MultiremiSystemEventCondition {
+  field: "status";
+  operator: "becomes";
+  value: MultiremiIssueStatus;
+}
+
+export interface MultiremiAutopilotSystemEventConfig {
+  resource: "issue";
+  event: "status_changed";
+  conditions: MultiremiSystemEventCondition[];
+  projectId?: string | null;
+  project_id?: string | null;
+}
+
+export type MultiremiSystemEventStatus = "pending" | "processing" | "processed" | "failed";
+
+export interface MultiremiSystemEvent {
+  id: string;
+  workspaceId: string;
+  resource: "issue";
+  event: "status_changed";
+  resourceId: string;
+  projectId: string | null;
+  payload: Record<string, unknown>;
+  status: MultiremiSystemEventStatus;
+  attemptCount: number;
+  availableAt: string;
+  leaseUntil: string | null;
+  lastError: string | null;
+  createdAt: string;
+  processedAt: string | null;
+}
 
 export interface MultiremiAutopilot {
   id: string;
@@ -2232,6 +2285,10 @@ export interface MultiremiAutopilot {
   status: MultiremiAutopilotStatus;
   executionMode: MultiremiAutopilotExecutionMode;
   execution_mode?: MultiremiAutopilotExecutionMode;
+  sessionPolicy: MultiremiAutopilotSessionPolicy;
+  session_policy?: MultiremiAutopilotSessionPolicy;
+  workspacePolicy: MultiremiAutopilotWorkspacePolicy;
+  workspace_policy?: MultiremiAutopilotWorkspacePolicy;
   issueTitleTemplate: string | null;
   issue_title_template?: string | null;
   triggerKind: string;
@@ -2266,6 +2323,8 @@ export interface MultiremiAutopilotTrigger {
   provider: MultiremiWebhookProvider | null;
   label: string | null;
   eventFilters: MultiremiWebhookEventFilter[] | null;
+  eventConfig: MultiremiAutopilotSystemEventConfig | null;
+  event_config?: MultiremiAutopilotSystemEventConfig | null;
   signingSecretSet: boolean;
   signingSecretHint: string | null;
   lastFiredAt: string | null;
@@ -2280,6 +2339,9 @@ export interface MultiremiAutopilotRun {
   status: MultiremiAutopilotRunStatus;
   issueId: string | null;
   taskId: string | null;
+  triggerId: string | null;
+  eventId: string | null;
+  issueSessionId: string | null;
   triggeredAt: string;
   completedAt: string | null;
   failureReason: string | null;
@@ -2303,6 +2365,10 @@ export interface CreateAutopilotInput {
   status?: MultiremiAutopilotStatus;
   executionMode?: MultiremiAutopilotExecutionMode;
   execution_mode?: MultiremiAutopilotExecutionMode;
+  sessionPolicy?: MultiremiAutopilotSessionPolicy;
+  session_policy?: MultiremiAutopilotSessionPolicy;
+  workspacePolicy?: MultiremiAutopilotWorkspacePolicy;
+  workspace_policy?: MultiremiAutopilotWorkspacePolicy;
   issueTitleTemplate?: string | null;
   issue_title_template?: string | null;
   triggerKind?: string;
@@ -2327,6 +2393,8 @@ export interface CreateAutopilotTriggerInput {
   enabled?: boolean;
   eventFilters?: MultiremiWebhookEventFilter[] | null;
   event_filters?: MultiremiWebhookEventFilter[] | null;
+  eventConfig?: MultiremiAutopilotSystemEventConfig | null;
+  event_config?: MultiremiAutopilotSystemEventConfig | null;
 }
 
 export interface UpdateAutopilotTriggerInput {
@@ -2337,6 +2405,8 @@ export interface UpdateAutopilotTriggerInput {
   label?: string | null;
   eventFilters?: MultiremiWebhookEventFilter[] | null;
   event_filters?: MultiremiWebhookEventFilter[] | null;
+  eventConfig?: MultiremiAutopilotSystemEventConfig | null;
+  event_config?: MultiremiAutopilotSystemEventConfig | null;
 }
 
 export interface UpdateAutopilotInput {
@@ -2347,6 +2417,8 @@ export interface UpdateAutopilotInput {
   assigneeId?: string;
   status?: MultiremiAutopilotStatus;
   executionMode?: MultiremiAutopilotExecutionMode;
+  sessionPolicy?: MultiremiAutopilotSessionPolicy;
+  workspacePolicy?: MultiremiAutopilotWorkspacePolicy;
   issueTitleTemplate?: string | null;
   triggerKind?: string;
   triggerLabel?: string | null;
@@ -2357,6 +2429,12 @@ export interface RunAutopilotInput {
   source?: MultiremiAutopilotRunSource;
   prompt?: string | null;
   payload?: unknown | null;
+  triggerIssueId?: string | null;
+  trigger_issue_id?: string | null;
+  triggerId?: string | null;
+  trigger_id?: string | null;
+  eventId?: string | null;
+  event_id?: string | null;
 }
 
 // ─── Users, workspaces, membership & tokens ──────────────────────────────────────────────────────

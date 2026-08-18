@@ -101,27 +101,28 @@ export class TasksRepo {
   }
 
   createTask(input: CreateTaskInput): MultiremiTask {
+    const task = this.ctx.db.transaction(() => this.createTaskWithinTransaction(input))();
+    this.ctx.notifyTaskEnqueued(task);
+    return task;
+  }
+
+  /** Caller owns the transaction; notification must happen only after it commits. */
+  createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask {
     const initialAgent = this.ctx.agents().getAgent(input.agentId);
     if (!initialAgent) throw new Error(`Agent not found: ${input.agentId}`);
     if (initialAgent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
     const workspaceId = initialAgent.workspaceId;
-    const tx = this.ctx.db.transaction(() => {
-      // Daemon retirement and Runtime claims take this same row lock. A task
-      // creation that started before retirement must therefore either commit
-      // first (and be included in the retirement plan) or re-read state after
-      // retirement commits; it can never insert a stale Runtime pin mid-cleanup.
-      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      const currentAgent = this.ctx.agents().getAgent(input.agentId);
-      if (!currentAgent) throw new Error(`Agent not found: ${input.agentId}`);
-      if (currentAgent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
-      if (currentAgent.workspaceId !== workspaceId) {
-        throw new Error(`Agent workspace changed while creating task: ${input.agentId}`);
-      }
-      return this.createTaskWithinWorkspaceLock(input);
-    });
-    const task = tx();
-    this.ctx.notifyTaskEnqueued(task);
-    return task;
+    // Daemon retirement and Runtime claims take this same row lock. A task
+    // creation that started before retirement must therefore either commit
+    // first or re-read state after retirement commits.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    const currentAgent = this.ctx.agents().getAgent(input.agentId);
+    if (!currentAgent) throw new Error(`Agent not found: ${input.agentId}`);
+    if (currentAgent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
+    if (currentAgent.workspaceId !== workspaceId) {
+      throw new Error(`Agent workspace changed while creating task: ${input.agentId}`);
+    }
+    return this.createTaskWithinWorkspaceLock(input);
   }
 
   /** Caller holds the task workspace row lock in an open transaction. */
@@ -226,14 +227,18 @@ export class TasksRepo {
     const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts, 3));
     const triggerSummary = normalizeTriggerSummary(input.triggerSummary ?? input.trigger_summary ?? triggerComment?.body ?? null);
     const taskKind = input.taskKind ?? input.task_kind ?? "direct";
+    const requestedIssueSessionGeneration = input.issueSessionGeneration ?? input.issue_session_generation;
+    const issueSessionGeneration = issueSession
+      ? normalizePositiveInt(requestedIssueSessionGeneration, issueLane?.generation ?? 1)
+      : null;
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
-        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
+        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
-        attempt, max_attempts, parent_task_id, assignment_event_id,
+        attempt, max_attempts, parent_task_id, assignment_event_id, assignment_source_event_id,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         taskKind,
@@ -241,6 +246,7 @@ export class TasksRepo {
         runtimeId,
         issueId,
         issueSession?.id ?? null,
+        issueSessionGeneration,
         input.chatSessionId ?? null,
         triggerCommentId,
         triggerSummary,
@@ -257,6 +263,7 @@ export class TasksRepo {
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
+        cleanOptionalString(input.assignmentSourceEventId ?? input.assignment_source_event_id),
         cleanOptionalString(input.provider),
         toJson(inheritedPluginSnapshot ?? []),
         inheritedExecutionFingerprint,
@@ -328,7 +335,7 @@ export class TasksRepo {
     const task = this.getTask(id)!;
     const parentTaskId = cleanOptionalString(input.parentTaskId ?? input.parent_task_id);
     if (task.issueId && !parentTaskId && !this.hasInFlightTaskForIssue(task.issueId)) {
-      this.syncIssueStatusFromTask(task, "todo");
+      this.syncIssueStatusFromTaskWithinTransaction(task, "todo");
     }
     return task;
   }
@@ -713,9 +720,19 @@ export class TasksRepo {
     // A stale dispatch and an automatic infrastructure retry already own an
     // immutable snapshot. Never resolve mutable Agent bindings again.
     if (task.executionFingerprint) {
-      if (provider && !task.provider) {
-        this.ctx.db.run("UPDATE multiremi_tasks SET provider = ? WHERE id = ?", [provider, task.id]);
-        return { ...task, provider };
+      const legacyGeneration = task.issueSessionId && task.issueSessionGeneration == null
+        ? this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId).generation
+        : null;
+      if ((provider && !task.provider) || legacyGeneration != null) {
+        this.ctx.db.run(
+          `UPDATE multiremi_tasks
+           SET provider = COALESCE(provider, ?),
+               issue_session_generation = COALESCE(issue_session_generation, ?),
+               updated_at = ?
+           WHERE id = ?`,
+          [provider, legacyGeneration, nowIso(), task.id],
+        );
+        return this.getTaskWithAgent(task.id)!;
       }
       return task;
     }
@@ -728,6 +745,10 @@ export class TasksRepo {
       throw new AgentPluginReadinessChangedError("Agent Plugin readiness changed during task claim");
     }
     let keepProviderSession = true;
+    let issueSessionId: string | null = null;
+    let issueSessionGeneration: number | null = task.issueSessionGeneration ?? null;
+    let issueProviderSessionId: string | null = task.sessionId;
+    let issueWorkDir: string | null = task.workDir;
     if (task.sessionId && task.chatSessionId) {
       const chat = this.ctx.chat().getChatSession(task.chatSessionId);
       keepProviderSession = executionFingerprintResumable(
@@ -735,27 +756,54 @@ export class TasksRepo {
         executionFingerprint,
         pluginSnapshot.length > 0,
       );
-    } else if (task.sessionId && task.issueSessionId) {
-      const lane = this.ctx.issueSessions().getSessionAgentLane(task.issueSessionId, task.agentId);
-      keepProviderSession = executionFingerprintResumable(
-        lane?.executionFingerprint ?? null,
-        executionFingerprint,
-        pluginSnapshot.length > 0,
-      );
+    } else if (task.issueSessionId) {
+      issueSessionId = task.issueSessionId;
+      let lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+      const laneRuntime = lane.runtimeId ? this.ctx.runtimes().getRuntime(lane.runtimeId) : null;
+      const laneResumable =
+        !!lane.providerSessionId
+        && lane.provider === provider
+        && executionFingerprintResumable(
+          lane.executionFingerprint,
+          executionFingerprint,
+          pluginSnapshot.length > 0,
+        )
+        && lane.runtimeId === runtime.id
+        && laneRuntime != null
+        && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, currentAgent);
+      if (laneResumable) {
+        issueProviderSessionId = lane.providerSessionId;
+        issueWorkDir = lane.workDir;
+      } else {
+        if (lane.providerSessionId || lane.cursorSeq > 0) {
+          lane = this.resetSessionAgentLane(task.issueSessionId, task.agentId) ?? lane;
+        }
+        issueProviderSessionId = null;
+        issueWorkDir = null;
+      }
+      issueSessionGeneration = lane.generation;
+      keepProviderSession = laneResumable;
     }
     this.ctx.db.run(
       `UPDATE multiremi_tasks
        SET provider = ?, plugin_snapshot = ?, execution_fingerprint = ?,
-           session_id = CASE WHEN ? = 1 THEN session_id ELSE NULL END,
-           work_dir = CASE WHEN ? = 1 THEN work_dir ELSE NULL END,
+           session_id = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN session_id ELSE NULL END,
+           work_dir = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN work_dir ELSE NULL END,
+           issue_session_generation = CASE WHEN ? = 1 THEN ? ELSE issue_session_generation END,
            updated_at = ?
        WHERE id = ?`,
       [
         provider,
         toJson(pluginSnapshot),
         executionFingerprint,
+        issueSessionId ? 1 : 0,
+        issueProviderSessionId,
         keepProviderSession ? 1 : 0,
+        issueSessionId ? 1 : 0,
+        issueWorkDir,
         keepProviderSession ? 1 : 0,
+        issueSessionGeneration != null ? 1 : 0,
+        issueSessionGeneration,
         nowIso(),
         task.id,
       ],
@@ -1052,16 +1100,19 @@ export class TasksRepo {
   }
 
   startTask(taskId: string): MultiremiTask {
-    const now = nowIso();
-    const result = this.ctx.db.run(
-      `UPDATE multiremi_tasks
-       SET status = 'running', started_at = COALESCE(started_at, ?), wait_reason = NULL, updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'waiting_local_directory')`,
-      [now, now, taskId],
-    );
-    if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
-    const task = this.getTask(taskId)!;
-    this.syncIssueStatusFromTask(task, "in_progress");
+    const task = this.ctx.db.transaction(() => {
+      const now = nowIso();
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET status = 'running', started_at = COALESCE(started_at, ?), wait_reason = NULL, updated_at = ?
+         WHERE id = ? AND status IN ('dispatched', 'waiting_local_directory')`,
+        [now, now, taskId],
+      );
+      if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
+      const started = this.getTask(taskId)!;
+      this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress");
+      return started;
+    })();
     this.ctx.notifyTaskEvent("task:running", task);
     return task;
   }
@@ -1091,27 +1142,29 @@ export class TasksRepo {
 
   createTaskHumanRequest(input: CreateTaskHumanRequestInput): MultiremiTaskHumanRequest {
     const id = input.id ?? createId("hrq");
-    const now = nowIso();
-    this.ctx.db.run(
-      `INSERT INTO multiremi_task_human_requests (id, task_id, kind, payload, status, created_at)
-       VALUES (?, ?, ?, ?, 'pending', ?)`,
-      [id, input.taskId, input.kind, JSON.stringify(input.payload ?? {}), now],
-    );
-    const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
-    const transition = this.ctx.db.run(
-      `UPDATE multiremi_tasks
-       SET status = 'awaiting_human', wait_reason = ?, progress_summary = ?, updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'running')`,
-      [reason, reason, now, input.taskId],
-    );
-    if (transition.changes > 0) {
-      const task = this.getTask(input.taskId);
-      if (task) {
-        this.syncIssueStatusFromTask(task, "in_review");
-        this.ctx.notifyTaskEvent("task:awaiting_human", task);
+    let transitionedTask: MultiremiTask | null = null;
+    const request = this.ctx.db.transaction(() => {
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_task_human_requests (id, task_id, kind, payload, status, created_at)
+         VALUES (?, ?, ?, ?, 'pending', ?)`,
+        [id, input.taskId, input.kind, JSON.stringify(input.payload ?? {}), now],
+      );
+      const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
+      const transition = this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET status = 'awaiting_human', wait_reason = ?, progress_summary = ?, updated_at = ?
+         WHERE id = ? AND status IN ('dispatched', 'running')`,
+        [reason, reason, now, input.taskId],
+      );
+      if (transition.changes > 0) {
+        transitionedTask = this.getTask(input.taskId);
+        if (transitionedTask) this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review");
       }
-    }
-    return this.getTaskHumanRequest(id)!;
+      return this.getTaskHumanRequest(id)!;
+    })();
+    if (transitionedTask) this.ctx.notifyTaskEvent("task:awaiting_human", transitionedTask);
+    return request;
   }
 
   getTaskHumanRequest(requestId: string): MultiremiTaskHumanRequest | null {
@@ -1131,38 +1184,49 @@ export class TasksRepo {
     requestId: string,
     input: { response: Record<string, unknown>; respondedBy?: string | null },
   ): MultiremiTaskHumanRequest | null {
-    const now = nowIso();
-    const result = this.ctx.db.run(
-      `UPDATE multiremi_task_human_requests
-       SET status = 'responded', response = ?, responded_by = ?, responded_at = ?
-       WHERE id = ? AND status = 'pending'`,
-      [JSON.stringify(input.response ?? {}), input.respondedBy ?? null, now, requestId],
-    );
-    if (result.changes === 0) return null;
-    const request = this.getTaskHumanRequest(requestId)!;
-    this.resumeTaskFromAwaitingHuman(request.taskId);
+    let resumedTask: MultiremiTask | null = null;
+    const request = this.ctx.db.transaction(() => {
+      const now = nowIso();
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_task_human_requests
+         SET status = 'responded', response = ?, responded_by = ?, responded_at = ?
+         WHERE id = ? AND status = 'pending'`,
+        [JSON.stringify(input.response ?? {}), input.respondedBy ?? null, now, requestId],
+      );
+      if (result.changes === 0) return null;
+      const responded = this.getTaskHumanRequest(requestId)!;
+      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId);
+      return responded;
+    })();
+    if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     return request;
   }
 
   /** Worker-initiated terminal transition (timeout, or task aborted while pending). */
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
-    const result = this.ctx.db.run(
-      `UPDATE multiremi_task_human_requests
-       SET status = ?, responded_at = ?
-       WHERE id = ? AND status = 'pending'`,
-      [status, nowIso(), requestId],
-    );
-    if (result.changes === 0) return null;
-    const request = this.getTaskHumanRequest(requestId)!;
-    this.resumeTaskFromAwaitingHuman(request.taskId);
+    let resumedTask: MultiremiTask | null = null;
+    const request = this.ctx.db.transaction(() => {
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_task_human_requests
+         SET status = ?, responded_at = ?
+         WHERE id = ? AND status = 'pending'`,
+        [status, nowIso(), requestId],
+      );
+      if (result.changes === 0) return null;
+      const expired = this.getTaskHumanRequest(requestId)!;
+      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(expired.taskId);
+      return expired;
+    })();
+    if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     return request;
   }
 
-  private resumeTaskFromAwaitingHuman(taskId: string): void {
+  /** Caller owns the request/task/Issue/outbox transaction. */
+  private resumeTaskFromAwaitingHumanWithinTransaction(taskId: string): MultiremiTask | null {
     const pending = this.ctx.db.query(
       "SELECT COUNT(*) AS n FROM multiremi_task_human_requests WHERE task_id = ? AND status = 'pending'",
     ).get(taskId) as { n: number } | null;
-    if (pending && Number(pending.n) > 0) return;
+    if (pending && Number(pending.n) > 0) return null;
     const result = this.ctx.db.run(
       `UPDATE multiremi_tasks
        SET status = 'running', wait_reason = NULL, updated_at = ?
@@ -1172,10 +1236,11 @@ export class TasksRepo {
     if (result.changes > 0) {
       const task = this.getTask(taskId);
       if (task) {
-        this.syncIssueStatusFromTask(task, "in_progress");
-        this.ctx.notifyTaskEvent("task:running", task);
+        this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress");
+        return task;
       }
     }
+    return null;
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null): MultiremiTask {
@@ -1386,16 +1451,19 @@ export class TasksRepo {
   }
 
   cancelTask(taskId: string): MultiremiTask {
-    const now = nowIso();
-    const result = this.ctx.db.run(
-      `UPDATE multiremi_tasks
-       SET status = 'cancelled', wait_reason = NULL, failure_reason = NULL, completed_at = ?, cancelled_at = ?, updated_at = ?
-       WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
-      [now, now, now, taskId],
-    );
-    if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-    const task = this.getTask(taskId)!;
-    this.afterTaskTerminal(task, "cancelled", null);
+    const task = this.ctx.db.transaction(() => {
+      const now = nowIso();
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET status = 'cancelled', wait_reason = NULL, failure_reason = NULL, completed_at = ?, cancelled_at = ?, updated_at = ?
+         WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+        [now, now, now, taskId],
+      );
+      if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
+      const cancelled = this.getTask(taskId)!;
+      this.afterTaskTerminal(cancelled, "cancelled", null, true);
+      return cancelled;
+    })();
     this.ctx.notifyTaskEvent("task:cancelled", task);
     return task;
   }
@@ -1513,6 +1581,7 @@ export class TasksRepo {
       provider: inheritExecutionSnapshot ? parent.provider : null,
       pluginSnapshot: inheritExecutionSnapshot ? parent.pluginSnapshot : undefined,
       executionFingerprint: inheritExecutionSnapshot ? parent.executionFingerprint : null,
+      issueSessionGeneration: resumeSafe ? parent.issueSessionGeneration : null,
       // Resume-safe failures must go back to the machine holding the session;
       // once the session is abandoned, any pool machine may pick up the retry.
       runtimeId: resumeSafe ? parent.runtimeId : null,
@@ -1532,6 +1601,7 @@ export class TasksRepo {
       attempt: parent.attempt + 1,
       maxAttempts: parent.maxAttempts,
       parentTaskId: parent.id,
+      assignmentSourceEventId: parent.assignmentSourceEventId,
     };
     const retry = workspaceLockHeld
       ? this.createTaskWithinWorkspaceLock(retryInput)
@@ -1666,7 +1736,10 @@ export class TasksRepo {
     if (task.issueId) {
       const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status);
       const issue = this.ctx.issues().getIssue(task.issueId);
-      if (issueStatus) this.syncIssueStatusFromTask(task, issueStatus);
+      if (issueStatus) {
+        if (workspaceLockHeld) this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus);
+        else this.syncIssueStatusFromTask(task, issueStatus);
+      }
       this.ctx.appendIssueActivity(task.issueId, {
         actorType: "agent",
         actorId: task.agentId,
@@ -1756,7 +1829,7 @@ export class TasksRepo {
           cursor_seq = ?,
           last_task_id = ?,
           updated_at = ?
-      WHERE session_id = ? AND agent_id = ?`;
+      WHERE session_id = ? AND agent_id = ? AND generation = ?`;
     const params = [
       task.sessionId,
       task.runtimeId,
@@ -1768,6 +1841,7 @@ export class TasksRepo {
       now,
       task.issueSessionId,
       task.agentId,
+      task.issueSessionGeneration ?? lane.generation,
     ];
     // Keep the NULL comparison out of a placeholder expression: SQLite accepts
     // `? IS NULL`, while Postgres cannot infer that placeholder's data type.
@@ -1871,7 +1945,18 @@ export class TasksRepo {
   }
 
   private syncIssueStatusFromTask(task: MultiremiTask, status: string): void {
+    this.ctx.db.transaction(() => this.syncIssueStatusFromTaskWithinTransaction(task, status))();
+  }
+
+  /** Caller owns the task/Issue/outbox transaction. */
+  private syncIssueStatusFromTaskWithinTransaction(task: MultiremiTask, status: string): void {
     if (!task.issueId) return;
+    // Serialize against direct Issue mutations before checking terminal state.
+    // The no-op write acquires a row lock on Postgres and the writer lock on
+    // SQLite, so a late worker can never reopen a concurrently accepted or
+    // cancelled Issue from a stale pre-lock read.
+    const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [task.issueId]);
+    if (locked.changes === 0) return;
     const issue = this.ctx.issues().getIssue(task.issueId);
     // Explicit issue terminal states are user decisions. A late worker event
     // (or a cancellation racing with it) must not reopen accepted/cancelled
@@ -1883,6 +1968,17 @@ export class TasksRepo {
       "UPDATE multiremi_issues SET status = ?, updated_at = ? WHERE id = ?",
       [status, now, task.issueId],
     );
+    const updatedIssue = this.ctx.issues().getIssue(task.issueId);
+    if (updatedIssue) {
+      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+        issue: updatedIssue,
+        previousStatus: issue.status,
+        actorType: "agent",
+        actorId: task.agentId,
+        automationSourceEventId: task.assignmentSourceEventId,
+        automationSourceTaskId: task.id,
+      });
+    }
     // Task lifecycle writes bypass the HTTP layer, so publish the same partial
     // patch that issue pages and boards already consume from realtime updates.
     this.ctx.emitWorkspaceEvent({
@@ -2021,6 +2117,8 @@ function toTask(row: Row): MultiremiTask {
     issueId: nullableString(row.issue_id),
     issueSessionId: nullableString(row.issue_session_id),
     issue_session_id: nullableString(row.issue_session_id),
+    issueSessionGeneration: row.issue_session_generation == null ? null : Number(row.issue_session_generation),
+    issue_session_generation: row.issue_session_generation == null ? null : Number(row.issue_session_generation),
     chatSessionId: nullableString(row.chat_session_id),
     autopilotRunId: nullableString(row.autopilot_run_id),
     triggerCommentId: nullableString(row.trigger_comment_id),
@@ -2034,6 +2132,8 @@ function toTask(row: Row): MultiremiTask {
     parentTaskId: nullableString(row.parent_task_id),
     assignmentEventId: nullableString(row.assignment_event_id),
     assignment_event_id: nullableString(row.assignment_event_id),
+    assignmentSourceEventId: nullableString(row.assignment_source_event_id),
+    assignment_source_event_id: nullableString(row.assignment_source_event_id),
     projectionFromSeq: row.projection_from_seq == null ? null : Number(row.projection_from_seq),
     projection_from_seq: row.projection_from_seq == null ? null : Number(row.projection_from_seq),
     projectionToSeq: row.projection_to_seq == null ? null : Number(row.projection_to_seq),

@@ -607,52 +607,63 @@ export class IssuesRepo {
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
-    const current = this.getIssue(id);
-    if (!current) throw new Error(`Issue not found: ${id}`);
-    const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
-    const nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
-    const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
-    let nextAssigneeType = resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null;
-    let nextAssigneeId = resolveOptionalStringField(input, "assigneeId", "assignee_id", current.assigneeId);
-    const nextStartDate = hasAnyField(input, "startDate", "start_date")
-      ? normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date")
-      : current.startDate;
-    const nextDueDate = hasAnyField(input, "dueDate", "due_date")
-      ? normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date")
-      : current.dueDate;
-    const nextAcceptanceCriteria = hasAnyField(input, "acceptanceCriteria", "acceptance_criteria")
-      ? normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? [])
-      : current.acceptanceCriteria;
-    const nextContextRefs = hasAnyField(input, "contextRefs", "context_refs")
-      ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
-      : current.contextRefs;
+    let previous: MultiremiIssue | null = null;
+    let updatedAt = "";
+    const updated = this.ctx.db.transaction(() => {
+      // A no-op UPDATE is a portable write lock: Postgres locks this Issue row
+      // until commit, while SQLite serializes the writer transaction. Re-read
+      // only after acquiring it so a user terminal transition and a worker
+      // lifecycle transition can never derive writes from the same stale row.
+      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
+      if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
+      const current = this.getIssue(id);
+      if (!current) throw new Error(`Issue not found: ${id}`);
+      previous = current;
 
-    if (nextProjectId) {
-      const project = this.ctx.projects().getProject(nextProjectId);
-      if (!project) throw new Error(`Project not found: ${nextProjectId}`);
-      if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
-    }
-    if (nextParentIssueId) {
-      const parent = this.getIssue(nextParentIssueId);
-      if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
-      if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
-      this.validateIssueParent(id, nextParentIssueId);
-    }
-    if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
-      const requestedAssigneeType = hasAnyField(input, "assigneeType", "assignee_type")
-        ? resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null
-        : hasAnyField(input, "assigneeId", "assignee_id")
-          ? null
-          : nextAssigneeType;
-      const resolvedAssignee = this.ctx.squads().resolveAssigneeRef(requestedAssigneeType, nextAssigneeId, nextWorkspaceId);
-      nextAssigneeType = resolvedAssignee?.assigneeType ?? null;
-      nextAssigneeId = resolvedAssignee?.assigneeId ?? null;
-      this.validateIssueAssignee(nextAssigneeType, nextAssigneeId);
-    }
+      const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
+      const nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
+      const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+      let nextAssigneeType = resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null;
+      let nextAssigneeId = resolveOptionalStringField(input, "assigneeId", "assignee_id", current.assigneeId);
+      const nextStartDate = hasAnyField(input, "startDate", "start_date")
+        ? normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date")
+        : current.startDate;
+      const nextDueDate = hasAnyField(input, "dueDate", "due_date")
+        ? normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date")
+        : current.dueDate;
+      const nextAcceptanceCriteria = hasAnyField(input, "acceptanceCriteria", "acceptance_criteria")
+        ? normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? [])
+        : current.acceptanceCriteria;
+      const nextContextRefs = hasAnyField(input, "contextRefs", "context_refs")
+        ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
+        : current.contextRefs;
 
-    const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_issues SET
+      if (nextProjectId) {
+        const project = this.ctx.projects().getProject(nextProjectId);
+        if (!project) throw new Error(`Project not found: ${nextProjectId}`);
+        if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
+      }
+      if (nextParentIssueId) {
+        const parent = this.getIssue(nextParentIssueId);
+        if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
+        if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
+        this.validateIssueParent(id, nextParentIssueId);
+      }
+      if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
+        const requestedAssigneeType = hasAnyField(input, "assigneeType", "assignee_type")
+          ? resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null
+          : hasAnyField(input, "assigneeId", "assignee_id")
+            ? null
+            : nextAssigneeType;
+        const resolvedAssignee = this.ctx.squads().resolveAssigneeRef(requestedAssigneeType, nextAssigneeId, nextWorkspaceId);
+        nextAssigneeType = resolvedAssignee?.assigneeType ?? null;
+        nextAssigneeId = resolvedAssignee?.assigneeId ?? null;
+        this.validateIssueAssignee(nextAssigneeType, nextAssigneeId);
+      }
+
+      updatedAt = nowIso();
+      this.ctx.db.run(
+        `UPDATE multiremi_issues SET
         title = ?,
         description = ?,
         status = ?,
@@ -684,10 +695,19 @@ export class IssuesRepo {
         nextDueDate,
         toJson(nextAcceptanceCriteria),
         toJson(nextContextRefs),
-        now,
+        updatedAt,
         id,
-      ],
-    );
+        ],
+      );
+      const next = this.getIssue(id)!;
+      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+        issue: next,
+        previousStatus: current.status,
+        actorType: "system",
+        actorId: null,
+      });
+      return next;
+    })();
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
@@ -695,10 +715,9 @@ export class IssuesRepo {
       body: null,
       data: input,
     });
-    if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
-    if (nextProjectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, nextProjectId]);
-    const updated = this.getIssue(id)!;
-    this.notifyParentOfChildDone(current, updated);
+    if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
+    if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
+    this.notifyParentOfChildDone(previous!, updated);
     return updated;
   }
 

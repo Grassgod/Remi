@@ -55,8 +55,11 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       title: "Autopilot payload",
       assigneeId: agent.id,
       executionMode: "run_only",
+      description: "Execute the full Runbook",
+      issueTitleTemplate: "This title is not the Runbook",
     });
     const run = store.runAutopilot(autopilot.id);
+    expect(store.getTask(run.taskId!)?.prompt).toBe("Execute the full Runbook");
     const app = createMultiremiApp({ store });
 
     const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
@@ -65,6 +68,34 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(body.task.id).toBe(run.taskId);
     expect(body.task.autopilot_run_id).toBe(run.id);
     expect(body.task.autopilotRunId).toBeUndefined();
+  });
+
+  it("rolls back a task-driven Issue status when its outbox insert fails", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Atomic Codex", provider: "codex" });
+    const runtime = store.registerRuntime({ name: "atomic-runtime", provider: "codex" });
+    const issue = store.createIssue({ title: "Atomic task transition", status: "backlog" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Run atomically" });
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    db!.run("DELETE FROM multiremi_system_events");
+    db!.exec(`
+      CREATE TRIGGER reject_system_event_insert
+      BEFORE INSERT ON multiremi_system_events
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated outbox failure');
+      END;
+    `);
+
+    expect(() => store.startTask(task.id)).toThrow("simulated outbox failure");
+    expect(store.getTask(task.id)?.status).toBe("dispatched");
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_system_events").get()).toEqual({ count: 0 });
+
+    db!.exec("DROP TRIGGER reject_system_event_insert");
+    expect(store.startTask(task.id).status).toBe("running");
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_system_events").get()).toEqual({ count: 1 });
   });
 
   it("schedules active cron autopilots and unschedules inactive ones", () => {
@@ -490,5 +521,247 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "generic", status: "ignored" })).toBe(1);
     expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "github", status: "ignored" })).toBe(1);
     expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "generic", status: "duplicate" })).toBe(0);
+  });
+
+  it("dispatches a completed Issue system event once into a new Issue Session", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
+    const project = store.createProject({ title: "Knowledge project" });
+    const issue = store.createIssue({ title: "Ship feature", projectId: project.id, status: "in_review" });
+    const autopilot = store.createAutopilot({
+      title: "Maintain Wiki",
+      projectId: project.id,
+      assigneeId: agent.id,
+      executionMode: "trigger_issue",
+      sessionPolicy: "new",
+      workspacePolicy: "reuse_issue",
+      description: "Inspect the completed work and reconcile the Wiki",
+      issueTitleTemplate: "Review the completed Issue and maintain Wiki",
+    });
+    const trigger = store.createAutopilotTrigger(autopilot.id, {
+      kind: "system_event",
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+        projectId: project.id,
+      },
+    });
+    const otherProject = store.createProject({ title: "Other project" });
+    expect(() => store.updateAutopilotTrigger(autopilot.id, trigger.id, {
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+        projectId: otherProject.id,
+      },
+    })).toThrow("must match the Autopilot project");
+    expect(() => store.updateAutopilot(autopilot.id, { executionMode: "run_only" })).toThrow(
+      "system_event triggers require execution_mode trigger_issue",
+    );
+    expect(() => store.createAutopilotTrigger(autopilot.id, {
+      kind: "schedule",
+      cronExpression: "0 9 * * *",
+    })).toThrow("trigger_issue execution does not support schedule or webhook triggers");
+    expect(() => store.createAutopilotTrigger(autopilot.id, {
+      kind: "webhook",
+    })).toThrow("trigger_issue execution does not support schedule or webhook triggers");
+
+    const scheduled = store.createAutopilot({
+      title: "Scheduled run",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+    store.createAutopilotTrigger(scheduled.id, {
+      kind: "schedule",
+      cronExpression: "0 9 * * *",
+    });
+    expect(() => store.updateAutopilot(scheduled.id, { executionMode: "trigger_issue" }))
+      .toThrow("trigger_issue execution does not support schedule or webhook triggers");
+
+    store.updateIssue(issue.id, { status: "done" });
+    const eventRow = db!.query(
+      "SELECT id FROM multiremi_system_events WHERE resource_id = ? AND status = 'pending'",
+    ).get(issue.id) as { id: string };
+    const scheduler = new MultiremiScheduler({ store, pollIntervalMs: 60_000 });
+    const runs = scheduler.tickSystemEvents();
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      autopilotId: autopilot.id,
+      source: "system_event",
+      triggerId: trigger.id,
+      eventId: eventRow.id,
+      issueId: issue.id,
+      status: "running",
+    });
+    expect(runs[0].issueSessionId).toBeString();
+    expect(store.getTask(runs[0].taskId!)?.issueSessionId).toBe(runs[0].issueSessionId);
+    expect(store.getTask(runs[0].taskId!)?.prompt).toBe("Inspect the completed work and reconcile the Wiki");
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expect(store.listIssueSessions(issue.id, true)).toHaveLength(2);
+    expect(store.getSystemEvent(eventRow.id)?.status).toBe("processed");
+
+    expect(scheduler.tickSystemEvents()).toEqual([]);
+    const duplicate = store.runAutopilot(autopilot.id, {
+      source: "system_event",
+      triggerId: trigger.id,
+      eventId: eventRow.id,
+      triggerIssueId: issue.id,
+    });
+    expect(duplicate.id).toBe(runs[0].id);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
+    expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
+  });
+
+  it("does not feed automation-owned task status writes back into the same system event trigger", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Review maintainer", provider: "codex" });
+    const runtime = store.registerRuntime({ name: "review-runtime", provider: "codex" });
+    const issue = store.createIssue({ title: "Review without a loop", status: "todo" });
+    const autopilot = store.createAutopilot({
+      title: "Review on in_review",
+      assigneeId: agent.id,
+      executionMode: "trigger_issue",
+    });
+    store.createAutopilotTrigger(autopilot.id, {
+      kind: "system_event",
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "in_review" }],
+      },
+    });
+
+    store.updateIssue(issue.id, { status: "in_review" });
+    const initialEvent = db!.query(
+      "SELECT id FROM multiremi_system_events WHERE resource_id = ? AND status = 'pending'",
+    ).get(issue.id) as { id: string };
+    const [run] = store.dispatchPendingSystemEvents();
+    const task = store.getTask(run.taskId!)!;
+    expect(task.assignmentSourceEventId).toBe(initialEvent.id);
+
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "reviewed" });
+
+    // queued/running/completed lifecycle transitions stay auditable in the
+    // outbox, but none may recursively create another automation task.
+    expect(store.dispatchPendingSystemEvents()).toEqual([]);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
+    expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
+
+    // Suppression belongs to the automation lineage, not to the in_review
+    // status itself: a later user transition still starts a fresh run.
+    store.updateIssue(issue.id, { status: "todo" });
+    store.updateIssue(issue.id, { status: "in_review" });
+    expect(store.dispatchPendingSystemEvents()).toHaveLength(1);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(2);
+  });
+
+  it("reuses the most recently updated active Issue Session when configured", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Wiki maintainer", provider: "claude" });
+    const issue = store.createIssue({ title: "Reuse session", status: "in_review" });
+    const latest = store.createIssueSession(issue.id, { title: "Latest context" });
+    db!.run(
+      "UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?",
+      ["2099-01-01T00:00:00.000Z", latest.id],
+    );
+    const autopilot = store.createAutopilot({
+      title: "Reuse Wiki session",
+      assigneeId: agent.id,
+      executionMode: "trigger_issue",
+      sessionPolicy: "reuse_latest",
+    });
+    store.createAutopilotTrigger(autopilot.id, {
+      kind: "system_event",
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+      },
+    });
+
+    store.updateIssue(issue.id, { status: "done" });
+    const [run] = store.dispatchPendingSystemEvents();
+    expect(run.issueSessionId).toBe(latest.id);
+    expect(store.listIssueSessions(issue.id, true)).toHaveLength(2);
+  });
+
+  it("claims each pending system event once across sqlite connections", () => {
+    const dir = mkdtempSync(join(tmpdir(), "multiremi-system-event-claim-"));
+    const path = join(dir, "multiremi.db");
+    const dbA = new Database(path);
+    const dbB = new Database(path);
+    try {
+      const storeA = new MultiremiStore(dbA);
+      const storeB = new MultiremiStore(dbB);
+      const issue = storeA.createIssue({ title: "Atomic event claim", status: "in_review" });
+      storeA.updateIssue(issue.id, { status: "done" });
+
+      const event = dbA.query(
+        "SELECT id FROM multiremi_system_events WHERE resource_id = ? AND status = 'pending'",
+      ).get(issue.id) as { id: string };
+      const first = storeA.claimPendingSystemEvents();
+      const second = storeB.claimPendingSystemEvents();
+      const claimedIds = [...first, ...second].map((item) => item.id);
+
+      expect(claimedIds.filter((id) => id === event.id)).toHaveLength(1);
+      expect(storeA.getSystemEvent(event.id)?.status).toBe("processing");
+      expect(storeA.getSystemEvent(event.id)?.attemptCount).toBe(1);
+    } finally {
+      dbA.close();
+      dbB.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requeues a system event when its trigger execution fails", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
+    const issue = store.createIssue({ title: "Retry missing Issue", status: "in_review" });
+    const autopilot = store.createAutopilot({
+      title: "Retry Wiki maintenance",
+      assigneeId: agent.id,
+      executionMode: "trigger_issue",
+    });
+    store.createAutopilotTrigger(autopilot.id, {
+      kind: "system_event",
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+      },
+    });
+
+    store.updateIssue(issue.id, { status: "done" });
+    const event = db!.query(
+      "SELECT id FROM multiremi_system_events WHERE resource_id = ? AND status = 'pending'",
+    ).get(issue.id) as { id: string };
+    db!.run("DELETE FROM multiremi_issues WHERE id = ?", [issue.id]);
+
+    expect(store.dispatchPendingSystemEvents()).toEqual([]);
+    const retried = store.getSystemEvent(event.id)!;
+    expect(retried.status).toBe("pending");
+    expect(retried.attemptCount).toBe(1);
+    expect(retried.lastError).toContain("Issue not found");
+    expect(new Date(retried.availableAt).getTime()).toBeGreaterThan(Date.now());
+    expect(store.listAutopilotRuns(autopilot.id)).toEqual([]);
+    expect(store.listTasks()).toEqual([]);
+  });
+
+  it("rolls back the reserved run when trigger_issue has no triggering Issue", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Missing Issue",
+      assigneeId: agent.id,
+      executionMode: "trigger_issue",
+    });
+
+    expect(() => store.runAutopilot(autopilot.id)).toThrow("trigger_issue_id");
+    expect(store.listAutopilotRuns(autopilot.id)).toEqual([]);
+    expect(store.listTasks()).toEqual([]);
   });
 });

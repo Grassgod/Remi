@@ -65,6 +65,7 @@ const MODERN_FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_STALE_LOCK_MS = 60 * 60_000;
+const RESERVED_ISSUE_WORKSPACE_DIRECTORIES = new Set(["wiki", ".multiremi"]);
 const MULTIREMI_HOOK_MARKER = "# multiremi:prepare-commit-msg:co-authored-by";
 const LEGACY_DAEMON_HOOK_SIGNATURES = [
   "# multimira:prepare-commit-msg:co-authored-by",
@@ -220,7 +221,16 @@ export class MultiremiRepoCache {
   }
 
   private createWorktreeLocked(barePath: string, params: MultiremiWorktreeParams): MultiremiWorktreeResult {
-    const worktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
+    const worktreePath = join(params.workDir, worktreeDirectoryName(params.repoUrl));
+    const legacyWorktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
+    if (
+      legacyWorktreePath !== worktreePath
+      && !existsSync(worktreePath)
+      && existsSync(legacyWorktreePath)
+      && isGitWorktree(legacyWorktreePath)
+    ) {
+      git(barePath, ["worktree", "move", legacyWorktreePath, worktreePath]);
+    }
     const requestedBranch = params.branchName?.trim() || null;
     if (params.reuseExisting && existsSync(worktreePath) && isGitWorktree(worktreePath)) {
       const currentBranch = git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -484,6 +494,13 @@ function repoNameFromUrl(repoUrl: string): string {
   const withoutGit = trimmed.endsWith(".git") ? trimmed.slice(0, -4) : trimmed;
   const rawName = basename(withoutGit.replace(/[:\\]/g, "/")) || "repo";
   return safePathPart(rawName.replace(/\.git$/, "")) || "repo";
+}
+
+function worktreeDirectoryName(repoUrl: string): string {
+  const name = repoNameFromUrl(repoUrl);
+  if (!RESERVED_ISSUE_WORKSPACE_DIRECTORIES.has(name.toLowerCase())) return name;
+  const digest = createHash("sha256").update(repoUrl.trim()).digest("hex").slice(0, 8);
+  return `${name}-repo-${digest}`;
 }
 
 function safePathPart(value: string): string {

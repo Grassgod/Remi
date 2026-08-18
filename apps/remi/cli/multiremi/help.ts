@@ -69,6 +69,10 @@ Commands:
   wiki delete <ref>      Delete a wiki page (requires --project)
   wiki history <ref>     Read wiki revision history (requires --project)
   wiki backlinks <ref>   List pages linking to a wiki page (requires --project)
+  wiki pull              Materialize the project Wiki into ./wiki
+  wiki status            Compare the local Wiki, base snapshot, and remote
+  wiki diff              Show local Wiki changes against the base snapshot
+  wiki push              Three-way merge and write local Wiki changes back
   project knowledge status|backfill|verify|retry-failed [project-id]
   version                Print Multiremi version
 

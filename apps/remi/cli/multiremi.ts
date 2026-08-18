@@ -51,7 +51,6 @@ import { agent } from "./multiremi/commands/agent.js";
 import { issue } from "./multiremi/commands/issue.js";
 import { project } from "./multiremi/commands/project.js";
 import { memory, wiki } from "./multiremi/commands/knowledge.js";
-import { runProjectKnowledgeMcp } from "./multiremi/project-knowledge-mcp.js";
 
 export type { CliOptions } from "./multiremi/options.js";
 export type {
@@ -117,9 +116,6 @@ export async function runMultiremi(args: string[], runOptions: RunMultiremiOptio
       return;
     case "wiki":
       await wiki(parsed.positional, parsed.options);
-      return;
-    case "project-knowledge-mcp":
-      await runProjectKnowledgeMcp(parsed.positional[0] ?? "");
       return;
     case "seed":
       seed(parsed.options);

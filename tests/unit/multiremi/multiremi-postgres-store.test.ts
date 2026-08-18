@@ -119,6 +119,30 @@ async function probePostgres(): Promise<boolean> {
   }
 }
 
+function waitForWorkerPhase(worker: Worker, expectedPhase: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (event: MessageEvent<{ phase?: string; error?: string }>) => {
+      if (event.data.phase === "error") {
+        cleanup();
+        reject(new Error(event.data.error ?? "Postgres race worker failed"));
+      } else if (event.data.phase === expectedPhase) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onError = (event: ErrorEvent) => {
+      cleanup();
+      reject(event.error ?? new Error(event.message));
+    };
+    const cleanup = () => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+    };
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+  });
+}
+
 // Decide skip-vs-run at collection time (top-level await); the throwaway DB and
 // store are built in beforeAll so a probe failure never leaves half-open state.
 const pgAvailable = await probePostgres();
@@ -920,5 +944,72 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const before = store.listIssueComments(issue.id).length;
     store.completeTask(second.id, { output: "narration text" });
     expect(store.listIssueComments(issue.id)).toHaveLength(before);
+  });
+
+  it("dispatches trigger_issue system events atomically on Postgres", () => {
+    const ws = freshWorkspace();
+    const agent = store.createAgent({ name: "Wiki PG", provider: "codex", workspaceId: ws });
+    const issue = store.createIssue({ title: "Wiki PG evidence", workspaceId: ws, status: "in_review" });
+    const autopilot = store.createAutopilot({
+      title: "Wiki PG maintainer",
+      workspaceId: ws,
+      assigneeId: agent.id,
+      executionMode: "trigger_issue",
+      sessionPolicy: "new",
+    });
+    store.createAutopilotTrigger(autopilot.id, {
+      kind: "system_event",
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+      },
+    });
+
+    store.updateIssue(issue.id, { status: "done" });
+    const [run] = store.dispatchPendingSystemEvents();
+    expect(run).toMatchObject({ issueId: issue.id, source: "system_event", status: "running" });
+    expect(run.issueSessionId).toBeString();
+    expect(store.getTask(run.taskId!)?.issueSessionId).toBe(run.issueSessionId);
+  });
+
+  it("keeps a user terminal Issue committed while a worker status write waits on its row lock (PG)", async () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({ name: "terminal-race-runtime", provider: "codex", workspaceId: ws });
+    const agent = store.createAgent({ name: "Terminal Race", provider: "codex", workspaceId: ws });
+    const issue = store.createIssue({ title: "Do not reopen", workspaceId: ws, status: "backlog" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Start after acceptance" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    db.run("DELETE FROM multiremi_system_events WHERE resource_id = ?", [issue.id]);
+
+    const worker = new Worker(
+      new URL("./fixtures/postgres-terminal-issue-worker.ts", import.meta.url).href,
+    );
+    const locked = waitForWorkerPhase(worker, "locked");
+    const committed = waitForWorkerPhase(worker, "committed");
+    worker.postMessage({
+      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      issueId: issue.id,
+      eventId: `sev_pg_terminal_${wsCounter}`,
+      holdMs: 200,
+    });
+
+    await locked;
+    // This call reaches the Issue row while the user transaction still owns
+    // it. The store's own bridge runs in another worker, so the test process can
+    // genuinely exercise the two-connection lock ordering.
+    expect(store.startTask(task.id).status).toBe("running");
+    await committed;
+    worker.terminate();
+
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+    const outbox = db.query(
+      "SELECT payload FROM multiremi_system_events WHERE resource_id = ? ORDER BY created_at ASC",
+    ).all(issue.id) as Array<{ payload: string }>;
+    expect(outbox).toHaveLength(1);
+    expect(JSON.parse(outbox[0]!.payload)).toMatchObject({
+      previous_status: "todo",
+      status: "done",
+    });
   });
 });
