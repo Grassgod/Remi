@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 546,
+    "routeCount": 556,
     "routeCountByPrefix": {
       "native": 193,
-      "compat": 340,
+      "compat": 350,
       "root": 13
     },
-    "getRoutes": 241,
-    "getRoutesWithBody": 238,
+    "getRoutes": 244,
+    "getRoutesWithBody": 241,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 305,
+    "mutationRoutes": 312,
     "mutationRoutesCovered": 277,
     "flows": [
       "agents-compat",
@@ -160,6 +160,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
     "GET /api/daemon/tasks/:taskId/gc-check",
@@ -201,6 +202,7 @@
     "GET /api/issues/:id/timeline",
     "GET /api/issues/:id/usage",
     "GET /api/issues/:id/workspace",
+    "GET /api/issues/:issueId/session-archives",
     "GET /api/issues/child-progress",
     "GET /api/issues/children",
     "GET /api/issues/grouped",
@@ -350,6 +352,7 @@
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /auth/lark/url",
     "GET /favicon.ico",
@@ -419,6 +422,9 @@
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
@@ -467,6 +473,8 @@
     "POST /api/issues/:id/subscribe",
     "POST /api/issues/:id/tasks/:taskId/cancel",
     "POST /api/issues/:id/unsubscribe",
+    "POST /api/issues/:issueId/session-archives/:archiveId/retry",
+    "POST /api/issues/:issueId/session-archives/:archiveId/verify",
     "POST /api/issues/batch-delete",
     "POST /api/issues/batch-update",
     "POST /api/issues/quick-create",
@@ -582,6 +590,7 @@
     "PUT /api/agents/:id/skills",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
+    "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "PUT /api/daemon/runtimes/:runtimeId/models",
     "PUT /api/issues/:id",
     "PUT /api/issues/:id/metadata/:key",
@@ -608,6 +617,7 @@
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
+    "PUT /api/workspaces/:id/session-archive",
     "PUT /api/workspaces/:id/ssh-mesh"
   ],
   "coveredRoutes": [
@@ -705,6 +715,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
     "GET /api/daemon/tasks/:taskId/gc-check",
@@ -746,6 +757,7 @@
     "GET /api/issues/:id/timeline",
     "GET /api/issues/:id/usage",
     "GET /api/issues/:id/workspace",
+    "GET /api/issues/:issueId/session-archives",
     "GET /api/issues/child-progress",
     "GET /api/issues/children",
     "GET /api/issues/grouped",
@@ -895,6 +907,7 @@
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /auth/lark/url",
     "GET /favicon.ico",
@@ -4483,7 +4496,13 @@
       "path": "/api/daemon/heartbeat",
       "status": 200,
       "body": {
-        "status": "ok"
+        "status": "ok",
+        "workspace_settings": {},
+        "relay": {
+          "claude": null,
+          "codex": null,
+          "model_discovery": false
+        }
       }
     },
     {
@@ -6543,6 +6562,15 @@
       }
     },
     {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+      "route": "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+      "path": "/api/daemon/runtimes/rt_snapshot/issues/iss_snapshot/session-archives/status",
+      "status": 404,
+      "body": {
+        "error": "issue archive scope not found"
+      }
+    },
+    {
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/tasks/pending",
       "route": "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
       "path": "/api/daemon/runtimes/rt_snapshot/tasks/pending",
@@ -8068,6 +8096,17 @@
       "status": 200,
       "body": {
         "workspace": null
+      }
+    },
+    {
+      "key": "get-sweep GET /api/issues/:issueId/session-archives",
+      "route": "GET /api/issues/:issueId/session-archives",
+      "path": "/api/issues/iss_snapshot/session-archives",
+      "status": 200,
+      "body": {
+        "archives": [],
+        "latest": null,
+        "latest_ready": null
       }
     },
     {
@@ -14524,6 +14563,31 @@
       }
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/session-archive",
+      "route": "GET /api/workspaces/:id/session-archive",
+      "path": "/api/workspaces/local/session-archive",
+      "status": 200,
+      "body": {
+        "config": {
+          "backend": "local",
+          "root_hint": "~/.remi/multiremi/session-archives",
+          "require_archive": true,
+          "max_bytes": 2147483648,
+          "min_free_bytes": 10737418240,
+          "workspace_ttl_ms": 0,
+          "gc_interval_ms": 0
+        },
+        "usage": {
+          "total_archives": 0,
+          "ready_archives": 0,
+          "failed_archives": 0,
+          "pending_archives": 0,
+          "total_bytes": 0
+        },
+        "last_failure": null
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/ssh-mesh",
       "route": "GET /api/workspaces/:id/ssh-mesh",
       "path": "/api/workspaces/local/ssh-mesh",
@@ -15698,9 +15762,10 @@
       "key": "issues-compat#006 POST /api/issues/batch-delete",
       "route": "POST /api/issues/batch-delete",
       "path": "/api/issues/batch-delete",
-      "status": 200,
+      "status": 409,
       "body": {
-        "deleted": 1
+        "error": "active Issue tasks must finish before hard deletion",
+        "code": "issue_has_active_tasks"
       }
     },
     {
@@ -16004,9 +16069,10 @@
       "key": "issues-native#005 POST /api/multiremi/issues/batch-delete",
       "route": "POST /api/multiremi/issues/batch-delete",
       "path": "/api/multiremi/issues/batch-delete",
-      "status": 200,
+      "status": 409,
       "body": {
-        "deleted": 1
+        "error": "active Issue tasks must finish before hard deletion",
+        "code": "issue_has_active_tasks"
       }
     },
     {

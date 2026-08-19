@@ -286,6 +286,7 @@ export function IssueDetail({
       issueSessions={sessions.list}
       activeIssueSessionId={sessions.activeId}
       usage={usage}
+      canManageArchives={canModerateComments}
     />
   );
 

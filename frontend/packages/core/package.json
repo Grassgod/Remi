@@ -67,6 +67,7 @@
     "./plugins/queries": "./plugins/queries.ts",
     "./plugins/mutations": "./plugins/mutations.ts",
     "./plugins/readiness": "./plugins/readiness.ts",
+    "./session-archives": "./session-archives/index.ts",
     "./squads": "./squads/index.ts",
     "./squads/stores": "./squads/stores/index.ts",
     "./permissions": "./permissions/index.ts",

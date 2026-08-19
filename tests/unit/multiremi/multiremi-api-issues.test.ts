@@ -7,6 +7,118 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — issue endpoints", () => {
+  it("requires a human workspace owner or admin for single and batch hard deletion", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const target = store.createIssue({ title: "Human-admin delete only", workspaceId: "local" });
+    const authIssue = store.createIssue({ title: "Task credential source", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Delete auth agent", provider: "codex" });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: authIssue.id,
+      agentId: agent.id,
+      prompt: "authenticate only",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const daemonToken = await store.createAccessToken({
+      name: "Delete auth daemon",
+      type: "daemon",
+      purpose: "daemon",
+      workspaceId: "local",
+      daemonId: "dmn_delete_auth",
+    });
+    store.createWorkspaceMember({
+      id: "mem_delete_member",
+      workspaceId: "local",
+      userId: "usr_delete_member",
+      name: "Delete member",
+      role: "member",
+    });
+    const memberToken = await store.createAccessToken({
+      name: "Delete member PAT",
+      type: "pat",
+      workspaceId: "local",
+      userId: "usr_delete_member",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    for (const token of [taskToken.token, daemonToken.token, memberToken.token]) {
+      const single = await app.request(`/api/issues/${target.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(single.status).toBe(403);
+      expect(store.getIssue(target.id)?.id).toBe(target.id);
+
+      const batch = await app.request("/api/issues/batch-delete", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ issue_ids: [target.id] }),
+      });
+      expect(batch.status).toBe(403);
+      expect(store.getIssue(target.id)?.id).toBe(target.id);
+    }
+  });
+
+  it("preflights batch-delete workspace access before deleting any Issue", async () => {
+    const store = createStore();
+    const local = store.createIssue({ title: "Local batch delete", workspaceId: "local" });
+    const remote = store.createIssue({ title: "Remote batch delete", workspaceId: "remote" });
+    store.createWorkspaceMember({
+      id: "mem_batch_owner",
+      workspaceId: "local",
+      userId: "usr_batch_owner",
+      name: "Batch owner",
+      role: "owner",
+    });
+    const token = await store.createAccessToken({
+      name: "local-only",
+      type: "pat",
+      workspaceId: "local",
+      userId: "usr_batch_owner",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/issues/batch-delete", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ issue_ids: [local.id, remote.id] }),
+    });
+    expect(response.status).toBe(404);
+    expect(store.getIssue(local.id)?.id).toBe(local.id);
+    expect(store.getIssue(remote.id)?.id).toBe(remote.id);
+  });
+
+  it("preflights batch lifecycle fences before deleting any Issue", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const deletable = store.createIssue({ title: "Batch deletable", workspaceId: "local" });
+    const materialized = store.createIssue({ title: "Batch materialized", workspaceId: "local" });
+    store.createIssueSession(materialized.id, { title: "Materialized session" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/issues/batch-delete", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer root-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ issue_ids: [deletable.id, materialized.id] }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "issue_workspace_not_cleaned" });
+    expect(store.getIssue(deletable.id)?.id).toBe(deletable.id);
+    expect(store.getIssue(materialized.id)?.id).toBe(materialized.id);
+    expect(store.beginIssueDeletion(deletable.id)).toEqual({ ok: true });
+    store.abortIssueDeletion(deletable.id);
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });

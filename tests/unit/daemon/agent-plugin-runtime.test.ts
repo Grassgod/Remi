@@ -671,7 +671,16 @@ describe("task-private Agent Plugin runtime", () => {
     const baseHome = join(root, "base-codex");
     mkdirSync(join(baseHome, "plugins", "cache"), { recursive: true });
     writeFileSync(join(baseHome, "auth.json"), '{"token":"test"}\n', { mode: 0o600 });
-    writeFileSync(join(baseHome, "config.toml"), "unsafe_global = true\n");
+    writeFileSync(join(baseHome, "config.toml"), [
+      'model = "gpt-5.6"',
+      'model_provider = "Corp"',
+      "unsafe_global = true",
+      "",
+      "[model_providers.Corp]",
+      'base_url = "https://gateway.example/v1"',
+      'experimental_bearer_token = "must-never-enter-plugin-home"',
+      "",
+    ].join("\n"));
     writeFileSync(join(baseHome, "plugins", "cache", "global.txt"), "do not copy\n");
     const commands: CodexPluginCommand[] = [];
 
@@ -679,11 +688,14 @@ describe("task-private Agent Plugin runtime", () => {
       seedHome: (targetHome) => seedCodexHomeFromBase({
         baseHome,
         targetHome,
-        configToml: "model = \"gpt-5.6\"\n",
         copyAuth: false,
         linkAuth: true,
       }),
-      runCommand: async (command) => { commands.push(command); },
+      runCommand: async (command) => {
+        expect(readFileSync(join(command.env.CODEX_HOME, "config.toml"), "utf8"))
+          .not.toContain("must-never-enter-plugin-home");
+        commands.push(command);
+      },
     });
 
     expect(prepared.codexHome).toBe(sessionCodexHome);
@@ -696,9 +708,12 @@ describe("task-private Agent Plugin runtime", () => {
     expect(lstatSync(join(installed!, "auth.json")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(installed!, "auth.json"))).toBe(join(baseHome, "auth.json"));
     expect(readFileSync(join(installed!, "auth.json"), "utf8")).toBe('{"token":"test"}\n');
-    expect(readFileSync(join(installed!, "config.toml"), "utf8")).toBe("model = \"gpt-5.6\"\n");
+    expect(readFileSync(join(installed!, "config.toml"), "utf8")).toContain('model = "gpt-5.6"');
+    expect(readFileSync(join(installed!, "config.toml"), "utf8"))
+      .not.toContain("must-never-enter-plugin-home");
     expect(existsSync(join(installed!, "plugins", "cache", "global.txt"))).toBe(false);
-    expect(readFileSync(join(baseHome, "config.toml"), "utf8")).toBe("unsafe_global = true\n");
+    expect(readFileSync(join(baseHome, "config.toml"), "utf8"))
+      .toContain('experimental_bearer_token = "must-never-enter-plugin-home"');
 
     await installCodexPluginHome(prepared, { runCommand: async (command) => { commands.push(command); } });
     expect(commands).toHaveLength(2);
@@ -736,6 +751,35 @@ describe("task-private Agent Plugin runtime", () => {
     expect(first).toBe(prepared.codexHome!);
     expect(second).toBe(first);
     expect(commands).toBe(2);
+  });
+
+  it("redacts provider credentials echoed by a failing Codex Plugin command", async () => {
+    const root = tempRoot();
+    const marketplaceRoot = join(root, "marketplace");
+    mkdirSync(marketplaceRoot, { recursive: true });
+    const prepared = {
+      runtimeRoot: root,
+      pluginPaths: [],
+      pluginFingerprint: "plugins",
+      executionFingerprint: "execution",
+      codexHome: join(root, "codex-home"),
+      codexMarketplaceRoot: marketplaceRoot,
+      codexMarketplaceName: "local",
+      codexPluginNames: ["demo"],
+    };
+    const token = "gateway-secret-value";
+
+    const attempt = installCodexPluginHome(prepared, {
+      env: { OPENAI_API_KEY: token },
+      runCommand: async () => {
+        throw new Error(`command leaked ${token}`);
+      },
+    });
+
+    await expect(attempt).rejects.toMatchObject({
+      message: "Codex Plugin install failed: command leaked [REDACTED]",
+    });
+    await expect(attempt).rejects.not.toThrow(token);
   });
 
   it("aborts a stalled native Codex CLI process at the command deadline", async () => {
@@ -781,6 +825,17 @@ describe("task-private Agent Plugin runtime", () => {
       '[model_providers.Corp]',
       'base_url = "https://gateway.example/v1"',
       'experimental_bearer_token = "runtime-secret"',
+      'env_key = "CORP_API_KEY"',
+      'access_token = "access-secret"',
+      'env_http_headers = { Authorization = "CORP_AUTH_TOKEN", "X-Api-Key" = "CORP_API_KEY", Unsafe = "literal-secret" }',
+      '',
+      '[model_providers.Corp.http_headers]',
+      'Authorization = "Bearer header-secret"',
+      'X-Custom-Auth = "opaque-header-secret"',
+      '',
+      '[model_providers.Corp.nested]',
+      'client_secret = "nested-secret"',
+      'enabled = true',
       '',
       '[marketplaces.global]',
       'source = "/global/marketplace"',
@@ -806,10 +861,22 @@ describe("task-private Agent Plugin runtime", () => {
       model_providers: {
         Corp: {
           base_url: "https://gateway.example/v1",
-          experimental_bearer_token: "runtime-secret",
+          env_key: "CORP_API_KEY",
+          env_http_headers: {
+            Authorization: "CORP_AUTH_TOKEN",
+            "X-Api-Key": "CORP_API_KEY",
+          },
+          nested: { enabled: true },
         },
       },
     });
+    const inheritedText = readFileSync(join(targetHome, "config.toml"), "utf8");
+    expect(inheritedText).not.toContain("runtime-secret");
+    expect(inheritedText).not.toContain("access-secret");
+    expect(inheritedText).not.toContain("header-secret");
+    expect(inheritedText).not.toContain("nested-secret");
+    expect((inherited.model_providers as Record<string, Record<string, unknown>>).Corp.http_headers)
+      .toBeUndefined();
     expect(inherited.unsafe_global).toBeUndefined();
     expect(inherited.marketplaces).toBeUndefined();
     expect(inherited.plugins).toBeUndefined();

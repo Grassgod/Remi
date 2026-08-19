@@ -32,6 +32,25 @@ permissions:
   contents: read
 
 jobs:
+  session-archive-platform:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install dependencies from the public registry
+        run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
+
+      - name: Verify native Issue session archive traversal
+        run: bun test tests/unit/daemon/session-archive.test.ts
+
   build:
     runs-on: ubuntu-latest
 

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonRuntimeId } from "@multiremi/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -59,7 +59,11 @@ describe("Multiremi API — daemon endpoints", () => {
 
     store.startTask(task.id);
     store.completeTask(task.id, { output: "done" });
-    store.markIssueWorkspaceCleaned(issue.id, runtime.id);
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      ...readyArchiveBinding(store, issue.id, runtime.id),
+    });
     const nextRuntime = store.registerRuntime({ id: "rt_workspace_next", name: "codex (next)", provider: "codex" });
     const nextTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "continue" });
     expect(store.claimTask(nextRuntime.id)?.id).toBe(nextTask.id);

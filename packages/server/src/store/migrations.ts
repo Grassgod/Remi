@@ -593,6 +593,7 @@ export function runMigrations(db: SqlDatabase): void {
       acceptance_criteria TEXT NOT NULL DEFAULT '[]',
       context_refs TEXT NOT NULL DEFAULT '[]',
       metadata TEXT NOT NULL DEFAULT '{}',
+      lifecycle_state TEXT NOT NULL DEFAULT 'active',
       created_by TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -1318,6 +1319,9 @@ export function runMigrations(db: SqlDatabase): void {
       repos TEXT NOT NULL DEFAULT '[]',
       last_task_id TEXT,
       cleaned_at TEXT,
+      cleaned_archive_id TEXT,
+      cleaned_archive_source_revision TEXT,
+      cleaned_archive_sha256 TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
@@ -1325,6 +1329,36 @@ export function runMigrations(db: SqlDatabase): void {
     );
     CREATE INDEX IF NOT EXISTS idx_multiremi_issue_workspaces_runtime
       ON multiremi_issue_workspaces(runtime_id, status, updated_at);
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_session_archives (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      issue_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      size_bytes BIGINT NOT NULL,
+      uploaded_size_bytes BIGINT NOT NULL DEFAULT 0,
+      file_count INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      relative_path TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      UNIQUE(issue_id, source_revision, sha256),
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_issue
+      ON multiremi_session_archives(issue_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_workspace_status
+      ON multiremi_session_archives(workspace_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_runtime
+      ON multiremi_session_archives(runtime_id, status, updated_at);
   `);
   db.exec(`
     DELETE FROM multiremi_task_messages
@@ -1405,6 +1439,14 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issues", "due_date TEXT");
   addColumnIfMissing(db, "multiremi_issues", "acceptance_criteria TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, "multiremi_issues", "context_refs TEXT NOT NULL DEFAULT '[]'");
+  // Hard deletion spans a database commit and durable archive cleanup. Keep a
+  // persisted fence on the Issue so daemon archive writers cannot race a
+  // purge snapshot or resurrect archive bytes after the control-plane row is
+  // removed.
+  addColumnIfMissing(db, "multiremi_issues", "lifecycle_state TEXT NOT NULL DEFAULT 'active'");
+  addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_id TEXT");
+  addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_source_revision TEXT");
+  addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_sha256 TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "parent_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "type TEXT NOT NULL DEFAULT 'comment'");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_at TEXT");

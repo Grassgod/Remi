@@ -8,8 +8,9 @@
  */
 
 import { join } from "node:path";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import type { AgentTask } from "@daemon/contracts/types.js";
+import { ISSUE_SESSION_ARCHIVE_RECEIPT_FILE } from "@daemon/agent-runtime/workspace/session-archive.js";
 
 export function writeTaskContext(workDir: string, task: AgentTask): void {
   const dir = join(workDir, ".multiremi");
@@ -51,12 +52,18 @@ export function writeTaskContext(workDir: string, task: AgentTask): void {
 export function writeTaskGcContext(workDir: string, task: AgentTask, options: { localDirectory?: boolean } = {}): void {
   const dir = join(workDir, ".multiremi");
   mkdirSync(dir, { recursive: true });
-  const kind = task.chatSessionId
-    ? "chat"
-    : task.autopilotRunId
-      ? "autopilot_run"
-      : task.issueId
-        ? "issue"
+  // A new Issue task can append provider history after an earlier terminal
+  // snapshot. Force the next terminal sweep to verify a fresh archive.
+  if (task.issueId) rmSync(join(dir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE), { force: true });
+  // An Issue owns its stable workspace for the full lifecycle. Automation
+  // tasks can carry both issueId and autopilotRunId; letting the run win here
+  // would replace the Issue GC policy and bypass its dirty/unpushed Git guard.
+  const kind = task.issueId
+    ? "issue"
+    : task.chatSessionId
+      ? "chat"
+      : task.autopilotRunId
+        ? "autopilot_run"
         : "quick_create";
   const payload = {
     version: task.issueId ? 2 : 1,

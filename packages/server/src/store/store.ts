@@ -13,8 +13,16 @@ import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
-import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import {
+  IssuesRepo,
+  type BeginIssueDeletionResult,
+} from "@multiremi/store/repos/issues-repo.js";
 import { IssueWorkspacesRepo } from "@multiremi/store/repos/issue-workspaces-repo.js";
+import {
+  SessionArchivesRepo,
+  type SessionArchiveStatusSnapshot,
+  type SessionArchiveWorkspaceUsage,
+} from "@multiremi/store/repos/session-archives-repo.js";
 import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
@@ -91,6 +99,8 @@ import type {
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateIssueSessionInput,
+  InitSessionArchiveInput,
+  ReportSessionArchiveFailureInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   CreateLabelInput,
@@ -149,6 +159,7 @@ import type {
   MultiremiIssue,
   MultiremiIssueShare,
   MultiremiIssueSession,
+  MultiremiSessionArchive,
   MultiremiIssueAssigneeGroup,
   MultiremiIssueSearchResult,
   MultiremiFeedback,
@@ -217,6 +228,7 @@ import type {
   MultiremiWorkspace,
   MultiremiWorkspaceInvitation,
   MultiremiWorkspaceMember,
+  MarkIssueWorkspaceCleanedInput,
   RegisterRuntimeInput,
   RecordTaskPromptInput,
   ReportAgentPluginRuntimeStateInput,
@@ -272,6 +284,7 @@ export class MultiremiStore {
   private chat: ChatRepo;
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
+  private sessionArchives: SessionArchivesRepo;
   private runtimes: RuntimesRepo;
   private daemonRetirement: DaemonRetirementRepo;
   private sshMesh: SshMeshRepo;
@@ -300,6 +313,7 @@ export class MultiremiStore {
     this.chat = new ChatRepo(this.ctx);
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
+    this.sessionArchives = new SessionArchivesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.daemonRetirement = new DaemonRetirementRepo(this.ctx);
     this.sshMesh = new SshMeshRepo(this.ctx);
@@ -353,6 +367,114 @@ export class MultiremiStore {
 
   migrate(): void {
 runMigrations(this.db);
+  }
+
+  getSessionArchive(id: string): MultiremiSessionArchive | null {
+    return this.sessionArchives.get(id);
+  }
+
+  listSessionArchives(issueId: string): MultiremiSessionArchive[] {
+    return this.sessionArchives.list(issueId);
+  }
+
+  getSessionArchiveWorkspaceUsage(workspaceId: string): SessionArchiveWorkspaceUsage {
+    return this.sessionArchives.workspaceUsage(workspaceId);
+  }
+
+  getSessionArchiveStatus(
+    issueId: string,
+    sourceRevision?: string | null,
+    sha256?: string | null,
+  ): SessionArchiveStatusSnapshot {
+    return this.sessionArchives.status(issueId, sourceRevision, sha256);
+  }
+
+  initSessionArchive(input: InitSessionArchiveInput, id: string, relativePath: string): {
+    archive: MultiremiSessionArchive;
+    created: boolean;
+  } {
+    const initialized = this.sessionArchives.init(input, id, relativePath);
+    if (!initialized) {
+      throw Object.assign(
+        new Error("Issue is deleting or its workspace has already been cleaned"),
+        { code: "issue_archive_lifecycle_closed" },
+      );
+    }
+    return initialized;
+  }
+
+  reportSessionArchiveFailure(
+    input: ReportSessionArchiveFailureInput,
+    id: string,
+    relativePath: string,
+  ): { archive: MultiremiSessionArchive; created: boolean } {
+    const reported = this.sessionArchives.reportFailure(input, id, relativePath);
+    if (!reported) {
+      throw Object.assign(
+        new Error("Issue is deleting or its workspace has already been cleaned"),
+        { code: "issue_archive_lifecycle_closed" },
+      );
+    }
+    return reported;
+  }
+
+  touchWritableSessionArchive(id: string, runtimeId: string): MultiremiSessionArchive | null {
+    return this.sessionArchives.touchWritableArchive(id, runtimeId);
+  }
+
+  claimSessionArchiveUploadAttempt(id: string, runtimeId: string): MultiremiSessionArchive | null {
+    return this.sessionArchives.claimUploadAttempt(id, runtimeId);
+  }
+
+  beginSessionArchiveUploadAttempt(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+  ): MultiremiSessionArchive | null {
+    return this.sessionArchives.beginUploadAttempt(id, runtimeId, attemptCount);
+  }
+
+  markSessionArchiveUploadedAttempt(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    uploadedSizeBytes: number,
+  ): MultiremiSessionArchive | null {
+    return this.sessionArchives.markUploadedAttempt(id, runtimeId, attemptCount, uploadedSizeBytes);
+  }
+
+  markSessionArchiveReadyAttempt(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    uploadedSizeBytes: number,
+  ): MultiremiSessionArchive | null {
+    return this.sessionArchives.markReadyAttempt(id, runtimeId, attemptCount, uploadedSizeBytes);
+  }
+
+  markSessionArchiveFailedAttempt(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    error: string,
+  ): MultiremiSessionArchive | null {
+    return this.sessionArchives.markFailedAttempt(id, runtimeId, attemptCount, error);
+  }
+
+  markSessionArchiveFailed(id: string, error: string): MultiremiSessionArchive | null {
+    return this.sessionArchives.markFailed(id, error);
+  }
+
+  markSessionArchiveVerificationFailedAttempt(
+    id: string,
+    attemptCount: number,
+    error: string,
+  ): MultiremiSessionArchive | null {
+    return this.sessionArchives.markVerificationFailedAttempt(id, attemptCount, error);
+  }
+
+  retrySessionArchive(id: string): MultiremiSessionArchive | null {
+    return this.sessionArchives.retry(id);
   }
 
   createAgent(input: CreateAgentInput): MultiremiAgent {
@@ -1559,8 +1681,8 @@ runMigrations(this.db);
     return this.issueWorkspaces.report(input);
   }
 
-  markIssueWorkspaceCleaned(issueId: string, runtimeId: string): MultiremiIssueWorkspace {
-    return this.issueWorkspaces.markCleaned(issueId, runtimeId);
+  markIssueWorkspaceCleaned(input: MarkIssueWorkspaceCleanedInput): MultiremiIssueWorkspace {
+    return this.issueWorkspaces.markCleaned(input);
   }
 
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null {
@@ -1621,6 +1743,22 @@ runMigrations(this.db);
 
   deleteIssue(id: string): boolean {
     return this.issues.deleteIssue(id);
+  }
+
+  deleteIssuesAtomically(ids: string[]): { deleted: number } {
+    return this.issues.deleteIssuesAtomically(ids);
+  }
+
+  beginIssueDeletion(id: string): BeginIssueDeletionResult {
+    return this.issues.beginIssueDeletion(id);
+  }
+
+  abortIssueDeletion(id: string): void {
+    this.issues.abortIssueDeletion(id);
+  }
+
+  getIssueDeletionLifecycleState(id: string): string | null {
+    return this.issues.deletionLifecycleState(id);
   }
 
   batchDeleteIssues(input: BatchDeleteIssuesInput): { deleted: number } {

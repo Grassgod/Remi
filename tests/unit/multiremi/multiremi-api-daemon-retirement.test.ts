@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -540,7 +540,11 @@ describe("Multiremi API — daemon retirement", () => {
       branchName: `agent/${issue.key}`,
       status: "ready",
     });
-    store.markIssueWorkspaceCleaned(issue.id, claude.id);
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: claude.id,
+      ...readyArchiveBinding(store, issue.id, claude.id),
+    });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     store.getOrCreateSessionAgentLane(session.id, agent.id);
     db!.run(
@@ -729,7 +733,13 @@ describe("Multiremi API — daemon retirement", () => {
       branchName: `agent/${issue.key}`,
       status: "ready",
     })).toThrow(`Runtime not found: ${claude.id}`);
-    expect(() => store.markIssueWorkspaceCleaned(issue.id, claude.id)).toThrow("runtime does not own issue workspace");
+    expect(() => store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: claude.id,
+      archiveId: "sar_retired",
+      sourceRevision: "retired",
+      sha256: "0".repeat(64),
+    })).toThrow("runtime does not own issue workspace");
     expect(() => store.updateRuntimeModels(claude.id, [{ id: "late-model", label: "Late", provider: "anthropic", default: false }]))
       .toThrow(`Runtime not found: ${claude.id}`);
     expect(() => store.createRuntimeModelListRequest(claude.id)).toThrow(`Runtime not found: ${claude.id}`);
@@ -773,6 +783,12 @@ describe("Multiremi API — daemon retirement", () => {
     });
 
     expect(store.getDaemonRetirementPlan("local", "daemon-issue-delete").canRetire).toBeFalse();
+    expect(store.deleteIssue(issue.id)).toBeFalse();
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      ...readyArchiveBinding(store, issue.id, runtime.id),
+    });
     expect(store.deleteIssue(issue.id)).toBeTrue();
     expect(store.getIssueWorkspace(issue.id)).toBeNull();
     expect(Number((db!.query(
@@ -829,7 +845,11 @@ describe("Multiremi API — daemon retirement", () => {
       branchName: `agent/${issue.key}`,
       status: "ready",
     });
-    store.markIssueWorkspaceCleaned(issue.id, runtime.id);
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      ...readyArchiveBinding(store, issue.id, runtime.id),
+    });
     plan = store.getDaemonRetirementPlan("local", "daemon-snapshot");
     expect(plan.snapshot).not.toBe(auxiliarySnapshot);
     expect(plan.canRetire).toBeTrue();

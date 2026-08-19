@@ -71,6 +71,7 @@ describe("buildTaskEnv", () => {
       ...OPTS,
       workDir: "/workspaces/MUL-1",
       providerHome: {
+        storageRoot: "/workspaces/MUL-1",
         root: "/workspaces/MUL-1/.multiremi/sessions/ises_real/agt_real/1",
         home: "/workspaces/MUL-1/.multiremi/sessions/ises_real/agt_real/1/home",
         sessionId: "ises_real",
@@ -98,6 +99,7 @@ describe("buildTaskEnv", () => {
     const env = buildTaskEnv(taskWith({ issueId: "iss_1", issueSessionId: "ises_1" }), {
       ...OPTS,
       providerHome: {
+        storageRoot: "/workspaces/MUL-1",
         root: "/workspaces/MUL-1/.multiremi/sessions/ises_1/agt_1/2",
         home: "/workspaces/MUL-1/.multiremi/sessions/ises_1/agt_1/2/home",
         sessionId: "ises_1",
@@ -108,6 +110,20 @@ describe("buildTaskEnv", () => {
     });
     expect(env.CLAUDE_CONFIG_DIR).toBe("/workspaces/MUL-1/.multiremi/sessions/ises_1/agt_1/2/home");
     expect(env.CODEX_HOME).toBeUndefined();
+  });
+
+  it("keeps provider tombstones so stale workspace and agent credentials cannot reach the child", () => {
+    const env = buildTaskEnv(taskWith({
+      workspaceEnv: { OPENAI_API_KEY: "workspace-old" },
+      agent: { customEnv: { OPENAI_API_KEY: "agent-old" } } as unknown as AgentTask["agent"],
+    }), {
+      ...OPTS,
+      providerEnv: { OPENAI_API_KEY: "" },
+    });
+
+    // AcpClient overlays this object on top of process.env. Keeping the empty
+    // entry, rather than omitting it, also clears a machine-level old key.
+    expect(env).toHaveProperty("OPENAI_API_KEY", "");
   });
 
   it("builds the same env as before when the task has no workspace env", () => {

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
@@ -6,9 +9,11 @@ import {
 } from "@multiremi/client.js";
 
 const originalFetch = globalThis.fetch;
+const temporaryRoots: string[] = [];
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("MultiremiDaemonClient HTTP failures", () => {
@@ -147,5 +152,116 @@ describe("MultiremiDaemonClient SSH Mesh wire", () => {
     expect(requestSignal).not.toBeNull();
     expect(requestSignal as unknown as AbortSignal).toBe(controller.signal);
     expect(requestReleased).toBe(true);
+  });
+});
+
+describe("MultiremiDaemonClient workspace configuration", () => {
+  it("returns heartbeat-delivered settings and Relay configuration", async () => {
+    globalThis.fetch = (async () => Response.json({
+      status: "ok",
+      workspace_settings: {
+        session_archive: { workspace_ttl_ms: 7_200_000, gc_interval_ms: 120_000 },
+      },
+      relay: {
+        claude: {
+          fragment: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://relay.example" } }),
+          auth_token: "relay-secret",
+          revision: 3,
+        },
+        codex: null,
+      },
+    })) as unknown as typeof globalThis.fetch;
+
+    const ack = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .heartbeatRuntime("runtime-1");
+
+    expect(ack.workspace_settings).toEqual({
+      session_archive: { workspace_ttl_ms: 7_200_000, gc_interval_ms: 120_000 },
+    });
+    expect(ack.relay?.claude).toMatchObject({ revision: 3, auth_token: "relay-secret" });
+  });
+});
+
+describe("MultiremiDaemonClient Issue session archive wire", () => {
+  it("encodes archive scope and streams the prepared file with daemon auth", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-archive-"));
+    temporaryRoots.push(root);
+    const archivePath = join(root, "sessions.tar.gz");
+    writeFileSync(archivePath, "archive-bytes");
+    const requests: Array<{ url: string; method: string; headers: Headers; body: BodyInit | null | undefined }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      requests.push({ url, method, headers: new Headers(init?.headers), body: init?.body });
+      if (url.includes("/status?source_revision=revision%2F1&sha256=abc")) {
+        return Response.json({ latest: null, latest_ready: null, requested_ready: null, gc_ready: false });
+      }
+      if (url.endsWith("/init")) {
+        return Response.json({
+          archive: {
+            id: "archive/1",
+            status: "pending",
+            source_revision: "revision/1",
+            sha256: "abc",
+            size_bytes: 13,
+          },
+          upload_attempt: 7,
+          upload_url: "/unused-by-client?attempt=7",
+        });
+      }
+      return Response.json({
+        archive: {
+          id: "archive/1",
+          status: url.includes("/complete?attempt=") ? "ready" : "uploading",
+          source_revision: "revision/1",
+          sha256: "abc",
+          size_bytes: 13,
+        },
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new MultiremiDaemonClient("https://remi.example/", "daemon-token");
+    await client.getIssueSessionArchiveStatus("runtime/1", "issue/1", "revision/1", "abc");
+    await client.getIssueSessionArchiveStatus("runtime/1", "issue/1", "revision/1", "abc", true);
+    await client.initIssueSessionArchive("runtime/1", "issue/1", {
+      sourceRevision: "revision/1",
+      sha256: "abc",
+      sizeBytes: 13,
+      fileCount: 2,
+    });
+    await client.reportIssueSessionArchiveFailure("runtime/1", "issue/1", {
+      stage: "prepare",
+      error: "pack failed",
+    });
+    await client.uploadIssueSessionArchive("runtime/1", "issue/1", "archive/1", archivePath);
+    await client.completeIssueSessionArchive("runtime/1", "issue/1", "archive/1");
+    await client.reportIssueWorkspaceCleaned("issue/1", "runtime/1", {
+      archiveId: "archive/1",
+      sourceRevision: "revision/1",
+      sha256: "abc",
+    });
+
+    expect(requests.map(({ url, method }) => [method, url])).toEqual([
+      ["GET", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/status?source_revision=revision%2F1&sha256=abc"],
+      ["GET", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/status?source_revision=revision%2F1&sha256=abc&verify_ready=1"],
+      ["POST", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/init"],
+      ["POST", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/failure"],
+      ["PUT", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/archive%2F1/content?attempt=7"],
+      ["POST", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/archive%2F1/complete?attempt=7"],
+      ["POST", "https://remi.example/api/daemon/issues/issue%2F1/workspace/cleaned"],
+    ]);
+    expect(requests.every(({ headers }) => headers.get("authorization") === "Bearer daemon-token")).toBe(true);
+    expect(JSON.parse(String(requests[3]?.body))).toEqual({
+      stage: "prepare",
+      error: "pack failed",
+    });
+    expect(requests[4]?.headers.get("content-type")).toBe("application/octet-stream");
+    expect(requests[4]?.body).toBeTruthy();
+    expect(JSON.parse(String(requests[6]?.body))).toEqual({
+      runtime_id: "runtime/1",
+      archive_id: "archive/1",
+      source_revision: "revision/1",
+      sha256: "abc",
+    });
   });
 });

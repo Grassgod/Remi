@@ -1359,8 +1359,75 @@ export interface MultiremiIssueWorkspace {
   repos: MultiremiIssueWorkspaceRepo[];
   lastTaskId: string | null;
   cleanedAt: string | null;
+  cleanedArchiveId: string | null;
+  cleanedArchiveSourceRevision: string | null;
+  cleanedArchiveSha256: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MultiremiIssueWorkspaceArchiveBinding {
+  archiveId: string;
+  sourceRevision: string;
+  sha256: string;
+}
+
+export type MultiremiSessionArchiveStatus =
+  | "pending"
+  | "uploading"
+  | "ready"
+  | "failed"
+  | "superseded";
+
+export const MULTIREMI_SESSION_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
+export const MULTIREMI_SESSION_ARCHIVE_MAX_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+export const MULTIREMI_SESSION_ARCHIVE_MIN_GC_INTERVAL_MS = 60 * 1000;
+export const MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION = "preparation-failed";
+
+/**
+ * Control-plane metadata for a provider-native Issue session archive.
+ * Archive bytes live in SessionArchiveStore, never in SQL.
+ */
+export interface MultiremiSessionArchive {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  runtimeId: string;
+  daemonId: string;
+  sourceRevision: string;
+  sha256: string;
+  sizeBytes: number;
+  uploadedSizeBytes: number;
+  fileCount: number | null;
+  status: MultiremiSessionArchiveStatus;
+  relativePath: string;
+  metadata: Record<string, unknown>;
+  attemptCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface InitSessionArchiveInput {
+  workspaceId: string;
+  issueId: string;
+  runtimeId: string;
+  daemonId: string;
+  sourceRevision: string;
+  sha256: string;
+  sizeBytes: number;
+  fileCount?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReportSessionArchiveFailureInput {
+  workspaceId: string;
+  issueId: string;
+  runtimeId: string;
+  daemonId: string;
+  stage: "prepare";
+  error: string;
 }
 
 export interface ReportIssueWorkspaceInput {
@@ -1372,6 +1439,11 @@ export interface ReportIssueWorkspaceInput {
   repos?: MultiremiIssueWorkspaceRepo[];
   lastTaskId?: string | null;
   cleanedAt?: string | null;
+}
+
+export interface MarkIssueWorkspaceCleanedInput extends MultiremiIssueWorkspaceArchiveBinding {
+  issueId: string;
+  runtimeId: string;
 }
 
 export interface MultiremiIssueAssigneeGroup {

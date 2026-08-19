@@ -229,6 +229,11 @@ const mockApiObj = vi.hoisted(() => ({
   unsubscribeFromIssue: vi.fn().mockResolvedValue(undefined),
   getActiveTasksForIssue: vi.fn().mockResolvedValue({ tasks: [] }),
   listTasksByIssue: vi.fn().mockResolvedValue([]),
+  listIssueSessionArchives: vi.fn().mockResolvedValue({
+    archives: [],
+    latest: null,
+    latest_ready: null,
+  }),
   listTaskMessages: vi.fn().mockResolvedValue([]),
   listChildIssues: vi.fn().mockResolvedValue({ issues: [] }),
   listIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),

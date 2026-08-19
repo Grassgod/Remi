@@ -56,6 +56,7 @@ describe("store migrations", () => {
       "multiremi_chat_sessions",
       "multiremi_feedback",
       "multiremi_access_tokens",
+      "multiremi_session_archives",
     ]) {
       expect(tables).toContain(table);
     }
@@ -69,7 +70,12 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
       "trigger_id", "event_id", "issue_session_id",
     ]));
-    expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining(["issue_kind", "source_issue_id"]));
+    expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining([
+      "issue_kind", "source_issue_id", "lifecycle_state",
+    ]));
+    expect(columnNames(database, "multiremi_issue_workspaces")).toEqual(expect.arrayContaining([
+      "cleaned_archive_id", "cleaned_archive_source_revision", "cleaned_archive_sha256",
+    ]));
     expect(columnNames(database, "multiremi_agent_plugin_bindings")).not.toContain("task_kind");
     expect(columnNames(database, "multiremi_project_docs")).toEqual(expect.arrayContaining([
       "storage_backend", "content_uri", "content_sha256", "sync_status", "sync_error", "snapshot_oid",
@@ -81,6 +87,9 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_workspace_ssh_mesh")).toContain("active_operation_id");
     expect(columnNames(database, "multiremi_daemon_ssh_mesh_states")).toEqual(expect.arrayContaining([
       "node_kind", "name",
+    ]));
+    expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
+      "source_revision", "sha256", "relative_path", "status", "uploaded_size_bytes",
     ]));
   });
 

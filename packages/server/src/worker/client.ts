@@ -14,6 +14,7 @@ import type {
   TaskUsageEntry,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
+  MultiremiIssueWorkspaceArchiveBinding,
   MultiremiDaemonSshMeshConfig,
   MultiremiDaemonSshMeshStatus,
   ReportAgentPluginRuntimeStateInput,
@@ -70,10 +71,38 @@ export interface MultiremiDaemonRegisterResponse {
   runtimes: Array<{ id: string; provider?: string; type?: string }>;
 }
 
+export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonHeartbeatAck {
+  workspace_settings?: Record<string, unknown>;
+  relay?: MultiremiRelayWire;
+}
+
 export interface MultiremiDaemonGcStatus {
   status: string;
   updated_at?: string | null;
   completed_at?: string | null;
+}
+
+export interface MultiremiDaemonSessionArchiveWire {
+  id: string;
+  status: "pending" | "uploading" | "ready" | "failed" | "superseded";
+  source_revision: string;
+  sha256: string;
+  size_bytes: number;
+  attempt_count?: number;
+  last_error?: string | null;
+}
+
+export interface MultiremiDaemonSessionArchiveStatus {
+  latest: MultiremiDaemonSessionArchiveWire | null;
+  latest_ready: MultiremiDaemonSessionArchiveWire | null;
+  requested_ready: MultiremiDaemonSessionArchiveWire | null;
+  gc_ready: boolean;
+}
+
+export interface MultiremiDaemonSessionArchiveInitResponse {
+  archive: MultiremiDaemonSessionArchiveWire;
+  upload_attempt: number | null;
+  upload_url: string | null;
 }
 
 export interface MultiremiRecoverOrphansResult {
@@ -109,6 +138,7 @@ export function isTerminalDaemonAuthorityError(error: unknown): boolean {
 export class MultiremiDaemonClient {
   private baseUrl: string;
   private token: string | null;
+  private sessionArchiveUploadAttempts = new Map<string, number>();
 
   constructor(baseUrl: string, token?: string | null) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -146,8 +176,8 @@ export class MultiremiDaemonClient {
   async heartbeatRuntime(
     runtimeId: string,
     sshMeshStatus?: MultiremiDaemonSshMeshStatus,
-  ): Promise<MultiremiDaemonHeartbeatAck> {
-    let resp: Partial<MultiremiDaemonHeartbeatAck>;
+  ): Promise<MultiremiDaemonHeartbeatConfigAck> {
+    let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
       resp = await this.post<Partial<MultiremiDaemonHeartbeatAck>>("/api/daemon/heartbeat", {
         runtime_id: runtimeId,
@@ -167,7 +197,7 @@ export class MultiremiDaemonClient {
       runtime_id: runtimeId,
       status: resp.status ?? "ok",
       ...resp,
-    } as MultiremiDaemonHeartbeatAck;
+    } as MultiremiDaemonHeartbeatConfigAck;
   }
 
   async getSshMeshConfig(runtimeId: string, signal?: AbortSignal): Promise<MultiremiDaemonSshMeshConfig> {
@@ -401,8 +431,106 @@ export class MultiremiDaemonClient {
     return this.get<MultiremiDaemonGcStatus>(`/api/daemon/issues/${encodeURIComponent(issueId)}/gc-check`);
   }
 
-  async reportIssueWorkspaceCleaned(issueId: string, runtimeId: string): Promise<void> {
-    await this.post(`/api/daemon/issues/${encodeURIComponent(issueId)}/workspace/cleaned`, { runtime_id: runtimeId });
+  async getIssueSessionArchiveStatus(
+    runtimeId: string,
+    issueId: string,
+    sourceRevision: string,
+    sha256: string,
+    verifyReady = false,
+  ): Promise<MultiremiDaemonSessionArchiveStatus> {
+    const query = new URLSearchParams({ source_revision: sourceRevision, sha256 });
+    if (verifyReady) query.set("verify_ready", "1");
+    return this.get<MultiremiDaemonSessionArchiveStatus>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/status?${query}`,
+    );
+  }
+
+  async initIssueSessionArchive(runtimeId: string, issueId: string, input: {
+    sourceRevision: string;
+    sha256: string;
+    sizeBytes: number;
+    fileCount: number;
+    metadata?: Record<string, unknown>;
+  }): Promise<MultiremiDaemonSessionArchiveInitResponse> {
+    const response = await this.post<MultiremiDaemonSessionArchiveInitResponse>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/init`,
+      {
+        source_revision: input.sourceRevision,
+        sha256: input.sha256,
+        size_bytes: input.sizeBytes,
+        file_count: input.fileCount,
+        metadata: input.metadata ?? {},
+      },
+    );
+    const key = sessionArchiveAttemptKey(runtimeId, issueId, response.archive.id);
+    if (Number.isSafeInteger(response.upload_attempt) && Number(response.upload_attempt) > 0) {
+      this.sessionArchiveUploadAttempts.set(key, Number(response.upload_attempt));
+    } else {
+      this.sessionArchiveUploadAttempts.delete(key);
+    }
+    return response;
+  }
+
+  async reportIssueSessionArchiveFailure(
+    runtimeId: string,
+    issueId: string,
+    input: { stage: "prepare"; error: string },
+  ): Promise<MultiremiDaemonSessionArchiveWire> {
+    const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/failure`,
+      input,
+    );
+    return response.archive;
+  }
+
+  async uploadIssueSessionArchive(
+    runtimeId: string,
+    issueId: string,
+    archiveId: string,
+    archivePath: string,
+  ): Promise<MultiremiDaemonSessionArchiveWire> {
+    const attempt = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
+    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
+    const resp = await fetch(this.baseUrl + path, {
+      method: "PUT",
+      headers: this.headers("application/octet-stream"),
+      body: Bun.file(archivePath),
+    });
+    return (await parseResponse<{ archive: MultiremiDaemonSessionArchiveWire }>(resp, "PUT", path)).archive;
+  }
+
+  async completeIssueSessionArchive(
+    runtimeId: string,
+    issueId: string,
+    archiveId: string,
+  ): Promise<MultiremiDaemonSessionArchiveWire> {
+    const attempt = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
+    const key = sessionArchiveAttemptKey(runtimeId, issueId, archiveId);
+    const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/complete?attempt=${attempt}`,
+      {},
+    );
+    if (response.archive.status === "ready") this.sessionArchiveUploadAttempts.delete(key);
+    return response.archive;
+  }
+
+  private requireSessionArchiveUploadAttempt(runtimeId: string, issueId: string, archiveId: string): number {
+    const attempt = this.sessionArchiveUploadAttempts.get(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+    if (!attempt) throw new Error("Session archive must be initialized before upload or completion");
+    return attempt;
+  }
+
+  async reportIssueWorkspaceCleaned(
+    issueId: string,
+    runtimeId: string,
+    archive: MultiremiIssueWorkspaceArchiveBinding,
+  ): Promise<void> {
+    await this.post(`/api/daemon/issues/${encodeURIComponent(issueId)}/workspace/cleaned`, {
+      runtime_id: runtimeId,
+      archive_id: archive.archiveId,
+      source_revision: archive.sourceRevision,
+      sha256: archive.sha256,
+    });
   }
 
   async getChatSessionGcCheck(sessionId: string): Promise<MultiremiDaemonGcStatus> {
@@ -448,6 +576,10 @@ export class MultiremiDaemonClient {
     if (token) headers.Authorization = `Bearer ${token}`;
     return headers;
   }
+}
+
+function sessionArchiveAttemptKey(runtimeId: string, issueId: string, archiveId: string): string {
+  return JSON.stringify([runtimeId, issueId, archiveId]);
 }
 
 async function parseResponse<T>(resp: Response, method: string, path: string): Promise<T> {

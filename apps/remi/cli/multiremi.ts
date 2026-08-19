@@ -6,11 +6,17 @@
  * daemon health probing live in `./multiremi/`.
  */
 
-import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname } from "node:path";
-import { MultiremiDaemon, startMultiremiServer, MultiremiStore } from "@multiremi/index.js";
+import {
+  MultiremiDaemon,
+  startMultiremiServer,
+  MultiremiStore,
+} from "@multiremi/index.js";
+import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
 import { setLogLevel } from "@shared/logger.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
@@ -22,12 +28,19 @@ import {
 } from "@multiremi/config.js";
 import { bootFeishuChannel } from "./agent.js";
 import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
+import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
+import {
+  acquireWorkspaceSupervisorLease,
+  configuredMultiremiWorkspacesRoot,
+  type WorkspaceSupervisorLease,
+} from "@daemon/agent-runtime/workspace/process-owner.js";
 import { type CliOptions, numberOpt, parseArgs, stringOpt } from "./multiremi/options.js";
 import {
   SUPPORTED_DAEMON_PROVIDERS,
   type SupportedDaemonProvider,
   checkManagedDaemonHealth,
   daemonAlive,
+  daemonSupervisorReady,
   isSupportedDaemonProvider,
   requestDaemonShutdown,
   resolveHealthyDaemonProviders,
@@ -73,6 +86,8 @@ interface RunMultiremiOptions {
 }
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
+const SUPERVISOR_INSTANCE_ENV = "MULTIREMI_SUPERVISOR_INSTANCE_ID";
 
 export async function runMultiremi(args: string[], runOptions: RunMultiremiOptions = {}): Promise<void> {
   const parsed = parseArgs(args);
@@ -276,7 +291,16 @@ async function daemon(options: CliOptions, positional: string[], programName: st
  * provider, or `[]` if no provider is healthy (the caller decides whether that
  * is an error — e.g. the unified agent tolerates it when Feishu is configured).
  */
-export async function resolveWorkerDaemons(options: CliOptions): Promise<MultiremiDaemon[]> {
+export interface WorkerDaemonSupervisorOptions {
+  workspacesRoot?: string;
+  workspaceRootFence?: () => void;
+  onRestartRequested?: () => void;
+}
+
+export async function resolveWorkerDaemons(
+  options: CliOptions,
+  supervisor: WorkerDaemonSupervisorOptions = {},
+): Promise<MultiremiDaemon[]> {
   await prepareDaemonEnvironment();
   const config = loadMultiremiConfig();
   const serverUrl = stringOpt(options.server, undefined)
@@ -319,52 +343,153 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
   const daemons: MultiremiDaemon[] = [];
   const stopAllForRestart = () => {
     for (const runtimeDaemon of daemons) runtimeDaemon.stop();
+    supervisor.onRestartRequested?.();
   };
-  for (const provider of providers) {
-    daemons.push(new MultiremiDaemon({
-      serverUrl,
-      token: stringOpt(options.token, process.env.MULTIREMI_TOKEN) ?? config.token,
-      runtimeId,
-      daemonId: stringOpt(options.daemonId ?? options["daemon-id"], process.env.MULTIREMI_DAEMON_ID)
-        ?? config.daemon_id
-        ?? (providers.length > 1 ? deviceName : null),
-      runtimeName: providers.length > 1 ? formatRuntimeName(runtimeName, provider) : runtimeName,
-      deviceName,
-      provider,
-      maxConcurrency,
-      workspaceId: stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)
-        ?? config.workspace_id
-        ?? "local",
-      daemonPort: providers.length > 1 && baseDaemonPort !== 0 ? baseDaemonPort + providers.indexOf(provider) : baseDaemonPort,
-      repoCacheRoot: stringOpt(options.repoCacheRoot ?? options["repo-cache-root"], process.env.MULTIREMI_REPO_CACHE_ROOT) ?? undefined,
-      once: Boolean(options.once),
-      onRestartRequested: stopAllForRestart,
-    }));
-  }
+  const daemonOptions = providers.map((provider): MultiremiDaemonOptions => ({
+    serverUrl,
+    token: stringOpt(options.token, process.env.MULTIREMI_TOKEN) ?? config.token,
+    runtimeId,
+    daemonId: stringOpt(options.daemonId ?? options["daemon-id"], process.env.MULTIREMI_DAEMON_ID)
+      ?? config.daemon_id
+      ?? (providers.length > 1 ? deviceName : null),
+    runtimeName: providers.length > 1 ? formatRuntimeName(runtimeName, provider) : runtimeName,
+    deviceName,
+    provider,
+    maxConcurrency,
+    workspaceId: stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)
+      ?? config.workspace_id
+      ?? "local",
+    daemonPort: providers.length > 1 && baseDaemonPort !== 0 ? baseDaemonPort + providers.indexOf(provider) : baseDaemonPort,
+    workspacesRoot: supervisor.workspacesRoot,
+    workspaceRootFence: supervisor.workspaceRootFence,
+    repoCacheRoot: stringOpt(options.repoCacheRoot ?? options["repo-cache-root"], process.env.MULTIREMI_REPO_CACHE_ROOT) ?? undefined,
+    once: Boolean(options.once),
+    onRestartRequested: stopAllForRestart,
+  }));
+  daemons.push(...instantiateCoResidentWorkerDaemons(daemonOptions));
   return daemons;
 }
 
+/** Construct provider daemons that share one local Issue workspace tree. */
+export function instantiateCoResidentWorkerDaemons(
+  options: MultiremiDaemonOptions[],
+): MultiremiDaemon[] {
+  // Claude and Codex are separate daemon instances but their provider
+  // lifecycle and GC must cross the same archive-and-delete barrier.
+  const issueWorkspaceLifecycleLocker = new IssueWorkspaceLifecycleLocker();
+  const readyProviders = new Set<number>();
+  return options.map((daemonOptions, index) => {
+    const extraReadyCheck = daemonOptions.supervisorReady;
+    const notifyReadyChange = daemonOptions.onReadyChange;
+    return new MultiremiDaemon({
+      ...daemonOptions,
+      issueWorkspaceLifecycleLocker,
+      supervisorReady: () =>
+        readyProviders.size === options.length && (extraReadyCheck?.() ?? true),
+      onReadyChange: (ready) => {
+        if (ready) readyProviders.add(index);
+        else readyProviders.delete(index);
+        notifyReadyChange?.(ready);
+      },
+    });
+  });
+}
+
 async function runDaemonForeground(options: CliOptions, programName: string): Promise<void> {
-  const daemons = await resolveWorkerDaemons(options);
-  // Co-resident Feishu channel: a long-running agent process also brings up the
-  // Feishu channel when configured, so one `remi start` runs both. Skipped in
-  // --once mode (tests / one-shot worker runs never touch Feishu).
-  const feishu = Boolean(options.once) ? null : await bootFeishuChannel();
-  if (daemons.length === 0 && !feishu) {
-    throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
+  let workspaceSupervisor: WorkspaceSupervisorLease | null = acquireWorkspaceSupervisorLease(
+    configuredMultiremiWorkspacesRoot(),
+    { basePort: daemonPortFromOptions(options) },
+  );
+  let daemons: MultiremiDaemon[] = [];
+  let feishu: Awaited<ReturnType<typeof bootFeishuChannel>> = null;
+  let stopAll = (): void => {};
+  let signalsRegistered = false;
+  let ownerWatch: ReturnType<typeof setInterval> | null = null;
+  let ownershipFailure: unknown = null;
+  let restartRequested = false;
+  try {
+    daemons = await resolveWorkerDaemons(options, {
+      workspacesRoot: workspaceSupervisor.workspaceRoot,
+      workspaceRootFence: () => workspaceSupervisor?.assertOwner(),
+      // Provider updates must stop the whole supervisor, including Feishu.
+      onRestartRequested: () => stopAll(),
+    });
+    // Co-resident Feishu channel: a long-running agent process also brings up
+    // Feishu when configured. One-shot workers never start it.
+    feishu = Boolean(options.once) ? null : await bootFeishuChannel();
+    if (daemons.length === 0) {
+      workspaceSupervisor.release();
+      workspaceSupervisor = null;
+    }
+    if (daemons.length === 0 && !feishu) {
+      throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
+    }
+
+    stopAll = (): void => {
+      for (const runtimeDaemon of daemons) runtimeDaemon.stop();
+      feishu?.stop().catch(() => {});
+    };
+    process.on("SIGINT", stopAll);
+    process.on("SIGTERM", stopAll);
+    signalsRegistered = true;
+    if (workspaceSupervisor) {
+      ownerWatch = setInterval(() => {
+        try {
+          workspaceSupervisor?.assertOwner();
+        } catch (error) {
+          if (ownershipFailure) return;
+          ownershipFailure = error;
+          for (const runtimeDaemon of daemons) {
+            runtimeDaemon.stopForWorkspaceOwnershipLoss(error);
+          }
+          feishu?.stop().catch(() => {});
+        }
+      }, 250);
+      ownerWatch.unref?.();
+    }
+
+    const providerRuns = daemons.map((runtimeDaemon) => runtimeDaemon.start());
+    stopChannelWhenProvidersFinish(providerRuns, feishu);
+    const running: Promise<void>[] = [...providerRuns];
+    if (feishu) running.push(feishu.start);
+    try {
+      await Promise.all(running);
+    } catch (error) {
+      // Promise.all returns on the first provider failure. Keep ownership until
+      // every co-resident provider has drained its tasks and archive/GC pass.
+      stopAll();
+      await Promise.allSettled(running);
+      throw error;
+    }
+    if (ownershipFailure) throw ownershipFailure;
+    restartRequested = !Boolean(options.once)
+      && daemons.some((runtimeDaemon) => runtimeDaemon.restartRequested());
+  } finally {
+    if (ownerWatch) clearInterval(ownerWatch);
+    if (signalsRegistered) {
+      process.off("SIGINT", stopAll);
+      process.off("SIGTERM", stopAll);
+    }
+    workspaceSupervisor?.release();
   }
-  const stopAll = (): void => {
-    for (const runtimeDaemon of daemons) runtimeDaemon.stop();
-    feishu?.stop().catch(() => {});
-  };
-  process.on("SIGINT", stopAll);
-  process.on("SIGTERM", stopAll);
-  const running: Promise<void>[] = daemons.map((runtimeDaemon) => runtimeDaemon.start());
-  if (feishu) running.push(feishu.start);
-  await Promise.all(running);
-  if (!Boolean(options.once) && daemons.some((runtimeDaemon) => runtimeDaemon.restartRequested())) {
+  if (restartRequested) {
     restartForegroundDaemonProcess(options, programName);
   }
+}
+
+export function stopChannelWhenProvidersFinish(
+  providerRuns: Promise<void>[],
+  channel: { stop(): Promise<void> } | null,
+): void {
+  if (!channel || providerRuns.length === 0) return;
+  // A terminal-authority provider exit is a clean resolution, not a rejection.
+  // Tie the co-resident channel to the provider group so it cannot keep the
+  // process and workspace lease alive after every worker control port closes.
+  void Promise.all(providerRuns)
+    .then(() => channel.stop())
+    .catch(() => {
+      // Provider failures are handled by runDaemonForeground's stop-and-drain.
+    });
 }
 
 async function startDaemonBackground(options: CliOptions, programName: string): Promise<void> {
@@ -378,28 +503,365 @@ async function startDaemonBackground(options: CliOptions, programName: string): 
 
   mkdirSync(spec.stateDir, { recursive: true });
   const logFd = openSync(spec.logPath, "a", 0o644);
+  let child: ChildProcess | null = null;
   let childPid = 0;
+  let exitedBeforeReady: Promise<never> | null = null;
+  const supervisorInstanceId = randomUUID();
   try {
-    const child = spawn(spec.command, spec.args, {
+    const spawned = spawn(spec.command, spec.args, {
       detached: true,
       stdio: ["ignore", logFd, logFd],
-      env: { ...process.env, ...spec.env },
+      env: { ...process.env, ...spec.env, [SUPERVISOR_INSTANCE_ENV]: supervisorInstanceId },
     });
-    childPid = child.pid ?? 0;
-    child.unref();
+    child = spawned;
+    childPid = spawned.pid ?? 0;
+    exitedBeforeReady = new Promise<never>((_, reject) => {
+      spawned.once("error", reject);
+      spawned.once("exit", (code, signal) => {
+        reject(new Error(
+          `Multiremi daemon exited before becoming ready (code ${code ?? "none"}, signal ${signal ?? "none"}). Check logs: ${spec.logPath}`,
+        ));
+      });
+    });
+    spawned.unref();
   } finally {
     closeSync(logFd);
   }
   if (!childPid) throw new Error("failed to start Multiremi daemon");
   writeFileSync(spec.pidPath, `${childPid}\n`, { mode: 0o644 });
 
-  const health = await waitForDaemonReady(spec.port, DEFAULT_STARTUP_TIMEOUT_MS);
-  if (health.status !== "running") {
-    console.error(`Multiremi daemon may still be starting. Check logs: ${spec.logPath}`);
-    return;
+  try {
+    const health = await Promise.race([
+      waitForDaemonReady(spec.port, DEFAULT_STARTUP_TIMEOUT_MS, {
+        expectedPid: childPid,
+        requireSupervisorReady: true,
+      }),
+      exitedBeforeReady!,
+    ]);
+    if (!daemonSupervisorReady(health, { expectedPid: childPid, requireSupervisorReady: true })) {
+      throw new Error(
+        `Multiremi daemon did not make every provider ready within ${DEFAULT_STARTUP_TIMEOUT_MS}ms. `
+          + `The failed supervisor has been stopped; check logs: ${spec.logPath}`,
+      );
+    }
+    console.error(`Multiremi daemon started (pid ${childPid}, version ${health.cli_version ?? multiremiVersion})`);
+    console.error(`Logs: ${spec.logPath}`);
+  } catch (error) {
+    try {
+      await terminateUnreadyBackgroundProcess(child!, spec.pidPath, DEFAULT_SHUTDOWN_TIMEOUT_MS, supervisorInstanceId);
+    } catch (cleanupError) {
+      throw new Error(
+        `Multiremi daemon startup failed and pid ${childPid} could not be stopped: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
-  console.error(`Multiremi daemon started (pid ${childPid}, version ${health.cli_version ?? multiremiVersion})`);
-  console.error(`Logs: ${spec.logPath}`);
+}
+
+/** Stop a supervisor that never reached process-wide readiness. */
+export async function terminateUnreadyBackgroundProcess(
+  child: ChildProcess,
+  pidPath: string,
+  timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  supervisorInstanceId?: string,
+): Promise<void> {
+  const trackedDescendants = new Map<number, TrackedProcess>();
+  const supervisorIdentity = currentProcessRecord(child.pid ?? 0);
+  captureDescendants(supervisorIdentity, trackedDescendants);
+  captureMarkedProcesses(supervisorInstanceId, child.pid ?? 0, trackedDescendants);
+  child.ref();
+  try {
+    if (child.exitCode === null && child.signalCode === null) {
+      try { child.kill("SIGTERM"); } catch {}
+    }
+    if (!(await waitForSupervisorExit(
+      child,
+      timeoutMs,
+      trackedDescendants,
+      supervisorIdentity,
+      supervisorInstanceId,
+    ))) {
+      captureDescendants(supervisorIdentity, trackedDescendants);
+      captureMarkedProcesses(supervisorInstanceId, child.pid ?? 0, trackedDescendants);
+      signalTrackedProcesses(trackedDescendants, "SIGTERM", supervisorInstanceId);
+      try { child.kill("SIGKILL"); } catch {}
+      if (!(await waitForSupervisorExit(
+        child,
+        Math.min(timeoutMs, 5_000),
+        trackedDescendants,
+        supervisorIdentity,
+        supervisorInstanceId,
+      ))) {
+        throw new Error("process remained alive after SIGTERM and SIGKILL");
+      }
+    }
+    captureMarkedProcesses(supervisorInstanceId, child.pid ?? 0, trackedDescendants);
+    await terminateTrackedProcesses(trackedDescendants, timeoutMs, supervisorInstanceId, child.pid ?? 0);
+    removeMatchingPidFile(pidPath, child.pid ?? 0);
+  } finally {
+    child.unref();
+  }
+}
+
+interface TrackedProcess {
+  pid: number;
+  parentPid: number;
+  processGroupId: number;
+  startId: string;
+}
+
+async function waitForSupervisorExit(
+  child: ChildProcess,
+  timeoutMs: number,
+  tracked: Map<number, TrackedProcess>,
+  supervisorIdentity: TrackedProcess | null,
+  supervisorInstanceId?: string,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+    captureDescendants(supervisorIdentity, tracked);
+    captureMarkedProcesses(supervisorInstanceId, child.pid ?? 0, tracked);
+    await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+  }
+  captureDescendants(supervisorIdentity, tracked);
+  captureMarkedProcesses(supervisorInstanceId, child.pid ?? 0, tracked);
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function terminateTrackedProcesses(
+  tracked: Map<number, TrackedProcess>,
+  timeoutMs: number,
+  supervisorInstanceId?: string,
+  supervisorPid = 0,
+): Promise<void> {
+  captureMarkedProcesses(supervisorInstanceId, supervisorPid, tracked);
+  if (await waitForTrackedProcessesExit(
+    tracked,
+    Math.min(timeoutMs, 200),
+    supervisorInstanceId,
+    supervisorPid,
+  )) return;
+  signalTrackedProcesses(tracked, "SIGTERM", supervisorInstanceId);
+  if (await waitForTrackedProcessesExit(
+    tracked,
+    Math.min(timeoutMs, 2_000),
+    supervisorInstanceId,
+    supervisorPid,
+  )) return;
+  signalTrackedProcesses(tracked, "SIGKILL", supervisorInstanceId);
+  if (await waitForTrackedProcessesExit(
+    tracked,
+    Math.min(timeoutMs, 5_000),
+    supervisorInstanceId,
+    supervisorPid,
+  )) return;
+  const remaining = [...tracked.values()]
+    .filter((entry) => trackedProcessAlive(entry, supervisorInstanceId))
+    .map((entry) => entry.pid);
+  throw new Error(`descendant processes remained alive after SIGKILL: ${remaining.join(", ")}`);
+}
+
+async function waitForTrackedProcessesExit(
+  tracked: Map<number, TrackedProcess>,
+  timeoutMs: number,
+  supervisorInstanceId?: string,
+  supervisorPid = 0,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let quietSince: number | null = null;
+  while (Date.now() < deadline) {
+    captureMarkedProcesses(supervisorInstanceId, supervisorPid, tracked);
+    if (!trackedProcessesAlive(tracked, supervisorInstanceId)) {
+      quietSince ??= Date.now();
+      if (Date.now() - quietSince >= 100) return true;
+    } else {
+      quietSince = null;
+    }
+    await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+  }
+  captureMarkedProcesses(supervisorInstanceId, supervisorPid, tracked);
+  return !trackedProcessesAlive(tracked, supervisorInstanceId)
+    && quietSince !== null
+    && Date.now() - quietSince >= 100;
+}
+
+function trackedProcessesAlive(
+  tracked: Map<number, TrackedProcess>,
+  supervisorInstanceId?: string,
+): boolean {
+  const marked = supervisorInstanceId ? markedProcessIds(supervisorInstanceId) : null;
+  return [...tracked.values()].some((entry) => trackedProcessAlive(entry, supervisorInstanceId, marked));
+}
+
+function trackedProcessAlive(
+  expected: TrackedProcess,
+  supervisorInstanceId?: string,
+  marked = supervisorInstanceId ? markedProcessIds(supervisorInstanceId) : null,
+): boolean {
+  if (currentProcessRecord(expected.pid)?.startId !== expected.startId) return false;
+  return !supervisorInstanceId || Boolean(marked?.has(expected.pid));
+}
+
+function signalTrackedProcesses(
+  tracked: Map<number, TrackedProcess>,
+  signal: NodeJS.Signals,
+  supervisorInstanceId?: string,
+): void {
+  // Signal leaves before their parents so wrappers cannot keep a native child
+  // alive through inherited pipes. Dedicated ACP process groups are swept as
+  // groups, while start identity checks prevent PID-reuse kills.
+  const entries = [...tracked.values()].sort(
+    (left, right) => trackedProcessDepth(right, tracked) - trackedProcessDepth(left, tracked),
+  );
+  const marked = supervisorInstanceId ? markedProcessIds(supervisorInstanceId) : null;
+  for (const entry of entries) {
+    const current = currentProcessRecord(entry.pid);
+    if (!current || current.startId !== entry.startId) continue;
+    if (supervisorInstanceId && !marked?.has(current.pid)) continue;
+    if (process.platform !== "win32" && current.processGroupId === current.pid) {
+      try { process.kill(-current.pid, signal); } catch {}
+    }
+    try { process.kill(current.pid, signal); } catch {}
+  }
+}
+
+function trackedProcessDepth(entry: TrackedProcess, tracked: Map<number, TrackedProcess>): number {
+  let depth = 0;
+  let parentPid = entry.parentPid;
+  const seen = new Set<number>();
+  while (!seen.has(parentPid)) {
+    seen.add(parentPid);
+    const parent = tracked.get(parentPid);
+    if (!parent) break;
+    depth++;
+    parentPid = parent.parentPid;
+  }
+  return depth;
+}
+
+function captureDescendants(root: TrackedProcess | null, target: Map<number, TrackedProcess>): void {
+  if (!root) return;
+  const records = allProcessRecords();
+  const observedRoot = records.find((record) => record.pid === root.pid);
+  if (!observedRoot || observedRoot.startId !== root.startId) return;
+  const children = new Map<number, TrackedProcess[]>();
+  for (const record of records) {
+    const siblings = children.get(record.parentPid) ?? [];
+    siblings.push(record);
+    children.set(record.parentPid, siblings);
+  }
+  const pending = [...(children.get(root.pid) ?? [])];
+  while (pending.length) {
+    const child = pending.pop()!;
+    const existing = target.get(child.pid);
+    if (!existing || existing.startId === child.startId) target.set(child.pid, child);
+    pending.push(...(children.get(child.pid) ?? []));
+  }
+}
+
+function captureMarkedProcesses(
+  supervisorInstanceId: string | undefined,
+  supervisorPid: number,
+  target: Map<number, TrackedProcess>,
+): void {
+  if (!supervisorInstanceId) return;
+  const records = allProcessRecords();
+  const marked = markedProcessIds(supervisorInstanceId);
+  for (const record of records) {
+    if (record.pid === supervisorPid || !marked.has(record.pid)) continue;
+    const existing = target.get(record.pid);
+    if (!existing || existing.startId === record.startId) target.set(record.pid, record);
+  }
+}
+
+function markedProcessIds(supervisorInstanceId: string): Set<number> {
+  const marker = `${SUPERVISOR_INSTANCE_ENV}=${supervisorInstanceId}`;
+  if (process.platform === "linux") {
+    let entries: string[];
+    try { entries = readdirSync("/proc"); } catch { return new Set(); }
+    const result = new Set<number>();
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const environ = readFileSync(`/proc/${entry}/environ`, "utf8").split("\0");
+        if (environ.includes(marker)) result.add(Number(entry));
+      } catch {}
+    }
+    return result;
+  }
+  if (process.platform === "win32") return new Set();
+  const result = spawnSync("ps", ["eww", "-axo", "pid=,command="], {
+    encoding: "utf8",
+    timeout: 2_000,
+  });
+  if (result.status !== 0 || !result.stdout) return new Set();
+  return new Set(result.stdout.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    return match && match[2]?.includes(marker) ? [Number(match[1])] : [];
+  }));
+}
+
+function currentProcessRecord(pid: number): TrackedProcess | null {
+  if (process.platform === "linux") return readLinuxProcessRecord(pid);
+  return allProcessRecords().find((entry) => entry.pid === pid) ?? null;
+}
+
+function allProcessRecords(): TrackedProcess[] {
+  if (process.platform === "linux") {
+    let entries: string[];
+    try { entries = readdirSync("/proc"); } catch { return []; }
+    return entries
+      .filter((entry) => /^\d+$/.test(entry))
+      .map((entry) => readLinuxProcessRecord(Number(entry)))
+      .filter((entry): entry is TrackedProcess => entry !== null);
+  }
+  if (process.platform === "win32") return [];
+  const result = spawnSync("ps", ["-axo", "pid=,ppid=,pgid=,lstart="], {
+    encoding: "utf8",
+    timeout: 2_000,
+  });
+  if (result.status !== 0 || !result.stdout) return [];
+  return result.stdout.split("\n").flatMap((line) => {
+    const fields = line.trim().split(/\s+/);
+    const pid = Number(fields[0]);
+    const parentPid = Number(fields[1]);
+    const processGroupId = Number(fields[2]);
+    const startId = fields.slice(3).join(" ");
+    return Number.isSafeInteger(pid)
+      && Number.isSafeInteger(parentPid)
+      && Number.isSafeInteger(processGroupId)
+      && Boolean(startId)
+      ? [{ pid, parentPid, processGroupId, startId }]
+      : [];
+  });
+}
+
+function readLinuxProcessRecord(pid: number): TrackedProcess | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const commandEnd = stat.lastIndexOf(")");
+    if (commandEnd < 0) return null;
+    const fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
+    if (fields[0] === "Z") return null;
+    const parentPid = Number(fields[1]);
+    const processGroupId = Number(fields[2]);
+    const startId = fields[19];
+    if (!Number.isSafeInteger(parentPid) || !Number.isSafeInteger(processGroupId) || !startId) return null;
+    return { pid, parentPid, processGroupId, startId };
+  } catch {
+    return null;
+  }
+}
+
+function removeMatchingPidFile(pidPath: string, expectedPid: number): void {
+  if (expectedPid <= 0) return;
+  try {
+    if (readFileSync(pidPath, "utf8").trim() !== String(expectedPid)) return;
+    rmSync(pidPath, { force: true });
+  } catch {
+    // Missing or concurrently replaced PID files belong to no cleanup here.
+  }
 }
 
 function restartForegroundDaemonProcess(options: CliOptions, programName: string): void {
@@ -415,6 +877,7 @@ function restartForegroundDaemonProcess(options: CliOptions, programName: string
 
 async function stopDaemon(options: CliOptions, opts: { quietIfStopped?: boolean } = {}): Promise<void> {
   const port = daemonPortFromOptions(options);
+  const timeoutMs = daemonShutdownTimeoutMs(options);
   const live = (await checkManagedDaemonHealth(port)).filter((entry) => daemonAlive(entry.health));
   if (live.length === 0) {
     if (!opts.quietIfStopped) console.error("Multiremi daemon is not running.");
@@ -436,16 +899,59 @@ async function stopDaemon(options: CliOptions, opts: { quietIfStopped?: boolean 
     }
   }
 
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + timeoutMs;
+  let remaining = live;
   while (Date.now() < deadline) {
-    await sleep(250);
-    const remaining = (await checkManagedDaemonHealth(port)).filter((entry) => daemonAlive(entry.health));
+    await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+    const reported = (await checkManagedDaemonHealth(port)).filter((entry) => daemonAlive(entry.health));
+    const reportedPorts = new Set(reported.map((entry) => entry.port));
+    remaining = [...reported];
+    // A transient health miss is not proof that the old supervisor released
+    // its root ownership. Retain an original entry while its PID is alive.
+    for (const entry of live) {
+      const pid = typeof entry.health.pid === "number" ? entry.health.pid : 0;
+      if (!reportedPorts.has(entry.port) && pid > 0 && processIsAlive(pid)) {
+        remaining.push(entry);
+      }
+    }
     if (remaining.length === 0) {
       console.error("Multiremi daemon stopped.");
       return;
     }
   }
-  console.error("Multiremi daemon is still stopping. It may be finishing a running task.");
+  const owners = remaining.map((entry) => {
+    const pid = entry.health.pid ?? "unknown";
+    const tasks = entry.health.active_task_count ?? "unknown";
+    return `port ${entry.port}, pid ${pid}, active tasks ${tasks}`;
+  }).join("; ");
+  throw new Error(
+    `Multiremi daemon is still draining after ${timeoutMs}ms (${owners}). `
+      + "No replacement daemon was started. Check `multiremi daemon status` and logs, then retry.",
+  );
+}
+
+function daemonShutdownTimeoutMs(options: CliOptions): number {
+  const option = options.shutdownTimeoutMs ?? options["shutdown-timeout-ms"];
+  const value = Array.isArray(option) ? option.at(-1) : option;
+  const raw = value ?? process.env.MULTIREMI_DAEMON_SHUTDOWN_TIMEOUT_MS;
+  if (raw === undefined) return DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
+    throw new Error("--shutdown-timeout-ms must be a positive integer");
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error("--shutdown-timeout-ms must be a positive integer");
+  }
+  return parsed;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 async function daemonStatus(options: CliOptions): Promise<void> {
@@ -474,6 +980,11 @@ async function daemonStatus(options: CliOptions): Promise<void> {
     if (health.cli_version) console.log(`Version: ${health.cli_version}`);
     if (health.runtime_id) console.log(`Runtime: ${health.runtime_id}`);
     if (health.active_task_count !== undefined) console.log(`Active tasks: ${health.active_task_count}`);
+    if (health.workspace_cleanup_capability === "blocked") {
+      console.log(`Workspace cleanup capability: blocked${health.workspace_cleanup_error ? ` (${health.workspace_cleanup_error})` : ""}`);
+    } else if (health.workspace_cleanup_capability === "available") {
+      console.log("Workspace cleanup capability: available");
+    }
   }
 }
 

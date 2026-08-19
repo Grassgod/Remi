@@ -39,6 +39,7 @@ import { IssueKeyResultsSection } from "./issue-key-results-section";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
 import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
+import { IssueSessionArchivesSection } from "./issue-session-archives-section";
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -59,6 +60,7 @@ interface IssueDetailSidebarProps {
   issueSessions: IssueSession[];
   activeIssueSessionId: string;
   usage: IssueUsageSummary | undefined;
+  canManageArchives: boolean;
 }
 
 /**
@@ -80,6 +82,7 @@ export function IssueDetailSidebar({
   issueSessions,
   activeIssueSessionId,
   usage,
+  canManageArchives,
 }: IssueDetailSidebarProps) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();
@@ -336,6 +339,12 @@ export function IssueDetailSidebar({
           owns its own collapse state and WS subscriptions. Hides itself
           when there are no runs to show. */}
       <ExecutionLogSection issueId={issueId} />
+
+      <IssueSessionArchivesSection
+        issueId={issue.id}
+        issueStatus={issue.status}
+        canManage={canManageArchives}
+      />
 
       {/* Token usage */}
       {usage && usage.task_count > 0 && (

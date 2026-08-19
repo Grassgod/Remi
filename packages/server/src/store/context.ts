@@ -371,6 +371,14 @@ export class StoreContext {
     );
   }
 
+  /** Caller holds the workspace lifecycle lock and is inside a transaction. */
+  lockIssueArchiveLifecycle(issueId: string): void {
+    this.db.run(
+      "UPDATE multiremi_issues SET lifecycle_state = lifecycle_state WHERE id = ?",
+      [issueId],
+    );
+  }
+
   // Lazy cross-domain accessors. A carved-out repo reaches a domain it does not own through these,
   // never through a constructor-injected sibling (which would deadlock the carve order). Today they
   // all resolve to the still-monolithic facade.

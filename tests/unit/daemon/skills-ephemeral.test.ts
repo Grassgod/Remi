@@ -9,11 +9,12 @@
  */
 
 import { test, expect } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { writeAgentSkillContext } from "@daemon/agent-runtime/skills/ephemeral.js";
+import { writeAgentSkillContext, writeTaskGcContext } from "@daemon/agent-runtime/skills/ephemeral.js";
+import { ISSUE_SESSION_ARCHIVE_RECEIPT_FILE } from "@daemon/agent-runtime/workspace/session-archive.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 function taskWithSkill(provider: string): AgentTask {
@@ -69,4 +70,24 @@ test("an agent without skills writes no skill root at all", () => {
   writeAgentSkillContext(workDir, { agent: { skills: [], provider: "codex" } } as unknown as AgentTask);
   expect(existsSync(join(workDir, ".agents"))).toBe(false);
   expect(existsSync(join(workDir, ".claude"))).toBe(false);
+});
+
+test("a new Issue task invalidates the previous Session archive receipt", () => {
+  const workDir = workspace();
+  const metadataDir = join(workDir, ".multiremi");
+  mkdirSync(metadataDir, { recursive: true });
+  const receipt = join(metadataDir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE);
+  writeFileSync(receipt, "stale\n");
+
+  writeTaskGcContext(workDir, {
+    id: "tsk_1",
+    workspaceId: "ws_1",
+    issueId: "iss_1",
+  } as unknown as AgentTask);
+
+  expect(existsSync(receipt)).toBe(false);
+  expect(JSON.parse(readFileSync(join(metadataDir, "gc.json"), "utf8"))).toMatchObject({
+    kind: "issue",
+    issue_id: "iss_1",
+  });
 });

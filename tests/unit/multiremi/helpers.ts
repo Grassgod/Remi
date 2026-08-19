@@ -26,6 +26,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
+import { createId } from "@multiremi/ids.js";
+import type { MultiremiIssueWorkspaceArchiveBinding } from "@multiremi/contracts/types.js";
 
 /** The sqlite handle behind the store most recently built by `createStore()`. */
 export let db: Database | null = null;
@@ -43,6 +45,51 @@ export function createLocalStore(): MultiremiStore {
   const store = createStore();
   store.ensureLocalWorkspace();
   return store;
+}
+
+export function readyArchiveBinding(
+  store: MultiremiStore,
+  issueId: string,
+  runtimeId: string,
+): MultiremiIssueWorkspaceArchiveBinding {
+  const existing = store.getSessionArchiveStatus(issueId).latestReady;
+  if (existing) {
+    return {
+      archiveId: existing.id,
+      sourceRevision: existing.sourceRevision,
+      sha256: existing.sha256,
+    };
+  }
+  const runtime = store.getRuntime(runtimeId);
+  if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+  const archiveId = createId("sar");
+  const sourceRevision = `test-${archiveId}`;
+  const sha256 = createHash("sha256").update(archiveId).digest("hex");
+  const initialized = store.initSessionArchive({
+    workspaceId: runtime.workspaceId ?? "local",
+    issueId,
+    runtimeId,
+    daemonId: runtime.daemonId ?? "test-daemon",
+    sourceRevision,
+    sha256,
+    sizeBytes: 0,
+  }, archiveId, `tests/${archiveId}/sessions.tar.gz`).archive;
+  const claimed = store.claimSessionArchiveUploadAttempt(initialized.id, runtimeId);
+  if (!claimed) throw new Error("Failed to claim test Session archive");
+  const uploading = store.beginSessionArchiveUploadAttempt(
+    claimed.id,
+    runtimeId,
+    claimed.attemptCount,
+  );
+  if (!uploading) throw new Error("Failed to begin test Session archive upload");
+  const ready = store.markSessionArchiveReadyAttempt(
+    uploading.id,
+    runtimeId,
+    uploading.attemptCount,
+    0,
+  );
+  if (!ready) throw new Error("Failed to complete test Session archive");
+  return { archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 };
 }
 
 /**

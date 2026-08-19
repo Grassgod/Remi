@@ -13,6 +13,7 @@ import {
 import { constants as fsConstants } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
+import { removeOwnedDirectorySync } from "../workspace/safe-remove.js";
 import type { AgentPluginCache } from "./cache.js";
 import { normalizeSha256Digest } from "./cache.js";
 import type {
@@ -208,12 +209,15 @@ export async function cleanupTaskPluginRuntime(workDir: string): Promise<void> {
   const workspace = resolve(workDir);
   const runtimeRoot = resolve(workspace, RUNTIME_DIR);
   assertDirectChild(workspace, runtimeRoot, RUNTIME_DIR);
-  await makeTreeWritable(runtimeRoot);
-  await rm(runtimeRoot, { recursive: true, force: true });
+  removeOwnedDirectorySync(workspace, runtimeRoot);
 }
 
 /** Remove the whole daemon-owned non-Issue task directory, including empty parents. */
-export async function cleanupNonIssueTaskPluginRuntime(task: AgentTask, workspacesRoot: string): Promise<void> {
+export async function cleanupNonIssueTaskPluginRuntime(
+  task: AgentTask,
+  workspacesRoot: string,
+  assertRootOwner?: () => void,
+): Promise<void> {
   if (task.issueId ?? task.issue_id) {
     throw new AgentPluginError(
       "Issue Plugin runtimes are reclaimed by workspace GC",
@@ -231,8 +235,7 @@ export async function cleanupNonIssueTaskPluginRuntime(task: AgentTask, workspac
   const owner = resolve(workspacesRoot, ".task-runtime");
   const taskRoot = resolveTaskPluginRuntimeBase(task, workspacesRoot, workspacesRoot);
   assertDirectChild(owner, taskRoot, safePathSegment(task.id));
-  await makeTreeWritable(taskRoot);
-  await rm(taskRoot, { recursive: true, force: true });
+  removeOwnedDirectorySync(workspacesRoot, taskRoot, { assertRootOwner });
 }
 
 /**

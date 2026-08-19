@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
@@ -18,8 +19,10 @@ import type { AgentResponse, Provider } from "@shared/contracts/provider-types.j
 import {
   isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
+  type MultiremiDaemonHeartbeatConfigAck,
   type MultiremiDaemonGcStatus,
   type MultiremiDaemonRegisterResponse,
+  type MultiremiRelayEngineWire,
   type MultiremiRelayWire,
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
@@ -42,15 +45,18 @@ import {
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
 import {
+  assertIssueSessionNativeCodexOAuth,
+  cleanupTemporaryTaskProviderHome,
+  ensureProviderHomeDirectory,
   loadIssueSessionProviderEnv,
   prepareIssueSessionProviderHome,
-  resolveIssueSessionProviderHome,
   resolveIssueRuntimeStateRoot,
+  resolveTaskProviderHome,
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
-import { mergeCodexConfig, syncRelayConfigs } from "@daemon/agent-runtime/relay-sync.js";
+import { mergeCodexSessionConfig } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
@@ -70,6 +76,7 @@ import {
 import {
   installCodexPluginHome,
   seedCodexHomeFromBase,
+  type CodexPluginCommand,
 } from "@daemon/agent-runtime/agent-plugins/codex-home.js";
 import {
   agentPluginDesiredFromWire,
@@ -87,11 +94,22 @@ import {
   type ResolvedTaskWorkDir,
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
 import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
+import { resolveWorkspaceGcPolicy, type WorkspaceGcPolicy } from "@daemon/agent-runtime/workspace/gc-policy.js";
+import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
+import { configuredMultiremiWorkspacesRoot } from "@daemon/agent-runtime/workspace/process-owner.js";
+import { ownedDirectoryRemovalSupport } from "@daemon/agent-runtime/workspace/safe-remove.js";
+import {
+  prepareIssueSessionArchive,
+  readIssueSessionArchiveReceipt,
+  removePreparedIssueSessionArchive,
+  writeIssueSessionArchiveReceipt,
+} from "@daemon/agent-runtime/workspace/session-archive.js";
 import { SshMeshManager } from "@daemon/ssh-mesh.js";
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiDaemonSshMeshStatus,
   MultiremiIssueWorkspaceRepo,
+  MultiremiIssueWorkspaceArchiveBinding,
   MultiremiRepoData,
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
@@ -103,6 +121,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import {
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+  MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
 
@@ -149,18 +168,93 @@ function providerBootstrapEnv(
       ? ["OPENAI_API_KEY"]
       : [];
   const result: Record<string, string> = {};
-  for (const source of [
-    process.env,
-    task.workspaceEnv ?? task.workspace_env,
-    task.agent?.customEnv,
-    resolved,
-  ]) {
-    for (const key of keys) {
-      const value = source?.[key];
-      if (typeof value === "string" && value.trim()) result[key] = value;
+  for (const key of keys) {
+    let value: string | undefined;
+    for (const source of [
+      process.env,
+      task.workspaceEnv ?? task.workspace_env,
+      task.agent?.customEnv,
+      resolved,
+    ]) {
+      if (source && Object.prototype.hasOwnProperty.call(source, key)) {
+        value = source[key];
+      }
     }
+    // Preserve an authoritative empty value: Plugin installers also merge on
+    // top of process.env, so omitting the key would resurrect a machine secret.
+    if (typeof value === "string") result[key] = value.trim() ? value : "";
   }
   return result;
+}
+
+export interface InstallCodexPluginReadinessHomeOptions {
+  readinessRoot: string;
+  /** Non-secret owner identity; keeps readiness state isolated across workspaces. */
+  scopeIdentity?: string;
+  baseHome?: string;
+  /** Presence distinguishes an authoritative workspace clear from legacy/local config. */
+  relayAuthoritative: boolean;
+  relay: MultiremiRelayEngineWire | null;
+  signal?: AbortSignal;
+  runCommand?: (command: CodexPluginCommand) => Promise<void>;
+}
+
+/**
+ * Build the Runtime-readiness CODEX_HOME with the same Relay contract used by
+ * task execution. Gateway credentials exist only in the native Plugin command
+ * environment; the generated config contains routing plus an env-key pointer.
+ */
+export async function installCodexPluginReadinessHome(
+  snapshot: AgentPluginArtifactSpec,
+  payloadPath: string,
+  options: InstallCodexPluginReadinessHomeOptions,
+): Promise<string | null> {
+  const relayToken = options.relay?.auth_token.trim() ?? "";
+  const readinessScope = createHash("sha256").update(JSON.stringify({
+    owner: options.scopeIdentity ?? "default",
+    mode: options.relayAuthoritative
+      ? relayToken ? "workspace-relay" : "workspace-native-oauth"
+      : "runtime-native",
+    revision: options.relay?.revision ?? null,
+  })).digest("hex").slice(0, 24);
+  const prepared = await prepareCodexPluginReadinessRuntime(
+    snapshot,
+    payloadPath,
+    join(options.readinessRoot, readinessScope),
+    options.signal,
+  );
+  const baseHome = options.baseHome ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  const relayUsesEnvApiKey = options.relayAuthoritative && Boolean(relayToken);
+  const useNativeOAuth = !relayUsesEnvApiKey;
+
+  let configToml: string | undefined;
+  let env: Record<string, string> | undefined;
+  if (options.relayAuthoritative) {
+    configToml = mergeCodexSessionConfig(
+      "",
+      options.relay?.fragment ?? "",
+      relayUsesEnvApiKey,
+    );
+    // An empty value is an intentional tombstone: installCodexPluginHome
+    // overlays this on process.env, so a stale machine key cannot survive a
+    // workspace Relay clear and bypass native OAuth.
+    env = { OPENAI_API_KEY: relayToken };
+    if (useNativeOAuth) await assertIssueSessionNativeCodexOAuth(baseHome);
+  }
+
+  return installCodexPluginHome(prepared, {
+    signal: options.signal,
+    ...(options.runCommand ? { runCommand: options.runCommand } : {}),
+    ...(env ? { env } : {}),
+    seedHome: (targetHome) => seedCodexHomeFromBase({
+      baseHome,
+      targetHome,
+      ...(configToml === undefined ? {} : { configToml }),
+      requireAuth: useNativeOAuth,
+      copyAuth: false,
+      linkAuth: useNativeOAuth,
+    }),
+  });
 }
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
@@ -201,6 +295,10 @@ export interface MultiremiDaemonOptions {
   gcIntervalMs?: number;
   gcTtlMs?: number;
   gcOrphanTtlMs?: number;
+  /** Session archives are a mandatory Issue GC precondition by default. */
+  gcRequireArchive?: boolean;
+  /** Maximum uncompressed provider history accepted for one Issue snapshot. */
+  sessionArchiveMaxSourceBytes?: number;
   /** Runtime-global immutable Agent Plugin cache. */
   pluginCacheRoot?: string;
   /** Injectable provider capability probe; production uses the native CLI and ACP bridge. */
@@ -213,6 +311,18 @@ export interface MultiremiDaemonOptions {
   sshMeshManager?: MultiremiDaemonSshMeshRuntime;
   /** Injectable retry schedule for terminal-authority SSH Mesh cleanup tests. */
   terminalAuthorityCleanupRetryDelaysMs?: number[];
+  /**
+   * Root-scoped Issue lifecycle barrier. Every provider daemon that shares a
+   * workspaces root must receive the same instance so task setup cannot race
+   * another provider's archive-and-delete pass.
+   */
+  issueWorkspaceLifecycleLocker?: IssueWorkspaceLifecycleLocker;
+  /** Verifies that this process still owns the canonical workspaces root. */
+  workspaceRootFence?: () => void;
+  /** Shared readiness of every provider daemon in this supervisor process. */
+  supervisorReady?: () => boolean;
+  /** Updates the shared provider readiness barrier. */
+  onReadyChange?: (ready: boolean) => void;
 }
 
 export interface MultiremiDaemonSshMeshRuntime {
@@ -272,7 +382,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -286,6 +396,8 @@ export class MultiremiDaemon {
     gcIntervalMs: number;
     gcTtlMs: number;
     gcOrphanTtlMs: number;
+    gcRequireArchive: boolean;
+    sessionArchiveMaxSourceBytes: number;
     pluginCacheRoot: string;
   };
   private providerFactory: MultiremiDaemonProviderFactory;
@@ -307,7 +419,9 @@ export class MultiremiDaemon {
   private claimsPaused = false;
   private restartRequestedFlag = false;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
+  private gcInFlight: Promise<MultiremiDaemonGcSummary> | null = null;
   private localPathLocks = new LocalPathLocker();
+  private issueWorkspaceLifecycleLocks: IssueWorkspaceLifecycleLocker;
   private runtimeGoneInflight = new Set<string>();
   private reregisterGate = new MultiremiRuntimeReregisterGate();
   private readonly explicitRuntimeId: boolean;
@@ -316,6 +430,11 @@ export class MultiremiDaemon {
   private readonly agentPluginProviderPreflight: MultiremiAgentPluginProviderPreflight;
   private readonly sshMeshManager: MultiremiDaemonSshMeshRuntime;
   private readonly terminalAuthorityCleanupRetryDelaysMs: number[];
+  private readonly defaultGcPolicy: WorkspaceGcPolicy;
+  private readonly workspaceRootFence: (() => void) | null;
+  private readonly supervisorReady: () => boolean;
+  private readonly onReadyChange: (ready: boolean) => void;
+  private workspaceOwnershipLost = false;
   private terminalAuthorityCleanup: Promise<void> | null = null;
   private terminalAuthorityCleanupRetryWake: (() => void) | null = null;
   private terminalAuthorityMode = false;
@@ -332,7 +451,7 @@ export class MultiremiDaemon {
   private runtimeModelRetryWake: (() => void) | null = null;
 
   constructor(options: MultiremiDaemonOptions) {
-    const workspacesRoot = options.workspacesRoot ?? process.env.MULTIREMI_WORKSPACES_ROOT ?? join(homedir(), ".remi", "multiremi", "workspaces");
+    const workspacesRoot = configuredMultiremiWorkspacesRoot(options.workspacesRoot);
     const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
     const deviceName = options.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
     const runtimeId = options.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID ?? null;
@@ -348,6 +467,11 @@ export class MultiremiDaemon {
         ?? numberEnv(process.env.MULTIREMI_RUNTIME_MODEL_RETRY_MAX_MS, RUNTIME_MODEL_RETRY_MAX_MS),
     );
     this.explicitRuntimeId = Boolean(runtimeId);
+    this.issueWorkspaceLifecycleLocks = options.issueWorkspaceLifecycleLocker
+      ?? new IssueWorkspaceLifecycleLocker();
+    this.workspaceRootFence = options.workspaceRootFence ?? null;
+    this.supervisorReady = options.supervisorReady ?? (() => this.ready);
+    this.onReadyChange = options.onReadyChange ?? (() => {});
     this.options = {
       token: options.token ?? process.env.MULTIREMI_TOKEN ?? null,
       runtimeId,
@@ -370,12 +494,19 @@ export class MultiremiDaemon {
       gcIntervalMs: options.gcIntervalMs ?? numberEnv(process.env.MULTIREMI_GC_INTERVAL_MS, 15 * 60 * 1000),
       gcTtlMs: options.gcTtlMs ?? numberEnv(process.env.MULTIREMI_GC_TTL_MS, 72 * 60 * 60 * 1000),
       gcOrphanTtlMs: options.gcOrphanTtlMs ?? numberEnv(process.env.MULTIREMI_GC_ORPHAN_TTL_MS, 72 * 60 * 60 * 1000),
+      gcRequireArchive: options.gcRequireArchive ?? true,
+      sessionArchiveMaxSourceBytes: options.sessionArchiveMaxSourceBytes
+        ?? numberEnv(process.env.MULTIREMI_SESSION_ARCHIVE_MAX_SOURCE_BYTES, 512 * 1024 * 1024),
       pluginCacheRoot: options.pluginCacheRoot
         ?? process.env.MULTIREMI_PLUGIN_CACHE_ROOT
         ?? join(homedir(), ".remi", "plugin-cache", "sha256"),
       runtimeModelRetryBaseMs,
       runtimeModelRetryMaxMs,
       serverUrl: options.serverUrl,
+    };
+    this.defaultGcPolicy = {
+      ttlMs: this.options.gcTtlMs,
+      intervalMs: this.options.gcIntervalMs,
     };
     this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
@@ -426,11 +557,16 @@ export class MultiremiDaemon {
     this.terminalAuthorityMode = false;
     this.terminalAuthorityCleanupAttempts = 0;
     this.restartRequestedFlag = false;
+    this.workspaceOwnershipLost = false;
+    this.onReadyChange(false);
+    this.assertWorkspaceRootOwner();
     this.startRepoCheckoutServer();
-    this.startGcLoop();
     try {
       await this.registerCurrentRuntime();
+      this.assertWorkspaceRootOwner();
       await this.refreshWorkspaceRepos(this.options.workspaceId);
+      this.assertWorkspaceRootOwner();
+      this.startGcLoop();
       // One-shot mode is primarily used for a single queued task (and tests), so
       // avoid paying for a second ACP process unless a model-list request exists.
       if (!this.options.once) {
@@ -441,9 +577,21 @@ export class MultiremiDaemon {
       // iteration because handleHeartbeatAck() may re-register and replace it.
       await this.client.recoverOrphans(this.options.runtimeId!);
       this.ready = true;
+      this.onReadyChange(true);
+      // A co-resident provider becoming ready is not enough to claim work.
+      // Hold every lane until the process-wide readiness barrier is complete;
+      // otherwise a sibling startup failure can leave an unacknowledged task.
+      while (!this.stopped && !this.supervisorReady()) {
+        await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
+      }
 
       while (!this.stopped) {
         try {
+          this.assertWorkspaceRootOwner();
+          if (!this.supervisorReady()) {
+            await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
+            continue;
+          }
           const ack = await this.client.heartbeatRuntime(
             this.options.runtimeId!,
             this.sshMeshManager.getHeartbeatStatus(),
@@ -473,7 +621,12 @@ export class MultiremiDaemon {
           // caps in-flight tasks at the runtime's maxConcurrency, so this local
           // gate and the server agree. activeTaskCount is incremented
           // synchronously at the top of handleTask, so the loop sees it grow.
-          while (this.activeTaskCount < this.options.maxConcurrency && !this.stopped && !this.claimsPaused) {
+          while (
+            this.activeTaskCount < this.options.maxConcurrency
+            && !this.stopped
+            && !this.claimsPaused
+            && this.supervisorReady()
+          ) {
             const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
             if (!task) break;
             const run = this.handleTask(task).catch((err) => {
@@ -512,13 +665,17 @@ export class MultiremiDaemon {
       throw error;
     } finally {
       this.ready = false;
+      this.onReadyChange(false);
+      // Stop scheduling new sweeps before draining tasks. An existing sweep
+      // may be waiting on a task's Issue lifecycle lease and is drained below.
+      this.stopGcLoop();
       this.cancelRuntimeModelRefresh();
       const modelRefresh = this.runtimeModelRefreshTask;
       if (modelRefresh) await Promise.allSettled([modelRefresh]);
       // Running tasks depend on the repo-checkout server, so let any in-flight
-      // tasks drain before tearing it (and the GC loop) down.
+      // tasks drain before waiting for the GC lease they may currently hold.
       await Promise.allSettled([...this.inflight]);
-      this.stopGcLoop();
+      await this.drainGcInFlight();
       this.stopRepoCheckoutServer();
     }
   }
@@ -564,10 +721,10 @@ export class MultiremiDaemon {
     const workspaceId = response.workspace_id ?? this.options.workspaceId ?? "local";
     const repos = normalizeRepoList(response.repos ?? []);
     this.workspaceRepoUrls.set(workspaceId, new Set(repos.map((repo) => repo.url.trim()).filter(Boolean)));
-    this.workspaceSettings.set(workspaceId, response.settings ?? {});
+    this.applyWorkspaceSettings(workspaceId, response.settings ?? {});
     this.workspaceRelays.set(workspaceId, response.relay);
+    this.assertWorkspaceRootOwner();
     this.repoCache.sync(workspaceId, repos);
-    syncRelayConfigs(response.relay, workspaceId);
   }
 
   /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
@@ -605,7 +762,12 @@ export class MultiremiDaemon {
     };
   }
 
-  private async handleHeartbeatAck(runtimeId: string, ack: MultiremiDaemonHeartbeatAck): Promise<boolean> {
+  private async handleHeartbeatAck(runtimeId: string, ack: MultiremiDaemonHeartbeatConfigAck): Promise<boolean> {
+    const workspaceId = this.options.workspaceId ?? "local";
+    if (ack.workspace_settings) this.applyWorkspaceSettings(workspaceId, ack.workspace_settings);
+    if (ack.relay) {
+      this.workspaceRelays.set(workspaceId, ack.relay);
+    }
     if (ack.status === "runtime_gone" || ack.runtime_gone) {
       return !(await this.handleRuntimeGone(runtimeId, Date.now()));
     }
@@ -882,10 +1044,7 @@ export class MultiremiDaemon {
     const abort = new AbortController();
     this.runtimeModelProbeAbort = abort;
     const probe = (async () => {
-      const provider = this.providerFactory({
-        agentType: this.options.provider,
-        cwd: homedir(),
-      });
+      const provider = this.providerFactory(await this.runtimeModelProbeProviderOptions());
       try {
         if (!provider.discoverModelCapabilities) {
           throw new Error(`ACP model discovery is not supported by provider: ${this.options.provider}`);
@@ -914,6 +1073,59 @@ export class MultiremiDaemon {
       if (this.runtimeModelProbe === probe) this.runtimeModelProbe = null;
       if (this.runtimeModelProbeAbort === abort) this.runtimeModelProbeAbort = null;
     }
+  }
+
+  private async runtimeModelProbeProviderOptions(): Promise<AcpProviderOptions> {
+    const provider = this.options.provider;
+    if (provider !== "claude" && provider !== "codex") {
+      return { agentType: provider, cwd: homedir() };
+    }
+    const workspaceId = this.options.workspaceId ?? "local";
+    const workspaceRelay = this.workspaceRelays.get(workspaceId);
+    const relayAuthoritative = workspaceRelay !== undefined;
+    const relay = provider === "claude" ? workspaceRelay?.claude : workspaceRelay?.codex;
+    const owner = `${this.options.daemonId ?? this.options.runtimeName}:${provider}`;
+    const root = join(
+      resolve(this.options.workspacesRoot),
+      ".runtime-probe",
+      `${provider}-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`,
+    );
+    const providerHome: IssueSessionProviderHome = {
+      storageRoot: resolve(this.options.workspacesRoot),
+      root,
+      home: join(root, "home"),
+      sessionId: "runtime-model-probe",
+      agentId: owner,
+      generation: 1,
+      provider,
+    };
+    const providerEnv = await loadIssueSessionProviderEnv(providerHome, {
+      ...(relayAuthoritative
+        ? {
+            relayFragment: relay?.fragment ?? "",
+            relayAuthToken: relay?.auth_token ?? "",
+          }
+        : {}),
+    });
+    const usesCodexRelayKey = provider === "codex" && Boolean(providerEnv.OPENAI_API_KEY);
+    await prepareIssueSessionProviderHome(providerHome, {
+      linkCodexAuth: provider === "codex" && !usesCodexRelayKey,
+      linkClaudeCredentials: provider === "claude"
+        && !providerEnv.ANTHROPIC_AUTH_TOKEN
+        && !providerEnv.ANTHROPIC_API_KEY,
+      ...(relayAuthoritative ? { relayFragment: relay?.fragment ?? "" } : {}),
+      codexRelayUsesEnvApiKey: usesCodexRelayKey,
+    });
+    return {
+      agentType: provider,
+      cwd: root,
+      env: {
+        ...providerEnv,
+        ...(provider === "claude"
+          ? { CLAUDE_CONFIG_DIR: providerHome.home }
+          : { CODEX_HOME: providerHome.home }),
+      },
+    };
   }
 
   private async handleRuntimeLocalSkillList(runtimeId: string, requestId: string): Promise<void> {
@@ -1040,24 +1252,20 @@ export class MultiremiDaemon {
     if (snapshot.provider !== "codex") return;
 
     try {
-      const prepared = await prepareCodexPluginReadinessRuntime(
+      const workspaceId = this.options.workspaceId ?? "local";
+      const workspaceRelay = this.workspaceRelays.get(workspaceId);
+      await installCodexPluginReadinessHome(
         snapshot,
         payloadPath,
-        join(this.options.pluginCacheRoot, ".codex-readiness"),
-        signal,
+        {
+          readinessRoot: join(this.options.pluginCacheRoot, ".codex-readiness"),
+          scopeIdentity: workspaceId,
+          baseHome: process.env.CODEX_HOME || join(homedir(), ".codex"),
+          relayAuthoritative: workspaceRelay !== undefined,
+          relay: workspaceRelay?.codex ?? null,
+          signal,
+        },
       );
-      const workspaceId = this.options.workspaceId ?? "local";
-      const relayFragment = this.workspaceRelays.get(workspaceId)?.codex?.fragment ?? "";
-      const configToml = relayFragment.trim() ? mergeCodexConfig("", relayFragment) : undefined;
-      const baseHome = process.env.CODEX_HOME || join(homedir(), ".codex");
-      await installCodexPluginHome(prepared, {
-        signal,
-        seedHome: (targetHome) => seedCodexHomeFromBase({
-          baseHome,
-          targetHome,
-          ...(configToml === undefined ? {} : { configToml }),
-        }),
-      });
     } catch (error) {
       if (error instanceof AgentPluginError) throw error;
       throw pluginBlocked(
@@ -1069,9 +1277,26 @@ export class MultiremiDaemon {
 
   stop(): void {
     this.stopped = true;
+    // stop() is synchronous and may be called while start() is sleeping. Clear
+    // the timer immediately; start()'s finally block waits for any current run.
+    this.stopGcLoop();
     this.terminalAuthorityCleanupRetryWake?.();
     this.agentPluginReconcileAbort?.abort();
     this.cancelRuntimeModelRefresh();
+  }
+
+  stopForWorkspaceOwnershipLoss(error: unknown): void {
+    if (!this.workspaceOwnershipLost) {
+      this.workspaceOwnershipLost = true;
+      log.error(
+        `Workspace supervisor ownership was lost; aborting local work: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    this.claimsPaused = true;
+    this.ready = false;
+    this.onReadyChange(false);
+    for (const abort of this.activeTaskAborts) abort.abort();
+    this.stop();
   }
 
   private async stopAfterTerminalAuthority(): Promise<void> {
@@ -1129,15 +1354,182 @@ export class MultiremiDaemon {
   }
 
   async runGcOnce(): Promise<MultiremiDaemonGcSummary> {
+    if (this.gcInFlight) return await this.gcInFlight;
+    const run = this.executeGcOnce();
+    this.gcInFlight = run;
+    try {
+      return await run;
+    } finally {
+      if (this.gcInFlight === run) this.gcInFlight = null;
+    }
+  }
+
+  private async executeGcOnce(): Promise<MultiremiDaemonGcSummary> {
+    this.assertWorkspaceRootOwner();
     const summary = await runWorkspaceGcOnce({
       root: this.options.workspacesRoot,
       ttlMs: this.options.gcTtlMs,
       orphanTtlMs: this.options.gcOrphanTtlMs,
       client: this.client,
       runtimeId: this.options.runtimeId,
+      requireIssueSessionArchive: this.options.gcRequireArchive,
+      ensureIssueSessionArchive: (issueId, workspaceDir, forceFreshSnapshot) =>
+        this.ensureIssueSessionArchive(issueId, workspaceDir, forceFreshSnapshot),
+      assertRootOwner: () => this.assertWorkspaceRootOwner(),
+      withIssueWorkspaceLock: (issueId, _workspaceDir, action) =>
+        this.issueWorkspaceLifecycleLocks.runExclusive(issueId, async () => {
+          this.assertWorkspaceRootOwner();
+          await action();
+          this.assertWorkspaceRootOwner();
+        }),
+      onError: (workspaceDir, error) => {
+        log.warn(`Workspace GC skipped ${workspaceDir}: ${error instanceof Error ? error.message : String(error)}`);
+      },
     });
+    this.assertWorkspaceRootOwner();
     this.repoCache.pruneWorktrees();
     return summary;
+  }
+
+  private async ensureIssueSessionArchive(
+    issueId: string,
+    workspaceDir: string,
+    forceFreshSnapshot = false,
+  ): Promise<MultiremiIssueWorkspaceArchiveBinding | null> {
+    this.assertWorkspaceRootOwner();
+    const runtimeId = this.options.runtimeId;
+    if (!runtimeId) throw new Error("Session archive requires a registered Runtime");
+    const receipt = await readIssueSessionArchiveReceipt(workspaceDir);
+    if (!forceFreshSnapshot && receipt?.issueId === issueId) {
+      const status = await this.client.getIssueSessionArchiveStatus(
+        runtimeId,
+        issueId,
+        receipt.sourceRevision,
+        receipt.sha256,
+      );
+      if (
+        receipt.archiveId
+        && status.gc_ready
+        && status.requested_ready?.id === receipt.archiveId
+      ) {
+        return {
+          archiveId: receipt.archiveId,
+          sourceRevision: receipt.sourceRevision,
+          sha256: receipt.sha256,
+        };
+      }
+    }
+    let prepared: Awaited<ReturnType<typeof prepareIssueSessionArchive>>;
+    try {
+      this.assertWorkspaceRootOwner();
+      prepared = await prepareIssueSessionArchive(workspaceDir, {
+        maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        await this.client.reportIssueSessionArchiveFailure(runtimeId, issueId, {
+          stage: "prepare",
+          error: message,
+        });
+      } catch (reportError) {
+        log.warn(
+          `Failed to report Issue session archive preparation failure for ${issueId}: ${reportError instanceof Error ? reportError.message : String(reportError)}`,
+        );
+      }
+      throw error;
+    }
+    try {
+      const status = await this.client.getIssueSessionArchiveStatus(
+        runtimeId,
+        issueId,
+        prepared.sourceRevision,
+        prepared.sha256,
+        forceFreshSnapshot,
+      );
+      if (status.gc_ready) {
+        if (
+          status.latest?.source_revision === MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION
+          && (status.latest.status === "failed" || status.latest.status === "pending")
+        ) {
+          await this.client.initIssueSessionArchive(runtimeId, issueId, {
+            sourceRevision: prepared.sourceRevision,
+            sha256: prepared.sha256,
+            sizeBytes: prepared.sizeBytes,
+            fileCount: prepared.fileCount,
+            metadata: {
+              format: prepared.metadata.format,
+              source: ".multiremi/sessions",
+            },
+          });
+        }
+        const archiveId = status.requested_ready?.id;
+        if (!archiveId) return null;
+        this.assertWorkspaceRootOwner();
+        await writeIssueSessionArchiveReceipt(workspaceDir, {
+          issueId,
+          sourceRevision: prepared.sourceRevision,
+          sha256: prepared.sha256,
+          archiveId,
+        });
+        return {
+          archiveId,
+          sourceRevision: prepared.sourceRevision,
+          sha256: prepared.sha256,
+        };
+      }
+
+      const initialized = await this.client.initIssueSessionArchive(runtimeId, issueId, {
+        sourceRevision: prepared.sourceRevision,
+        sha256: prepared.sha256,
+        sizeBytes: prepared.sizeBytes,
+        fileCount: prepared.fileCount,
+        metadata: {
+          format: prepared.metadata.format,
+          source: ".multiremi/sessions",
+        },
+      });
+      if (initialized.archive.status === "ready") {
+        this.assertWorkspaceRootOwner();
+        await writeIssueSessionArchiveReceipt(workspaceDir, {
+          issueId,
+          sourceRevision: prepared.sourceRevision,
+          sha256: prepared.sha256,
+          archiveId: initialized.archive.id,
+        });
+        return {
+          archiveId: initialized.archive.id,
+          sourceRevision: prepared.sourceRevision,
+          sha256: prepared.sha256,
+        };
+      }
+      await this.client.uploadIssueSessionArchive(
+        runtimeId,
+        issueId,
+        initialized.archive.id,
+        prepared.archivePath,
+      );
+      const completed = await this.client.completeIssueSessionArchive(
+        runtimeId,
+        issueId,
+        initialized.archive.id,
+      );
+      if (completed.status !== "ready") return null;
+      this.assertWorkspaceRootOwner();
+      await writeIssueSessionArchiveReceipt(workspaceDir, {
+        issueId,
+        sourceRevision: prepared.sourceRevision,
+        sha256: prepared.sha256,
+        archiveId: completed.id,
+      });
+      return {
+        archiveId: completed.id,
+        sourceRevision: prepared.sourceRevision,
+        sha256: prepared.sha256,
+      };
+    } finally {
+      await removePreparedIssueSessionArchive(prepared.archivePath);
+    }
   }
 
   restartRequested(): boolean {
@@ -1185,8 +1577,16 @@ export class MultiremiDaemon {
     let providerHome: IssueSessionProviderHome | null = null;
     let providerEnv: Record<string, string> | undefined;
     let providerInstallEnv: Record<string, string> | undefined;
+    let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
 
     try {
+      this.assertWorkspaceRootOwner();
+      if (task.issueId) {
+        // GC uses this same lease for its deletion-time snapshot, upload and rm.
+        // Holding it for the full task lifecycle makes provider exit the archive barrier.
+        releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquire(task.issueId);
+        this.assertWorkspaceRootOwner();
+      }
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
       const issueRuntimeStateRoot = resolveIssueRuntimeStateRoot(
         task,
@@ -1194,20 +1594,62 @@ export class MultiremiDaemon {
         this.options.workspacesRoot,
         resolvedWorkDir.localDirectory,
       );
-      providerHome = resolveIssueSessionProviderHome(task, issueRuntimeStateRoot, this.options.workspacesRoot);
+      providerHome = resolveTaskProviderHome(task, issueRuntimeStateRoot, this.options.workspacesRoot);
+      if (providerHome) {
+        // Validate/create every daemon-owned parent before GC metadata, Plugin
+        // materialization or provider-native JSONL can write through it.
+        await ensureProviderHomeDirectory(providerHome);
+      }
+      if (task.issueId) {
+        // Establish the Issue lifecycle before provider setup can create JSONL.
+        // This also covers repository-free Issues and preparation failures, so
+        // GC can never mistake their history for an unowned directory.
+        writeTaskGcContext(issueRuntimeStateRoot, task, {
+          localDirectory: resolvedWorkDir.localDirectory,
+        });
+        const runtimeId = task.runtimeId ?? this.options.runtimeId;
+        if (runtimeId) {
+          await this.client.reportIssueWorkspace(task.id, {
+            runtimeId,
+            rootPath: issueRuntimeStateRoot,
+            branchName: task.issue?.issueKind === "intake" ? "" : `agent/${task.issue?.key ?? task.id}`,
+            status: "preparing",
+            repos: [],
+          });
+        }
+      }
+      if (providerHome?.runtimeStateRoot) {
+        writeTaskGcContext(providerHome.runtimeStateRoot, task);
+      }
+      const workspaceRelay = this.workspaceRelays.get(task.workspaceId);
+      const relayAuthoritative = workspaceRelay !== undefined;
       const relay = task.agent?.provider === "claude"
-        ? this.workspaceRelays.get(task.workspaceId)?.claude
+        ? workspaceRelay?.claude
         : task.agent?.provider === "codex"
-          ? this.workspaceRelays.get(task.workspaceId)?.codex
+          ? workspaceRelay?.codex
           : null;
       if (providerHome) {
         providerEnv = await loadIssueSessionProviderEnv(providerHome, {
-          relayFragment: relay?.fragment,
-          relayAuthToken: relay?.auth_token,
+          ...(relayAuthoritative
+            ? {
+                relayFragment: relay?.fragment ?? "",
+                relayAuthToken: relay?.auth_token ?? "",
+              }
+            : {}),
         });
         providerInstallEnv = providerBootstrapEnv(task, providerEnv);
+        if (
+          task.agent?.provider === "codex"
+          && relayAuthoritative
+          && !providerInstallEnv.OPENAI_API_KEY
+        ) {
+          await assertIssueSessionNativeCodexOAuth(
+            process.env.CODEX_HOME || join(homedir(), ".codex"),
+          );
+        }
       }
       if (resolveTaskPluginSnapshot(task).length) {
+        this.assertWorkspaceRootOwner();
         pluginRuntimeBase = resolveTaskPluginRuntimeBase(task, issueRuntimeStateRoot, this.options.workspacesRoot);
         pluginRuntime = await this.prepareTaskPluginRuntime(
           task,
@@ -1219,13 +1661,13 @@ export class MultiremiDaemon {
         );
       }
       if (providerHome) {
+        this.assertWorkspaceRootOwner();
         await prepareIssueSessionProviderHome(providerHome, {
           codexPluginInstalled: task.agent?.provider === "codex" && Boolean(pluginRuntime?.codexHome),
           linkCodexAuth: !providerInstallEnv?.OPENAI_API_KEY,
           linkClaudeCredentials: !providerInstallEnv?.ANTHROPIC_AUTH_TOKEN && !providerInstallEnv?.ANTHROPIC_API_KEY,
-          ...(task.agent?.provider === "codex" && relay?.fragment?.trim()
-            ? { codexConfigToml: mergeCodexConfig("", relay.fragment) }
-            : {}),
+          ...(relayAuthoritative ? { relayFragment: relay?.fragment ?? "" } : {}),
+          codexRelayUsesEnvApiKey: task.agent?.provider === "codex" && Boolean(providerInstallEnv?.OPENAI_API_KEY),
         });
       }
       await this.client.startTask(task.id);
@@ -1255,11 +1697,23 @@ export class MultiremiDaemon {
       log.error(`Failed task ${task.id}: ${error}`);
     } finally {
       if (pluginRuntimeBase && !task.issueId && !task.chatSessionId) {
-        await cleanupNonIssueTaskPluginRuntime(task, this.options.workspacesRoot).catch((error) => {
+        await cleanupNonIssueTaskPluginRuntime(
+          task,
+          this.options.workspacesRoot,
+          () => this.assertWorkspaceRootOwner(),
+        ).catch((error) => {
           log.warn(`Failed to clean task Plugin runtime for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
+      await cleanupTemporaryTaskProviderHome(
+        providerHome,
+        this.options.workspacesRoot,
+        () => this.assertWorkspaceRootOwner(),
+      ).catch((error) => {
+        log.warn(`Failed to clean task provider home for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+      });
       resolvedWorkDir?.release?.();
+      releaseIssueWorkspaceLifecycle?.();
       this.activeTaskAborts.delete(abort);
       this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
       clearInterval(cancelWatcher);
@@ -1282,8 +1736,6 @@ export class MultiremiDaemon {
     });
     if (!task.issueId) writeTaskGcContext(runtimeBase, task);
     if (task.agent?.provider === "codex" && prepared.codexHome) {
-      const relayFragment = this.workspaceRelays.get(task.workspaceId)?.codex?.fragment ?? "";
-      const configToml = relayFragment.trim() ? mergeCodexConfig("", relayFragment) : undefined;
       const baseHome = process.env.CODEX_HOME || join(homedir(), ".codex");
       await installCodexPluginHome(prepared, {
         signal,
@@ -1293,7 +1745,6 @@ export class MultiremiDaemon {
           requireAuth: !providerEnv?.OPENAI_API_KEY,
           copyAuth: false,
           linkAuth: !providerEnv?.OPENAI_API_KEY,
-          ...(configToml === undefined ? {} : { configToml }),
         }),
         env: providerEnv,
       });
@@ -1349,6 +1800,7 @@ export class MultiremiDaemon {
     for (const repo of repos) {
       try {
         await this.ensureRepoReady(task.workspaceId, repo.url);
+        this.assertWorkspaceRootOwner();
         const result = this.repoCache.createWorktree({
           workspaceId: task.workspaceId,
           repoUrl: repo.url,
@@ -1625,6 +2077,7 @@ export class MultiremiDaemon {
     providerHome?: IssueSessionProviderHome | null,
     providerEnv?: Record<string, string>,
   ): Promise<RunSummary> {
+    this.assertWorkspaceRootOwner();
     const agent = task.agent;
     if (!agent) throw new Error(`Task ${task.id} has no agent`);
     if (agent.provider !== "claude" && agent.provider !== "codex") {
@@ -1639,6 +2092,7 @@ export class MultiremiDaemon {
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
     await this.registerTaskRepos(task.workspaceId, task.repos ?? []);
     const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir);
+    this.assertWorkspaceRootOwner();
     try {
       writeTaskContext(workDir, task);
       writeTaskGcContext(workDir, task, { localDirectory: resolvedWorkDir.localDirectory });
@@ -1777,6 +2231,11 @@ export class MultiremiDaemon {
     this.gcTimer = null;
   }
 
+  private async drainGcInFlight(): Promise<void> {
+    const gcRun = this.gcInFlight;
+    if (gcRun) await Promise.allSettled([gcRun]);
+  }
+
   private async handleLocalDaemonRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return this.handleHealthRequest(request);
@@ -1800,7 +2259,9 @@ export class MultiremiDaemon {
     if (!workDir) return jsonResponse({ error: "workdir is required" }, 400);
 
     try {
+      this.assertWorkspaceRootOwner();
       await this.ensureRepoReady(workspaceId, repoUrl);
+      this.assertWorkspaceRootOwner();
       const result = this.repoCache.createWorktree({
         workspaceId,
         repoUrl,
@@ -1819,6 +2280,7 @@ export class MultiremiDaemon {
 
   private handleHealthRequest(request: Request): Response {
     if (request.method !== "GET") return jsonResponse({ error: "method not allowed" }, 405);
+    const cleanupSupport = ownedDirectoryRemovalSupport();
     return jsonResponse({
       status: this.ready ? "running" : "starting",
       mode: this.terminalAuthorityMode ? "cleanup_only" : this.ready ? "serving" : "starting",
@@ -1831,8 +2293,11 @@ export class MultiremiDaemon {
       workspace_id: this.options.workspaceId,
       server_url: this.options.serverUrl,
       cli_version: multiremiVersion,
+      supervisor_ready: this.supervisorReady(),
       active_task_count: this.activeTaskCount,
       daemon_port: this.repoServerPort,
+      workspace_cleanup_capability: cleanupSupport.capability,
+      workspace_cleanup_error: cleanupSupport.error,
       restart_requested: this.restartRequestedFlag,
     });
   }
@@ -1841,7 +2306,6 @@ export class MultiremiDaemon {
     if (request.method !== "POST") return jsonResponse({ error: "method not allowed" }, 405);
     setTimeout(() => {
       this.stop();
-      this.stopRepoCheckoutServer();
     }, 10);
     return jsonResponse({ status: "shutting_down" });
   }
@@ -1850,13 +2314,40 @@ export class MultiremiDaemon {
     if (!workspaceId) return;
     try {
       const response = await this.client.getWorkspaceRepos(workspaceId);
+      this.assertWorkspaceRootOwner();
       this.workspaceRepoUrls.set(workspaceId, new Set(response.repos.map((repo) => repo.url.trim()).filter(Boolean)));
-      this.workspaceSettings.set(workspaceId, response.settings ?? {});
+      this.applyWorkspaceSettings(workspaceId, response.settings ?? {});
       this.workspaceRelays.set(workspaceId, response.relay);
+      this.assertWorkspaceRootOwner();
       this.repoCache.sync(workspaceId, response.repos);
-      syncRelayConfigs(response.relay, workspaceId);
     } catch (err) {
       log.warn(`Workspace repo sync failed for ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private assertWorkspaceRootOwner(): void {
+    if (!this.workspaceRootFence) return;
+    try {
+      this.workspaceRootFence();
+    } catch (error) {
+      this.stopForWorkspaceOwnershipLoss(error);
+      throw error;
+    }
+  }
+
+  private applyWorkspaceSettings(workspaceId: string, settings: Record<string, unknown>): void {
+    this.workspaceSettings.set(workspaceId, settings);
+    if (workspaceId !== (this.options.workspaceId ?? "local")) return;
+    const policy = resolveWorkspaceGcPolicy(settings, this.defaultGcPolicy);
+    const intervalChanged = policy.intervalMs !== this.options.gcIntervalMs;
+    const ttlChanged = policy.ttlMs !== this.options.gcTtlMs;
+    if (!intervalChanged && !ttlChanged) return;
+    this.options.gcTtlMs = policy.ttlMs;
+    this.options.gcIntervalMs = policy.intervalMs;
+    log.info(`Workspace GC policy applied: ttl=${policy.ttlMs}ms interval=${policy.intervalMs}ms`);
+    if (intervalChanged && this.gcTimer) {
+      this.stopGcLoop();
+      this.startGcLoop();
     }
   }
 
@@ -1867,6 +2358,7 @@ export class MultiremiDaemon {
     for (const repo of normalized) allowed.add(repo.url);
     this.workspaceRepoUrls.set(workspaceId, allowed);
     try {
+      this.assertWorkspaceRootOwner();
       this.repoCache.sync(workspaceId, normalized);
     } catch (err) {
       log.warn(`Task repo sync failed for ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -1881,6 +2373,7 @@ export class MultiremiDaemon {
       throw new Error(`repo not configured for workspace: ${repoUrl}`);
     }
     if (!this.repoCache.lookup(workspaceId, repoUrl)) {
+      this.assertWorkspaceRootOwner();
       this.repoCache.sync(workspaceId, [{ url: repoUrl }]);
     }
     if (!this.repoCache.lookup(workspaceId, repoUrl)) {

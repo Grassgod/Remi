@@ -15,6 +15,13 @@ export type { ParseOptions } from "./schema";
 export { DuplicateIssueErrorBodySchema } from "./schemas";
 export type { DuplicateIssueErrorBody } from "./schemas";
 export type { RelayConfigResponse, RelayEngineConfig } from "./schemas";
+export type {
+  IssueSessionArchivesResponse,
+  SessionArchive,
+  SessionArchiveRetryResponse,
+  SessionArchiveVerifyResponse,
+  WorkspaceSessionArchiveStatus,
+} from "./schemas/session-archives";
 export { WSClient } from "./ws-client";
 
 import type { ApiClient as ApiClientType } from "./client";

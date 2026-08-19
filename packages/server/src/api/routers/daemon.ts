@@ -46,6 +46,7 @@ import type {
   MultiremiTask,
 } from "@multiremi/contracts/types.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
+import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -289,7 +290,19 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     } else {
       store.recordSshMeshHeartbeat(runtimeId, 0);
     }
-    return c.json(daemonHeartbeatHttpResponse(ack));
+    const response = daemonHeartbeatHttpResponse(ack);
+    const runtime = store.getRuntime(runtimeId);
+    const workspaceId = runtime?.workspaceId ?? "local";
+    const workspaceConfig = workspaceReposResponse(
+      store,
+      workspaceId,
+      callerCanReceiveRelay(c, store, workspaceId),
+    );
+    if (workspaceConfig) {
+      response.workspace_settings = workspaceConfig.settings ?? {};
+      if (callerCanReceiveRelay(c, store, workspaceId)) response.relay = workspaceConfig.relay;
+    }
+    return c.json(response);
   });
   app.get("/api/daemon/ssh-mesh/config", (c) => {
     const runtimeId = String(c.req.query("runtime_id") ?? "").trim();
@@ -622,18 +635,76 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ status: issue.status, updated_at: issue.updatedAt });
   });
   app.post("/api/daemon/issues/:issueId/workspace/cleaned", async (c) => {
-    const body = await readJsonStrict<{ runtime_id?: string }>(c);
+    const body = await readJsonStrict<{
+      runtime_id?: string;
+      archive_id?: string;
+      source_revision?: string;
+      sha256?: string;
+    }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id?.trim() ?? "";
     if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
+    const archiveId = body.archive_id?.trim() ?? "";
+    const sourceRevision = body.source_revision?.trim() ?? "";
+    const sha256 = body.sha256?.trim().toLowerCase() ?? "";
     const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
     if (denied) return denied;
-    if (!store.getIssueWorkspace(c.req.param("issueId"))) return c.body(null, 204);
+    if (!archiveId || !sourceRevision || !/^[a-f0-9]{64}$/.test(sha256)) {
+      return c.json({
+        error: "archive_id, source_revision and a 64-character sha256 are required",
+      }, 400);
+    }
+    const issueId = c.req.param("issueId");
+    if (!store.getIssue(issueId)) {
+      return c.json({ error: "issue not found", code: "issue_not_found" }, 404);
+    }
+    const current = store.getIssueWorkspace(issueId);
+    if (!current) {
+      return c.json({
+        error: "issue workspace not found",
+        code: "issue_workspace_not_found",
+      }, 404);
+    }
+    if (current.runtimeId !== runtimeId) {
+      return c.json({
+        error: "runtime does not own issue workspace",
+        code: "issue_workspace_runtime_mismatch",
+      }, 404);
+    }
     try {
-      const workspace = store.markIssueWorkspaceCleaned(c.req.param("issueId"), runtimeId);
-      return c.json({ issue_id: workspace.issueId, status: workspace.status, cleaned_at: workspace.cleanedAt });
+      const verified = await deps.sessionArchives.verify(archiveId);
+      if (
+        !verified.valid
+        || verified.archive.issueId !== issueId
+        || verified.archive.sourceRevision !== sourceRevision
+        || verified.archive.sha256 !== sha256
+      ) {
+        return c.json({
+          error: "workspace cleanup archive is missing, corrupt, or does not match the exact snapshot",
+          code: "issue_workspace_archive_invalid",
+        }, 409);
+      }
+      const workspace = store.markIssueWorkspaceCleaned({
+        issueId,
+        runtimeId,
+        archiveId,
+        sourceRevision,
+        sha256,
+      });
+      return c.json({
+        issue_id: workspace.issueId,
+        status: workspace.status,
+        cleaned_at: workspace.cleanedAt,
+        archive_id: workspace.cleanedArchiveId,
+        source_revision: workspace.cleanedArchiveSourceRevision,
+        sha256: workspace.cleanedArchiveSha256,
+      });
     } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+      if (err instanceof SessionArchiveError) {
+        return c.json({ error: err.message, code: err.code }, err.status as 400);
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, message.includes("exact ready") ? 409 : 400);
     }
   });
   app.get("/api/daemon/chat-sessions/:sessionId/gc-check", (c) => {

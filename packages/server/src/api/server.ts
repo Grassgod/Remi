@@ -17,6 +17,7 @@ import { registerGithubRoutes } from "./routers/github.js";
 import { registerWebhookRoutes } from "./routers/webhooks.js";
 import { registerRemiReleaseRoutes } from "./routers/remi-releases.js";
 import { registerDaemonRoutes } from "./routers/daemon.js";
+import { registerSessionArchiveRoutes } from "./routers/session-archives.js";
 import { registerCloudRuntimeRoutes } from "./routers/cloud-runtime.js";
 import { registerCloudBillingRoutes } from "./routers/cloud-billing.js";
 import { registerMeRoutes } from "./routers/me.js";
@@ -88,6 +89,7 @@ import {
   verifyJwtToken,
   withFeedbackRequestMetadata,
 } from "./helpers.js";
+import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
@@ -138,6 +140,7 @@ export interface MultiremiApiOptions {
   inspectGitRemoteRepository?: GitRemoteInspector;
   resolveAgentPluginGitSource?: AgentPluginGitSourceResolver;
   projectKnowledge?: ProjectKnowledgeServiceContract;
+  sessionArchives?: SessionArchiveService;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -153,6 +156,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const webhookIpRateLimiter = createWebhookRateLimiter(options.webhookIpRateLimit, DEFAULT_WEBHOOK_IP_RATE_LIMIT);
   const app = new Hono();
   const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
+  const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
     store,
@@ -166,6 +170,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     resolveAgentPluginGitSource:
       options.resolveAgentPluginGitSource ?? resolveAgentPluginGitSource,
     projectKnowledge,
+    sessionArchives,
   };
 
   app.use("*", cors());
@@ -349,6 +354,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     await next();
   });
   registerDaemonRoutes(app, deps);
+  registerSessionArchiveRoutes(app, deps);
   app.get("/api/daemon/ws", (c) => c.json({
     error: "websocket upgrade required",
     enabled: realtimeState.enabled,
@@ -457,7 +463,15 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   scheduler?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
-  const app = createMultiremiApp({ ...options, store, scheduler, realtimeState });
+  const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
+  sessionArchives.startIssueArchivePurgeRecovery();
+  const app = createMultiremiApp({
+    ...options,
+    store,
+    scheduler,
+    realtimeState,
+    sessionArchives,
+  });
   const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";
   const daemonWebSockets: DaemonWebSocketRegistry = new Map();
@@ -652,6 +666,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
+    sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();
     unsubscribeTaskEnqueued();
     unsubscribeTaskEvent();

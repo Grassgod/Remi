@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, copyFile, lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { sanitizeProviderConfigValue } from "../provider-config-sanitize.js";
 import type { PreparedAgentPluginRuntime } from "./types.js";
 import { AgentPluginError } from "./types.js";
 
@@ -189,7 +190,7 @@ async function readCodexExecutionConfig(baseHome: string): Promise<string> {
   }
   const allowed: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(parsed)) {
-    if (CODEX_EXECUTION_CONFIG_KEYS.has(key)) allowed[key] = value;
+    if (CODEX_EXECUTION_CONFIG_KEYS.has(key)) allowed[key] = sanitizeProviderConfigValue(value);
   }
   return stringifyToml(allowed);
 }
@@ -291,9 +292,16 @@ async function runCodexPluginCommand(
       scope.signal,
     );
   } catch (error) {
-    if (error instanceof AgentPluginError) throw error;
+    const message = redactCommandSecrets(
+      error instanceof Error ? error.message : String(error),
+      command.env,
+    );
+    if (error instanceof AgentPluginError) {
+      if (message === error.message) throw error;
+      throw new AgentPluginError(message, error.code, error.retryKind, { cause: error });
+    }
     throw new AgentPluginError(
-      `Codex Plugin install failed: ${error instanceof Error ? error.message : String(error)}`,
+      `Codex Plugin install failed: ${message}`,
       "plugin_codex_install_failed",
       "blocked",
       { cause: error },
@@ -301,6 +309,16 @@ async function runCodexPluginCommand(
   } finally {
     scope.dispose();
   }
+}
+
+function redactCommandSecrets(message: string, env: Record<string, string>): string {
+  let redacted = message;
+  for (const [key, value] of Object.entries(env)) {
+    if (!/(?:token|api[_-]?key|secret|authorization|password|credential|bearer)/i.test(key)) continue;
+    if (value.length < 4) continue;
+    redacted = redacted.split(value).join("[REDACTED]");
+  }
+  return redacted;
 }
 
 async function validatePublishedCodexHome(home: string, executionFingerprint: string): Promise<boolean> {

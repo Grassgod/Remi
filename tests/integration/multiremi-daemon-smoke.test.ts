@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -12,6 +12,7 @@ import {
   MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS,
   MultiremiDaemon,
   MultiremiRuntimeReregisterGate,
+  installCodexPluginReadinessHome,
   preflightAgentPluginProvider,
   runtimeModelsFromAcpCapabilities,
   type MultiremiDaemonProviderFactory,
@@ -62,6 +63,161 @@ describe("Bun Multiremi daemon smoke", () => {
     ]);
   });
 
+  it("discovers Claude and Codex gateway models from isolated daemon-owned probe homes", async () => {
+    const { store, workDir: root } = daemonTestBed("multiremi-daemon-relay-model-probe-");
+    const workspacesRoot = join(root, "workspaces");
+    const globalClaudeHome = join(root, "global-claude");
+    const globalCodexHome = join(root, "global-codex");
+    mkdirSync(globalClaudeHome, { recursive: true });
+    mkdirSync(globalCodexHome, { recursive: true });
+    const globalClaudeSettings = JSON.stringify({
+      model: "global-claude-model",
+      env: {
+        ANTHROPIC_BASE_URL: "https://global-claude.invalid",
+        ANTHROPIC_AUTH_TOKEN: "global-claude-secret",
+      },
+    }, null, 2);
+    const globalCodexConfig = [
+      'model_provider = "Global"',
+      "[model_providers.Global]",
+      'base_url = "https://global-codex.invalid/v1"',
+      'experimental_bearer_token = "global-inline-codex-secret"',
+    ].join("\n");
+    writeFileSync(join(globalClaudeHome, "settings.json"), globalClaudeSettings);
+    writeFileSync(join(globalCodexHome, "config.toml"), globalCodexConfig);
+    store.upsertRelayConfig("local", "claude", {
+      fragment: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://gateway-claude.example" } }),
+      tokenOp: "set",
+      authToken: "claude-probe-secret",
+    });
+    store.upsertRelayConfig("local", "codex", {
+      fragment: [
+        'model_provider = "OpenAI"',
+        "[model_providers.OpenAI]",
+        'base_url = "https://gateway-codex.example/v1"',
+        'wire_api = "responses"',
+      ].join("\n"),
+      tokenOp: "set",
+      authToken: "codex-probe-secret",
+    });
+    const claudeDaemonToken = await store.createAccessToken({
+      name: "Claude Relay model probe daemon",
+      type: "daemon",
+      workspaceId: "local",
+      daemonId: "daemon-relay-probe-claude",
+    });
+    const codexDaemonToken = await store.createAccessToken({
+      name: "Codex Relay model probe daemon",
+      type: "daemon",
+      workspaceId: "local",
+      daemonId: "daemon-relay-probe-codex",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-relay-model-probe-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const captured = new Map<string, AcpProviderOptions>();
+    const providerFactory = (provider: "claude" | "codex"): MultiremiDaemonProviderFactory => (options) => {
+      captured.set(provider, options);
+      return {
+        async *sendStream() {},
+        getLastResponse: () => null,
+        discoverModelCapabilities: async () => [{
+          id: `${provider}-gateway-model`,
+          label: `${provider} gateway model`,
+          default: true,
+        }],
+      };
+    };
+    const claudeDaemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: claudeDaemonToken.token,
+      daemonId: "daemon-relay-probe-claude",
+      runtimeName: "relay-probe-claude",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 25,
+      gcEnabled: false,
+      workspacesRoot,
+      repoCacheRoot: join(root, ".repo-cache-claude"),
+      providerFactory: providerFactory("claude"),
+    });
+    const codexDaemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: codexDaemonToken.token,
+      daemonId: "daemon-relay-probe-codex",
+      runtimeName: "relay-probe-codex",
+      provider: "codex",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 25,
+      gcEnabled: false,
+      workspacesRoot,
+      repoCacheRoot: join(root, ".repo-cache-codex"),
+      providerFactory: providerFactory("codex"),
+    });
+    const previousClaudeHome = process.env.CLAUDE_CONFIG_DIR;
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CLAUDE_CONFIG_DIR = globalClaudeHome;
+    process.env.CODEX_HOME = globalCodexHome;
+    let claudeRun: Promise<void> | null = null;
+    let codexRun: Promise<void> | null = null;
+    try {
+      claudeRun = claudeDaemon.start();
+      codexRun = codexDaemon.start();
+      await waitForCondition(() => {
+        const runtimes = store.listRuntimes();
+        return runtimes.some((runtime) => runtime.provider === "claude"
+          && store.listRuntimeModels(runtime.id).some((model) => model.id === "claude-gateway-model"))
+          && runtimes.some((runtime) => runtime.provider === "codex"
+            && store.listRuntimeModels(runtime.id).some((model) => model.id === "codex-gateway-model"));
+      }, 5_000);
+
+      const claudeOptions = captured.get("claude")!;
+      const codexOptions = captured.get("codex")!;
+      expect(claudeOptions.cwd).toStartWith(join(workspacesRoot, ".runtime-probe"));
+      expect(codexOptions.cwd).toStartWith(join(workspacesRoot, ".runtime-probe"));
+      expect(claudeOptions.env).toMatchObject({
+        ANTHROPIC_API_KEY: "",
+        ANTHROPIC_AUTH_TOKEN: "claude-probe-secret",
+        ANTHROPIC_BASE_URL: "https://gateway-claude.example",
+      });
+      expect(codexOptions.env).toMatchObject({ OPENAI_API_KEY: "codex-probe-secret" });
+      expect(claudeOptions.env?.CLAUDE_CONFIG_DIR).toStartWith(join(workspacesRoot, ".runtime-probe"));
+      expect(codexOptions.env?.CODEX_HOME).toStartWith(join(workspacesRoot, ".runtime-probe"));
+      const claudeSettings = readFileSync(join(claudeOptions.env!.CLAUDE_CONFIG_DIR!, "settings.json"), "utf8");
+      const codexConfig = readFileSync(join(codexOptions.env!.CODEX_HOME!, "config.toml"), "utf8");
+      expect(claudeSettings).toContain("https://gateway-claude.example");
+      expect(claudeSettings).not.toContain("claude-probe-secret");
+      expect(codexConfig).toContain('env_key = "OPENAI_API_KEY"');
+      expect(codexConfig).toContain("requires_openai_auth = false");
+      expect(codexConfig).not.toContain("codex-probe-secret");
+      expect(codexConfig).not.toContain("global-inline-codex-secret");
+      expect(existsSync(join(codexOptions.env!.CODEX_HOME!, "auth.json"))).toBe(false);
+      expect(readFileSync(join(globalClaudeHome, "settings.json"), "utf8")).toBe(globalClaudeSettings);
+      expect(readFileSync(join(globalCodexHome, "config.toml"), "utf8")).toBe(globalCodexConfig);
+    } finally {
+      claudeDaemon.stop();
+      codexDaemon.stop();
+      await Promise.all([claudeRun?.catch(() => {}), codexRun?.catch(() => {})]);
+      if (previousClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousClaudeHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      server.stop(true);
+    }
+  });
+
+  for (const kind of ["quick", "chat", "issue"] as const) {
+    it(`rejects a symlinked ${kind} Provider parent before writing external GC state`, async () => {
+      await runProviderHomeSymlinkProof(kind);
+    });
+  }
+
   it("requires provider-native Plugin support during preflight", async () => {
     await expect(preflightAgentPluginProvider("codex", {
       which: () => "/opt/bin/codex",
@@ -78,6 +234,170 @@ describe("Bun Multiremi daemon smoke", () => {
       code: "plugin_claude_bridge_missing",
       retryKind: "setup_required",
     });
+  });
+
+  it("preflights a Codex Plugin with a gateway-only Relay and no base auth", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-codex-readiness-relay-"));
+    workDir = root;
+    const payload = join(root, "payload");
+    mkdirSync(join(payload, ".codex-plugin"), { recursive: true });
+    writeFileSync(join(payload, ".codex-plugin", "plugin.json"), JSON.stringify({
+      name: "gateway-proof",
+      version: "1.0.0",
+    }));
+    const commands: Array<{ env: Record<string, string>; config: string }> = [];
+    const token = "gateway-readiness-secret";
+
+    const home = await installCodexPluginReadinessHome({
+      pluginId: "plg_gateway",
+      versionId: "plgv_gateway",
+      name: "gateway-proof",
+      provider: "codex",
+      version: "1.0.0",
+      digest: "a".repeat(64),
+      artifactUrl: "/artifact",
+    }, payload, {
+      readinessRoot: join(root, "readiness"),
+      baseHome: join(root, "base-without-auth"),
+      relayAuthoritative: true,
+      relay: {
+        fragment: [
+          'model_provider = "OpenAI"',
+          "[model_providers.OpenAI]",
+          'base_url = "https://gateway.example/v1"',
+          'wire_api = "responses"',
+        ].join("\n"),
+        auth_token: token,
+        revision: 1,
+      },
+      runCommand: async (command) => {
+        commands.push({
+          env: command.env,
+          config: readFileSync(join(command.env.CODEX_HOME!, "config.toml"), "utf8"),
+        });
+      },
+    });
+
+    expect(home).not.toBeNull();
+    expect(commands).toHaveLength(2);
+    expect(commands.every((command) => command.env.OPENAI_API_KEY === token)).toBe(true);
+    expect(commands.every((command) => command.config.includes('env_key = "OPENAI_API_KEY"'))).toBe(true);
+    expect(commands.every((command) => command.config.includes("requires_openai_auth = false"))).toBe(true);
+    expect(commands.every((command) => !command.config.includes(token))).toBe(true);
+    expect(existsSync(join(home!, "auth.json"))).toBe(false);
+    expect(readFileSync(join(home!, "config.toml"), "utf8")).not.toContain(token);
+    expect(readFileSync(join(home!, ".remi-plugins.json"), "utf8")).not.toContain(token);
+  });
+
+  it("uses an empty key tombstone and native OAuth after an authoritative Relay clear", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-codex-readiness-clear-"));
+    workDir = root;
+    const payload = join(root, "payload");
+    const baseHome = join(root, "base");
+    mkdirSync(join(payload, ".codex-plugin"), { recursive: true });
+    mkdirSync(baseHome, { recursive: true });
+    writeFileSync(join(payload, ".codex-plugin", "plugin.json"), JSON.stringify({
+      name: "clear-proof",
+      version: "1.0.0",
+    }));
+    writeFileSync(join(baseHome, "auth.json"), JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "native-oauth-secret" },
+    }), { mode: 0o600 });
+    writeFileSync(join(baseHome, "config.toml"), [
+      'model_provider = "StaleRelay"',
+      "[model_providers.StaleRelay]",
+      'base_url = "https://stale.example/v1"',
+    ].join("\n"));
+    const observedKeys: string[] = [];
+
+    const home = await installCodexPluginReadinessHome({
+      pluginId: "plg_clear",
+      versionId: "plgv_clear",
+      name: "clear-proof",
+      provider: "codex",
+      version: "1.0.0",
+      digest: "b".repeat(64),
+      artifactUrl: "/artifact",
+    }, payload, {
+      readinessRoot: join(root, "readiness"),
+      baseHome,
+      relayAuthoritative: true,
+      relay: null,
+      runCommand: async (command) => {
+        observedKeys.push(command.env.OPENAI_API_KEY ?? "missing");
+      },
+    });
+
+    expect(observedKeys).toEqual(["", ""]);
+    expect(lstatSync(join(home!, "auth.json")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(home!, "auth.json"))).toBe(join(baseHome, "auth.json"));
+    const config = readFileSync(join(home!, "config.toml"), "utf8");
+    expect(config).not.toContain("StaleRelay");
+    expect(config).not.toContain("stale.example");
+    expect(config).not.toContain("native-oauth-secret");
+  });
+
+  it("does not reuse native Codex Plugin readiness after a workspace switches to Relay", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-codex-readiness-scope-"));
+    workDir = root;
+    const payload = join(root, "payload");
+    const baseHome = join(root, "base");
+    const readinessRoot = join(root, "readiness");
+    mkdirSync(join(payload, ".codex-plugin"), { recursive: true });
+    mkdirSync(baseHome, { recursive: true });
+    writeFileSync(join(payload, ".codex-plugin", "plugin.json"), JSON.stringify({
+      name: "scope-proof",
+      version: "1.0.0",
+    }));
+    writeFileSync(join(baseHome, "auth.json"), JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "native-oauth-secret" },
+    }), { mode: 0o600 });
+    const snapshot = {
+      pluginId: "plg_scope",
+      versionId: "plgv_scope",
+      name: "scope-proof",
+      provider: "codex" as const,
+      version: "1.0.0",
+      digest: "c".repeat(64),
+      artifactUrl: "/artifact",
+    };
+    let nativeCommands = 0;
+    const nativeHome = await installCodexPluginReadinessHome(snapshot, payload, {
+      readinessRoot,
+      scopeIdentity: "workspace-a",
+      baseHome,
+      relayAuthoritative: false,
+      relay: null,
+      runCommand: async () => { nativeCommands++; },
+    });
+    const relayConfigs: string[] = [];
+    const relayHome = await installCodexPluginReadinessHome(snapshot, payload, {
+      readinessRoot,
+      scopeIdentity: "workspace-a",
+      baseHome,
+      relayAuthoritative: true,
+      relay: {
+        fragment: [
+          'model_provider = "OpenAI"',
+          "[model_providers.OpenAI]",
+          'base_url = "https://gateway.example/v1"',
+        ].join("\n"),
+        auth_token: "workspace-relay-secret",
+        revision: 2,
+      },
+      runCommand: async (command) => {
+        relayConfigs.push(readFileSync(join(command.env.CODEX_HOME, "config.toml"), "utf8"));
+      },
+    });
+
+    expect(nativeCommands).toBe(2);
+    expect(relayConfigs).toHaveLength(2);
+    expect(relayHome).not.toBe(nativeHome);
+    expect(relayConfigs.every((config) => config.includes('env_key = "OPENAI_API_KEY"'))).toBe(true);
+    expect(relayConfigs.every((config) => !config.includes("workspace-relay-secret"))).toBe(true);
+    expect(existsSync(join(relayHome!, "auth.json"))).toBe(false);
   });
 
   it("coalesces runtime_gone re-register attempts like the Go daemon", () => {
@@ -99,6 +419,12 @@ describe("Bun Multiremi daemon smoke", () => {
 
   it("runs one claimed task through the local API lifecycle", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-smoke-");
+    store.upsertRelayConfig("local", "claude", {
+      fragment: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://gateway.example" } }),
+      tokenOp: "set",
+      authToken: "quick-task-provider-key",
+    });
+    const workspacesRoot = join(workDir, "workspaces");
     const agent = store.createAgent({
       name: "Claude Smoke",
       provider: "claude",
@@ -195,6 +521,7 @@ describe("Bun Multiremi daemon smoke", () => {
         workspaceId: "local",
         once: true,
         daemonPort: 0,
+        workspacesRoot,
         repoCacheRoot: join(workDir, ".repo-cache"),
         providerFactory,
       });
@@ -214,8 +541,24 @@ describe("Bun Multiremi daemon smoke", () => {
         model: "claude-smoke",
         allowedTools: ["Read"],
         cwd: workDir,
-        env: { SMOKE_ENV: "1" },
+        env: {
+          SMOKE_ENV: "1",
+          ANTHROPIC_API_KEY: "",
+          ANTHROPIC_AUTH_TOKEN: "quick-task-provider-key",
+          ANTHROPIC_BASE_URL: "https://gateway.example",
+        },
       });
+      const temporaryProviderHome = join(
+        workspacesRoot,
+        ".task-runtime",
+        task.id,
+        "provider-home",
+        agent.id,
+        "claude",
+        "home",
+      );
+      expect(providerOptions[0]?.env?.CLAUDE_CONFIG_DIR).toBe(temporaryProviderHome);
+      expect(existsSync(temporaryProviderHome)).toBe(false);
       const injectedToken = providerOptions[0].env?.MULTIREMI_TOKEN;
       expect(injectedToken).toStartWith("mat_");
       expect(injectedToken).not.toBe(daemonToken.token);
@@ -876,6 +1219,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
   it("resumes chat tasks with the pinned provider session after daemon restart", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-chat-resume-");
+    const workspacesRoot = join(workDir, "workspaces");
     const agent = store.createAgent({
       name: "Chat Claude",
       provider: "claude",
@@ -901,12 +1245,14 @@ describe("Bun Multiremi daemon smoke", () => {
 
     const prompts: string[] = [];
     const providerCwds: string[] = [];
+    const providerHomes: Array<string | undefined> = [];
     const injectedMcpServers: unknown[] = [];
     const sendOptions: SendOptions[] = [];
     let providerIndex = 0;
     const providerFactory: MultiremiDaemonProviderFactory = (options) => {
       const turn = providerIndex++;
       providerCwds.push(options.cwd!);
+      providerHomes.push(options.env?.CLAUDE_CONFIG_DIR);
       injectedMcpServers.push(options.getMcpServers?.() ?? []);
       const text = turn === 0 ? "First answer" : "Second answer";
       return {
@@ -933,6 +1279,7 @@ describe("Bun Multiremi daemon smoke", () => {
       workspaceId: "local",
       once: true,
       daemonPort: 0,
+      workspacesRoot,
       repoCacheRoot: join(workDir!, ".repo-cache"),
       providerFactory,
     }).start();
@@ -971,6 +1318,25 @@ describe("Bun Multiremi daemon smoke", () => {
         chatId: second.task.id,
       });
       expect(providerCwds).toEqual([workDir, workDir]);
+      const chatProviderHome = join(
+        workspacesRoot,
+        ".session-runtime",
+        session.id,
+        "provider-home",
+        agent.id,
+        "claude",
+        "home",
+      );
+      expect(providerHomes).toEqual([chatProviderHome, chatProviderHome]);
+      expect(existsSync(chatProviderHome)).toBe(true);
+      expect(JSON.parse(readFileSync(
+        join(workspacesRoot, ".session-runtime", session.id, ".multiremi", "gc.json"),
+        "utf8",
+      ))).toMatchObject({
+        kind: "chat",
+        chat_session_id: session.id,
+        task_id: second.task.id,
+      });
       // The continued turn re-sends everything session/resume needs: the agent's
       // model + thinking_level (claim → SendOptions) and the MCP servers, in the
       // ACP wire shape (args/env required, env an EnvVariable[]).
@@ -1002,6 +1368,11 @@ describe("Bun Multiremi daemon smoke", () => {
 
   it("ignores a legacy local_directory when resolving an Issue workspace", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-local-dir-");
+    store.upsertRelayConfig("local", "claude", {
+      fragment: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://ai.openremi.fun" } }),
+      tokenOp: "set",
+      authToken: "test-provider-key",
+    });
     const localDir = join(workDir, "local-project");
     mkdirSync(localDir, { recursive: true });
     writeFileSync(join(localDir, "README.md"), "local project\n");
@@ -1015,7 +1386,6 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({
       name: "Local Claude",
       provider: "claude",
-      customEnv: { ANTHROPIC_API_KEY: "test-provider-key" },
     });
     const issue = store.createIssue({ title: "Use local directory", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Read the local project" });
@@ -1036,6 +1406,7 @@ describe("Bun Multiremi daemon smoke", () => {
     let providerCwd = "";
     let providerPrompt = "";
     let providerOptions: AcpProviderOptions | null = null;
+    let workspaceAtProviderStart: ReturnType<typeof store.getIssueWorkspace> = null;
     try {
       const daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
@@ -1050,6 +1421,7 @@ describe("Bun Multiremi daemon smoke", () => {
         repoCacheRoot: join(workDir, ".repo-cache"),
         providerFactory: (options) => {
           providerOptions = options;
+          workspaceAtProviderStart = store.getIssueWorkspace(issue.id);
           return messageProviderFactory({
             text: () => `cwd=${providerCwd}`,
             sessionId: "sess-local-dir",
@@ -1067,6 +1439,12 @@ describe("Bun Multiremi daemon smoke", () => {
       const completed = store.getTask(task.id)!;
       const issueWorkDir = join(workDir, "workspaces", issue.key);
       expect(providerCwd).toBe(issueWorkDir);
+      expect(workspaceAtProviderStart).toMatchObject({
+        issueId: issue.id,
+        rootPath: issueWorkDir,
+        status: "preparing",
+        repos: [],
+      });
       expect(completed.status).toBe("completed");
       expect(completed.workDir).toBe(issueWorkDir);
       const laneGeneration = completed.issueSessionGeneration ?? completed.issue_session_generation;
@@ -1081,7 +1459,9 @@ describe("Bun Multiremi daemon smoke", () => {
       );
       const capturedProviderOptions = providerOptions as AcpProviderOptions | null;
       expect(capturedProviderOptions?.env?.CLAUDE_CONFIG_DIR).toBe(expectedProviderHome);
-      expect(capturedProviderOptions?.env?.ANTHROPIC_API_KEY).toBe("test-provider-key");
+      expect(capturedProviderOptions?.env?.ANTHROPIC_API_KEY).toBe("");
+      expect(capturedProviderOptions?.env?.ANTHROPIC_AUTH_TOKEN).toBe("test-provider-key");
+      expect(capturedProviderOptions?.env?.ANTHROPIC_BASE_URL).toBe("https://ai.openremi.fun");
       expect(existsSync(join(expectedProviderHome, ".multiremi-session-home.json"))).toBe(true);
       expect(providerPrompt).not.toContain(localDir);
       expect(existsSync(join(localDir, ".multiremi"))).toBe(false);
@@ -1099,11 +1479,22 @@ describe("Bun Multiremi daemon smoke", () => {
 
   it("passes an Issue-scoped CODEX_HOME and in-memory key to the ACP provider", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-codex-home-");
+    store.upsertRelayConfig("local", "codex", {
+      fragment: [
+        'model_provider = "OpenAI"',
+        "",
+        "[model_providers.OpenAI]",
+        'base_url = "https://ai.openremi.fun/v1"',
+        'wire_api = "responses"',
+        "requires_openai_auth = true",
+      ].join("\n"),
+      tokenOp: "set",
+      authToken: "test-openai-key",
+    });
     const workspacesRoot = join(workDir, "workspaces");
     const agent = store.createAgent({
       name: "Issue Codex",
       provider: "codex",
-      customEnv: { OPENAI_API_KEY: "test-openai-key" },
     });
     const issue = store.createIssue({ title: "Capture Codex home", workspaceId: "local" });
     const task = store.createTask({
@@ -1159,6 +1550,8 @@ describe("Bun Multiremi daemon smoke", () => {
         completed.issueSessionId!,
         agent.id,
         String(completed.issueSessionGeneration ?? completed.issue_session_generation),
+        "executions",
+        completed.executionFingerprint!,
         "home",
       );
       const captured = providerOptions as AcpProviderOptions | null;
@@ -1648,12 +2041,22 @@ describe("Bun Multiremi daemon smoke", () => {
       pollIntervalMs: 25,
       repoCacheRoot: join(workDir, ".repo-cache"),
     });
+    const gcStarted = deferred<void>();
+    const releaseGc = deferred<void>();
+    Object.assign(daemon, {
+      executeGcOnce: async () => {
+        gcStarted.resolve();
+        await releaseGc.promise;
+        return { cleaned: 0, orphaned: 0, skipped: 0 };
+      },
+    });
 
     let daemonRun: Promise<void> | null = null;
     try {
       daemonRun = daemon.start();
       const port = await waitForLocalPort(daemon);
       const health = await waitForRunningHealth(port);
+      await withTimeout(gcStarted.promise, 5_000, "startup GC did not begin");
 
       expect(health).toMatchObject({
         status: "running",
@@ -1661,16 +2064,35 @@ describe("Bun Multiremi daemon smoke", () => {
         runtime_name: "lifecycle-runtime",
         provider: "claude",
         workspace_id: "local",
+        workspace_cleanup_capability: process.platform === "linux" ? "available" : "blocked",
       });
+      if (process.platform === "linux") expect(health.workspace_cleanup_error).toBeNull();
+      else expect(health.workspace_cleanup_error).toEqual(expect.any(String));
       expect(typeof health.runtime_id).toBe("string");
       expect(typeof health.cli_version).toBe("string");
 
       const shutdown = await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST" });
       expect(shutdown.status).toBe(200);
       expect(await shutdown.json()).toEqual({ status: "shutting_down" });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+
+      // The control port is the restart fence. It stays bound until the old
+      // process has drained its active archive/delete sweep.
+      const drainingHealth = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(drainingHealth.status).toBe(200);
+      expect(["running", "starting"]).toContain((await drainingHealth.json() as { status: string }).status);
+      let daemonStopped = false;
+      void daemonRun.then(() => {
+        daemonStopped = true;
+      });
+      await Promise.resolve();
+      expect(daemonStopped).toBe(false);
+
+      releaseGc.resolve();
       await daemonRun;
       expect(daemon.localPort()).toBe(0);
     } finally {
+      releaseGc.resolve();
       daemon.stop();
       await daemonRun?.catch(() => {});
       server.stop(true);
@@ -2075,6 +2497,79 @@ function daemonTestBed(tmpPrefix: string): { store: MultiremiStore; workDir: str
   db = new Database(":memory:");
   workDir = mkdtempSync(join(tmpdir(), tmpPrefix));
   return { store: new MultiremiStore(db), workDir };
+}
+
+async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Promise<void> {
+  const { store, workDir: root } = daemonTestBed(`multiremi-${kind}-provider-symlink-`);
+  const workspacesRoot = join(root, "workspaces");
+  const outside = join(root, "outside");
+  mkdirSync(workspacesRoot, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  const agent = store.createAgent({ name: `${kind} symlink proof`, provider: "claude", cwd: root });
+  let task: ReturnType<typeof store.createTask>;
+  let externalGc: string;
+  let receipt: string | null = null;
+  if (kind === "quick") {
+    symlinkSync(outside, join(workspacesRoot, ".task-runtime"), "dir");
+    task = store.createTask({ agentId: agent.id, prompt: "must fail before GC" });
+    externalGc = join(outside, task.id, ".multiremi", "gc.json");
+  } else if (kind === "chat") {
+    const session = store.createChatSession({ agentId: agent.id, title: "Symlink proof" });
+    symlinkSync(outside, join(workspacesRoot, ".session-runtime"), "dir");
+    task = store.sendChatMessage(session.id, { body: "must fail before GC" }).task;
+    externalGc = join(outside, session.id, ".multiremi", "gc.json");
+  } else {
+    const issue = store.createIssue({ title: "Issue symlink proof", workspaceId: "local" });
+    const issueRoot = join(workspacesRoot, issue.key);
+    mkdirSync(issueRoot, { recursive: true });
+    receipt = join(outside, "session-archive-receipt.json");
+    writeFileSync(receipt, "keep-receipt\n");
+    symlinkSync(outside, join(issueRoot, ".multiremi"), "dir");
+    task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "must fail before GC" });
+    externalGc = join(outside, "gc.json");
+  }
+  const daemonId = `daemon-${kind}-provider-symlink`;
+  const daemonToken = await store.createAccessToken({
+    name: `${kind} Provider symlink daemon`,
+    type: "daemon",
+    workspaceId: "local",
+    daemonId,
+  });
+  const server = startMultiremiServer({
+    store,
+    scheduler: null,
+    authToken: `root-${kind}-provider-symlink-secret`,
+    hostname: "127.0.0.1",
+    port: 0,
+  });
+  try {
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      daemonId,
+      runtimeName: `${kind}-provider-symlink-runtime`,
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      daemonPort: 0,
+      gcEnabled: false,
+      workspacesRoot,
+      repoCacheRoot: join(root, ".repo-cache"),
+      providerFactory: () => {
+        throw new Error("symlinked Provider Home must fail before provider creation");
+      },
+    });
+    await daemon.start();
+
+    expect(store.getTask(task.id)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("must be a real directory"),
+    });
+    expect(existsSync(externalGc)).toBe(false);
+    if (receipt) expect(readFileSync(receipt, "utf8")).toBe("keep-receipt\n");
+  } finally {
+    server.stop(true);
+  }
 }
 
 /**

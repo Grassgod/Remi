@@ -2,7 +2,7 @@
 // Covers provider/agent-binding routing, private-runtime visibility, cross-workspace
 // guards, re-pooling on runtime changes, and the execution-engine session snapshots.
 import { afterEach, describe, expect, it } from "bun:test";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -89,7 +89,11 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       repos: [],
     });
     expect(store.getIssueWorkspace(issue.id)?.runtimeId).toBe(codex.id);
-    expect(store.markIssueWorkspaceCleaned(issue.id, claude.id).status).toBe("cleaned");
+    expect(store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: codex.id,
+      ...readyArchiveBinding(store, issue.id, codex.id),
+    }).status).toBe("cleaned");
   });
 
   it("rejects Issue workspace reports and cleanup from a different daemon", () => {
@@ -124,7 +128,12 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       status: "in_use",
       repos: [],
     })).toThrow("runtime does not own active issue workspace");
-    expect(() => store.markIssueWorkspaceCleaned(issue.id, foreign.id))
+    const binding = readyArchiveBinding(store, issue.id, owner.id);
+    expect(() => store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: foreign.id,
+      ...binding,
+    }))
       .toThrow("runtime does not own issue workspace");
   });
 

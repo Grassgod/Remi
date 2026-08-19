@@ -24,8 +24,12 @@ export interface MultiremiDaemonHealth {
   workspace_id?: string | null;
   server_url?: string;
   cli_version?: string;
+  /** True only after every provider managed by this process is ready. */
+  supervisor_ready?: boolean;
   active_task_count?: number;
   daemon_port?: number;
+  workspace_cleanup_capability?: "available" | "blocked";
+  workspace_cleanup_error?: string | null;
   error?: string;
 }
 
@@ -42,15 +46,35 @@ export async function checkManagedDaemonHealth(basePort: number): Promise<Array<
   return entries;
 }
 
-export async function waitForDaemonReady(port: number, timeoutMs: number): Promise<MultiremiDaemonHealth> {
+export interface WaitForDaemonReadyOptions {
+  expectedPid?: number;
+  requireSupervisorReady?: boolean;
+}
+
+export async function waitForDaemonReady(
+  port: number,
+  timeoutMs: number,
+  options: WaitForDaemonReadyOptions = {},
+): Promise<MultiremiDaemonHealth> {
   const deadline = Date.now() + timeoutMs;
   let last: MultiremiDaemonHealth = { status: "stopped" };
   while (Date.now() < deadline) {
     last = await checkDaemonHealth(port);
-    if (last.status === "running") return last;
-    await sleep(500);
+    if (daemonSupervisorReady(last, options)) return last;
+    await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
   }
   return last;
+}
+
+export function daemonSupervisorReady(
+  health: MultiremiDaemonHealth,
+  options: WaitForDaemonReadyOptions = {},
+): boolean {
+  if (health.status !== "running") return false;
+  if (options.expectedPid !== undefined && health.pid !== options.expectedPid) return false;
+  return options.requireSupervisorReady
+    ? health.supervisor_ready === true
+    : health.supervisor_ready !== false;
 }
 
 export async function checkDaemonHealth(port: number): Promise<MultiremiDaemonHealth> {

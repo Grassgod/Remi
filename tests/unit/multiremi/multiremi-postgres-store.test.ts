@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
+import { readyArchiveBinding } from "./helpers.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -692,7 +693,11 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       branchName: `agent/${issue.key}`,
       status: "ready",
     });
-    store.markIssueWorkspaceCleaned(issue.id, runtime.id);
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      ...readyArchiveBinding(store, issue.id, runtime.id),
+    });
     const deletedIssue = store.createIssue({ title: "PG deleted workspace", workspaceId: ws });
     store.reportIssueWorkspace({
       issueId: deletedIssue.id,
@@ -700,6 +705,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       rootPath: "/abs/pg-deleted-issue",
       branchName: `agent/${deletedIssue.key}`,
       status: "in_use",
+    });
+    expect(store.deleteIssue(deletedIssue.id)).toBeFalse();
+    store.markIssueWorkspaceCleaned({
+      issueId: deletedIssue.id,
+      runtimeId: runtime.id,
+      ...readyArchiveBinding(store, deletedIssue.id, runtime.id),
     });
     expect(store.deleteIssue(deletedIssue.id)).toBeTrue();
     expect(store.getIssueWorkspace(deletedIssue.id)).toBeNull();
@@ -1041,6 +1052,90 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     expect(store.getProject(project.id)?.title).toBe("With resources");
     expect(store.listProjectResources(project.id).length).toBe(1);
+  });
+
+  it("upserts Issue session preparation failures on Postgres", () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({
+      name: "archive-failure-pg",
+      provider: "codex",
+      workspaceId: ws,
+      daemonId: `dmn_archive_failure_${wsCounter}`,
+    });
+    const issue = store.createIssue({ title: "Archive failure PG", workspaceId: ws });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    const input = {
+      workspaceId: ws,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: runtime.daemonId!,
+      stage: "prepare" as const,
+      error: "first pack failure",
+    };
+
+    const first = store.reportSessionArchiveFailure(
+      input,
+      `sar_failure_${wsCounter}`,
+      `failures/sar_failure_${wsCounter}/sessions.tar.gz`,
+    );
+    expect(first).toMatchObject({
+      created: true,
+      archive: { status: "failed", lastError: "first pack failure" },
+    });
+    expect(store.retrySessionArchive(first.archive.id)).toMatchObject({ status: "pending" });
+
+    const repeated = store.reportSessionArchiveFailure(
+      { ...input, error: "second pack failure" },
+      `sar_failure_replacement_${wsCounter}`,
+      `failures/sar_failure_replacement_${wsCounter}/sessions.tar.gz`,
+    );
+    expect(repeated).toMatchObject({
+      created: false,
+      archive: {
+        id: first.archive.id,
+        status: "failed",
+        lastError: "second pack failure",
+      },
+    });
+    expect(store.listSessionArchives(issue.id)).toHaveLength(1);
+
+    const actualInput = {
+      workspaceId: ws,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: runtime.daemonId!,
+      sourceRevision: "sessions-v1",
+      sha256: createHash("sha256").update("").digest("hex"),
+      sizeBytes: 0,
+    };
+    const actual = store.initSessionArchive(
+      actualInput,
+      `sar_actual_${wsCounter}`,
+      `archives/sar_actual_${wsCounter}/sessions.tar.gz`,
+    );
+    expect(actual.created).toBe(true);
+    expect(store.getSessionArchive(first.archive.id)).toBeNull();
+
+    const newFailure = store.reportSessionArchiveFailure(
+      { ...input, error: "third pack failure" },
+      `sar_failure_third_${wsCounter}`,
+      `failures/sar_failure_third_${wsCounter}/sessions.tar.gz`,
+    );
+    expect(newFailure.created).toBe(true);
+    expect(store.listSessionArchives(issue.id)).toHaveLength(2);
+    expect(store.initSessionArchive(
+      actualInput,
+      `sar_actual_duplicate_${wsCounter}`,
+      `archives/sar_actual_duplicate_${wsCounter}/sessions.tar.gz`,
+    )).toMatchObject({ created: false, archive: { id: actual.archive.id } });
+    expect(store.getSessionArchive(newFailure.archive.id)).toBeNull();
+    expect(store.listSessionArchives(issue.id)).toHaveLength(1);
   });
 
   it("drives the runtime directory scan queue (create → claim → report)", () => {

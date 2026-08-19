@@ -11,6 +11,7 @@ import {
   Bell,
   Plug,
   Waypoints,
+  Archive,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multiremi/ui/components/ui/tabs";
@@ -26,6 +27,7 @@ import { IntegrationsTab } from "./integrations-tab";
 import { ModelGatewayTab } from "./model-gateway-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
+import { StorageCleanupTab } from "./storage-cleanup-tab";
 import { useT } from "../../i18n";
 
 const ACCOUNT_TAB_KEYS = ["profile", "preferences", "notifications", "tokens"] as const;
@@ -41,6 +43,7 @@ const WORKSPACE_TAB_KEYS = [
   "github",
   "integrations",
   "model_gateway",
+  "storage_cleanup",
   "labs",
   "members",
 ] as const;
@@ -49,6 +52,7 @@ const WORKSPACE_TAB_VALUES = {
   github: "github",
   integrations: "integrations",
   model_gateway: "model-gateway",
+  storage_cleanup: "storage-cleanup",
   labs: "labs",
   members: "members",
 } as const;
@@ -57,6 +61,7 @@ const WORKSPACE_TAB_ICONS = {
   github: GitHubMark,
   integrations: Plug,
   model_gateway: Waypoints,
+  storage_cleanup: Archive,
   labs: FlaskConical,
   members: Users,
 } as const;
@@ -176,6 +181,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="github"><GitHubTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="model-gateway"><ModelGatewayTab /></TabsContent>
+          <TabsContent value="storage-cleanup"><StorageCleanupTab /></TabsContent>
           <TabsContent value="labs"><LabsTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
           {extraAccountTabs?.map((tab) => (

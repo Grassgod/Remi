@@ -1,13 +1,21 @@
-import { access, lstat, mkdir, readFile, readlink, symlink, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { access, lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { linkCodexAuthFromBase, seedCodexHomeFromBase } from "../agent-plugins/codex-home.js";
-import { mergeClaudeSettings } from "../relay-sync.js";
+import { AgentPluginError } from "../agent-plugins/types.js";
+import { sanitizeProviderConfigValue } from "../provider-config-sanitize.js";
+import { mergeClaudeSettings, mergeCodexSessionConfig } from "../relay-sync.js";
+import { removeOwnedDirectorySync } from "./safe-remove.js";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 const SESSION_HOME_MARKER = ".multiremi-session-home.json";
+const PROVIDER_CONFIG_BASELINE = ".multiremi-provider-config-baseline.json";
 
 export interface IssueSessionProviderHome {
+  /** Trusted daemon/workspace boundary beneath which every parent is validated. */
+  storageRoot: string;
   /** Workspace-visible lineage root for one provider lane generation. */
   root: string;
   /** Actual CLAUDE_CONFIG_DIR/CODEX_HOME. Native history is written here. */
@@ -16,6 +24,12 @@ export interface IssueSessionProviderHome {
   agentId: string;
   generation: number;
   provider: "claude" | "codex";
+  /** Codex execution identity. Different Plugin sets must never share a Home. */
+  executionFingerprint?: string;
+  /** Daemon-owned GC boundary for non-Issue provider state. */
+  runtimeStateRoot?: string;
+  /** Present only for non-Issue task-scoped homes that must be removed after the run. */
+  temporaryTaskRoot?: string;
 }
 
 export interface PrepareIssueSessionProviderHomeOptions {
@@ -23,8 +37,10 @@ export interface PrepareIssueSessionProviderHomeOptions {
   codexPluginInstalled?: boolean;
   baseClaudeConfigDir?: string;
   baseCodexHome?: string;
-  /** Relay-approved Codex routing, already stripped of inline credentials. */
-  codexConfigToml?: string;
+  /** Relay-approved provider routing. These fragments never contain credentials. */
+  relayFragment?: string;
+  /** The Relay token is injected as OPENAI_API_KEY into the Codex child. */
+  codexRelayUsesEnvApiKey?: boolean;
   /** Link the base Codex auth file for subscription OAuth. Defaults to true. */
   linkCodexAuth?: boolean;
   /** Link the base Claude credentials file for subscription OAuth. Defaults to true. */
@@ -80,39 +96,168 @@ export function resolveIssueSessionProviderHome(
   workDir: string,
   _workspacesRoot: string,
 ): IssueSessionProviderHome | null {
-  const sessionId = cleanString(task.issueSessionId ?? task.issue_session_id);
+  const formalSessionId = cleanString(task.issueSessionId ?? task.issue_session_id);
+  const issueId = cleanString(task.issueId ?? task.issue_id);
+  const sessionId = formalSessionId ?? (issueId ? `legacy-${issueId}` : null);
   const agentId = cleanString(task.agent?.id);
   const provider = task.agent?.provider;
   if (!sessionId || !agentId || (provider !== "claude" && provider !== "codex")) return null;
 
-  const generation = positiveInteger(
-    task.issueSessionGeneration ?? task.issue_session_generation,
-    1,
-  );
-  const root = join(
-    resolve(workDir),
+  const generation = formalSessionId
+    ? positiveInteger(task.issueSessionGeneration ?? task.issue_session_generation, 1)
+    : 1;
+  const storageRoot = resolve(workDir);
+  const generationRoot = join(
+    storageRoot,
     ".multiremi",
     "sessions",
     safePathSegment(sessionId),
     safePathSegment(agentId),
     String(generation),
   );
+  const execution = provider === "codex" ? codexExecutionIdentity(task) : null;
+  const root = execution
+    ? join(generationRoot, "executions", execution.segment)
+    : generationRoot;
   return {
+    storageRoot,
     root,
     home: join(root, "home"),
     sessionId,
     agentId,
     generation,
     provider,
+    ...(execution ? { executionFingerprint: execution.fingerprint } : {}),
   };
 }
 
-/** Seed provider configuration once, leaving all native session files intact. */
+/**
+ * Resolve an isolated provider home for every daemon task. Issue tasks keep
+ * their stable, archiveable Session lineage. Chats reuse one home until Chat
+ * GC, while one-shot task kinds get a temporary task-scoped home. Both live in
+ * daemon-owned runtime state, independent of the provider cwd.
+ */
+export function resolveTaskProviderHome(
+  task: AgentTask,
+  issueRuntimeStateRoot: string,
+  workspacesRoot: string,
+): IssueSessionProviderHome | null {
+  const issueId = cleanString(task.issueId ?? task.issue_id);
+  if (issueId) {
+    const issueHome = resolveIssueSessionProviderHome(task, issueRuntimeStateRoot, workspacesRoot);
+    return issueHome;
+  }
+
+  const agentId = cleanString(task.agent?.id);
+  const provider = task.agent?.provider;
+  if (!agentId || (provider !== "claude" && provider !== "codex")) return null;
+
+  const taskId = cleanString(task.id);
+  if (!taskId) throw new Error("Task provider home requires a task id");
+  const storageRoot = resolve(workspacesRoot);
+  const execution = provider === "codex" ? codexExecutionIdentity(task) : null;
+  const chatSessionId = cleanString(task.chatSessionId);
+  if (chatSessionId) {
+    const runtimeStateRoot = join(
+      storageRoot,
+      ".session-runtime",
+      safePathSegment(chatSessionId),
+    );
+    const providerRoot = join(
+      runtimeStateRoot,
+      "provider-home",
+      safePathSegment(agentId),
+      provider,
+    );
+    const root = execution
+      ? join(providerRoot, "executions", execution.segment)
+      : providerRoot;
+    return {
+      storageRoot,
+      root,
+      home: join(root, "home"),
+      sessionId: chatSessionId,
+      agentId,
+      generation: 1,
+      provider,
+      ...(execution ? { executionFingerprint: execution.fingerprint } : {}),
+      runtimeStateRoot,
+    };
+  }
+
+  const temporaryTaskRoot = join(storageRoot, ".task-runtime", safePathSegment(taskId));
+  const providerRoot = join(
+    temporaryTaskRoot,
+    "provider-home",
+    safePathSegment(agentId),
+    provider,
+  );
+  const root = execution
+    ? join(providerRoot, "executions", execution.segment)
+    : providerRoot;
+  return {
+    storageRoot,
+    root,
+    home: join(root, "home"),
+    sessionId: taskId,
+    agentId,
+    generation: 1,
+    provider,
+    ...(execution ? { executionFingerprint: execution.fingerprint } : {}),
+    runtimeStateRoot: temporaryTaskRoot,
+    temporaryTaskRoot,
+  };
+}
+
+/**
+ * Establish a Provider Home parent using one lstat-verified directory at a
+ * time. Recursive mkdir is deliberately limited to the trusted storage root;
+ * every daemon-owned descendant rejects symlinks and non-directories before a
+ * Plugin installer or provider can write through it.
+ */
+export async function ensureProviderHomeDirectory(
+  resolvedHome: IssueSessionProviderHome,
+): Promise<void> {
+  await ensureRealDirectoryTree(
+    resolvedHome.storageRoot,
+    resolvedHome.root,
+    "Provider Home",
+  );
+}
+
+/** Remove provider-native state for a completed non-Issue task. */
+export async function cleanupTemporaryTaskProviderHome(
+  resolvedHome: IssueSessionProviderHome | null | undefined,
+  workspacesRoot: string,
+  assertRootOwner?: () => void,
+): Promise<void> {
+  const temporaryTaskRoot = resolvedHome?.temporaryTaskRoot;
+  if (!resolvedHome || !temporaryTaskRoot) return;
+
+  const ownerRoot = join(resolve(workspacesRoot), ".task-runtime");
+  const expectedTaskRoot = join(ownerRoot, safePathSegment(resolvedHome.sessionId));
+  if (resolve(temporaryTaskRoot) !== resolve(expectedTaskRoot)) {
+    throw new Error(`Temporary provider home escapes task runtime root: ${temporaryTaskRoot}`);
+  }
+  const relativeHome = relative(resolve(temporaryTaskRoot), resolve(resolvedHome.root));
+  if (
+    !relativeHome
+    || relativeHome === ".."
+    || relativeHome.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
+    || isAbsolute(relativeHome)
+  ) {
+    throw new Error(`Temporary provider home is not contained by its task runtime: ${resolvedHome.root}`);
+  }
+
+  removeOwnedDirectorySync(workspacesRoot, temporaryTaskRoot, { assertRootOwner });
+}
+
+/** Seed a provider Home once, then reconcile its non-secret routing on every start. */
 export async function prepareIssueSessionProviderHome(
   resolvedHome: IssueSessionProviderHome,
   options: PrepareIssueSessionProviderHomeOptions = {},
 ): Promise<void> {
-  await mkdir(resolvedHome.root, { recursive: true, mode: 0o700 });
+  await ensureProviderHomeDirectory(resolvedHome);
   if (!(await isPreparedHome(resolvedHome.home))) {
     if (resolvedHome.provider === "codex") {
       if (!options.codexPluginInstalled) {
@@ -121,7 +266,6 @@ export async function prepareIssueSessionProviderHome(
           targetHome: resolvedHome.home,
           requireAuth: false,
           copyAuth: false,
-          ...(options.codexConfigToml === undefined ? {} : { configToml: options.codexConfigToml }),
         });
       }
     } else {
@@ -137,18 +281,33 @@ export async function prepareIssueSessionProviderHome(
       sessionId: resolvedHome.sessionId,
       agentId: resolvedHome.agentId,
       generation: resolvedHome.generation,
+      executionFingerprint: resolvedHome.executionFingerprint ?? null,
       preparedAt: new Date().toISOString(),
     })}\n`, { mode: 0o600 });
   }
+
+  // Capture Plugin/native configuration once, before applying Relay routing.
+  // Every later start rebuilds the provider config from this credential-free
+  // baseline, so deep-merge cannot retain a removed or superseded gateway.
+  const baseline = await ensureProviderConfigBaseline(resolvedHome, options);
+
+  // Homes are stable for a Session lane, while workspace Relay configuration
+  // may change between turns. Reconcile routing on every start without touching
+  // provider-native history or Plugin-owned configuration.
+  await reconcileIssueSessionProviderConfig(resolvedHome, baseline, options);
 
   // Authentication is runtime state, not immutable home configuration. Reconcile
   // it on every start so removing a Relay from an existing lane can fall back to
   // provider-native OAuth without forcing a new generation.
   if (resolvedHome.provider === "codex" && options.linkCodexAuth !== false) {
-    await linkCodexAuthFromBase(
-      options.baseCodexHome ?? process.env.CODEX_HOME ?? join(homedir(), ".codex"),
-      resolvedHome.home,
-    );
+    const baseCodexHome = options.baseCodexHome ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
+    if (options.relayFragment !== undefined && options.codexRelayUsesEnvApiKey !== true) {
+      await removeSessionCredential(join(resolvedHome.home, "auth.json"), "Codex");
+      await assertIssueSessionNativeCodexOAuth(baseCodexHome);
+    }
+    await linkCodexAuthFromBase(baseCodexHome, resolvedHome.home);
+  } else if (resolvedHome.provider === "codex") {
+    await removeSessionCredential(join(resolvedHome.home, "auth.json"), "Codex");
   }
   if (resolvedHome.provider === "claude" && options.linkClaudeCredentials !== false) {
     const baseClaudeConfigDir = resolve(
@@ -160,6 +319,8 @@ export async function prepareIssueSessionProviderHome(
       "Claude",
       false,
     );
+  } else if (resolvedHome.provider === "claude") {
+    await removeSessionCredential(join(resolvedHome.home, ".credentials.json"), "Claude");
   }
 
   await writeFile(join(resolvedHome.root, "meta.json"), `${JSON.stringify({
@@ -168,8 +329,233 @@ export async function prepareIssueSessionProviderHome(
     sessionId: resolvedHome.sessionId,
     agentId: resolvedHome.agentId,
     generation: resolvedHome.generation,
+    executionFingerprint: resolvedHome.executionFingerprint ?? null,
     providerHome: "home",
   }, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function ensureRealDirectoryTree(
+  storageRoot: string,
+  target: string,
+  label: string,
+): Promise<void> {
+  const root = resolve(storageRoot);
+  const destination = resolve(target);
+  assertContainedOrEqual(root, destination, label);
+
+  // The configured/workspace root is the trust boundary. It may be created by
+  // the daemon, but the daemon-owned descendants below it are never created via
+  // recursive traversal.
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await assertRealDirectory(root, `${label} storage root`);
+  let current = root;
+  const remainder = relative(root, destination);
+  if (!remainder) return;
+  for (const segment of remainder.split(sep)) {
+    current = join(current, segment);
+    try {
+      await mkdir(current, { mode: 0o700 });
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error;
+    }
+    await assertRealDirectory(current, label);
+  }
+}
+
+async function assertRealDirectory(path: string, label: string): Promise<void> {
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`${label} must be a real directory: ${path}`);
+  }
+}
+
+function assertContainedOrEqual(storageRoot: string, target: string, label: string): void {
+  const rel = relative(resolve(storageRoot), resolve(target));
+  if (
+    rel === ".."
+    || rel.startsWith(`..${sep}`)
+    || isAbsolute(rel)
+  ) {
+    throw new Error(`${label} escapes its storage root: ${target}`);
+  }
+}
+
+function codexExecutionIdentity(task: AgentTask): { fingerprint: string; segment: string } | null {
+  const fingerprint = cleanString(task.executionFingerprint ?? task.execution_fingerprint);
+  if (!fingerprint) return null;
+  const digest = fingerprint.toLowerCase().replace(/^sha256:/, "");
+  return {
+    fingerprint,
+    segment: /^[a-f0-9]{64}$/.test(digest)
+      ? digest
+      : createHash("sha256").update(fingerprint).digest("hex"),
+  };
+}
+
+async function reconcileIssueSessionProviderConfig(
+  resolvedHome: IssueSessionProviderHome,
+  baseline: string,
+  options: PrepareIssueSessionProviderHomeOptions,
+): Promise<void> {
+  if (resolvedHome.provider === "claude") {
+    const target = join(resolvedHome.home, "settings.json");
+    const current = parseJsonObject(baseline, `${resolvedHome.root}/${PROVIDER_CONFIG_BASELINE}`);
+    // An empty token deliberately strips credential-shaped Claude env keys from
+    // the file. The real Relay token is injected into the ACP child environment.
+    const merged = mergeClaudeSettings(current, options.relayFragment ?? "", "");
+    const mergedEnv = objectField(merged, "env");
+    if (mergedEnv && Object.keys(mergedEnv).length === 0) delete merged.env;
+    await writePrivateFileIfChanged(target, `${JSON.stringify(merged, null, 2)}\n`);
+    return;
+  }
+
+  const target = join(resolvedHome.home, "config.toml");
+  const merged = mergeCodexSessionConfig(
+    baseline,
+    options.relayFragment ?? "",
+    options.codexRelayUsesEnvApiKey === true,
+  );
+  await writePrivateFileIfChanged(target, merged);
+}
+
+interface ProviderConfigBaseline {
+  schemaVersion: 1;
+  provider: "claude" | "codex";
+  content: string;
+}
+
+async function ensureProviderConfigBaseline(
+  resolvedHome: IssueSessionProviderHome,
+  options: PrepareIssueSessionProviderHomeOptions,
+): Promise<string> {
+  const baselinePath = join(resolvedHome.root, PROVIDER_CONFIG_BASELINE);
+  const existing = await readProviderConfigBaseline(baselinePath, resolvedHome.provider);
+  if (existing !== null) return existing;
+
+  const configPath = join(
+    resolvedHome.home,
+    resolvedHome.provider === "claude" ? "settings.json" : "config.toml",
+  );
+  const current = await readTextFileForReconcile(configPath)
+    ?? (resolvedHome.provider === "claude" ? "{}\n" : "");
+  const content = resolvedHome.provider === "claude"
+    ? sanitizeClaudeBaseline(current, options.relayFragment !== undefined, configPath)
+    : sanitizeCodexBaseline(current, options.relayFragment !== undefined);
+  const payload: ProviderConfigBaseline = {
+    schemaVersion: 1,
+    provider: resolvedHome.provider,
+    content,
+  };
+  try {
+    await writeFile(baselinePath, `${JSON.stringify(payload, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    return content;
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+    const winner = await readProviderConfigBaseline(baselinePath, resolvedHome.provider);
+    if (winner === null) throw new Error(`Provider configuration baseline disappeared: ${baselinePath}`);
+    return winner;
+  }
+}
+
+async function readProviderConfigBaseline(
+  path: string,
+  expectedProvider: "claude" | "codex",
+): Promise<string | null> {
+  const text = await readTextFileForReconcile(path);
+  if (text === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Provider configuration baseline is not valid JSON: ${path}`, { cause: error });
+  }
+  const baseline = parsed as Partial<ProviderConfigBaseline> | null;
+  if (
+    !baseline
+    || typeof baseline !== "object"
+    || baseline.schemaVersion !== 1
+    || baseline.provider !== expectedProvider
+    || typeof baseline.content !== "string"
+  ) {
+    throw new Error(`Provider configuration baseline is invalid: ${path}`);
+  }
+  return baseline.content;
+}
+
+function sanitizeClaudeBaseline(current: string, relayAuthoritative: boolean, path: string): string {
+  const parsed = parseJsonObject(current, path);
+  const env = objectField(parsed, "env");
+  if (env) {
+    const cleanEnv = { ...env };
+    delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
+    delete cleanEnv.ANTHROPIC_API_KEY;
+    if (relayAuthoritative) delete cleanEnv.ANTHROPIC_BASE_URL;
+    if (Object.keys(cleanEnv).length) parsed.env = cleanEnv;
+    else delete parsed.env;
+  }
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+function sanitizeCodexBaseline(current: string, relayAuthoritative: boolean): string {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = current.trim() ? parseToml(current) as Record<string, unknown> : {};
+  } catch {
+    throw new Error("Provider configuration is not valid TOML");
+  }
+  parsed = sanitizeProviderConfigValue(parsed) as Record<string, unknown>;
+  if (relayAuthoritative) {
+    // The daemon's global CLI files may have been deep-merged by an older
+    // version. Provider routing is therefore not a trustworthy native baseline
+    // when the server supplied an authoritative workspace Relay (including a
+    // clear payload). Default Codex routing + native OAuth is the safe fallback.
+    delete parsed.model_provider;
+    delete parsed.model_providers;
+  }
+  return stringifyToml(parsed);
+}
+
+function parseJsonObject(text: string, path: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Provider configuration is not valid JSON: ${path}`, { cause: error });
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Provider configuration is not a JSON object: ${path}`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function readTextFileForReconcile(path: string): Promise<string | null> {
+  let info: Awaited<ReturnType<typeof lstat>>;
+  try {
+    info = await lstat(path);
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error(`Provider configuration must be a regular file: ${path}`);
+  }
+  return readFile(path, "utf8");
+}
+
+async function writePrivateFileIfChanged(path: string, content: string): Promise<void> {
+  const current = await readTextFileForReconcile(path);
+  if (current === content) return;
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temp = `${path}.multiremi.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(temp, content, { flag: "wx", mode: 0o600 });
+    await rename(temp, path);
+  } finally {
+    await rm(temp, { force: true }).catch(() => {});
+  }
 }
 
 async function ensureCredentialLink(
@@ -211,6 +597,24 @@ async function ensureCredentialLink(
   return true;
 }
 
+async function removeSessionCredential(target: string, provider: string): Promise<void> {
+  let targetInfo: Awaited<ReturnType<typeof lstat>>;
+  try {
+    targetInfo = await lstat(target);
+  } catch (error) {
+    if (isNotFound(error)) return;
+    throw error;
+  }
+  if (!targetInfo.isSymbolicLink() && !targetInfo.isFile()) {
+    throw new AgentPluginError(
+      `${provider} credential target is not a managed file: ${target}`,
+      `plugin_${provider.toLowerCase()}_auth_invalid`,
+      "setup_required",
+    );
+  }
+  await rm(target);
+}
+
 /**
  * Read the minimum provider credentials needed by the ACP child and return
  * them as an in-memory environment overlay. Secrets are never written into
@@ -221,24 +625,35 @@ export async function loadIssueSessionProviderEnv(
   options: IssueSessionProviderEnvOptions = {},
 ): Promise<Record<string, string>> {
   if (resolvedHome.provider === "claude") {
-    const baseDir = options.baseClaudeConfigDir
-      ?? process.env.CLAUDE_CONFIG_DIR
-      ?? join(homedir(), ".claude");
-    const baseSettings = await readJsonObjectIfRegular(join(resolve(baseDir), "settings.json"));
-    const baseEnv = objectField(baseSettings, "env");
-    const env = pickStringFields(baseEnv, CLAUDE_PROVIDER_ENV_KEYS);
-    if (options.relayFragment !== undefined || options.relayAuthToken !== undefined) {
+    const relayAuthoritative = options.relayFragment !== undefined
+      || options.relayAuthToken !== undefined;
+    if (relayAuthoritative) {
       const relaySettings = mergeClaudeSettings(
         {},
         options.relayFragment ?? "",
         options.relayAuthToken ?? "",
       );
-      Object.assign(env, pickStringFields(objectField(relaySettings, "env"), CLAUDE_PROVIDER_ENV_KEYS));
-      if (options.relayAuthToken) delete env.ANTHROPIC_API_KEY;
+      return {
+        // AcpClient starts with the daemon's machine env. Empty values are
+        // deliberate tombstones that prevent stale machine/custom credentials
+        // from surviving an authoritative workspace Relay clear.
+        ANTHROPIC_API_KEY: "",
+        ANTHROPIC_AUTH_TOKEN: "",
+        ANTHROPIC_BASE_URL: "",
+        ...pickStringFields(objectField(relaySettings, "env"), CLAUDE_PROVIDER_ENV_KEYS),
+      };
     }
-    return env;
+    const baseDir = options.baseClaudeConfigDir
+      ?? process.env.CLAUDE_CONFIG_DIR
+      ?? join(homedir(), ".claude");
+    const baseSettings = await readJsonObjectIfRegular(join(resolve(baseDir), "settings.json"));
+    const baseEnv = objectField(baseSettings, "env");
+    return pickStringFields(baseEnv, CLAUDE_PROVIDER_ENV_KEYS);
   }
 
+  if (options.relayFragment !== undefined || options.relayAuthToken !== undefined) {
+    return { OPENAI_API_KEY: options.relayAuthToken?.trim() ?? "" };
+  }
   const baseHome = options.baseCodexHome
     ?? process.env.CODEX_HOME
     ?? join(homedir(), ".codex");
@@ -246,8 +661,21 @@ export async function loadIssueSessionProviderEnv(
   const env: Record<string, string> = {};
   const staticKey = auth && typeof auth.OPENAI_API_KEY === "string" ? auth.OPENAI_API_KEY.trim() : "";
   if (staticKey) env.OPENAI_API_KEY = staticKey;
-  if (options.relayAuthToken?.trim()) env.OPENAI_API_KEY = options.relayAuthToken.trim();
   return env;
+}
+
+export async function assertIssueSessionNativeCodexOAuth(baseHome: string): Promise<void> {
+  const auth = await readJsonObjectIfRegular(join(resolve(baseHome), "auth.json"));
+  const hasStaticKey = typeof auth?.OPENAI_API_KEY === "string" && Boolean(auth.OPENAI_API_KEY.trim());
+  const authMode = typeof auth?.auth_mode === "string" ? auth.auth_mode.trim().toLowerCase() : "";
+  const hasTokenBundle = Boolean(objectField(auth, "tokens"));
+  if (!auth || hasStaticKey || (authMode !== "chatgpt" && !hasTokenBundle)) {
+    throw new AgentPluginError(
+      "Codex native OAuth is unavailable after clearing the workspace model gateway; sign in to Codex on this Runtime and retry",
+      "plugin_codex_native_oauth_required",
+      "setup_required",
+    );
+  }
 }
 
 async function seedClaudeSettings(baseDir: string, targetDir: string): Promise<void> {
