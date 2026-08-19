@@ -10,10 +10,10 @@ export function getSshMeshRefreshInterval(
 ): number {
   const applying =
     overview?.rotation_state === "rolling_out" ||
-    overview?.runtimes.some(
-      (runtime) =>
-        runtime.status === "syncing" ||
-        runtime.desired_probe_revision > runtime.probe_revision,
+    overview?.nodes.some(
+      (node) =>
+        node.status === "syncing" ||
+        node.desired_probe_revision > node.probe_revision,
     );
   return applying
     ? SSH_MESH_ACTIVE_REFRESH_MS

@@ -213,6 +213,8 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE TABLE IF NOT EXISTS multiremi_daemon_ssh_mesh_states (
       workspace_id TEXT NOT NULL,
       daemon_id TEXT NOT NULL,
+      node_kind TEXT NOT NULL DEFAULT 'runtime',
+      name TEXT,
       runtime_id TEXT,
       protocol_version INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'setup_required',
@@ -1363,6 +1365,8 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_daemon_retirements", "ssh_mesh_rekey_operation_id TEXT");
   addColumnIfMissing(db, "multiremi_daemon_retirements", "ssh_mesh_rekey_updated_at TEXT");
   addColumnIfMissing(db, "multiremi_workspace_ssh_mesh", "active_operation_id TEXT");
+  addColumnIfMissing(db, "multiremi_daemon_ssh_mesh_states", "node_kind TEXT NOT NULL DEFAULT 'runtime'");
+  addColumnIfMissing(db, "multiremi_daemon_ssh_mesh_states", "name TEXT");
   addColumnIfMissing(db, "multiremi_daemon_lifecycle_locks", "owner_user_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");

@@ -14507,12 +14507,46 @@
         "fingerprint": null,
         "rotation_state": "stable",
         "config_revision": "ce584f895ccd9080fc1b088e83b3470b7d4f2a84114953f9f8d06a11ad2110ff",
+        "rotation_ready_nodes": 0,
+        "rotation_total_nodes": 1,
         "rotation_ready_daemons": 0,
         "rotation_total_daemons": 1,
         "created_at": null,
         "updated_at": null,
+        "nodes": [
+          {
+            "node_id": "dmn_snapshot",
+            "node_type": "runtime",
+            "daemon_id": "dmn_snapshot",
+            "runtime_ids": [
+              "rt_snapshot"
+            ],
+            "name": "snapshot-runtime",
+            "ssh_alias": "remi-dmn-snapshot-89006f",
+            "status": "disabled",
+            "protocol_version": 0,
+            "key_version": null,
+            "config_revision": null,
+            "desired_config_revision": "ce584f895ccd9080fc1b088e83b3470b7d4f2a84114953f9f8d06a11ad2110ff",
+            "ssh_user": null,
+            "hostname": null,
+            "port": 22,
+            "addresses": [],
+            "host_keys": [],
+            "public_key_installed": false,
+            "config_installed": false,
+            "probe_revision": 0,
+            "desired_probe_revision": 0,
+            "peer_tests": [],
+            "last_error_code": null,
+            "last_error": null,
+            "last_reported_at": null
+          }
+        ],
         "runtimes": [
           {
+            "node_id": "dmn_snapshot",
+            "node_type": "runtime",
             "daemon_id": "dmn_snapshot",
             "runtime_ids": [
               "rt_snapshot"

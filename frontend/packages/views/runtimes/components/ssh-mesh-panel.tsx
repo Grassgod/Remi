@@ -4,6 +4,7 @@ import { useCallback, useId, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
+  ArrowRight,
   CheckCircle2,
   Clock3,
   LoaderCircle,
@@ -11,6 +12,7 @@ import {
   RefreshCw,
   RotateCw,
   Server,
+  ServerCog,
   ShieldAlert,
   Terminal,
   WifiOff,
@@ -44,6 +46,15 @@ import {
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@multiremi/ui/components/ui/select";
 import { Switch } from "@multiremi/ui/components/ui/switch";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT, useTimeAgo } from "../../i18n";
@@ -60,7 +71,12 @@ export function SshMeshPanel({
   const { t } = useT("runtimes");
   const wsId = useWorkspaceId();
   const toggleId = useId();
+  const sourceSelectId = useId();
   const [emergencyDisableOpen, setEmergencyDisableOpen] = useState(false);
+  const [sourceOverride, setSourceOverride] = useState<{
+    defaultSourceId: string | null;
+    nodeId: string;
+  } | null>(null);
   const user = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
   const lastHeartbeatRefreshRef = useRef(0);
@@ -161,12 +177,21 @@ export function SshMeshPanel({
   }
 
   const overview = meshQuery.data;
-  const source = overview.runtimes.find(
-    (runtime) => runtime.daemon_id === sourceDaemonId,
+  const nodes = overview.nodes;
+  const platformNodes = nodes.filter((node) => node.node_type === "control_plane");
+  const runtimeNodes = nodes.filter((node) => node.node_type === "runtime");
+  const otherNodes = nodes.filter(
+    (node) => node.node_type !== "control_plane" && node.node_type !== "runtime",
   );
-  const peers = overview.runtimes.filter(
-    (runtime) => runtime.daemon_id !== sourceDaemonId,
-  );
+  const requestedSourceId = sourceOverride?.defaultSourceId === sourceDaemonId
+    ? sourceOverride.nodeId
+    : sourceDaemonId;
+  const source = nodes.find((node) => node.node_id === requestedSourceId)
+    ?? platformNodes[0]
+    ?? nodes[0];
+  const sourceNodeId = source?.node_id ?? null;
+  const sourceLabel = source ? nodeLabel(source) : sourceName;
+  const peers = nodes.filter((node) => node.node_id !== sourceNodeId);
   const sourceIsTesting =
     !!source && source.desired_probe_revision > source.probe_revision;
   const rotationInProgress = overview.rotation_state === "rolling_out";
@@ -216,9 +241,9 @@ export function SshMeshPanel({
   };
 
   const testConnection = (targetDaemonId?: string) => {
-    if (!sourceDaemonId || !canProbe) return;
+    if (!sourceNodeId || !canProbe) return;
     testMutation.mutate(
-      { sourceDaemonId, targetDaemonId },
+      { sourceDaemonId: sourceNodeId, targetDaemonId },
       {
         onSuccess: () => toast.success(t(($) => $.ssh_mesh.toast_test_started)),
         onError: (error) =>
@@ -318,7 +343,10 @@ export function SshMeshPanel({
                   <RotateCw className="size-3.5" />
                 )}
                 {overview.rotation_state === "rolling_out"
-                  ? t(($) => $.ssh_mesh.rotation_applying)
+                  ? t(($) => $.ssh_mesh.rotation_progress, {
+                      ready: overview.rotation_ready_nodes,
+                      total: overview.rotation_total_nodes,
+                    })
                   : t(($) => $.ssh_mesh.rotate)}
               </AlertDialogTrigger>
               <AlertDialogContent>
@@ -360,61 +388,113 @@ export function SshMeshPanel({
 
       {overview.enabled && (
         <>
-          <section className="border-b">
-            <div className="flex items-center justify-between gap-3 px-5 py-3">
-              <div>
-                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
-                  {t(($) => $.ssh_mesh.fleet_title)}
-                </h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {t(($) => $.ssh_mesh.fleet_hint)}
-                </p>
-              </div>
-              <span className="font-mono text-xs text-muted-foreground">
-                {overview.runtimes.length}
-              </span>
-            </div>
-            {overview.runtimes.length === 0 ? (
-              <EmptyRow text={t(($) => $.ssh_mesh.fleet_empty)} />
-            ) : (
-              <ul className="divide-y border-t">
-                {overview.runtimes.map((runtime) => (
-                  <RuntimeMeshRow
-                    key={runtime.daemon_id}
-                    runtime={runtime}
-                    selected={runtime.daemon_id === sourceDaemonId}
-                  />
-                ))}
-              </ul>
-            )}
-          </section>
+          <MeshNodeSection
+            title={t(($) => $.ssh_mesh.platform_nodes_title)}
+            hint={t(($) => $.ssh_mesh.platform_nodes_hint)}
+            empty={t(($) => $.ssh_mesh.platform_nodes_empty)}
+            nodes={platformNodes}
+            sourceNodeId={sourceNodeId}
+          />
+
+          <MeshNodeSection
+            title={t(($) => $.ssh_mesh.runtime_nodes_title)}
+            hint={t(($) => $.ssh_mesh.runtime_nodes_hint)}
+            empty={t(($) => $.ssh_mesh.runtime_nodes_empty)}
+            nodes={runtimeNodes}
+            sourceNodeId={sourceNodeId}
+          />
+
+          {otherNodes.length > 0 && (
+            <MeshNodeSection
+              title={t(($) => $.ssh_mesh.other_nodes_title)}
+              hint={t(($) => $.ssh_mesh.other_nodes_hint)}
+              empty={t(($) => $.ssh_mesh.other_nodes_empty)}
+              nodes={otherNodes}
+              sourceNodeId={sourceNodeId}
+            />
+          )}
 
           <section>
-            <div className="flex flex-col gap-3 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 px-5 py-3 lg:flex-row lg:items-end lg:justify-between">
               <div className="min-w-0">
-                <h3 className="truncate text-xs font-semibold uppercase text-muted-foreground">
-                  {t(($) => $.ssh_mesh.connectivity_title, { name: sourceName })}
+                <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+                  {t(($) => $.ssh_mesh.connectivity_title)}
                 </h3>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {t(($) => $.ssh_mesh.connectivity_hint)}
                 </p>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={!canProbe}
-                onClick={() => testConnection()}
-              >
-                {sourceIsTesting ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-3.5" />
-                )}
-                {sourceIsTesting
-                  ? t(($) => $.ssh_mesh.testing)
-                  : t(($) => $.ssh_mesh.test_all)}
-              </Button>
+              <div className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:items-end lg:w-auto">
+                <div className="min-w-0 flex-1 space-y-1 lg:w-72">
+                  <label
+                    htmlFor={sourceSelectId}
+                    className="text-xs text-muted-foreground"
+                  >
+                    {t(($) => $.ssh_mesh.test_source)}
+                  </label>
+                  <Select
+                    value={sourceNodeId ?? ""}
+                    onValueChange={(nodeId) => {
+                      if (!nodeId) return;
+                      setSourceOverride({ defaultSourceId: sourceDaemonId, nodeId });
+                    }}
+                  >
+                    <SelectTrigger id={sourceSelectId} className="w-full">
+                      <SelectValue placeholder={t(($) => $.ssh_mesh.source_missing)}>
+                        {source ? (
+                          <>
+                            <NodeTypeIcon nodeType={source.node_type} />
+                            <span className="truncate">{sourceLabel}</span>
+                          </>
+                        ) : null}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent align="start" alignItemWithTrigger={false}>
+                      {platformNodes.length > 0 && (
+                        <SelectGroup>
+                          <SelectLabel>{t(($) => $.ssh_mesh.platform_nodes_title)}</SelectLabel>
+                          {platformNodes.map((node) => (
+                            <MeshSourceOption key={node.node_id} node={node} />
+                          ))}
+                        </SelectGroup>
+                      )}
+                      {runtimeNodes.length > 0 && (
+                        <SelectGroup>
+                          <SelectLabel>{t(($) => $.ssh_mesh.runtime_nodes_title)}</SelectLabel>
+                          {runtimeNodes.map((node) => (
+                            <MeshSourceOption key={node.node_id} node={node} />
+                          ))}
+                        </SelectGroup>
+                      )}
+                      {otherNodes.length > 0 && (
+                        <SelectGroup>
+                          <SelectLabel>{t(($) => $.ssh_mesh.other_nodes_title)}</SelectLabel>
+                          {otherNodes.map((node) => (
+                            <MeshSourceOption key={node.node_id} node={node} />
+                          ))}
+                        </SelectGroup>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={!canProbe}
+                  onClick={() => testConnection()}
+                >
+                  {sourceIsTesting ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="size-3.5" />
+                  )}
+                  {sourceIsTesting
+                    ? t(($) => $.ssh_mesh.testing)
+                    : t(($) => $.ssh_mesh.test_all)}
+                </Button>
+              </div>
             </div>
 
             {!source ? (
@@ -425,20 +505,21 @@ export function SshMeshPanel({
               <ul className="divide-y border-t">
                 {peers.map((peer) => {
                   const result = source.peer_tests.find(
-                    (candidate) => candidate.daemon_id === peer.daemon_id,
+                    (candidate) => candidate.node_id === peer.node_id,
                   );
                   const testingPeer =
                     testMutation.isPending &&
-                    testMutation.variables?.sourceDaemonId === sourceDaemonId &&
-                    testMutation.variables?.targetDaemonId === peer.daemon_id;
+                    testMutation.variables?.sourceDaemonId === sourceNodeId &&
+                    testMutation.variables?.targetDaemonId === peer.node_id;
                   return (
                     <PeerConnectionRow
-                      key={peer.daemon_id}
+                      key={peer.node_id}
+                      source={source}
                       peer={peer}
                       result={result}
                       testing={testingPeer || sourceIsTesting}
                       disabled={!canProbe}
-                      onTest={() => testConnection(peer.daemon_id)}
+                      onTest={() => testConnection(peer.node_id)}
                     />
                   );
                 })}
@@ -487,18 +568,61 @@ export function SshMeshPanel({
   );
 }
 
-function RuntimeMeshRow({
-  runtime,
+function MeshNodeSection({
+  title,
+  hint,
+  empty,
+  nodes,
+  sourceNodeId,
+}: {
+  title: string;
+  hint: string;
+  empty: string;
+  nodes: SshMeshRuntime[];
+  sourceNodeId: string | null;
+}) {
+  return (
+    <section className="border-b">
+      <div className="flex items-center justify-between gap-3 px-5 py-3">
+        <div className="min-w-0">
+          <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+            {title}
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>
+        </div>
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+          {nodes.length}
+        </span>
+      </div>
+      {nodes.length === 0 ? (
+        <EmptyRow text={empty} />
+      ) : (
+        <ul className="divide-y border-t">
+          {nodes.map((node) => (
+            <MeshNodeRow
+              key={node.node_id}
+              node={node}
+              selected={node.node_id === sourceNodeId}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function MeshNodeRow({
+  node,
   selected,
 }: {
-  runtime: SshMeshRuntime;
+  node: SshMeshRuntime;
   selected: boolean;
 }) {
   const { t } = useT("runtimes");
   const timeAgo = useTimeAgo();
-  const endpoint = runtime.addresses[0] ?? runtime.hostname;
-  const endpointLabel = runtime.ssh_user && endpoint
-    ? `${runtime.ssh_user}@${endpoint}${runtime.port === 22 ? "" : `:${runtime.port}`}`
+  const endpoint = node.addresses[0] ?? node.hostname;
+  const endpointLabel = node.ssh_user && endpoint
+    ? `${node.ssh_user}@${endpoint}${node.port === 22 ? "" : `:${node.port}`}`
     : t(($) => $.ssh_mesh.not_available);
 
   return (
@@ -506,43 +630,47 @@ function RuntimeMeshRow({
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border bg-background">
-            <Server className="size-3.5 text-muted-foreground" />
+            <NodeTypeIcon nodeType={node.node_type} />
           </span>
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="truncate text-sm font-medium">
-                {runtime.name ?? runtime.hostname ?? runtime.daemon_id}
+                {nodeLabel(node)}
               </span>
+              <NodeTypeBadge nodeType={node.node_type} />
               {selected && (
                 <Badge variant="secondary">
-                  {t(($) => $.ssh_mesh.selected_machine)}
+                  {t(($) => $.ssh_mesh.selected_source)}
                 </Badge>
               )}
-              <StatusBadge status={runtime.status} />
+              <StatusBadge status={node.status} />
             </div>
             <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span className="truncate font-mono">{endpointLabel}</span>
-              {runtime.last_reported_at && (
-                <span>{timeAgo(runtime.last_reported_at)}</span>
+              {node.last_reported_at && (
+                <span>{timeAgo(node.last_reported_at)}</span>
               )}
             </div>
-            {runtime.last_error && (
-              <p className="mt-1 truncate text-xs text-destructive" title={runtime.last_error}>
-                {runtime.last_error}
+            {node.last_error && (
+              <p className="mt-1 truncate text-xs text-destructive" title={node.last_error}>
+                {node.last_error}
               </p>
             )}
           </div>
         </div>
         <div className="min-w-0 shrink-0 text-left sm:text-right">
           <div className="truncate font-mono text-xs">
-            {runtime.ssh_alias
-              ? `ssh ${runtime.ssh_alias}`
+            <span className="mr-1 text-muted-foreground">
+              {t(($) => $.ssh_mesh.ssh_alias)}
+            </span>
+            {node.ssh_alias
+              ? `ssh ${node.ssh_alias}`
               : t(($) => $.ssh_mesh.not_available)}
           </div>
           <div className="mt-1 font-mono text-[11px] text-muted-foreground">
             {t(($) => $.ssh_mesh.runtime_revision, {
-              version: runtime.key_version ?? "--",
-              revision: shortRevision(runtime.config_revision),
+              version: node.key_version ?? "--",
+              revision: shortRevision(node.config_revision),
             })}
           </div>
         </div>
@@ -552,12 +680,14 @@ function RuntimeMeshRow({
 }
 
 function PeerConnectionRow({
+  source,
   peer,
   result,
   testing,
   disabled,
   onTest,
 }: {
+  source: SshMeshRuntime;
   peer: SshMeshRuntime;
   result: SshMeshRuntime["peer_tests"][number] | undefined;
   testing: boolean;
@@ -575,9 +705,22 @@ function PeerConnectionRow({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="truncate text-sm font-medium">
-            {peer.name ?? peer.hostname ?? peer.daemon_id}
+          <span
+            className="flex min-w-0 items-center gap-1.5 text-sm font-medium"
+            aria-label={t(($) => $.ssh_mesh.direction, {
+              source: nodeLabel(source),
+              target: nodeLabel(peer),
+            })}
+            title={t(($) => $.ssh_mesh.direction, {
+              source: nodeLabel(source),
+              target: nodeLabel(peer),
+            })}
+          >
+            <span className="truncate">{nodeLabel(source)}</span>
+            <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{nodeLabel(peer)}</span>
           </span>
+          <NodeTypeBadge nodeType={peer.node_type} />
           {testing ? (
             <Badge variant="secondary">
               <LoaderCircle className="animate-spin" />
@@ -613,12 +756,44 @@ function PeerConnectionRow({
         variant="ghost"
         disabled={disabled}
         onClick={onTest}
+        aria-label={t(($) => $.ssh_mesh.test_direction, {
+          source: nodeLabel(source),
+          target: nodeLabel(peer),
+        })}
       >
         <RefreshCw className="size-3.5" />
         {failed ? t(($) => $.ssh_mesh.retry) : t(($) => $.ssh_mesh.test)}
       </Button>
     </li>
   );
+}
+
+function MeshSourceOption({ node }: { node: SshMeshRuntime }) {
+  return (
+    <SelectItem value={node.node_id}>
+      <NodeTypeIcon nodeType={node.node_type} />
+      <span className="truncate">{nodeLabel(node)}</span>
+    </SelectItem>
+  );
+}
+
+function NodeTypeIcon({ nodeType }: { nodeType: string }) {
+  const Icon = nodeType === "control_plane" ? ServerCog : Server;
+  return <Icon className="size-3.5 shrink-0 text-muted-foreground" />;
+}
+
+function NodeTypeBadge({ nodeType }: { nodeType: string }) {
+  const { t } = useT("runtimes");
+  const label = nodeType === "control_plane"
+    ? t(($) => $.ssh_mesh.node_type.control_plane)
+    : nodeType === "runtime"
+      ? t(($) => $.ssh_mesh.node_type.runtime)
+      : t(($) => $.ssh_mesh.node_type.unknown);
+  return <Badge variant="outline">{label}</Badge>;
+}
+
+function nodeLabel(node: SshMeshRuntime): string {
+  return node.name ?? node.hostname ?? node.node_id;
 }
 
 function PanelLoadError({

@@ -756,17 +756,48 @@ runMigrations(this.db);
     });
   }
 
+  recordControlPlaneSshMeshHeartbeat(
+    workspaceId: string,
+    nodeId: string,
+    name: string,
+    protocolVersion: number,
+    status?: MultiremiDaemonSshMeshStatus,
+  ): MultiremiSshMeshHeartbeatAck {
+    return this.withSshMeshLifecycleLock(workspaceId, () => {
+      const ack = this.sshMesh.recordControlPlaneHeartbeat(
+        workspaceId,
+        nodeId,
+        name,
+        protocolVersion,
+        status,
+      );
+      const mutation = this.sshMesh.getMutationState(workspaceId);
+      if (mutation.overview.rotation_state === "stable") {
+        this.daemonRetirement.completeSshMeshRekeyForOperation(
+          workspaceId,
+          mutation.activeOperationId,
+          mutation.overview.key_version,
+        );
+      }
+      return ack;
+    });
+  }
+
   getSshMeshConfigForDaemon(runtimeId: string): MultiremiDaemonSshMeshConfig | null {
     return this.sshMesh.getDaemonConfig(runtimeId);
   }
 
+  getSshMeshConfigForNode(workspaceId: string, nodeId: string): MultiremiDaemonSshMeshConfig | null {
+    return this.sshMesh.getNodeConfig(workspaceId, nodeId);
+  }
+
   requestSshMeshProbe(
     workspaceId: string,
-    sourceDaemonId: string,
-    targetDaemonId?: string | null,
+    sourceNodeId: string,
+    targetNodeId?: string | null,
   ): { request_id: string; probe_revision: number; status: "pending" } {
     return this.withSshMeshLifecycleLock(workspaceId, () => (
-      this.sshMesh.requestProbe(workspaceId, sourceDaemonId, targetDaemonId)
+      this.sshMesh.requestProbe(workspaceId, sourceNodeId, targetNodeId)
     ));
   }
 

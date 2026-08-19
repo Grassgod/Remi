@@ -755,6 +755,8 @@ export interface MultiremiDaemonHeartbeatAck {
 
 export const MULTIREMI_SSH_MESH_PROTOCOL_VERSION = 1;
 
+export type MultiremiSshMeshNodeKind = "runtime" | "control_plane";
+
 export type MultiremiSshMeshRuntimeStatus =
   | "disabled"
   | "syncing"
@@ -771,6 +773,9 @@ export type MultiremiSshMeshPeerStatus =
   | "error";
 
 export interface MultiremiSshMeshPeerProbe {
+  /** Canonical machine identity used by browser and control-plane APIs. */
+  node_id?: string;
+  /** Protocol v1 compatibility field; its value is the opaque SSH Mesh node id. */
   daemon_id: string;
   status: MultiremiSshMeshPeerStatus;
   latency_ms?: number | null;

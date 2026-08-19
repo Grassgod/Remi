@@ -396,16 +396,23 @@ export const EMPTY_RETIRE_DAEMON_RESPONSE: RetireDaemonResponse = {
 
 const SshMeshPeerTestSchema = z
   .object({
+    node_id: z.string().min(1).optional(),
     daemon_id: z.string().min(1),
     status: z.string().default("error"),
     latency_ms: z.number().nonnegative().nullable().default(null),
     error_code: z.string().nullable().default(null),
     error: z.string().nullable().default(null),
     checked_at: z.string().nullable().default(null),
-  });
+  })
+  .transform((peer) => ({
+    ...peer,
+    node_id: peer.node_id ?? peer.daemon_id,
+  }));
 
 const SshMeshRuntimeSchema = z
   .object({
+    node_id: z.string().min(1).optional(),
+    node_type: z.string().default("runtime"),
     daemon_id: z.string().min(1),
     runtime_ids: z.array(z.string()).default([]),
     name: z.string().nullable().default(null),
@@ -428,7 +435,11 @@ const SshMeshRuntimeSchema = z
     probe_revision: z.number().int().nonnegative().default(0),
     desired_probe_revision: z.number().int().nonnegative().default(0),
     peer_tests: z.array(SshMeshPeerTestSchema).default([]),
-  });
+  })
+  .transform((node) => ({
+    ...node,
+    node_id: node.node_id ?? node.daemon_id,
+  }));
 
 export const SshMeshOverviewSchema = z
   .object({
@@ -440,10 +451,21 @@ export const SshMeshOverviewSchema = z
     config_revision: z.string(),
     rotation_ready_daemons: z.number().int().nonnegative(),
     rotation_total_daemons: z.number().int().nonnegative(),
+    rotation_ready_nodes: z.number().int().nonnegative().optional(),
+    rotation_total_nodes: z.number().int().nonnegative().optional(),
     created_at: z.string().nullable(),
     updated_at: z.string().nullable(),
-    runtimes: z.array(SshMeshRuntimeSchema),
-  });
+    nodes: z.array(SshMeshRuntimeSchema).nullish(),
+    runtimes: z.array(SshMeshRuntimeSchema).default([]),
+  })
+  .transform((overview) => ({
+    ...overview,
+    rotation_ready_nodes:
+      overview.rotation_ready_nodes ?? overview.rotation_ready_daemons,
+    rotation_total_nodes:
+      overview.rotation_total_nodes ?? overview.rotation_total_daemons,
+    nodes: overview.nodes ?? overview.runtimes,
+  }));
 
 export const EMPTY_SSH_MESH_OVERVIEW: SshMeshOverview = {
   workspace_id: "",
@@ -454,8 +476,11 @@ export const EMPTY_SSH_MESH_OVERVIEW: SshMeshOverview = {
   config_revision: "",
   rotation_ready_daemons: 0,
   rotation_total_daemons: 0,
+  rotation_ready_nodes: 0,
+  rotation_total_nodes: 0,
   created_at: null,
   updated_at: null,
+  nodes: [],
   runtimes: [],
 };
 

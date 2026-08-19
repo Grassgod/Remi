@@ -314,6 +314,8 @@ describe("RuntimesEndpoints SSH mesh", () => {
       fingerprint: "SHA256:test",
       runtimes: [
         {
+          node_id: "daemon-1",
+          node_type: "runtime",
           daemon_id: "daemon-1",
           ssh_alias: "remi-build-host",
           port: 22,
@@ -321,7 +323,64 @@ describe("RuntimesEndpoints SSH mesh", () => {
           runtime_ids: [],
         },
       ],
+      nodes: [
+        {
+          node_id: "daemon-1",
+          node_type: "runtime",
+          daemon_id: "daemon-1",
+          ssh_alias: "remi-build-host",
+          port: 22,
+          peer_tests: [],
+          runtime_ids: [],
+        },
+      ],
+      rotation_ready_nodes: 1,
+      rotation_total_nodes: 1,
     });
+  });
+
+  it("prefers canonical nodes and keeps the platform separate from legacy runtimes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({
+        ...overview,
+        rotation_ready_nodes: 2,
+        rotation_total_nodes: 2,
+        nodes: [
+          {
+            daemon_id: "control-plane-1",
+            node_id: "control-plane-1",
+            node_type: "control_plane",
+            name: "platform-host",
+            status: "ready",
+            ssh_alias: "remi-platform",
+            peer_tests: [{ daemon_id: "daemon-1", status: "ready" }],
+          },
+          {
+            ...overview.runtimes[0],
+            node_id: "daemon-1",
+            node_type: "runtime",
+          },
+        ],
+      })),
+    );
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    const parsed = await endpoints.getSshMeshOverview("ws-1");
+
+    expect(parsed.rotation_ready_nodes).toBe(2);
+    expect(parsed.rotation_total_nodes).toBe(2);
+    expect(parsed.nodes).toHaveLength(2);
+    expect(parsed.nodes[0]).toMatchObject({
+      node_id: "control-plane-1",
+      node_type: "control_plane",
+      runtime_ids: [],
+      peer_tests: [{ node_id: "daemon-1" }],
+    });
+    expect(parsed.runtimes).toHaveLength(1);
+    expect(parsed.runtimes[0]?.node_type).toBe("runtime");
   });
 
   it("strips unexpected private material before it reaches the frontend cache", async () => {
@@ -330,6 +389,18 @@ describe("RuntimesEndpoints SSH mesh", () => {
       vi.fn().mockResolvedValue(jsonResponse({
         ...overview,
         private_key: "TOP-LEVEL-SECRET",
+        nodes: [{
+          ...overview.runtimes[0],
+          node_id: "daemon-1",
+          node_type: "runtime",
+          private_key: "NODE-SECRET",
+          peer_tests: [{
+            daemon_id: "daemon-2",
+            node_id: "daemon-2",
+            status: "ready",
+            private_key: "PEER-SECRET",
+          }],
+        }],
         runtimes: [{
           ...overview.runtimes[0],
           private_key: "RUNTIME-SECRET",
@@ -348,6 +419,8 @@ describe("RuntimesEndpoints SSH mesh", () => {
     const parsed = await endpoints.getSshMeshOverview("ws-1");
 
     expect(parsed).not.toHaveProperty("private_key");
+    expect(parsed.nodes[0]).not.toHaveProperty("private_key");
+    expect(parsed.nodes[0]?.peer_tests[0]).not.toHaveProperty("private_key");
     expect(parsed.runtimes[0]).not.toHaveProperty("private_key");
     expect(parsed.runtimes[0]?.peer_tests[0]).not.toHaveProperty("private_key");
     expect(JSON.stringify(parsed)).not.toContain("SECRET");
@@ -371,8 +444,11 @@ describe("RuntimesEndpoints SSH mesh", () => {
       config_revision: "",
       rotation_ready_daemons: 0,
       rotation_total_daemons: 0,
+      rotation_ready_nodes: 0,
+      rotation_total_nodes: 0,
       created_at: null,
       updated_at: null,
+      nodes: [],
       runtimes: [],
     });
   });

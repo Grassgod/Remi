@@ -79,6 +79,52 @@ describe("store migrations", () => {
     ]));
     expect(columnNames(database, "multiremi_daemon_retirements")).toContain("ssh_mesh_rekey_operation_id");
     expect(columnNames(database, "multiremi_workspace_ssh_mesh")).toContain("active_operation_id");
+    expect(columnNames(database, "multiremi_daemon_ssh_mesh_states")).toEqual(expect.arrayContaining([
+      "node_kind", "name",
+    ]));
+  });
+
+  it("upgrades legacy SSH Mesh daemon state rows as runtime nodes", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_daemon_ssh_mesh_states (
+        workspace_id TEXT NOT NULL,
+        daemon_id TEXT NOT NULL,
+        runtime_id TEXT,
+        protocol_version INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'setup_required',
+        key_version INTEGER,
+        config_revision TEXT,
+        ssh_user TEXT,
+        hostname TEXT,
+        ssh_port INTEGER NOT NULL DEFAULT 22,
+        addresses TEXT NOT NULL DEFAULT '[]',
+        host_keys TEXT NOT NULL DEFAULT '[]',
+        public_key_installed INTEGER NOT NULL DEFAULT 0,
+        config_installed INTEGER NOT NULL DEFAULT 0,
+        peer_tests TEXT NOT NULL DEFAULT '[]',
+        probe_revision INTEGER NOT NULL DEFAULT 0,
+        desired_probe_revision INTEGER NOT NULL DEFAULT 0,
+        probe_target_daemon_ids TEXT NOT NULL DEFAULT '[]',
+        last_error_code TEXT,
+        last_error TEXT,
+        last_reported_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, daemon_id)
+      );
+      INSERT INTO multiremi_daemon_ssh_mesh_states (
+        workspace_id, daemon_id, created_at, updated_at
+      ) VALUES (
+        'local', 'legacy-daemon', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT daemon_id, node_kind, name FROM multiremi_daemon_ssh_mesh_states WHERE daemon_id = 'legacy-daemon'",
+    ).get()).toEqual({ daemon_id: "legacy-daemon", node_kind: "runtime", name: null });
   });
 
   it("classifies legacy access tokens by their actual purpose", () => {

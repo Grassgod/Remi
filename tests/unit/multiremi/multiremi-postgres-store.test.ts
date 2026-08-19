@@ -203,9 +203,14 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "multiremi_workspace_members",
       "multiremi_access_tokens",
       "multiremi_users",
+      "multiremi_daemon_ssh_mesh_states",
     ]) {
       expect(tables).toContain(t);
     }
+    const sshMeshStateColumns = db.query(
+      "PRAGMA table_info(multiremi_daemon_ssh_mesh_states)",
+    ).all().map((row: { name: string }) => row.name);
+    expect(sshMeshStateColumns).toEqual(expect.arrayContaining(["node_kind", "name"]));
   });
 
   it("registers daemon runtimes with models under one lifecycle transaction (PG)", () => {

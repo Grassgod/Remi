@@ -96,6 +96,175 @@ describe("Multiremi SSH Mesh", () => {
     expect(store.getSshMeshOverview("local").key_version).toBe(1);
   });
 
+  it("models the local platform as a control-plane node without registering a Runtime", async () => {
+    const { store, app, runtimeA, daemonA } = await setupFleet();
+    const platformNodeId = "control-plane-n37-117-209";
+    const platformIdentity = {
+      ssh_user: "hehuajie",
+      hostname: "n37-117-209-hehuajie",
+      port: 22,
+      addresses: ["10.37.117.209"],
+      host_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlatform"],
+      public_key_installed: false,
+      config_installed: false,
+    };
+
+    const disabledAck = store.recordControlPlaneSshMeshHeartbeat(
+      "local",
+      platformNodeId,
+      "Multiremi Platform",
+      1,
+      { status: "disabled", ...platformIdentity },
+    );
+    expect(disabledAck).toMatchObject({ enabled: false, key_version: 0 });
+
+    const initial = store.getSshMeshOverview("local");
+    expect(initial.nodes).toHaveLength(3);
+    expect(initial.runtimes).toHaveLength(2);
+    expect(initial.rotation_total_nodes).toBe(3);
+    expect(initial.rotation_total_daemons).toBe(2);
+    expect(initial.nodes.find((node) => node.node_id === platformNodeId)).toMatchObject({
+      node_id: platformNodeId,
+      node_type: "control_plane",
+      daemon_id: platformNodeId,
+      runtime_ids: [],
+      name: "Multiremi Platform",
+      hostname: "n37-117-209-hehuajie",
+    });
+    expect(initial.runtimes.some((node) => node.daemon_id === platformNodeId)).toBeFalse();
+    expect(Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_runtimes WHERE daemon_id = ?",
+    ).get(platformNodeId) as { count: number }).count)).toBe(0);
+    expect(Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_access_tokens WHERE daemon_id = ?",
+    ).get(platformNodeId) as { count: number }).count)).toBe(0);
+
+    await enableMesh(app);
+    const platformConfig = store.getSshMeshConfigForNode("local", platformNodeId);
+    expect(platformConfig).not.toBeNull();
+    expect(platformConfig?.private_key).toStartWith("-----BEGIN OPENSSH PRIVATE KEY-----");
+    expect(platformConfig?.hosts).toContainEqual(expect.objectContaining({
+      daemon_id: platformNodeId,
+      hostname: "n37-117-209-hehuajie",
+    }));
+    const daemonConfigResponse = await daemonConfig(app, runtimeA.id, daemonA.token);
+    expect(daemonConfigResponse.hosts).toContainEqual(expect.objectContaining({ daemon_id: platformNodeId }));
+
+    const browserOverview = await (await app.request("/api/workspaces/local/ssh-mesh", {
+      headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
+    })).json() as any;
+    expect(JSON.stringify(browserOverview)).not.toContain("PRIVATE KEY");
+    expect(browserOverview.nodes.find((node: any) => node.node_id === platformNodeId))
+      .toMatchObject({ node_type: "control_plane" });
+
+    store.recordControlPlaneSshMeshHeartbeat(
+      "local",
+      platformNodeId,
+      "Multiremi Platform",
+      1,
+      { status: "ready", ...platformIdentity, ...readyStatusFor(platformConfig) },
+    );
+    const probe = await app.request("/api/workspaces/local/ssh-mesh/test", {
+      method: "POST",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ source_node_id: platformNodeId, target_node_id: "daemon-a" }),
+    });
+    expect(probe.status).toBe(202);
+    expect(store.getSshMeshConfigForNode("local", platformNodeId)?.probe_target_daemon_ids).toEqual(["daemon-a"]);
+
+    const conflict = await app.request("/api/workspaces/local/ssh-mesh/test", {
+      method: "POST",
+      headers: rootJsonHeaders(),
+      body: JSON.stringify({ source_node_id: platformNodeId, source_daemon_id: "daemon-a" }),
+    });
+    expect(conflict.status).toBe(400);
+  });
+
+  it("waits for an online control-plane node before finalizing key rotation", async () => {
+    const { store, app, runtimeA, runtimeB, daemonA } = await setupFleet();
+    const platformNodeId = "control-plane-n37-117-209";
+    const platformIdentity = {
+      ssh_user: "hehuajie",
+      hostname: "n37-117-209-hehuajie",
+      addresses: ["10.37.117.209"],
+      host_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlatform"],
+      public_key_installed: false,
+      config_installed: false,
+    };
+    store.recordControlPlaneSshMeshHeartbeat(
+      "local",
+      platformNodeId,
+      "Multiremi Platform",
+      1,
+      { status: "disabled", ...platformIdentity },
+    );
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, {
+      status: "disabled",
+      ssh_user: "hehuajie",
+      hostname: "n37-206-133-hehuajie",
+      addresses: ["10.37.206.133"],
+      host_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestA"],
+    });
+    db!.run(
+      "UPDATE multiremi_runtimes SET status = 'offline', last_heartbeat_at = ? WHERE id = ?",
+      ["2000-01-01T00:00:00.000Z", runtimeB.id],
+    );
+    await enableMesh(app);
+
+    let rolloutConfig = store.getSshMeshConfigForNode("local", platformNodeId)!;
+    store.recordControlPlaneSshMeshHeartbeat(
+      "local",
+      platformNodeId,
+      "Multiremi Platform",
+      1,
+      { ...platformIdentity, ...readyStatusFor(rolloutConfig) } as any,
+    );
+    rolloutConfig = await daemonConfig(app, runtimeA.id, daemonA.token);
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(rolloutConfig));
+
+    const rotate = await app.request("/api/workspaces/local/ssh-mesh/rotate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ROOT_TOKEN}` },
+    });
+    const rotateBody = await rotate.json() as any;
+    expect({ status: rotate.status, body: rotateBody }).toMatchObject({ status: 200 });
+    expect(rotateBody).toMatchObject({ rotation_state: "rolling_out", key_version: 2 });
+
+    rolloutConfig = await daemonConfig(app, runtimeA.id, daemonA.token);
+    const daemonAck = await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(rolloutConfig));
+    expect(daemonAck.ssh_mesh.rotation_state).toBe("rolling_out");
+    expect(store.getSshMeshOverview("local")).toMatchObject({
+      rotation_state: "rolling_out",
+      rotation_ready_nodes: 1,
+      rotation_total_nodes: 2,
+    });
+
+    const platformRolloutConfig = store.getSshMeshConfigForNode("local", platformNodeId)!;
+    const platformAck = store.recordControlPlaneSshMeshHeartbeat(
+      "local",
+      platformNodeId,
+      "Multiremi Platform",
+      1,
+      { ...platformIdentity, ...readyStatusFor(platformRolloutConfig) } as any,
+    );
+    expect(platformAck.rotation_state).toBe("stable");
+    const finalizedPlatformConfig = store.getSshMeshConfigForNode("local", platformNodeId)!;
+    store.recordControlPlaneSshMeshHeartbeat(
+      "local",
+      platformNodeId,
+      "Multiremi Platform",
+      1,
+      { ...platformIdentity, ...readyStatusFor(finalizedPlatformConfig) } as any,
+    );
+    const finalizedDaemonConfig = await daemonConfig(app, runtimeA.id, daemonA.token);
+    await daemonHeartbeat(app, runtimeA.id, daemonA.token, readyStatusFor(finalizedDaemonConfig));
+    expect(store.getSshMeshOverview("local")).toMatchObject({
+      rotation_state: "stable",
+      rotation_ready_nodes: 2,
+      rotation_total_nodes: 2,
+    });
+  });
+
   it("deduplicates provider runtimes, propagates endpoint state, and triggers an immediate peer probe", async () => {
     const { store, app, runtimeA, runtimeB, daemonA, daemonB } = await setupFleet();
     await enableMesh(app);

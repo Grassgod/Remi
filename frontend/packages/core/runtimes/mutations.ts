@@ -161,16 +161,16 @@ export function useTestSshMeshConnection(wsId: string) {
         if (!current) return current;
         return {
           ...current,
-          runtimes: current.runtimes.map((runtime) =>
-            runtime.daemon_id === variables.sourceDaemonId
+          nodes: current.nodes.map((node) =>
+            node.node_id === variables.sourceDaemonId
               ? {
-                  ...runtime,
+                  ...node,
                   desired_probe_revision: Math.max(
-                    runtime.desired_probe_revision,
+                    node.desired_probe_revision,
                     result.probe_revision,
                   ),
                 }
-              : runtime,
+              : node,
           ),
         };
       });

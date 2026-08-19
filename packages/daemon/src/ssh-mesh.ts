@@ -166,12 +166,29 @@ function isSshMeshLockLost(error: unknown): error is SshMeshError {
 
 export function defaultSshMeshPaths(workspaceId: string, home = homedir()): SshMeshPaths {
   const canonicalHome = existsSync(home) ? realpathSync(home) : resolve(home);
+  return sshMeshPathsForRoot(
+    workspaceId,
+    join(canonicalHome, ".multiremi", "ssh"),
+    canonicalHome,
+  );
+}
+
+/**
+ * Places per-workspace Mesh state under a stable service-owned root while the
+ * two OpenSSH integration files remain in the account's real home directory.
+ */
+export function sshMeshPathsForRoot(
+  workspaceId: string,
+  meshRoot: string,
+  home = homedir(),
+): SshMeshPaths {
+  const canonicalHome = existsSync(home) ? realpathSync(home) : resolve(home);
+  const resolvedMeshRoot = resolve(meshRoot);
   const workspaceComponent = `workspace-${createHash("sha256").update(workspaceId).digest("hex").slice(0, 16)}`;
-  const meshRoot = join(canonicalHome, ".multiremi", "ssh");
-  const workspaceRoot = join(meshRoot, "workspaces", workspaceComponent);
+  const workspaceRoot = join(resolvedMeshRoot, "workspaces", workspaceComponent);
   return {
     home: canonicalHome,
-    meshRoot,
+    meshRoot: resolvedMeshRoot,
     workspaceRoot,
     privateKey: join(workspaceRoot, "id_ed25519"),
     publicKey: join(workspaceRoot, "id_ed25519.pub"),
@@ -179,8 +196,8 @@ export function defaultSshMeshPaths(workspaceId: string, home = homedir()): SshM
     knownHosts: join(workspaceRoot, "known_hosts"),
     stateFile: join(workspaceRoot, "state.json"),
     lockDirectory: join(workspaceRoot, ".reconcile.lock"),
-    sharedFilesLockDirectory: join(meshRoot, ".shared-files.lock"),
-    configInclude: join(meshRoot, "config.d", `${workspaceComponent}.conf`),
+    sharedFilesLockDirectory: join(resolvedMeshRoot, ".shared-files.lock"),
+    configInclude: join(resolvedMeshRoot, "config.d", `${workspaceComponent}.conf`),
     sshConfig: join(canonicalHome, ".ssh", "config"),
     authorizedKeys: join(canonicalHome, ".ssh", "authorized_keys"),
   };

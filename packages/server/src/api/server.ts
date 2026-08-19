@@ -61,6 +61,10 @@ import {
   type AgentPluginGitSourceResolver,
 } from "@multiremi/agent-plugins/git-import.js";
 import {
+  createControlPlaneSshMeshFromEnv,
+  type ControlPlaneSshMeshLifecycle,
+} from "@multiremi/ssh-mesh/control-plane.js";
+import {
   AUTH_COOKIE_NAME,
   DEFAULT_WEBHOOK_IP_RATE_LIMIT,
   DEFAULT_WEBHOOK_RATE_LIMIT,
@@ -123,6 +127,8 @@ let authDisabledWarningEmitted = false;
 export interface MultiremiApiOptions {
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
+  /** Undefined reads the opt-in env config; null explicitly disables it. */
+  controlPlaneSshMesh?: ControlPlaneSshMeshLifecycle | null;
   authToken?: string | null;
   shareSecret?: string | null;
   hostname?: string;
@@ -445,6 +451,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler === undefined ? new MultiremiScheduler({ store }) : options.scheduler;
+  const controlPlaneSshMesh = options.controlPlaneSshMesh === undefined
+    ? createControlPlaneSshMeshFromEnv(store)
+    : options.controlPlaneSshMesh;
   scheduler?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
@@ -641,7 +650,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     },
   });
   const stopServer = server.stop.bind(server);
+  controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
+    controlPlaneSshMesh?.stop();
     unsubscribeTaskEnqueued();
     unsubscribeTaskEvent();
     unsubscribeTaskMessages();

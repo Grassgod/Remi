@@ -89,6 +89,100 @@ const resources = { en: { common: enCommon, runtimes: enRuntimes } };
 const queryClients: QueryClient[] = [];
 
 function overview(enabled = true): SshMeshOverview {
+  const runtimeNodes: SshMeshOverview["nodes"] = enabled
+    ? [
+        {
+          node_id: "daemon-source",
+          node_type: "runtime",
+          daemon_id: "daemon-source",
+          runtime_ids: ["runtime-1"],
+          name: "source-host",
+          status: "ready",
+          protocol_version: 1,
+          key_version: 2,
+          config_revision: "revision-4",
+          desired_config_revision: "revision-4",
+          ssh_user: "runner",
+          ssh_alias: "remi-source",
+          hostname: "source-host",
+          port: 22,
+          addresses: ["10.37.206.133"],
+          host_keys: ["SHA256:source-host"],
+          public_key_installed: true,
+          config_installed: true,
+          last_error_code: null,
+          last_error: null,
+          last_reported_at: "2026-08-18T00:00:00Z",
+          probe_revision: 3,
+          desired_probe_revision: 3,
+          peer_tests: [
+            {
+              node_id: "daemon-peer",
+              daemon_id: "daemon-peer",
+              status: "auth_failed",
+              latency_ms: null,
+              error_code: "ssh_auth_failed",
+              error: "Permission denied (publickey).",
+              checked_at: "2026-08-18T00:00:00Z",
+            },
+          ],
+        },
+        {
+          node_id: "daemon-peer",
+          node_type: "runtime",
+          daemon_id: "daemon-peer",
+          runtime_ids: ["runtime-2"],
+          name: "worker-host",
+          status: "ready",
+          protocol_version: 1,
+          key_version: 2,
+          config_revision: "revision-4",
+          desired_config_revision: "revision-4",
+          ssh_user: "runner",
+          ssh_alias: "remi-worker",
+          hostname: "worker-host",
+          port: 2222,
+          addresses: ["10.37.66.8"],
+          host_keys: ["SHA256:worker-host"],
+          public_key_installed: true,
+          config_installed: true,
+          last_error_code: null,
+          last_error: null,
+          last_reported_at: "2026-08-18T00:00:00Z",
+          probe_revision: 3,
+          desired_probe_revision: 3,
+          peer_tests: [],
+        },
+      ]
+    : [];
+  const platformNodes: SshMeshOverview["nodes"] = enabled
+    ? [{
+        node_id: "control-plane-1",
+        node_type: "control_plane",
+        daemon_id: "control-plane-1",
+        runtime_ids: [],
+        name: "platform-host",
+        status: "ready",
+        protocol_version: 1,
+        key_version: 2,
+        config_revision: "revision-4",
+        desired_config_revision: "revision-4",
+        ssh_user: "runner",
+        ssh_alias: "remi-platform",
+        hostname: "platform-host",
+        port: 22,
+        addresses: ["10.37.117.209"],
+        host_keys: ["SHA256:platform-host"],
+        public_key_installed: true,
+        config_installed: true,
+        last_error_code: null,
+        last_error: null,
+        last_reported_at: "2026-08-18T00:00:00Z",
+        probe_revision: 3,
+        desired_probe_revision: 3,
+        peer_tests: [],
+      }]
+    : [];
   return {
     workspace_id: "ws-1",
     enabled,
@@ -98,69 +192,12 @@ function overview(enabled = true): SshMeshOverview {
     config_revision: enabled ? "revision-4" : "",
     rotation_ready_daemons: enabled ? 2 : 0,
     rotation_total_daemons: enabled ? 2 : 0,
+    rotation_ready_nodes: enabled ? 3 : 0,
+    rotation_total_nodes: enabled ? 3 : 0,
     created_at: "2026-08-18T00:00:00Z",
     updated_at: "2026-08-18T00:00:00Z",
-    runtimes: enabled
-      ? [
-          {
-            daemon_id: "daemon-source",
-            runtime_ids: ["runtime-1"],
-            name: "source-host",
-            status: "ready",
-            protocol_version: 1,
-            key_version: 2,
-            config_revision: "revision-4",
-            desired_config_revision: "revision-4",
-            ssh_user: "runner",
-            ssh_alias: "remi-source",
-            hostname: "source-host",
-            port: 22,
-            addresses: ["10.37.206.133"],
-            host_keys: ["SHA256:source-host"],
-            public_key_installed: true,
-            config_installed: true,
-            last_error_code: null,
-            last_error: null,
-            last_reported_at: "2026-08-18T00:00:00Z",
-            probe_revision: 3,
-            desired_probe_revision: 3,
-            peer_tests: [
-              {
-                daemon_id: "daemon-peer",
-                status: "auth_failed",
-                latency_ms: null,
-                error_code: "ssh_auth_failed",
-                error: "Permission denied (publickey).",
-                checked_at: "2026-08-18T00:00:00Z",
-              },
-            ],
-          },
-          {
-            daemon_id: "daemon-peer",
-            runtime_ids: ["runtime-2"],
-            name: "worker-host",
-            status: "ready",
-            protocol_version: 1,
-            key_version: 2,
-            config_revision: "revision-4",
-            desired_config_revision: "revision-4",
-            ssh_user: "runner",
-            ssh_alias: "remi-worker",
-            hostname: "worker-host",
-            port: 2222,
-            addresses: ["10.37.66.8"],
-            host_keys: ["SHA256:worker-host"],
-            public_key_installed: true,
-            config_installed: true,
-            last_error_code: null,
-            last_error: null,
-            last_reported_at: "2026-08-18T00:00:00Z",
-            probe_revision: 3,
-            desired_probe_revision: 3,
-            peer_tests: [],
-          },
-        ]
-      : [],
+    nodes: [...platformNodes, ...runtimeNodes],
+    runtimes: runtimeNodes,
   };
 }
 
@@ -205,6 +242,9 @@ describe("SshMeshPanel", () => {
     expect(await screen.findByText("SHA256:dedicated-workspace-key")).toBeInTheDocument();
     expect(screen.getByText("ssh remi-source")).toBeInTheDocument();
     expect(screen.getByText("runner@10.37.66.8:2222")).toBeInTheDocument();
+    expect(screen.getByText("Hosts the Multiremi service and does not run Agent tasks.")).toBeInTheDocument();
+    expect(screen.getAllByText("ssh remi-platform").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("source-host → worker-host")).toBeInTheDocument();
     expect(screen.getByText("Authentication failed")).toBeInTheDocument();
     expect(screen.getByText("Permission denied (publickey).")).toBeInTheDocument();
 
@@ -217,11 +257,31 @@ describe("SshMeshPanel", () => {
     const workerNames = screen.getAllByText("worker-host");
     const peerRow = workerNames.at(-1)?.closest("li") ?? null;
     expect(peerRow).not.toBeNull();
-    await user.click(within(peerRow!).getByRole("button", { name: "Retry" }));
+    await user.click(
+      within(peerRow!).getByRole("button", {
+        name: "Test source-host to worker-host",
+      }),
+    );
     expect(actions.test).toHaveBeenCalledWith(
       { sourceDaemonId: "daemon-source", targetDaemonId: "daemon-peer" },
       expect.any(Object),
     );
+  });
+
+  it("uses the platform node as an explicit probe source", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const sourcePicker = await screen.findByRole("combobox", { name: "Test source" });
+    await user.click(sourcePicker);
+    await user.click(await screen.findByRole("option", { name: "platform-host" }));
+    await user.click(screen.getByRole("button", { name: "Test all" }));
+
+    expect(actions.test).toHaveBeenCalledWith(
+      { sourceDaemonId: "control-plane-1", targetDaemonId: undefined },
+      expect.any(Object),
+    );
+    expect(screen.getByLabelText("platform-host → source-host")).toBeInTheDocument();
   });
 
   it("enables an unconfigured workspace without collecting private key input", async () => {
@@ -253,13 +313,19 @@ describe("SshMeshPanel", () => {
   });
 
   it("requires emergency confirmation before disabling during key rotation", async () => {
-    fixture.overview = { ...overview(), rotation_state: "rolling_out" };
+    fixture.overview = {
+      ...overview(),
+      rotation_state: "rolling_out",
+      rotation_ready_nodes: 2,
+    };
     const user = userEvent.setup();
     renderPanel();
 
     const toggle = await screen.findByRole("switch", { name: "Enabled" });
     expect(toggle).not.toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("button", { name: "Rolling out key" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Rolling out key · 2/3 nodes" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Test all" })).toBeDisabled();
 
     await user.click(toggle);
@@ -275,7 +341,7 @@ describe("SshMeshPanel", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "All daemons will lose mutual SSH trust until access is enabled again.",
+        "All SSH nodes will lose mutual trust until access is enabled again.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -328,7 +394,7 @@ describe("SshMeshPanel", () => {
 
   it("does not start a probe from an offline source", async () => {
     const current = overview();
-    current.runtimes[0] = { ...current.runtimes[0]!, status: "offline" };
+    current.nodes[1] = { ...current.nodes[1]!, status: "offline" };
     fixture.overview = current;
     const user = userEvent.setup();
     renderPanel();
@@ -338,10 +404,18 @@ describe("SshMeshPanel", () => {
     const workerNames = screen.getAllByText("worker-host");
     const peerRow = workerNames.at(-1)?.closest("li") ?? null;
     expect(peerRow).not.toBeNull();
-    expect(within(peerRow!).getByRole("button", { name: "Retry" })).toBeDisabled();
+    expect(
+      within(peerRow!).getByRole("button", {
+        name: "Test source-host to worker-host",
+      }),
+    ).toBeDisabled();
 
     await user.click(testAll);
-    await user.click(within(peerRow!).getByRole("button", { name: "Retry" }));
+    await user.click(
+      within(peerRow!).getByRole("button", {
+        name: "Test source-host to worker-host",
+      }),
+    );
     expect(actions.test).not.toHaveBeenCalled();
   });
 
@@ -355,7 +429,11 @@ describe("SshMeshPanel", () => {
     const workerNames = screen.getAllByText("worker-host");
     const peerRow = workerNames.at(-1)?.closest("li") ?? null;
     expect(peerRow).not.toBeNull();
-    expect(within(peerRow!).getByRole("button", { name: "Retry" })).toBeDisabled();
+    expect(
+      within(peerRow!).getByRole("button", {
+        name: "Test source-host to worker-host",
+      }),
+    ).toBeDisabled();
   });
 
   it("does not load or expose the mesh to regular members", async () => {

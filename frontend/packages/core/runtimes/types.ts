@@ -117,7 +117,13 @@ export type SshMeshPeerStatus =
   | "error"
   | (string & {});
 
+export type SshMeshNodeType =
+  | "runtime"
+  | "control_plane"
+  | (string & {});
+
 export interface SshMeshPeerTest {
+  node_id: string;
   daemon_id: string;
   status: SshMeshPeerStatus;
   latency_ms: number | null;
@@ -127,6 +133,8 @@ export interface SshMeshPeerTest {
 }
 
 export interface SshMeshRuntime {
+  node_id: string;
+  node_type: SshMeshNodeType;
   daemon_id: string;
   runtime_ids: string[];
   name: string | null;
@@ -160,8 +168,11 @@ export interface SshMeshOverview {
   config_revision: string;
   rotation_ready_daemons: number;
   rotation_total_daemons: number;
+  rotation_ready_nodes: number;
+  rotation_total_nodes: number;
   created_at: string | null;
   updated_at: string | null;
+  nodes: SshMeshRuntime[];
   runtimes: SshMeshRuntime[];
 }
 

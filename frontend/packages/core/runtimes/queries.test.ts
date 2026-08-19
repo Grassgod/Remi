@@ -18,8 +18,11 @@ function overview(
     config_revision: "revision-3",
     rotation_ready_daemons: 1,
     rotation_total_daemons: 1,
+    rotation_ready_nodes: 1,
+    rotation_total_nodes: 1,
     created_at: "2026-08-18T00:00:00Z",
     updated_at: "2026-08-18T00:00:00Z",
+    nodes: [],
     runtimes: [],
     ...overrides,
   };
@@ -48,8 +51,10 @@ describe("getSshMeshRefreshInterval", () => {
     expect(
       getSshMeshRefreshInterval(
         overview({
-          runtimes: [
+          nodes: [
             {
+              node_id: "daemon-1",
+              node_type: "runtime",
               daemon_id: "daemon-1",
               runtime_ids: [],
               name: "build-host",

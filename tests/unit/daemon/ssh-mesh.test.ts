@@ -24,6 +24,7 @@ import {
   discoverHostPublicKeys,
   replaceManagedBlock,
   SshMeshManager,
+  sshMeshPathsForRoot,
   tryAcquireReconcileLock,
   type SshMeshCommandRunner,
   type SshMeshLocalIdentity,
@@ -626,6 +627,20 @@ describe("SSH Mesh helpers", () => {
     expect(paths.workspaceRoot.startsWith(home)).toBe(true);
     expect(paths.workspaceRoot).not.toContain("other workspace");
     expect(paths.workspaceRoot).not.toContain("..");
+  });
+
+  it("keeps service Mesh state under a stable root and OpenSSH integration in the user home", () => {
+    const home = tempHome();
+    const stableRoot = join(home, "Services", "remi-platform", "ssh-mesh");
+    const paths = sshMeshPathsForRoot("workspace-a", stableRoot, home);
+
+    expect(paths.meshRoot).toBe(stableRoot);
+    expect(paths.workspaceRoot.startsWith(join(stableRoot, "workspaces"))).toBe(true);
+    expect(paths.privateKey.startsWith(stableRoot)).toBe(true);
+    expect(paths.stateFile.startsWith(stableRoot)).toBe(true);
+    expect(paths.configInclude.startsWith(join(stableRoot, "config.d"))).toBe(true);
+    expect(paths.sshConfig).toBe(join(home, ".ssh", "config"));
+    expect(paths.authorizedKeys).toBe(join(home, ".ssh", "authorized_keys"));
   });
 
   it("updates and removes a single managed block while preserving surrounding content", () => {

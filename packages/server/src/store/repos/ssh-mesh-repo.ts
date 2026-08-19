@@ -4,6 +4,7 @@ import {
   type MultiremiDaemonSshMeshConfig,
   type MultiremiDaemonSshMeshStatus,
   type MultiremiSshMeshHeartbeatAck,
+  type MultiremiSshMeshNodeKind,
   type MultiremiSshMeshPeerProbe,
   type MultiremiSshMeshRuntimeStatus,
 } from "@multiremi/contracts/types.js";
@@ -24,7 +25,10 @@ type Row = Record<string, unknown>;
 
 export type SshMeshRotationState = "stable" | "rolling_out" | "rekey_required";
 
-export interface SshMeshBrowserRuntime {
+export interface SshMeshBrowserNode {
+  node_id: string;
+  node_type: MultiremiSshMeshNodeKind;
+  /** Compatibility alias for protocol v1 and older browser clients. */
   daemon_id: string;
   runtime_ids: string[];
   name: string;
@@ -49,6 +53,10 @@ export interface SshMeshBrowserRuntime {
   last_reported_at: string | null;
 }
 
+export interface SshMeshBrowserRuntime extends SshMeshBrowserNode {
+  node_type: "runtime";
+}
+
 export interface SshMeshBrowserOverview {
   workspace_id: string;
   enabled: boolean;
@@ -56,10 +64,14 @@ export interface SshMeshBrowserOverview {
   fingerprint: string | null;
   rotation_state: SshMeshRotationState;
   config_revision: string;
+  rotation_ready_nodes: number;
+  rotation_total_nodes: number;
+  /** Compatibility counters. These continue to count runtime daemon nodes only. */
   rotation_ready_daemons: number;
   rotation_total_daemons: number;
   created_at: string | null;
   updated_at: string | null;
+  nodes: SshMeshBrowserNode[];
   runtimes: SshMeshBrowserRuntime[];
 }
 
@@ -71,6 +83,10 @@ export class SshMeshProbeConflictError extends Error {
   ) {
     super(message);
     this.name = "SshMeshProbeConflictError";
+  }
+
+  get sourceNodeId(): string {
+    return this.sourceDaemonId;
   }
 }
 
@@ -101,6 +117,7 @@ interface SshMeshWorkspaceConfigRow {
 
 interface DaemonInventoryEntry {
   daemonId: string;
+  nodeKind: MultiremiSshMeshNodeKind;
   runtimeIds: string[];
   name: string;
   online: boolean;
@@ -109,6 +126,8 @@ interface DaemonInventoryEntry {
 interface DaemonStateRow {
   workspaceId: string;
   daemonId: string;
+  nodeKind: MultiremiSshMeshNodeKind;
+  name: string | null;
   runtimeId: string | null;
   protocolVersion: number;
   status: MultiremiSshMeshRuntimeStatus;
@@ -137,18 +156,62 @@ export class SshMeshRepo {
 
   getOverview(workspaceId: string): SshMeshBrowserOverview {
     const config = this.getWorkspaceConfig(workspaceId);
-    const inventory = this.listDaemonInventory(workspaceId);
-    const states = new Map(this.listDaemonStates(workspaceId).map((state) => [state.daemonId, state]));
-    const revision = this.configRevision(workspaceId, config, this.listDaemonStates(workspaceId));
+    const stateList = this.listDaemonStates(workspaceId);
+    const inventory = this.listDaemonInventory(workspaceId, stateList);
+    const states = new Map(stateList.map((state) => [state.daemonId, state]));
+    const revision = this.configRevision(workspaceId, config, stateList);
     const activeVersion = config?.activeKeyVersion ?? 0;
     const onlineInventory = inventory.filter((daemon) => daemon.online);
-    const rotationReady = onlineInventory.filter((daemon) => {
+    const runtimeInventory = onlineInventory.filter((node) => node.nodeKind === "runtime");
+    const isRotationReady = (daemon: DaemonInventoryEntry): boolean => {
       const state = states.get(daemon.daemonId);
       return state?.status === "ready"
         && isDaemonStateFresh(state)
         && state.keyVersion === activeVersion
         && state.configRevision === revision;
-    }).length;
+    };
+    const rotationReady = onlineInventory.filter(isRotationReady).length;
+    const runtimeRotationReady = runtimeInventory.filter(isRotationReady).length;
+    const nodes: SshMeshBrowserNode[] = inventory.map((daemon) => {
+      const state = states.get(daemon.daemonId);
+      const observedStatus = !daemon.online
+        ? "offline"
+        : !config?.enabled
+          ? state?.status ?? "disabled"
+          : !state
+            || !isDaemonStateFresh(state)
+            || state.protocolVersion < MULTIREMI_SSH_MESH_PROTOCOL_VERSION
+            ? "setup_required"
+            : state.keyVersion !== activeVersion || state.configRevision !== revision
+              ? "syncing"
+              : state.status;
+      return {
+        node_id: daemon.daemonId,
+        node_type: daemon.nodeKind,
+        daemon_id: daemon.daemonId,
+        runtime_ids: daemon.runtimeIds,
+        name: daemon.name,
+        ssh_alias: sshAlias(workspaceId, daemon.daemonId, state?.hostname ?? null),
+        status: observedStatus,
+        protocol_version: state?.protocolVersion ?? 0,
+        key_version: state?.keyVersion ?? null,
+        config_revision: state?.configRevision ?? null,
+        desired_config_revision: revision,
+        ssh_user: state?.sshUser ?? null,
+        hostname: state?.hostname ?? null,
+        port: state?.port ?? 22,
+        addresses: state?.addresses ?? [],
+        host_keys: state?.hostKeys ?? [],
+        public_key_installed: state?.publicKeyInstalled ?? false,
+        config_installed: state?.configInstalled ?? false,
+        probe_revision: state?.probeRevision ?? 0,
+        desired_probe_revision: state?.desiredProbeRevision ?? 0,
+        peer_tests: (state?.peerTests ?? []).map(withCanonicalPeerNodeId),
+        last_error_code: state?.lastErrorCode ?? null,
+        last_error: state?.lastError ?? null,
+        last_reported_at: state?.lastReportedAt ?? null,
+      };
+    });
     return {
       workspace_id: workspaceId,
       enabled: config?.enabled ?? false,
@@ -156,48 +219,14 @@ export class SshMeshRepo {
       fingerprint: config?.activeFingerprint ?? null,
       rotation_state: config?.rotationState ?? "stable",
       config_revision: revision,
-      rotation_ready_daemons: rotationReady,
-      rotation_total_daemons: onlineInventory.length,
+      rotation_ready_nodes: rotationReady,
+      rotation_total_nodes: onlineInventory.length,
+      rotation_ready_daemons: runtimeRotationReady,
+      rotation_total_daemons: runtimeInventory.length,
       created_at: config?.createdAt ?? null,
       updated_at: config?.updatedAt ?? null,
-      runtimes: inventory.map((daemon) => {
-        const state = states.get(daemon.daemonId);
-        const observedStatus = !daemon.online
-          ? "offline"
-          : !config?.enabled
-            ? state?.status ?? "disabled"
-            : !state
-              || !isDaemonStateFresh(state)
-              || state.protocolVersion < MULTIREMI_SSH_MESH_PROTOCOL_VERSION
-              ? "setup_required"
-              : state.keyVersion !== activeVersion || state.configRevision !== revision
-                ? "syncing"
-                : state.status;
-        return {
-          daemon_id: daemon.daemonId,
-          runtime_ids: daemon.runtimeIds,
-          name: daemon.name,
-          ssh_alias: sshAlias(workspaceId, daemon.daemonId, state?.hostname ?? null),
-          status: observedStatus,
-          protocol_version: state?.protocolVersion ?? 0,
-          key_version: state?.keyVersion ?? null,
-          config_revision: state?.configRevision ?? null,
-          desired_config_revision: revision,
-          ssh_user: state?.sshUser ?? null,
-          hostname: state?.hostname ?? null,
-          port: state?.port ?? 22,
-          addresses: state?.addresses ?? [],
-          host_keys: state?.hostKeys ?? [],
-          public_key_installed: state?.publicKeyInstalled ?? false,
-          config_installed: state?.configInstalled ?? false,
-          probe_revision: state?.probeRevision ?? 0,
-          desired_probe_revision: state?.desiredProbeRevision ?? 0,
-          peer_tests: state?.peerTests ?? [],
-          last_error_code: state?.lastErrorCode ?? null,
-          last_error: state?.lastError ?? null,
-          last_reported_at: state?.lastReportedAt ?? null,
-        };
-      }),
+      nodes,
+      runtimes: nodes.filter((node): node is SshMeshBrowserRuntime => node.node_type === "runtime"),
     };
   }
 
@@ -384,8 +413,50 @@ export class SshMeshRepo {
   ): MultiremiSshMeshHeartbeatAck | null {
     const runtime = this.runtimeIdentity(runtimeId);
     if (!runtime?.daemonId) return null;
-    const currentState = this.getDaemonState(runtime.workspaceId, runtime.daemonId);
-    const workspaceConfig = this.getWorkspaceConfig(runtime.workspaceId);
+    return this.recordNodeHeartbeat(
+      runtime.workspaceId,
+      runtime.daemonId,
+      "runtime",
+      null,
+      runtimeId,
+      protocolVersion,
+      observed,
+    );
+  }
+
+  recordControlPlaneHeartbeat(
+    workspaceId: string,
+    nodeId: string,
+    name: string,
+    protocolVersion: number,
+    observed?: MultiremiDaemonSshMeshStatus,
+  ): MultiremiSshMeshHeartbeatAck {
+    this.assertWorkspaceExists(workspaceId);
+    const normalizedNodeId = normalizeRequiredNodeValue(nodeId, "control-plane node id", 255);
+    const normalizedName = normalizeRequiredNodeValue(name, "control-plane node name", 255);
+    return this.recordNodeHeartbeat(
+      workspaceId,
+      normalizedNodeId,
+      "control_plane",
+      normalizedName,
+      null,
+      protocolVersion,
+      observed,
+    );
+  }
+
+  private recordNodeHeartbeat(
+    workspaceId: string,
+    nodeId: string,
+    nodeKind: MultiremiSshMeshNodeKind,
+    name: string | null,
+    runtimeId: string | null,
+    protocolVersion: number,
+    observed?: MultiremiDaemonSshMeshStatus,
+  ): MultiremiSshMeshHeartbeatAck {
+    this.assertNodeKindCompatible(workspaceId, nodeId, nodeKind);
+    const currentState = this.getDaemonState(workspaceId, nodeId);
+    const workspaceConfig = this.getWorkspaceConfig(workspaceId);
     const now = nowIso();
     const normalizedProtocolVersion = normalizeNonNegativeInt(protocolVersion, 0);
     const status = normalizedProtocolVersion < MULTIREMI_SSH_MESH_PROTOCOL_VERSION || observed === undefined
@@ -400,12 +471,14 @@ export class SshMeshRepo {
     );
     this.ctx.db.run(
       `INSERT INTO multiremi_daemon_ssh_mesh_states (
-         workspace_id, daemon_id, runtime_id, protocol_version, status, key_version, config_revision,
+         workspace_id, daemon_id, node_kind, name, runtime_id, protocol_version, status, key_version, config_revision,
          ssh_user, hostname, ssh_port, addresses, host_keys, public_key_installed, config_installed,
          peer_tests, probe_revision, desired_probe_revision, probe_target_daemon_ids,
          last_error_code, last_error, last_reported_at, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(workspace_id, daemon_id) DO UPDATE SET
+         node_kind = excluded.node_kind,
+         name = excluded.name,
          runtime_id = excluded.runtime_id,
          protocol_version = excluded.protocol_version,
          status = excluded.status,
@@ -425,8 +498,10 @@ export class SshMeshRepo {
          last_reported_at = excluded.last_reported_at,
          updated_at = excluded.updated_at`,
       [
-        runtime.workspaceId,
-        runtime.daemonId,
+        workspaceId,
+        nodeId,
+        nodeKind,
+        name,
         runtimeId,
         normalizedProtocolVersion,
         status,
@@ -454,7 +529,7 @@ export class SshMeshRepo {
         now,
       ],
     );
-    const refreshedState = this.getDaemonState(runtime.workspaceId, runtime.daemonId);
+    const refreshedState = this.getDaemonState(workspaceId, nodeId);
     if (
       observed?.probe_revision !== undefined
       && refreshedState
@@ -465,19 +540,21 @@ export class SshMeshRepo {
         `UPDATE multiremi_daemon_ssh_mesh_states
          SET probe_target_daemon_ids = '[]', updated_at = ?
          WHERE workspace_id = ? AND daemon_id = ? AND desired_probe_revision <= ?`,
-        [now, runtime.workspaceId, runtime.daemonId, observedProbeRevision],
+        [now, workspaceId, nodeId, observedProbeRevision],
       );
     }
-    this.maybeFinalizeRotation(runtime.workspaceId);
-    const ack = this.heartbeatAck(runtime.workspaceId, runtime.daemonId);
+    this.maybeFinalizeRotation(workspaceId);
+    const ack = this.heartbeatAck(workspaceId, nodeId);
     this.ctx.emitWorkspaceEvent({
       type: "daemon:heartbeat",
-      workspaceId: runtime.workspaceId,
-      actorType: "daemon",
-      actorId: runtime.daemonId,
+      workspaceId,
+      actorType: nodeKind === "runtime" ? "daemon" : "system",
+      actorId: nodeId,
       payload: {
         runtime_id: runtimeId,
-        daemon_id: runtime.daemonId,
+        node_id: nodeId,
+        node_type: nodeKind,
+        daemon_id: nodeId,
         ssh_mesh: {
           status,
           ...ack,
@@ -490,16 +567,33 @@ export class SshMeshRepo {
   getDaemonConfig(runtimeId: string): MultiremiDaemonSshMeshConfig | null {
     const runtime = this.runtimeIdentity(runtimeId);
     if (!runtime?.daemonId) return null;
-    const config = this.getWorkspaceConfig(runtime.workspaceId);
-    const states = this.listDaemonStates(runtime.workspaceId);
-    const ownState = states.find((state) => state.daemonId === runtime.daemonId);
+    return this.getNodeConfig(runtime.workspaceId, runtime.daemonId);
+  }
+
+  getNodeConfig(workspaceId: string, nodeId: string): MultiremiDaemonSshMeshConfig | null {
+    const config = this.getWorkspaceConfig(workspaceId);
+    const states = this.listDaemonStates(workspaceId);
+    const ownState = states.find((state) => state.daemonId === nodeId);
+    if (!ownState) {
+      const runtime = this.ctx.db.query(
+        `SELECT 1 FROM multiremi_runtimes runtime
+         WHERE COALESCE(runtime.workspace_id, 'local') = ?
+           AND runtime.daemon_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM multiremi_daemon_retirements retired
+             WHERE retired.workspace_id = ? AND retired.daemon_id = runtime.daemon_id
+           )
+         LIMIT 1`,
+      ).get(workspaceId, nodeId, workspaceId) as Row | null;
+      if (!runtime) return null;
+    }
     const enabled = config?.enabled ?? false;
     const keyVersion = config?.activeKeyVersion ?? 0;
     const response: MultiremiDaemonSshMeshConfig = {
       protocol_version: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
       enabled,
       key_version: keyVersion,
-      config_revision: this.configRevision(runtime.workspaceId, config, states),
+      config_revision: this.configRevision(workspaceId, config, states),
       rotation_state: config?.rotationState ?? "stable",
       probe_revision: ownState?.desiredProbeRevision ?? 0,
       probe_target_daemon_ids: ownState?.probeTargetDaemonIds ?? [],
@@ -508,7 +602,7 @@ export class SshMeshRepo {
         : [],
       hosts: states.map((state) => ({
         daemon_id: state.daemonId,
-        alias: sshAlias(runtime.workspaceId, state.daemonId, state.hostname),
+        alias: sshAlias(workspaceId, state.daemonId, state.hostname),
         hostname: state.hostname,
         ssh_user: state.sshUser,
         port: state.port,
@@ -519,7 +613,7 @@ export class SshMeshRepo {
     if (enabled && config?.activePrivateKeyEncrypted && config.activePublicKey) {
       response.private_key = decryptSshMeshPrivateKey(
         config.activePrivateKeyEncrypted,
-        runtime.workspaceId,
+        workspaceId,
         keyVersion,
       );
       response.public_key = config.activePublicKey;
@@ -529,43 +623,43 @@ export class SshMeshRepo {
 
   requestProbe(
     workspaceId: string,
-    sourceDaemonId: string,
-    targetDaemonId?: string | null,
+    sourceNodeId: string,
+    targetNodeId?: string | null,
   ): { request_id: string; probe_revision: number; status: "pending" } {
     const config = this.getWorkspaceConfig(workspaceId);
     if (!config?.enabled) {
       throw new Error("SSH Mesh is not enabled");
     }
-    const inventory = this.listDaemonInventory(workspaceId);
-    const source = inventory.find((entry) => entry.daemonId === sourceDaemonId);
+    const states = this.listDaemonStates(workspaceId);
+    const inventory = this.listDaemonInventory(workspaceId, states);
+    const source = inventory.find((entry) => entry.daemonId === sourceNodeId);
     if (!source) {
-      throw new Error("source daemon not found");
+      throw new Error("source node not found");
     }
-    if (targetDaemonId && !inventory.some((entry) => entry.daemonId === targetDaemonId)) {
-      throw new Error("target daemon not found");
+    if (targetNodeId && !inventory.some((entry) => entry.daemonId === targetNodeId)) {
+      throw new Error("target node not found");
     }
-    if (targetDaemonId === sourceDaemonId) throw new Error("source and target daemon must be different");
+    if (targetNodeId === sourceNodeId) throw new Error("source and target node must be different");
     if (config.rotationState !== "stable") {
       throw new SshMeshProbeConflictError(
         "ssh_mesh_rotation_in_progress",
-        sourceDaemonId,
+        sourceNodeId,
         "SSH Mesh key rollout must finish before testing connectivity",
       );
     }
     if (!source.online) {
       throw new SshMeshProbeConflictError(
         "ssh_mesh_source_offline",
-        sourceDaemonId,
-        "Source daemon is offline",
+        sourceNodeId,
+        "Source node is offline",
       );
     }
-    const states = this.listDaemonStates(workspaceId);
-    const sourceState = states.find((entry) => entry.daemonId === sourceDaemonId);
+    const sourceState = states.find((entry) => entry.daemonId === sourceNodeId);
     if (sourceState && !isDaemonStateFresh(sourceState)) {
       throw new SshMeshProbeConflictError(
         "ssh_mesh_source_stale",
-        sourceDaemonId,
-        "Source daemon SSH Mesh status is stale",
+        sourceNodeId,
+        "Source node SSH Mesh status is stale",
       );
     }
     const desiredConfigRevision = this.configRevision(workspaceId, config, states);
@@ -578,12 +672,12 @@ export class SshMeshRepo {
     ) {
       throw new SshMeshProbeConflictError(
         "ssh_mesh_source_not_ready",
-        sourceDaemonId,
-        "Source daemon must finish SSH Mesh setup before testing connectivity",
+        sourceNodeId,
+        "Source node must finish SSH Mesh setup before testing connectivity",
       );
     }
     const now = nowIso();
-    const targets = targetDaemonId ? [targetDaemonId] : [];
+    const targets = targetNodeId ? [targetNodeId] : [];
     this.ctx.db.run(
       `INSERT INTO multiremi_daemon_ssh_mesh_states (
          workspace_id, daemon_id, protocol_version, status, addresses, host_keys, peer_tests,
@@ -593,9 +687,9 @@ export class SshMeshRepo {
          desired_probe_revision = multiremi_daemon_ssh_mesh_states.desired_probe_revision + 1,
          probe_target_daemon_ids = excluded.probe_target_daemon_ids,
          updated_at = excluded.updated_at`,
-      [workspaceId, sourceDaemonId, 1, toJson(targets), now, now],
+      [workspaceId, sourceNodeId, 1, toJson(targets), now, now],
     );
-    const probeRevision = this.getDaemonState(workspaceId, sourceDaemonId)?.desiredProbeRevision ?? 1;
+    const probeRevision = this.getDaemonState(workspaceId, sourceNodeId)?.desiredProbeRevision ?? 1;
     return { request_id: createId("sshprobe"), probe_revision: probeRevision, status: "pending" };
   }
 
@@ -622,8 +716,9 @@ export class SshMeshRepo {
   private maybeFinalizeRotation(workspaceId: string): void {
     const config = this.getWorkspaceConfig(workspaceId);
     if (!config || config.rotationState !== "rolling_out") return;
-    const inventory = this.listDaemonInventory(workspaceId).filter((daemon) => daemon.online);
-    const states = new Map(this.listDaemonStates(workspaceId).map((state) => [state.daemonId, state]));
+    const statesList = this.listDaemonStates(workspaceId);
+    const inventory = this.listDaemonInventory(workspaceId, statesList).filter((daemon) => daemon.online);
+    const states = new Map(statesList.map((state) => [state.daemonId, state]));
     const rolloutRevision = this.configRevision(workspaceId, config, [...states.values()]);
     const ready = inventory.length === 0 || inventory.every((daemon) => {
       const state = states.get(daemon.daemonId);
@@ -688,21 +783,30 @@ export class SshMeshRepo {
     return (this.ctx.db.query(
       `SELECT state.* FROM multiremi_daemon_ssh_mesh_states state
        WHERE state.workspace_id = ?
-         AND EXISTS (
-           SELECT 1 FROM multiremi_runtimes runtime
-           WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id
-             AND runtime.daemon_id = state.daemon_id
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM multiremi_daemon_retirements retired
-           WHERE retired.workspace_id = state.workspace_id
-             AND retired.daemon_id = state.daemon_id
+         AND (
+           COALESCE(state.node_kind, 'runtime') = 'control_plane'
+           OR (
+             COALESCE(state.node_kind, 'runtime') = 'runtime'
+             AND EXISTS (
+               SELECT 1 FROM multiremi_runtimes runtime
+               WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id
+                 AND runtime.daemon_id = state.daemon_id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM multiremi_daemon_retirements retired
+               WHERE retired.workspace_id = state.workspace_id
+                 AND retired.daemon_id = state.daemon_id
+             )
+           )
          )
        ORDER BY state.daemon_id ASC`,
     ).all(workspaceId) as Row[]).map(hydrateDaemonState);
   }
 
-  private listDaemonInventory(workspaceId: string): DaemonInventoryEntry[] {
+  private listDaemonInventory(
+    workspaceId: string,
+    states: DaemonStateRow[] = this.listDaemonStates(workspaceId),
+  ): DaemonInventoryEntry[] {
     const rows = this.ctx.db.query(
       `SELECT id, name, daemon_id, status, last_heartbeat_at
        FROM multiremi_runtimes r
@@ -728,13 +832,27 @@ export class SshMeshRepo {
       } else {
         grouped.set(daemonId, {
           daemonId,
+          nodeKind: "runtime",
           runtimeIds: [String(row.id)],
           name: String(row.name ?? daemonId),
           online: runtimeOnline,
         });
       }
     }
-    return [...grouped.values()];
+    for (const state of states) {
+      if (state.nodeKind !== "control_plane") continue;
+      if (grouped.has(state.daemonId)) {
+        throw new Error(`SSH Mesh node id is used by both a runtime and control plane: ${state.daemonId}`);
+      }
+      grouped.set(state.daemonId, {
+        daemonId: state.daemonId,
+        nodeKind: "control_plane",
+        runtimeIds: [],
+        name: state.name ?? state.hostname ?? state.daemonId,
+        online: isDaemonStateFresh(state),
+      });
+    }
+    return [...grouped.values()].sort((left, right) => left.daemonId.localeCompare(right.daemonId));
   }
 
   private runtimeIdentity(runtimeId: string): { workspaceId: string; daemonId: string | null } | null {
@@ -750,6 +868,24 @@ export class SshMeshRepo {
   private assertWorkspaceExists(workspaceId: string): void {
     const row = this.ctx.db.query("SELECT id FROM multiremi_workspaces WHERE id = ?").get(workspaceId) as Row | null;
     if (!row) throw new Error("workspace not found");
+  }
+
+  private assertNodeKindCompatible(
+    workspaceId: string,
+    nodeId: string,
+    nodeKind: MultiremiSshMeshNodeKind,
+  ): void {
+    const current = this.getDaemonState(workspaceId, nodeId);
+    if (current && current.nodeKind !== nodeKind) {
+      throw new Error(`SSH Mesh node id ${nodeId} is already registered as ${current.nodeKind}`);
+    }
+    if (nodeKind === "control_plane") {
+      const runtime = this.ctx.db.query(
+        `SELECT 1 FROM multiremi_runtimes
+         WHERE COALESCE(workspace_id, 'local') = ? AND daemon_id = ? LIMIT 1`,
+      ).get(workspaceId, nodeId) as Row | null;
+      if (runtime) throw new Error(`SSH Mesh node id ${nodeId} is already registered as runtime`);
+    }
   }
 }
 
@@ -781,6 +917,8 @@ function hydrateDaemonState(row: Row): DaemonStateRow {
   return {
     workspaceId: String(row.workspace_id),
     daemonId: String(row.daemon_id),
+    nodeKind: normalizeNodeKind(row.node_kind),
+    name: nullableString(row.name),
     runtimeId: nullableString(row.runtime_id),
     protocolVersion: Number(row.protocol_version ?? 0),
     status: normalizeRuntimeStatus(row.status),
@@ -805,6 +943,10 @@ function hydrateDaemonState(row: Row): DaemonStateRow {
   };
 }
 
+function normalizeNodeKind(value: unknown): MultiremiSshMeshNodeKind {
+  return value === "control_plane" ? "control_plane" : "runtime";
+}
+
 function normalizeRuntimeStatus(value: unknown): MultiremiSshMeshRuntimeStatus {
   switch (value) {
     case "disabled":
@@ -826,12 +968,13 @@ function normalizePeerTests(value: unknown, checkedAt: string): MultiremiSshMesh
   for (const item of value.slice(0, 256)) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const row = item as Record<string, unknown>;
-    const daemonId = String(row.daemon_id ?? "").trim().slice(0, 255);
+    const daemonId = String(row.node_id ?? row.daemon_id ?? "").trim().slice(0, 255);
     if (!daemonId || seen.has(daemonId)) continue;
     seen.add(daemonId);
     const status = normalizePeerStatus(row.status);
     const latency = Number(row.latency_ms);
     result.push({
+      node_id: daemonId,
       daemon_id: daemonId,
       status,
       latency_ms: Number.isFinite(latency) && latency >= 0 ? Math.round(latency) : null,
@@ -841,6 +984,10 @@ function normalizePeerTests(value: unknown, checkedAt: string): MultiremiSshMesh
     });
   }
   return result;
+}
+
+function withCanonicalPeerNodeId(peer: MultiremiSshMeshPeerProbe): MultiremiSshMeshPeerProbe {
+  return { ...peer, node_id: peer.node_id ?? peer.daemon_id };
 }
 
 function normalizePeerStatus(value: unknown): MultiremiSshMeshPeerProbe["status"] {
@@ -880,6 +1027,14 @@ function normalizeNullableString(value: unknown, fallback: string | null, maxLen
   if (value === null) return null;
   const clean = String(value).trim().slice(0, maxLength);
   return clean || null;
+}
+
+function normalizeRequiredNodeValue(value: unknown, label: string, maxLength: number): string {
+  const raw = String(value ?? "");
+  if (/[\r\n\0]/.test(raw)) throw new Error(`${label} contains invalid characters`);
+  const normalized = raw.trim().slice(0, maxLength);
+  if (!normalized) throw new Error(`${label} is required`);
+  return normalized;
 }
 
 function normalizeNullablePositiveInt(value: unknown, fallback: number | null): number | null {

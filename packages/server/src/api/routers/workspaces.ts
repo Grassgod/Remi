@@ -349,18 +349,38 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
-    const body = await readJsonStrict<{ source_daemon_id?: string; target_daemon_id?: string }>(c);
+    const body = await readJsonStrict<{
+      source_node_id?: string;
+      target_node_id?: string;
+      source_daemon_id?: string;
+      target_daemon_id?: string;
+    }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const sourceDaemonId = String(body.source_daemon_id ?? "").trim();
-    const targetDaemonId = String(body.target_daemon_id ?? "").trim() || null;
-    if (!sourceDaemonId) return c.json({ error: "source_daemon_id is required" }, 400);
+    const sourceNodeId = String(body.source_node_id ?? body.source_daemon_id ?? "").trim();
+    const targetNodeId = String(body.target_node_id ?? body.target_daemon_id ?? "").trim() || null;
+    if (
+      body.source_node_id !== undefined
+      && body.source_daemon_id !== undefined
+      && String(body.source_node_id).trim() !== String(body.source_daemon_id).trim()
+    ) {
+      return c.json({ error: "source_node_id and source_daemon_id must match when both are provided" }, 400);
+    }
+    if (
+      body.target_node_id !== undefined
+      && body.target_daemon_id !== undefined
+      && String(body.target_node_id).trim() !== String(body.target_daemon_id).trim()
+    ) {
+      return c.json({ error: "target_node_id and target_daemon_id must match when both are provided" }, 400);
+    }
+    if (!sourceNodeId) return c.json({ error: "source_node_id is required" }, 400);
     try {
-      return c.json(store.requestSshMeshProbe(workspaceId, sourceDaemonId, targetDaemonId), 202);
+      return c.json(store.requestSshMeshProbe(workspaceId, sourceNodeId, targetNodeId), 202);
     } catch (error) {
       if (error instanceof SshMeshProbeConflictError) {
         return c.json({
           error: error.message,
           code: error.code,
+          source_node_id: error.sourceNodeId,
           source_daemon_id: error.sourceDaemonId,
         }, 409);
       }
