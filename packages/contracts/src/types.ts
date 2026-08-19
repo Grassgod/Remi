@@ -2045,6 +2045,10 @@ export interface MultiremiProject {
   workspaceId: string;
   title: string;
   description: string | null;
+  instructions: string;
+  instructionsRevision: number;
+  instructionsUpdatedAt: string | null;
+  instructionsUpdatedBy: string | null;
   icon: string | null;
   status: MultiremiProjectStatus;
   priority: MultiremiProjectPriority;
@@ -2161,6 +2165,7 @@ export interface CreateProjectInput {
   id?: string;
   title: string;
   description?: string | null;
+  instructions?: string;
   icon?: string | null;
   workspaceId?: string | null;
   workspace_id?: string | null;
@@ -2180,6 +2185,9 @@ export interface CreateProjectInput {
 export interface UpdateProjectInput {
   title?: string;
   description?: string | null;
+  instructions?: string;
+  expectedInstructionsRevision?: number;
+  expected_instructions_revision?: number;
   icon?: string | null;
   status?: MultiremiProjectStatus;
   priority?: MultiremiProjectPriority;

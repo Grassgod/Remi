@@ -887,6 +887,10 @@ export function runMigrations(db: SqlDatabase): void {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       description TEXT,
+      instructions TEXT NOT NULL DEFAULT '',
+      instructions_revision INTEGER NOT NULL DEFAULT 0,
+      instructions_updated_at TEXT,
+      instructions_updated_by TEXT,
       icon TEXT,
       status TEXT NOT NULL DEFAULT 'in_progress',
       priority TEXT NOT NULL DEFAULT 'none',
@@ -1486,6 +1490,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_project_doc_revisions", "content_uri TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_sync ON multiremi_project_docs(workspace_id, sync_status, updated_at)");
   addColumnIfMissing(db, "multiremi_projects", "archived_at TEXT");
+  addColumnIfMissing(db, "multiremi_projects", "instructions TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, "multiremi_projects", "instructions_revision INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_projects", "instructions_updated_at TEXT");
+  addColumnIfMissing(db, "multiremi_projects", "instructions_updated_by TEXT");
   // Per-project default assignee: prefills the group/agent/member on new issues
   // created under the project so users stop re-picking the same squad each time.
   addColumnIfMissing(db, "multiremi_projects", "default_assignee_type TEXT");

@@ -9,6 +9,10 @@ export interface Project {
   workspace_id: string;
   title: string;
   description: string | null;
+  instructions: string;
+  instructions_revision: number;
+  instructions_updated_at: string | null;
+  instructions_updated_by: string | null;
   icon: string | null;
   status: ProjectStatus;
   priority: ProjectPriority;
@@ -29,6 +33,7 @@ export interface Project {
 export interface CreateProjectRequest {
   title: string;
   description?: string;
+  instructions?: string;
   icon?: string;
   status?: ProjectStatus;
   priority?: ProjectPriority;
@@ -44,6 +49,9 @@ export interface CreateProjectRequest {
 export interface UpdateProjectRequest {
   title?: string;
   description?: string | null;
+  instructions?: string;
+  /** Optimistic concurrency guard used only when changing instructions. */
+  expected_instructions_revision?: number;
   icon?: string | null;
   status?: ProjectStatus;
   priority?: ProjectPriority;

@@ -92,6 +92,25 @@
     "issues_error_hint": "Something went wrong fetching this project's issues.",
     "issues_error_retry": "Try again"
   },
+  "instructions": {
+    "title": "Project instructions",
+    "summary": "Sent to Agents when a new or rebuilt session starts.",
+    "empty": "No project instructions yet.",
+    "edit": "Edit",
+    "dialog_title": "Edit project instructions",
+    "dialog_description": "Write project-wide guidance in Markdown.",
+    "effect_notice": "Only new or rebuilt Agent sessions receive changes. Current sessions are not updated.",
+    "secret_warning": "Do not include tokens, passwords, or other secrets.",
+    "placeholder": "Write what Agents should do, focus on, or avoid in this project...",
+    "character_count": "{{count}} / {{max}}",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saved_toast": "Saved. Only new or rebuilt Agent sessions receive changes. Current sessions are not updated.",
+    "save_failed": "Failed to save project instructions",
+    "revision_conflict": "Project instructions changed elsewhere. Your draft is still open; cancel and reopen the editor to review the latest version.",
+    "updated": "Updated {{when}}",
+    "updated_by": "Updated {{when}} by {{name}}"
+  },
   "resources": {
     "section_header": "Resources",
     "empty": "No resources attached.",

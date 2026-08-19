@@ -642,6 +642,10 @@ function normalizeDaemonClaimProject(raw: any): MultiremiTaskWithAgent["project"
   return {
     ...raw,
     workspaceId: stringOrNull(raw.workspace_id ?? raw.workspaceId) ?? "",
+    instructions: typeof raw.instructions === "string" ? raw.instructions : "",
+    instructionsRevision: numberOrDefault(raw.instructions_revision ?? raw.instructionsRevision, 0),
+    instructionsUpdatedAt: stringOrNull(raw.instructions_updated_at ?? raw.instructionsUpdatedAt),
+    instructionsUpdatedBy: stringOrNull(raw.instructions_updated_by ?? raw.instructionsUpdatedBy),
     leadType: stringOrNull(raw.lead_type ?? raw.leadType) as any,
     leadId: stringOrNull(raw.lead_id ?? raw.leadId),
     issueCount: numberOrDefault(raw.issue_count ?? raw.issueCount, 0),

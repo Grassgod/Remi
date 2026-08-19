@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
+import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -338,6 +339,40 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ids = store.listProjects(ws).map((p) => p.id).sort();
     expect(ids).toEqual([a.id, b.id].sort());
     expect(store.getProject(a.id)?.title).toBe("Alpha");
+  });
+
+  it("persists project instruction revisions and rejects stale Postgres writes", () => {
+    const ws = freshWorkspace();
+    const project = store.createProject(
+      { title: "PG instructions", workspaceId: ws, instructions: "Initial" },
+      { instructionsUpdatedBy: "usr_pg_creator" },
+    );
+    expect(project).toMatchObject({
+      instructions: "Initial",
+      instructionsRevision: 1,
+      instructionsUpdatedBy: "usr_pg_creator",
+    });
+
+    const updated = store.updateProject(
+      project.id,
+      { instructions: "Updated", expectedInstructionsRevision: 1 },
+      { instructionsUpdatedBy: "usr_pg_editor" },
+    );
+    expect(updated).toMatchObject({
+      instructions: "Updated",
+      instructionsRevision: 2,
+      instructionsUpdatedBy: "usr_pg_editor",
+    });
+    expect(() => store.updateProject(
+      project.id,
+      { instructions: "Stale", expectedInstructionsRevision: 1 },
+      { instructionsUpdatedBy: "usr_pg_stale" },
+    )).toThrow(ProjectInstructionsRevisionConflictError);
+    expect(store.getProject(project.id)).toMatchObject({
+      instructions: "Updated",
+      instructionsRevision: 2,
+      instructionsUpdatedBy: "usr_pg_editor",
+    });
   });
 
   it("persists OpenViking control metadata without project knowledge bodies", () => {

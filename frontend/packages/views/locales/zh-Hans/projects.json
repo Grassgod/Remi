@@ -92,6 +92,25 @@
     "issues_error_hint": "获取该项目的 issue 时出错。",
     "issues_error_retry": "重试"
   },
+  "instructions": {
+    "title": "项目指令",
+    "summary": "Agent 在新建或重建会话时会收到这些指令。",
+    "empty": "还没有项目指令。",
+    "edit": "编辑",
+    "dialog_title": "编辑项目指令",
+    "dialog_description": "使用 Markdown 编写项目级指引。",
+    "effect_notice": "仅对之后新建或重建的 Agent 会话生效，当前会话不会更新。",
+    "secret_warning": "请勿填写 Token、密码或其他密钥。",
+    "placeholder": "写下 Agent 在这个项目中该做什么、关注什么、要避开什么...",
+    "character_count": "{{count}} / {{max}}",
+    "cancel": "取消",
+    "save": "保存",
+    "saved_toast": "已保存。仅对之后新建或重建的 Agent 会话生效，当前会话不会更新。",
+    "save_failed": "保存项目指令失败",
+    "revision_conflict": "项目指令已在其他会话中更新。你的草稿仍保留在当前窗口；请取消并重新打开编辑器，查看最新版本后再保存。",
+    "updated": "更新于 {{when}}",
+    "updated_by": "{{name}} 更新于 {{when}}"
+  },
   "resources": {
     "section_header": "资源",
     "empty": "还没有关联资源。",

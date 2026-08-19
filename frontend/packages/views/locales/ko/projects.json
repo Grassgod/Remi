@@ -92,6 +92,25 @@
     "issues_error_hint": "이 프로젝트의 이슈를 가져오는 중 문제가 발생했습니다.",
     "issues_error_retry": "다시 시도"
   },
+  "instructions": {
+    "title": "프로젝트 지침",
+    "summary": "새로 만들거나 재구성한 세션이 시작될 때 Agent에게 전달됩니다.",
+    "empty": "아직 프로젝트 지침이 없습니다.",
+    "edit": "편집",
+    "dialog_title": "프로젝트 지침 편집",
+    "dialog_description": "프로젝트 전체 지침을 Markdown으로 작성하세요.",
+    "effect_notice": "변경 사항은 새로 만들거나 재구성한 Agent 세션에만 적용됩니다. 현재 세션은 업데이트되지 않습니다.",
+    "secret_warning": "토큰, 비밀번호 또는 기타 시크릿을 입력하지 마세요.",
+    "placeholder": "이 프로젝트에서 Agent가 수행할 작업, 집중할 사항, 피할 사항을 작성하세요...",
+    "character_count": "{{count}} / {{max}}",
+    "cancel": "취소",
+    "save": "저장",
+    "saved_toast": "저장했습니다. 변경 사항은 새로 만들거나 재구성한 Agent 세션에만 적용됩니다. 현재 세션은 업데이트되지 않습니다.",
+    "save_failed": "프로젝트 지침을 저장하지 못했습니다",
+    "revision_conflict": "프로젝트 지침이 다른 세션에서 변경되었습니다. 초안은 현재 창에 남아 있습니다. 취소한 뒤 편집기를 다시 열어 최신 버전을 확인하고 저장하세요.",
+    "updated": "{{when}} 업데이트",
+    "updated_by": "{{name}} 님이 {{when}} 업데이트"
+  },
   "resources": {
     "section_header": "리소스",
     "empty": "첨부된 리소스가 없습니다.",

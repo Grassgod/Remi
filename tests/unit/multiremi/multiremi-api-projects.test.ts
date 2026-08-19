@@ -194,6 +194,344 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(await invalid.json()).toEqual({ error: "Squad not found: sqd_missing" });
   });
 
+  it("round-trips bounded project instructions with audited optimistic revisions", async () => {
+    const store = createStore();
+    const userId = "usr_project_instructions_editor";
+    store.createWorkspaceMember({
+      id: "mem_project_instructions_editor",
+      userId,
+      name: "Project instructions editor",
+      role: "member",
+    });
+    const token = await store.createAccessToken({
+      name: "Project instructions editor",
+      type: "pat",
+      workspaceId: "local",
+      userId,
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = {
+      Authorization: `Bearer ${token.token}`,
+      "Content-Type": "application/json",
+    };
+
+    const created = await app.request("/api/multiremi/projects", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Directed project",
+        description: "Visible summary",
+        instructions: "Use Bun.\r\nRun focused tests.",
+        instructionsRevision: 99,
+        instructionsUpdatedBy: "usr_spoofed",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.project).toMatchObject({
+      description: "Visible summary",
+      instructions: "Use Bun.\nRun focused tests.",
+      instructionsRevision: 1,
+      instructionsUpdatedBy: userId,
+    });
+    expect(createdBody.project.instructionsUpdatedAt).toBeString();
+
+    const compatibilityDetail = await app.request(`/api/projects/${createdBody.project.id}`, { headers });
+    expect(compatibilityDetail.status).toBe(200);
+    expect(await compatibilityDetail.json()).toMatchObject({
+      instructions: "Use Bun.\nRun focused tests.",
+      instructions_revision: 1,
+      instructions_updated_at: createdBody.project.instructionsUpdatedAt,
+      instructions_updated_by: userId,
+    });
+
+    const missingExpectedRevision = await app.request(`/api/multiremi/projects/${createdBody.project.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ instructions: "Missing revision" }),
+    });
+    expect(missingExpectedRevision.status).toBe(400);
+    expect(await missingExpectedRevision.json()).toEqual({
+      error: "expected_instructions_revision is required when instructions is provided",
+    });
+
+    const missingCompatibilityExpectedRevision = await app.request(`/api/projects/${createdBody.project.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ instructions: "Missing compat revision" }),
+    });
+    expect(missingCompatibilityExpectedRevision.status).toBe(400);
+    expect(await missingCompatibilityExpectedRevision.json()).toEqual({
+      error: "expected_instructions_revision is required when instructions is provided",
+    });
+
+    const invalidExpectedRevision = await app.request(`/api/projects/${createdBody.project.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ instructions: "Invalid revision", expected_instructions_revision: -1 }),
+    });
+    expect(invalidExpectedRevision.status).toBe(400);
+    expect(await invalidExpectedRevision.json()).toEqual({
+      error: "expected_instructions_revision must be a non-negative integer",
+    });
+
+    for (const [path, method] of [
+      [`/api/multiremi/projects/${createdBody.project.id}`, "PATCH"],
+      [`/api/projects/${createdBody.project.id}`, "PUT"],
+    ] as const) {
+      const mismatchedExpectedRevisions = await app.request(path, {
+        method,
+        headers,
+        body: JSON.stringify({
+          instructions: "Ambiguous revision",
+          expectedInstructionsRevision: 1,
+          expected_instructions_revision: 2,
+        }),
+      });
+      expect(mismatchedExpectedRevisions.status).toBe(400);
+      expect(await mismatchedExpectedRevisions.json()).toEqual({
+        error: "expected instructions revisions must match",
+      });
+    }
+
+    const nativeUpdated = await app.request(`/api/multiremi/projects/${createdBody.project.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        instructions: "Prefer focused tests.",
+        expectedInstructionsRevision: 1,
+        instructionsUpdatedBy: "usr_spoofed_update",
+        instructions_updated_by: "usr_spoofed_update",
+      }),
+    });
+    expect(nativeUpdated.status).toBe(200);
+    const nativeUpdatedBody = await nativeUpdated.json();
+    expect(nativeUpdatedBody.project).toMatchObject({
+      instructions: "Prefer focused tests.",
+      instructionsRevision: 2,
+      instructionsUpdatedBy: userId,
+    });
+
+    const expectedConflict = {
+      error: "project instructions changed after they were loaded",
+      code: "project_instructions_revision_conflict",
+      expected_revision: 1,
+      current_revision: 2,
+    };
+    const staleNativeUpdate = await app.request(`/api/multiremi/projects/${createdBody.project.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ instructions: "Stale native overwrite", expectedInstructionsRevision: 1 }),
+    });
+    expect(staleNativeUpdate.status).toBe(409);
+    expect(await staleNativeUpdate.json()).toEqual(expectedConflict);
+
+    const staleCompatibilityUpdate = await app.request(`/api/projects/${createdBody.project.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ instructions: "Stale compat overwrite", expected_instructions_revision: 1 }),
+    });
+    expect(staleCompatibilityUpdate.status).toBe(409);
+    expect(await staleCompatibilityUpdate.json()).toEqual(expectedConflict);
+
+    const staleCamelCompatibilityUpdate = await app.request(`/api/projects/${createdBody.project.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ instructions: "Stale camel compat overwrite", expectedInstructionsRevision: 1 }),
+    });
+    expect(staleCamelCompatibilityUpdate.status).toBe(409);
+    expect(await staleCamelCompatibilityUpdate.json()).toEqual(expectedConflict);
+
+    const unchanged = await app.request(`/api/projects/${createdBody.project.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ instructions: "Prefer focused tests.", expected_instructions_revision: 2 }),
+    });
+    expect(unchanged.status).toBe(200);
+    expect((await unchanged.json()).instructions_revision).toBe(2);
+
+    const unrelatedUpdate = await app.request(`/api/projects/${createdBody.project.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ title: "Directed project renamed", expected_instructions_revision: 0 }),
+    });
+    expect(unrelatedUpdate.status).toBe(200);
+    expect(await unrelatedUpdate.json()).toMatchObject({
+      title: "Directed project renamed",
+      instructions: "Prefer focused tests.",
+      instructions_revision: 2,
+    });
+
+    const maxLengthUpdate = await app.request(`/api/multiremi/projects/${createdBody.project.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ instructions: "\u{20000}".repeat(4_000), expectedInstructionsRevision: 2 }),
+    });
+    expect(maxLengthUpdate.status).toBe(200);
+    expect((await maxLengthUpdate.json()).project.instructionsRevision).toBe(3);
+
+    const tooLongUpdate = await app.request(`/api/projects/${createdBody.project.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ instructions: "\u{20000}".repeat(4_001), expected_instructions_revision: 3 }),
+    });
+    expect(tooLongUpdate.status).toBe(400);
+    expect(await tooLongUpdate.json()).toEqual({ error: "instructions must be 4000 characters or fewer" });
+
+    const compatibilityCreated = await app.request("/api/projects", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Compatibility directed", instructions: "Ship carefully." }),
+    });
+    expect(compatibilityCreated.status).toBe(201);
+    expect(await compatibilityCreated.json()).toMatchObject({
+      instructions: "Ship carefully.",
+      instructions_revision: 1,
+      instructions_updated_at: expect.any(String),
+      instructions_updated_by: userId,
+    });
+
+    const tooLongCreate = await app.request("/api/multiremi/projects", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Too long", instructions: "x".repeat(4_001) }),
+    });
+    expect(tooLongCreate.status).toBe(400);
+    expect(await tooLongCreate.json()).toEqual({ error: "instructions must be 4000 characters or fewer" });
+  });
+
+  it("scopes instruction reads to the Project and allows only human members to update them", async () => {
+    const store = createStore();
+    const workspace = store.createWorkspace({
+      id: "ws_project_instructions_guard",
+      name: "Instructions Guard",
+      slug: "instructions-guard",
+    });
+    const project = store.createProject({
+      title: "Guarded project",
+      workspaceId: workspace.id,
+      instructions: "Private project guidance",
+    });
+    const siblingProject = store.createProject({
+      title: "Sibling project",
+      workspaceId: workspace.id,
+      instructions: "Sibling private guidance",
+    });
+    const outsider = store.getOrCreateUser({
+      externalId: "ou_project_instructions_outsider",
+      email: "project-instructions-outsider@example.test",
+      name: "Project instructions outsider",
+    });
+    const outsiderToken = await store.createAccessToken({
+      name: "Outsider session",
+      type: "pat",
+      purpose: "session",
+      workspaceId: "local",
+      userId: outsider.id,
+    });
+    const agent = store.createAgent({
+      name: "Scoped project agent",
+      provider: "claude",
+      workspaceId: workspace.id,
+    });
+    const issue = store.createIssue({
+      title: "Scoped task",
+      workspaceId: workspace.id,
+      projectId: project.id,
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const task = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      workspaceId: workspace.id,
+      prompt: "work",
+    });
+    const taskToken = await store.createTaskAccessToken(task, workspace.id);
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const outsiderHeaders = {
+      Authorization: `Bearer ${outsiderToken.token}`,
+      "Content-Type": "application/json",
+    };
+    const taskHeaders = {
+      Authorization: `Bearer ${taskToken.token}`,
+      "Content-Type": "application/json",
+    };
+
+    for (const path of [
+      `/api/multiremi/projects/${project.id}`,
+      `/api/projects/${project.id}`,
+    ]) {
+      expect((await app.request(path, { headers: outsiderHeaders })).status).toBe(404);
+    }
+    expect((await app.request(`/api/multiremi/projects/${project.id}`, {
+      method: "PATCH",
+      headers: outsiderHeaders,
+      body: JSON.stringify({ instructions: "Injected", expectedInstructionsRevision: 1 }),
+    })).status).toBe(404);
+    expect((await app.request(`/api/projects/${project.id}`, {
+      method: "PUT",
+      headers: outsiderHeaders,
+      body: JSON.stringify({ instructions: "Injected", expected_instructions_revision: 1 }),
+    })).status).toBe(404);
+
+    expect((await app.request(`/api/multiremi/projects/${project.id}`, { headers: taskHeaders })).status).toBe(200);
+    expect((await app.request(`/api/projects/${project.id}`, { headers: taskHeaders })).status).toBe(200);
+    expect((await app.request(`/api/projects/${siblingProject.id}`, { headers: taskHeaders })).status).toBe(404);
+    expect((await app.request(`/api/multiremi/projects/${project.id}`, {
+      method: "PATCH",
+      headers: taskHeaders,
+      body: JSON.stringify({ instructions: "Task injection", expectedInstructionsRevision: 1 }),
+    })).status).toBe(403);
+    expect((await app.request(`/api/projects/${project.id}`, {
+      method: "PUT",
+      headers: taskHeaders,
+      body: JSON.stringify({ instructions: "Task injection", expected_instructions_revision: 1 }),
+    })).status).toBe(403);
+
+    const compatList = await (await app.request(
+      `/api/projects?workspace_id=${workspace.id}`,
+      { headers: taskHeaders },
+    )).json();
+    expect(compatList.projects).toHaveLength(2);
+    expect(compatList.projects[0]).not.toHaveProperty("instructions");
+    const nativeList = await (await app.request(
+      `/api/multiremi/projects?workspaceId=${workspace.id}`,
+      { headers: taskHeaders },
+    )).json();
+    expect(nativeList.projects).toHaveLength(2);
+    expect(nativeList.projects[0]).not.toHaveProperty("instructions");
+
+    const nativeSearch = await (await app.request(
+      `/api/multiremi/projects/search?workspaceId=${workspace.id}&q=Sibling`,
+      { headers: taskHeaders },
+    )).json();
+    expect(nativeSearch.projects).toHaveLength(1);
+    expect(nativeSearch.projects[0]).toMatchObject({
+      id: siblingProject.id,
+      matchSource: "title",
+    });
+    expect(nativeSearch.projects[0]).not.toHaveProperty("instructions");
+    expect(nativeSearch.projects[0]).not.toHaveProperty("instructionsRevision");
+    expect(nativeSearch.projects[0]).not.toHaveProperty("instructionsUpdatedAt");
+    expect(nativeSearch.projects[0]).not.toHaveProperty("instructionsUpdatedBy");
+
+    const compatSearch = await (await app.request(
+      `/api/projects/search?workspace_id=${workspace.id}&q=Sibling`,
+      { headers: taskHeaders },
+    )).json();
+    expect(compatSearch.projects).toHaveLength(1);
+    expect(compatSearch.projects[0]).toMatchObject({
+      id: siblingProject.id,
+      match_source: "title",
+    });
+    expect(compatSearch.projects[0]).not.toHaveProperty("instructions");
+    expect(compatSearch.projects[0]).not.toHaveProperty("instructions_revision");
+    expect(compatSearch.projects[0]).not.toHaveProperty("instructions_updated_at");
+    expect(compatSearch.projects[0]).not.toHaveProperty("instructions_updated_by");
+    expect(store.getProject(project.id)?.instructions).toBe("Private project guidance");
+  });
+
   it("serves original project, squad, and autopilot compatibility endpoints", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Original Codex", provider: "codex" });

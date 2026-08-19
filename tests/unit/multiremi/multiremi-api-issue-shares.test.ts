@@ -36,10 +36,16 @@ describe("Multiremi API - issue sharing", () => {
       purpose: "session",
       expiresInDays: 30,
     });
+    const project = store.createProject({
+      title: "Internal delivery project",
+      workspaceId: "local",
+      instructions: "INTERNAL_AGENT_RULE_DO_NOT_SHARE",
+    });
     const issue = store.createIssue({
       title: "Shared launch plan",
       description: "Everything visible on the issue page",
       workspaceId: "local",
+      projectId: project.id,
       createdBy: "local",
     });
     const otherIssue = store.createIssue({
@@ -129,6 +135,12 @@ describe("Multiremi API - issue sharing", () => {
       title: "Shared launch plan",
       description: "Everything visible on the issue page",
     });
+    expect(bundle.project).toMatchObject({
+      id: project.id,
+      title: "Internal delivery project",
+    });
+    expect(bundle.project).not.toHaveProperty("instructions");
+    expect(bundle.project).not.toHaveProperty("instructions_revision");
     expect(bundle.timeline.some((entry: { content?: string }) => entry.content === "A visible comment")).toBe(true);
     expect(bundle.sessions.some((item: { events: Array<{ body?: string }> }) => (
       item.events.some((event) => event.body === "A visible session event")
@@ -138,6 +150,7 @@ describe("Multiremi API - issue sharing", () => {
     expect(bundle.issue.attachments[0].url).toContain(`/api/shares/${encodeURIComponent(share.token)}/attachments/${attachment.id}/content`);
     expect(JSON.stringify(bundle)).not.toContain(otherIssue.title);
     expect(JSON.stringify(bundle)).not.toContain("viewer@feishu.local");
+    expect(JSON.stringify(bundle)).not.toContain("INTERNAL_AGENT_RULE_DO_NOT_SHARE");
 
     const unrelatedFile = await app.request(
       `/api/shares/${encodeURIComponent(share.token)}/attachments/${unrelatedAttachment.id}/content`,

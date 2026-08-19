@@ -60,6 +60,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   if (mode === "bootstrap" && task.project) {
     const gitResources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
+    const projectInstructions = task.project.instructions?.trim();
     sections.push("");
     sections.push("## Project Context");
     sections.push(`This issue belongs to project: ${task.project.title}`);
@@ -70,6 +71,11 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
       for (const resource of gitResources) {
         sections.push(formatProjectResource(resource));
       }
+    }
+    if (projectInstructions) {
+      sections.push("");
+      sections.push("## Project Instructions");
+      sections.push(projectInstructions);
     }
     appendProjectKnowledgeSections(sections, task.project.id);
   }

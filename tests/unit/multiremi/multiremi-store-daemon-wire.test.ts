@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -253,6 +254,55 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       repos: [{ url: "https://github.com/example/claim-shape" }],
     });
     expect(normalized?.authToken).toStartWith("mat_");
+  });
+
+  it("uses the latest Project Instructions when a queued task is first claimed", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_latest_project_instructions",
+      name: "Latest Project Instructions runtime",
+      provider: "codex",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({
+      name: "Project Instructions worker",
+      provider: "codex",
+      runtimeId: runtime.id,
+    });
+    const project = store.createProject({
+      title: "Mutable instructions project",
+      instructions: "Use the instructions from task creation time.",
+    });
+    const issue = store.createIssue({
+      title: "Queued before Project Instructions change",
+      projectId: project.id,
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const task = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      prompt: "Handle the queued task",
+    });
+
+    const latestInstructions = "Use the latest instructions available at first claim.";
+    store.updateProject(project.id, { instructions: latestInstructions });
+    const updatedProject = store.getProject(project.id)!;
+
+    const app = createMultiremiApp({ store });
+    mockFetch((url, init) => {
+      const parsed = new URL(url);
+      return app.request(`${parsed.pathname}${parsed.search}`, init);
+    });
+    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+
+    expect(claimed?.id).toBe(task.id);
+    expect(claimed?.project?.instructions).toBe(latestInstructions);
+    expect(claimed?.project?.instructionsRevision).toBe(updatedProject.instructionsRevision);
+    expect(claimed?.project?.instructionsUpdatedAt).toBe(updatedProject.instructionsUpdatedAt);
+    const prompt = buildTaskPrompt(claimed);
+    expect(prompt).toContain(`## Project Instructions\n${latestInstructions}`);
+    expect(prompt).not.toContain("Use the instructions from task creation time.");
   });
 
   it("serves daemon claim execution context for chat, autopilot, and quick-create", async () => {

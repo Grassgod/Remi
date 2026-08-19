@@ -15,9 +15,20 @@ import type {
   UpdateProjectInput,
 } from "@multiremi/contracts/types.js";
 import type { Context } from "hono";
+import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { currentRequestUserId } from "./context.js";
 
 export function projectCompatibilityResponse(project: MultiremiProject): Record<string, unknown> {
+  return {
+    ...projectCompatibilitySummaryResponse(project),
+    instructions: project.instructions,
+    instructions_revision: project.instructionsRevision,
+    instructions_updated_at: project.instructionsUpdatedAt,
+    instructions_updated_by: project.instructionsUpdatedBy,
+  };
+}
+
+export function projectCompatibilitySummaryResponse(project: MultiremiProject): Record<string, unknown> {
   return {
     id: project.id,
     workspace_id: project.workspaceId,
@@ -39,11 +50,45 @@ export function projectCompatibilityResponse(project: MultiremiProject): Record<
   };
 }
 
+export function projectNativeSummaryResponse(project: MultiremiProject): Record<string, unknown> {
+  return {
+    id: project.id,
+    workspaceId: project.workspaceId,
+    title: project.title,
+    description: project.description,
+    icon: project.icon,
+    status: project.status,
+    priority: project.priority,
+    leadType: project.leadType,
+    leadId: project.leadId,
+    defaultAssigneeType: project.defaultAssigneeType,
+    defaultAssigneeId: project.defaultAssigneeId,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    issueCount: project.issueCount,
+    doneCount: project.doneCount,
+    resourceCount: project.resourceCount,
+    archivedAt: project.archivedAt,
+  };
+}
+
+export function projectSearchNativeResponse(project: MultiremiProjectSearchResult): Record<string, unknown> {
+  const response = {
+    ...projectNativeSummaryResponse(project),
+    matchSource: project.matchSource,
+  };
+  if (project.matchedSnippet !== undefined) {
+    return { ...response, matchedSnippet: project.matchedSnippet };
+  }
+  return response;
+}
+
 export function projectCreateCompatibilityInput(c: Context, input: CreateProjectInput): CreateProjectInput {
   return {
     id: input.id,
     title: input.title,
     description: input.description,
+    instructions: input.instructions,
     icon: input.icon,
     workspaceId: input.workspace_id ?? c.req.query("workspace_id") ?? "local",
     status: input.status,
@@ -67,6 +112,8 @@ export function projectUpdateCompatibilityInput(input: UpdateProjectInput): Upda
   return {
     title: input.title,
     description: input.description,
+    instructions: input.instructions,
+    expectedInstructionsRevision: input.expectedInstructionsRevision ?? input.expected_instructions_revision,
     icon: input.icon,
     status: input.status,
     priority: input.priority,
@@ -88,7 +135,7 @@ export function labelCreateCompatibilityInput(input: CreateLabelInput): CreateLa
 
 export function projectSearchCompatibilityResponse(project: MultiremiProjectSearchResult): Record<string, unknown> {
   const response = {
-    ...projectCompatibilityResponse(project),
+    ...projectCompatibilitySummaryResponse(project),
     match_source: project.matchSource,
   };
   if (project.matchedSnippet !== undefined) {
@@ -152,6 +199,14 @@ export function labelCompatibilityErrorResponse(c: Context, error: unknown): Res
 }
 
 export function projectErrorResponse(c: Context, err: unknown): Response | null {
+  if (err instanceof ProjectInstructionsRevisionConflictError) {
+    return c.json({
+      error: "project instructions changed after they were loaded",
+      code: err.code,
+      expected_revision: err.expectedRevision,
+      current_revision: err.currentRevision,
+    }, 409);
+  }
   if (!(err instanceof Error)) return null;
   if (err.message === "Project title is required") return c.json({ error: "title is required" }, 400);
   if (err.message.startsWith("Project not found:")) return c.json({ error: "project not found" }, 404);

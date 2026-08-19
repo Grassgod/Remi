@@ -60,6 +60,34 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("`remi wiki push`");
   });
 
+  it("injects Project Instructions exactly once after Project Context in bootstrap", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const instructions = "Run the focused tests before handing off.";
+    const prompt = buildTaskPrompt({
+      ...task,
+      project: { ...task.project!, instructions },
+    } as any);
+
+    expect(prompt.match(/## Project Instructions/g)).toHaveLength(1);
+    expect(prompt).toContain(`## Project Instructions\n${instructions}`);
+    expect(prompt.indexOf("## Project Context")).toBeLessThan(prompt.indexOf("## Project Instructions"));
+    expect(prompt.indexOf("## Project Instructions")).toBeLessThan(prompt.indexOf("## Project Knowledge"));
+  });
+
+  it("omits blank Project Instructions from bootstrap", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const prompt = buildTaskPrompt({
+      ...task,
+      project: { ...task.project!, instructions: "  \n\t" },
+    } as any);
+
+    expect(prompt).toContain("## Project Context");
+    expect(prompt).not.toContain("## Project Instructions");
+    expect(prompt).toContain("## Project Knowledge");
+  });
+
   it("does not embed Memory, Wiki, or schema bodies in a bootstrap prompt", () => {
     const store = createStore();
     const { task } = createProjectTask(store);
@@ -85,8 +113,10 @@ describe("bootstrap and delta task prompts", () => {
   it("builds a compact delta without replaying stable context", () => {
     const store = createStore();
     const { task } = createProjectTask(store);
+    const instructions = "DO_NOT_REPEAT_PROJECT_INSTRUCTIONS";
     const prompt = buildTaskPrompt({
       ...task,
+      project: { ...task.project!, instructions },
       prompt: "Apply the review feedback.",
       workspaceContext: "DO_NOT_REPEAT_WORKSPACE",
       sessionProjection: {
@@ -105,6 +135,8 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).not.toContain("DO_NOT_REPEAT_WORKSPACE");
     expect(prompt).not.toContain("Implement the requested behavior.");
     expect(prompt).not.toContain("## Project Context");
+    expect(prompt).not.toContain("## Project Instructions");
+    expect(prompt).not.toContain(instructions);
     expect(prompt).not.toContain("## Project Knowledge");
     expect(prompt).not.toContain("## Available Repositories");
     expect(prompt).not.toContain("## Agent Instructions");

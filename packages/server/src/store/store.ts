@@ -10,7 +10,7 @@ import { AgentPluginsRepo } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { GitHubRepo } from "@multiremi/store/repos/github-repo.js";
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
-import { ProjectsRepo } from "@multiremi/store/repos/projects-repo.js";
+import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -1991,8 +1991,8 @@ runMigrations(this.db);
     return this.tasks.listTasksForIssue(issueId);
   }
 
-  createProject(input: CreateProjectInput): MultiremiProject {
-    return this.projects.createProject(input);
+  createProject(input: CreateProjectInput, writeContext: ProjectInstructionsWriteContext = {}): MultiremiProject {
+    return this.projects.createProject(input, writeContext);
   }
 
   getProject(id: string): MultiremiProject | null {
@@ -2007,8 +2007,8 @@ runMigrations(this.db);
     return this.projects.searchProjects(input);
   }
 
-  updateProject(id: string, input: UpdateProjectInput): MultiremiProject {
-    return this.projects.updateProject(id, input);
+  updateProject(id: string, input: UpdateProjectInput, writeContext: ProjectInstructionsWriteContext = {}): MultiremiProject {
+    return this.projects.updateProject(id, input, writeContext);
   }
 
   archiveProject(id: string): MultiremiProject {

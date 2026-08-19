@@ -117,6 +117,8 @@ export interface AgentTaskProject {
   id: string;
   title: string;
   description: string | null;
+  /** Project-level rules injected only when bootstrapping a provider session. */
+  instructions?: string;
 }
 
 /** Project resource entry (github_repo / local_directory / ...). */

@@ -3710,7 +3710,11 @@
             "issue_count": 4,
             "done_count": 0,
             "resource_count": 1,
-            "archived_at": null
+            "archived_at": null,
+            "instructions": "",
+            "instructions_revision": 0,
+            "instructions_updated_at": null,
+            "instructions_updated_by": null
           },
           "project_resources": [
             {
@@ -3938,7 +3942,11 @@
             "issue_count": 4,
             "done_count": 0,
             "resource_count": 1,
-            "archived_at": null
+            "archived_at": null,
+            "instructions": "",
+            "instructions_revision": 0,
+            "instructions_updated_at": null,
+            "instructions_updated_by": null
           },
           "project_resources": [
             {
@@ -4104,7 +4112,11 @@
             "issue_count": 4,
             "done_count": 0,
             "resource_count": 1,
-            "archived_at": null
+            "archived_at": null,
+            "instructions": "",
+            "instructions_revision": 0,
+            "instructions_updated_at": null,
+            "instructions_updated_by": null
           },
           "project_resources": [
             {
@@ -4634,7 +4646,11 @@
             "issue_count": 4,
             "done_count": 0,
             "resource_count": 1,
-            "archived_at": null
+            "archived_at": null,
+            "instructions": "",
+            "instructions_revision": 0,
+            "instructions_updated_at": null,
+            "instructions_updated_by": null
           },
           "project_resources": [
             {
@@ -12238,12 +12254,12 @@
             "leadId": null,
             "defaultAssigneeType": null,
             "defaultAssigneeId": null,
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>",
             "issueCount": 4,
             "doneCount": 0,
             "resourceCount": 1,
-            "archivedAt": null,
-            "createdAt": "<timestamp>",
-            "updatedAt": "<timestamp>"
+            "archivedAt": null
           }
         ],
         "total": 1
@@ -12260,6 +12276,10 @@
           "workspaceId": "local",
           "title": "Snapshot Project",
           "description": "Project used by the snapshot",
+          "instructions": "",
+          "instructionsRevision": 0,
+          "instructionsUpdatedAt": null,
+          "instructionsUpdatedBy": null,
           "icon": null,
           "status": "in_progress",
           "priority": "none",
@@ -12334,12 +12354,12 @@
             "leadId": null,
             "defaultAssigneeType": null,
             "defaultAssigneeId": null,
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>",
             "issueCount": 4,
             "doneCount": 0,
             "resourceCount": 1,
             "archivedAt": null,
-            "createdAt": "<timestamp>",
-            "updatedAt": "<timestamp>",
             "matchSource": "title"
           }
         ],
@@ -13279,6 +13299,10 @@
             "workspaceId": "local",
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
+            "instructions": "",
+            "instructionsRevision": 0,
+            "instructionsUpdatedAt": null,
+            "instructionsUpdatedBy": null,
             "icon": null,
             "status": "in_progress",
             "priority": "none",
@@ -13555,7 +13579,11 @@
         "issue_count": 4,
         "done_count": 0,
         "resource_count": 1,
-        "archived_at": null
+        "archived_at": null,
+        "instructions": "",
+        "instructions_revision": 0,
+        "instructions_updated_at": null,
+        "instructions_updated_by": null
       }
     },
     {
@@ -16483,7 +16511,11 @@
         "issue_count": 0,
         "done_count": 0,
         "resource_count": 0,
-        "archived_at": null
+        "archived_at": null,
+        "instructions": "",
+        "instructions_revision": 0,
+        "instructions_updated_at": null,
+        "instructions_updated_by": null
       }
     },
     {
@@ -16508,7 +16540,11 @@
         "issue_count": 0,
         "done_count": 0,
         "resource_count": 0,
-        "archived_at": null
+        "archived_at": null,
+        "instructions": "",
+        "instructions_revision": 0,
+        "instructions_updated_at": null,
+        "instructions_updated_by": null
       }
     },
     {
@@ -16574,6 +16610,10 @@
           "workspaceId": "local",
           "title": "Native project",
           "description": null,
+          "instructions": "",
+          "instructionsRevision": 0,
+          "instructionsUpdatedAt": null,
+          "instructionsUpdatedBy": null,
           "icon": null,
           "status": "in_progress",
           "priority": "none",
@@ -16601,6 +16641,10 @@
           "workspaceId": "local",
           "title": "Native project patched",
           "description": "Project used by the snapshot",
+          "instructions": "",
+          "instructionsRevision": 0,
+          "instructionsUpdatedAt": null,
+          "instructionsUpdatedBy": null,
           "icon": null,
           "status": "in_progress",
           "priority": "none",
@@ -16679,6 +16723,10 @@
           "workspaceId": "local",
           "title": "Native project patched",
           "description": "Project used by the snapshot",
+          "instructions": "",
+          "instructionsRevision": 0,
+          "instructionsUpdatedAt": null,
+          "instructionsUpdatedBy": null,
           "icon": null,
           "status": "cancelled",
           "priority": "none",

@@ -92,6 +92,25 @@
     "issues_error_hint": "このプロジェクトのイシューの取得中に問題が発生しました。",
     "issues_error_retry": "再試行"
   },
+  "instructions": {
+    "title": "プロジェクト指示",
+    "summary": "新規作成または再構築されたセッションの開始時にエージェントへ送信されます。",
+    "empty": "プロジェクト指示はまだありません。",
+    "edit": "編集",
+    "dialog_title": "プロジェクト指示を編集",
+    "dialog_description": "プロジェクト全体のガイダンスを Markdown で記述します。",
+    "effect_notice": "変更を受け取るのは、新規作成または再構築された Agent セッションのみです。現在のセッションは更新されません。",
+    "secret_warning": "トークン、パスワード、その他のシークレットを入力しないでください。",
+    "placeholder": "このプロジェクトで Agent が行うこと、重視すること、避けることを記述...",
+    "character_count": "{{count}} / {{max}}",
+    "cancel": "キャンセル",
+    "save": "保存",
+    "saved_toast": "保存しました。変更を受け取るのは、新規作成または再構築された Agent セッションのみです。現在のセッションは更新されません。",
+    "save_failed": "プロジェクト指示を保存できませんでした",
+    "revision_conflict": "プロジェクト指示が別のセッションで更新されました。下書きはこの画面に残っています。キャンセルしてエディターを開き直し、最新版を確認してから保存してください。",
+    "updated": "{{when}}に更新",
+    "updated_by": "{{name}}が{{when}}に更新"
+  },
   "resources": {
     "section_header": "リソース",
     "empty": "添付されたリソースはありません。",

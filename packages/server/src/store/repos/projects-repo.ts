@@ -42,6 +42,22 @@ import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/
 
 type Row = Record<string, unknown>;
 
+export interface ProjectInstructionsWriteContext {
+  instructionsUpdatedBy?: string | null;
+}
+
+export class ProjectInstructionsRevisionConflictError extends Error {
+  readonly code = "project_instructions_revision_conflict";
+
+  constructor(
+    readonly expectedRevision: number,
+    readonly currentRevision: number,
+  ) {
+    super("Project instructions changed after they were loaded");
+    this.name = "ProjectInstructionsRevisionConflictError";
+  }
+}
+
 export const PROJECT_REF_MAX_DEPTH = 5;
 const PROJECT_DOC_MEMORY_INDEX_LIMIT = 50;
 const PROJECT_DOC_WIKI_INDEX_LIMIT = 100;
@@ -70,13 +86,15 @@ export const PROJECT_DOC_SCHEMA_TEMPLATE = `# Wiki Schema（本项目知识库�
 export class ProjectsRepo {
   constructor(private ctx: StoreContext) {}
 
-  createProject(input: CreateProjectInput): MultiremiProject {
+  createProject(input: CreateProjectInput, writeContext: ProjectInstructionsWriteContext = {}): MultiremiProject {
     if (!input.title?.trim()) throw new Error("Project title is required");
     const id = input.id ?? createId("prj");
     const now = nowIso();
     const status = input.status ?? "in_progress";
     const archivedAt = isArchivedProjectStatus(status) ? now : null;
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const instructions = normalizeProjectInstructions(input.instructions);
+    const hasInstructions = instructions !== "";
     const defaultAssignee = this.resolveDefaultAssignee(
       input.defaultAssigneeType === undefined ? input.default_assignee_type : input.defaultAssigneeType,
       input.defaultAssigneeId === undefined ? input.default_assignee_id : input.defaultAssigneeId,
@@ -90,14 +108,19 @@ export class ProjectsRepo {
       if (hasLocalDirectory) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       const result = this.ctx.db.run(
         `INSERT INTO multiremi_projects (
-          id, title, description, icon, status, priority, workspace_id,
+          id, title, description, instructions, instructions_revision,
+          instructions_updated_at, instructions_updated_by, icon, status, priority, workspace_id,
           lead_type, lead_id, default_assignee_type, default_assignee_id,
           archived_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           input.title.trim(),
           input.description ?? null,
+          instructions,
+          hasInstructions ? 1 : 0,
+          hasInstructions ? now : null,
+          hasInstructions ? nullableString(writeContext.instructionsUpdatedBy) : null,
           input.icon ?? null,
           status,
           input.priority ?? "none",
@@ -154,7 +177,7 @@ export class ProjectsRepo {
     return { projects: rows.slice(offset, offset + limit), total: rows.length };
   }
 
-  updateProject(id: string, input: UpdateProjectInput): MultiremiProject {
+  updateProject(id: string, input: UpdateProjectInput, writeContext: ProjectInstructionsWriteContext = {}): MultiremiProject {
     const current = this.getProject(id);
     if (!current) throw new Error(`Project not found: ${id}`);
     const now = nowIso();
@@ -162,40 +185,77 @@ export class ProjectsRepo {
     const archivedAt = input.status === undefined
       ? current.archivedAt
       : isArchivedProjectStatus(status) ? current.archivedAt ?? now : null;
+    const instructions = input.instructions === undefined
+      ? current.instructions
+      : normalizeProjectInstructions(input.instructions);
+    const instructionsChanged = instructions !== current.instructions;
+    const expectedInstructionsRevision = input.expectedInstructionsRevision
+      ?? input.expected_instructions_revision;
+    if (
+      input.instructions !== undefined
+      && expectedInstructionsRevision !== undefined
+      && expectedInstructionsRevision !== current.instructionsRevision
+    ) {
+      throw new ProjectInstructionsRevisionConflictError(
+        expectedInstructionsRevision,
+        current.instructionsRevision,
+      );
+    }
     const defaultAssigneeTypeInput = input.defaultAssigneeType === undefined ? input.default_assignee_type : input.defaultAssigneeType;
     const defaultAssigneeIdInput = input.defaultAssigneeId === undefined ? input.default_assignee_id : input.defaultAssigneeId;
     const defaultAssignee = defaultAssigneeTypeInput === undefined && defaultAssigneeIdInput === undefined
       ? { assigneeType: current.defaultAssigneeType, assigneeId: current.defaultAssigneeId }
       : this.resolveDefaultAssignee(defaultAssigneeTypeInput, defaultAssigneeIdInput, current.workspaceId);
-    this.ctx.db.run(
-      `UPDATE multiremi_projects SET
-        title = ?,
-        description = ?,
-        icon = ?,
-        status = ?,
-        priority = ?,
-        lead_type = ?,
-        lead_id = ?,
-        default_assignee_type = ?,
-        default_assignee_id = ?,
-        archived_at = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        input.title ?? current.title,
-        input.description === undefined ? current.description : input.description,
-        input.icon === undefined ? current.icon : input.icon,
-        status,
-        input.priority ?? current.priority,
-        input.leadType === undefined ? input.lead_type === undefined ? current.leadType : input.lead_type : input.leadType,
-        input.leadId === undefined ? input.lead_id === undefined ? current.leadId : input.lead_id : input.leadId,
-        defaultAssignee.assigneeType,
-        defaultAssignee.assigneeId,
-        archivedAt,
-        now,
-        id,
-      ],
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+    const assign = (column: string, value: unknown) => {
+      assignments.push(`${column} = ?`);
+      values.push(value);
+    };
+    if (input.title !== undefined) assign("title", input.title);
+    if (input.description !== undefined) assign("description", input.description);
+    if (input.instructions !== undefined) {
+      assign("instructions", instructions);
+      assign("instructions_revision", instructionsChanged ? current.instructionsRevision + 1 : current.instructionsRevision);
+      assign("instructions_updated_at", instructionsChanged ? now : current.instructionsUpdatedAt);
+      assign(
+        "instructions_updated_by",
+        instructionsChanged ? nullableString(writeContext.instructionsUpdatedBy) : current.instructionsUpdatedBy,
+      );
+    }
+    if (input.icon !== undefined) assign("icon", input.icon);
+    if (input.status !== undefined) {
+      assign("status", status);
+      assign("archived_at", archivedAt);
+    }
+    if (input.priority !== undefined) assign("priority", input.priority);
+    if (input.leadType !== undefined || input.lead_type !== undefined) {
+      assign("lead_type", input.leadType === undefined ? input.lead_type : input.leadType);
+    }
+    if (input.leadId !== undefined || input.lead_id !== undefined) {
+      assign("lead_id", input.leadId === undefined ? input.lead_id : input.leadId);
+    }
+    if (defaultAssigneeTypeInput !== undefined || defaultAssigneeIdInput !== undefined) {
+      assign("default_assignee_type", defaultAssignee.assigneeType);
+      assign("default_assignee_id", defaultAssignee.assigneeId);
+    }
+    assign("updated_at", now);
+    values.push(id);
+    if (input.instructions !== undefined && expectedInstructionsRevision !== undefined) {
+      values.push(expectedInstructionsRevision);
+    }
+    const result = this.ctx.db.run(
+      `UPDATE multiremi_projects SET ${assignments.join(", ")}
+       WHERE id = ?${input.instructions !== undefined && expectedInstructionsRevision !== undefined ? " AND instructions_revision = ?" : ""}`,
+      values,
     );
+    if (input.instructions !== undefined && expectedInstructionsRevision !== undefined && result.changes === 0) {
+      const latest = this.getProject(id);
+      throw new ProjectInstructionsRevisionConflictError(
+        expectedInstructionsRevision,
+        latest?.instructionsRevision ?? current.instructionsRevision,
+      );
+    }
     return this.getProject(id)!;
   }
 
@@ -1082,6 +1142,10 @@ function toProject(row: Row): MultiremiProject {
     workspaceId: String(row.workspace_id ?? "local"),
     title: String(row.title),
     description: nullableString(row.description),
+    instructions: String(row.instructions ?? ""),
+    instructionsRevision: Number(row.instructions_revision ?? 0),
+    instructionsUpdatedAt: nullableString(row.instructions_updated_at),
+    instructionsUpdatedBy: nullableString(row.instructions_updated_by),
     icon: nullableString(row.icon),
     status: String(row.status ?? "planned") as MultiremiProject["status"],
     priority: String(row.priority ?? "none") as MultiremiProject["priority"],
@@ -1096,6 +1160,10 @@ function toProject(row: Row): MultiremiProject {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function normalizeProjectInstructions(value: string | null | undefined): string {
+  return (value ?? "").replace(/\r\n?/g, "\n");
 }
 
 function toProjectResource(row: Row): MultiremiProjectResource {

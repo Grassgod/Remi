@@ -14,7 +14,7 @@ import {
   issueDependencyCompatibilityResponse,
   issueSessionCompatibilityResponse,
   issueUsageResponse,
-  projectCompatibilityResponse,
+  projectCompatibilitySummaryResponse,
   sessionEventCompatibilityResponse,
   sessionResultCompatibilityResponse,
 } from "../wire/index.js";
@@ -190,7 +190,7 @@ function buildSharedIssueBundle(
   return {
     share: publicShareResponse(share),
     issue: issueResponse,
-    project: project ? projectCompatibilityResponse(project) : null,
+    project: project ? projectCompatibilitySummaryResponse(project) : null,
     parent_issue: parentIssue ? issueCompatibilityResponse(parentIssue) : null,
     children: issue.children.map((child) => issueCompatibilityResponse(child)),
     child_progress: {

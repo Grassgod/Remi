@@ -29,17 +29,35 @@ export function useUpdateProject() {
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & UpdateProjectRequest) =>
       api.updateProject(id, data),
-    onMutate: ({ id, ...data }) => {
-      qc.cancelQueries({ queryKey: projectKeys.list(wsId) });
+    onMutate: async ({ id, ...data }) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: projectKeys.list(wsId) }),
+        qc.cancelQueries({ queryKey: projectKeys.detail(wsId, id) }),
+      ]);
+      const optimisticData = { ...data };
+      delete optimisticData.expected_instructions_revision;
       const prevList = qc.getQueryData<ListProjectsResponse>(projectKeys.list(wsId));
       const prevDetail = qc.getQueryData<Project>(projectKeys.detail(wsId, id));
       qc.setQueryData<ListProjectsResponse>(projectKeys.list(wsId), (old) =>
-        old ? { ...old, projects: old.projects.map((p) => (p.id === id ? { ...p, ...data } : p)) } : old,
+        old ? { ...old, projects: old.projects.map((p) => (p.id === id ? { ...p, ...optimisticData } : p)) } : old,
       );
       qc.setQueryData<Project>(projectKeys.detail(wsId, id), (old) =>
-        old ? { ...old, ...data } : old,
+        old ? { ...old, ...optimisticData } : old,
       );
       return { prevList, prevDetail, id };
+    },
+    onSuccess: (updatedProject) => {
+      qc.setQueryData<ListProjectsResponse>(projectKeys.list(wsId), (old) =>
+        old
+          ? {
+              ...old,
+              projects: old.projects.map((project) =>
+                project.id === updatedProject.id ? updatedProject : project,
+              ),
+            }
+          : old,
+      );
+      qc.setQueryData(projectKeys.detail(wsId, updatedProject.id), updatedProject);
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prevList) qc.setQueryData(projectKeys.list(wsId), ctx.prevList);

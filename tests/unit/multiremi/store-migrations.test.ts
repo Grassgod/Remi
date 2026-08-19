@@ -370,15 +370,44 @@ describe("store migrations", () => {
     migrate(database);
 
     expect(columnNames(database, "multiremi_projects")).toContain("archived_at");
+    expect(columnNames(database, "multiremi_projects")).toEqual(expect.arrayContaining([
+      "instructions",
+      "instructions_revision",
+      "instructions_updated_at",
+      "instructions_updated_by",
+    ]));
     // Upgrade path also patches in the project default-assignee columns.
     expect(columnNames(database, "multiremi_projects")).toContain("default_assignee_type");
     expect(columnNames(database, "multiremi_projects")).toContain("default_assignee_id");
     const rows = database.query(
-      "SELECT id, archived_at FROM multiremi_projects ORDER BY id",
-    ).all() as Array<{ id: string; archived_at: string | null }>;
+      `SELECT id, archived_at, instructions, instructions_revision,
+              instructions_updated_at, instructions_updated_by
+       FROM multiremi_projects ORDER BY id`,
+    ).all() as Array<{
+      id: string;
+      archived_at: string | null;
+      instructions: string;
+      instructions_revision: number;
+      instructions_updated_at: string | null;
+      instructions_updated_by: string | null;
+    }>;
     expect(rows).toEqual([
-      { id: "prj_active", archived_at: null },
-      { id: "prj_cancelled", archived_at: "2026-08-01T00:00:00.000Z" },
+      {
+        id: "prj_active",
+        archived_at: null,
+        instructions: "",
+        instructions_revision: 0,
+        instructions_updated_at: null,
+        instructions_updated_by: null,
+      },
+      {
+        id: "prj_cancelled",
+        archived_at: "2026-08-01T00:00:00.000Z",
+        instructions: "",
+        instructions_revision: 0,
+        instructions_updated_at: null,
+        instructions_updated_by: null,
+      },
     ]);
   });
 

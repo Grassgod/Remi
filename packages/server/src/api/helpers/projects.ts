@@ -8,9 +8,41 @@ import type {
   MultiremiProject,
   MultiremiProjectResource,
   UpdateProjectDocInput,
+  UpdateProjectInput,
 } from "@multiremi/contracts/types.js";
 import { denyCurrentUserWorkspaceAccess, denyTaskTokenProjectAccess } from "./auth-guards.js";
 import { issueSubscriberCaller } from "./issues.js";
+
+export const MAX_PROJECT_INSTRUCTIONS_LENGTH = 4_000;
+
+export function validateProjectInstructions(c: Context, value: unknown): Response | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string") return c.json({ error: "instructions must be a string" }, 400);
+  if (Array.from(value).length > MAX_PROJECT_INSTRUCTIONS_LENGTH) {
+    return c.json({ error: `instructions must be ${MAX_PROJECT_INSTRUCTIONS_LENGTH} characters or fewer` }, 400);
+  }
+  return null;
+}
+
+export function validateProjectInstructionsUpdate(c: Context, input: UpdateProjectInput): Response | null {
+  const instructionsError = validateProjectInstructions(c, input.instructions);
+  if (instructionsError || input.instructions === undefined) return instructionsError;
+  if (
+    input.expectedInstructionsRevision !== undefined
+    && input.expected_instructions_revision !== undefined
+    && input.expectedInstructionsRevision !== input.expected_instructions_revision
+  ) {
+    return c.json({ error: "expected instructions revisions must match" }, 400);
+  }
+  const expectedRevision = input.expectedInstructionsRevision ?? input.expected_instructions_revision;
+  if (expectedRevision === undefined) {
+    return c.json({ error: "expected_instructions_revision is required when instructions is provided" }, 400);
+  }
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    return c.json({ error: "expected_instructions_revision must be a non-negative integer" }, 400);
+  }
+  return null;
+}
 
 export function loadProjectResourceForMutation(
   c: Context,
@@ -31,6 +63,19 @@ export function loadProjectForDocs(c: Context, store: MultiremiStore, projectId:
   if (denied) return denied;
   const taskDenied = denyTaskTokenProjectAccess(c, store, project.id);
   if (taskDenied) return taskDenied;
+  return project;
+}
+
+export function loadProjectForHumanMutation(
+  c: Context,
+  store: MultiremiStore,
+  projectId: string,
+): MultiremiProject | Response {
+  const project = loadProjectForDocs(c, store, projectId);
+  if (project instanceof Response) return project;
+  if (currentTaskAccessToken(c)) {
+    return c.json({ error: "this endpoint is only available to human actors" }, 403);
+  }
   return project;
 }
 

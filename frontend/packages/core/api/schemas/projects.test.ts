@@ -65,6 +65,41 @@ describe("ProjectSchema", () => {
     });
     expect(parsed.default_assignee_type).toBeNull();
   });
+
+  it("parses project instructions and their revision metadata", () => {
+    const parsed = ProjectSchema.parse({
+      ...project,
+      instructions: "Always start with a failing test.",
+      instructions_revision: 4,
+      instructions_updated_at: "2026-08-19T08:30:00.000Z",
+      instructions_updated_by: "user-2",
+    });
+
+    expect(parsed.instructions).toBe("Always start with a failing test.");
+    expect(parsed.instructions_revision).toBe(4);
+    expect(parsed.instructions_updated_at).toBe("2026-08-19T08:30:00.000Z");
+    expect(parsed.instructions_updated_by).toBe("user-2");
+  });
+
+  it("defaults missing or malformed instruction fields without dropping the project", () => {
+    const legacy = ProjectSchema.parse(project);
+    expect(legacy.instructions).toBe("");
+    expect(legacy.instructions_revision).toBe(0);
+    expect(legacy.instructions_updated_at).toBeNull();
+    expect(legacy.instructions_updated_by).toBeNull();
+
+    const malformed = ProjectSchema.parse({
+      ...project,
+      instructions: { markdown: "nope" },
+      instructions_revision: -1,
+      instructions_updated_at: "not-a-date",
+      instructions_updated_by: ["user-2"],
+    });
+    expect(malformed.instructions).toBe("");
+    expect(malformed.instructions_revision).toBe(0);
+    expect(malformed.instructions_updated_at).toBeNull();
+    expect(malformed.instructions_updated_by).toBeNull();
+  });
 });
 
 describe("ListProjectsResponseSchema", () => {

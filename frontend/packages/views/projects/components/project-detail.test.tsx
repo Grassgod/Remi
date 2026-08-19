@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { Project } from "@multiremi/core/types";
 import enCommon from "../../locales/en/common.json";
@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
 
 const refetchIssues = vi.hoisted(() => vi.fn());
 const updateProject = vi.hoisted(() => vi.fn());
+const updateProjectAsync = vi.hoisted(() => vi.fn());
 const archiveProject = vi.hoisted(() => vi.fn());
 const restoreProject = vi.hoisted(() => vi.fn());
 
@@ -55,7 +56,7 @@ vi.mock("@multiremi/core/projects/queries", () => ({
 }));
 
 vi.mock("@multiremi/core/projects/mutations", () => ({
-  useUpdateProject: () => ({ mutate: updateProject }),
+  useUpdateProject: () => ({ mutate: updateProject, mutateAsync: updateProjectAsync }),
   useArchiveProject: () => ({ mutate: archiveProject, isPending: false }),
   useRestoreProject: () => ({ mutate: restoreProject, isPending: false }),
 }));
@@ -181,6 +182,18 @@ vi.mock("./project-resources-section", () => ({
   ),
 }));
 
+vi.mock("./project-instructions-section", () => ({
+  ProjectInstructionsSection: ({
+    onSave,
+  }: {
+    onSave: (instructions: string, expectedRevision: number) => Promise<void>;
+  }) => (
+    <section data-testid="project-instructions">
+      <button type="button" onClick={() => void onSave("Always test first.", 3)}>Save instructions</button>
+    </section>
+  ),
+}));
+
 vi.mock("./wiki/project-content-tabs", () => ({
   ProjectContentTabs: ({
     issues,
@@ -232,6 +245,10 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     workspace_id: "ws-1",
     title: "Apollo",
     description: null,
+    instructions: "",
+    instructions_revision: 0,
+    instructions_updated_at: null,
+    instructions_updated_by: null,
     icon: null,
     status: "in_progress",
     priority: "medium",
@@ -270,6 +287,8 @@ describe("ProjectDetail issues surface", () => {
     state.members = [];
     refetchIssues.mockClear();
     updateProject.mockClear();
+    updateProjectAsync.mockReset();
+    updateProjectAsync.mockResolvedValue(undefined);
   });
 
   it("shows a skeleton while the issue query is loading, not the empty-project CTA", () => {
@@ -338,6 +357,55 @@ describe("ProjectDetail issues surface", () => {
     const tabs = screen.getByTestId("content-tabs");
     expect(tabs).toHaveAttribute("data-tab", "wiki");
     expect(tabs).toHaveAttribute("data-wiki-slug", "runbook");
+  });
+});
+
+describe("ProjectDetail instructions", () => {
+  beforeEach(() => {
+    state.project = makeProject({
+      description: "Project context",
+      instructions: "Keep changes focused.",
+      instructions_revision: 3,
+      instructions_updated_at: "2026-08-19T08:30:00.000Z",
+      instructions_updated_by: "user-2",
+    });
+    state.projectLoading = false;
+    state.issues = [];
+    state.issuesLoading = false;
+    state.issuesError = false;
+    state.members = [{ user_id: "user-2", name: "Ada" }];
+    updateProjectAsync.mockReset();
+    updateProjectAsync.mockResolvedValue(undefined);
+  });
+
+  it("places instructions after Description and before Resources", () => {
+    renderDetail();
+
+    const description = screen.getByText("Description");
+    const instructions = screen.getByTestId("project-instructions");
+    const resources = screen.getByTestId("resources");
+    expect(
+      description.compareDocumentPosition(instructions)
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      instructions.compareDocumentPosition(resources)
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("saves instructions with the revision currently shown to the editor", async () => {
+    renderDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save instructions" }));
+
+    await waitFor(() => {
+      expect(updateProjectAsync).toHaveBeenCalledWith({
+        id: "proj-1",
+        instructions: "Always test first.",
+        expected_instructions_revision: 3,
+      });
+    });
   });
 });
 

@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
-import { ProjectsRepo } from "@multiremi/store/repos/projects-repo.js";
+import {
+  ProjectInstructionsRevisionConflictError,
+  ProjectsRepo,
+} from "@multiremi/store/repos/projects-repo.js";
 
 let db: Database | null = null;
 let store: MultiremiStore | null = null;
@@ -32,6 +35,90 @@ describe("ProjectsRepo", () => {
     expect(repo.listProjects("local").map((entry) => entry.id)).toContain(project.id);
     expect(repo.searchProjects({ q: "atlas", workspaceId: "local" }).projects.map((entry) => entry.id)).toEqual([project.id]);
     expect(repo.updateProject(project.id, { status: "in_progress" }).status).toBe("in_progress");
+  });
+
+  it("persists project instructions and revisions only when normalized content changes", () => {
+    const repo = createRepo();
+    const empty = repo.createProject({ title: "Empty instructions" }, { instructionsUpdatedBy: "usr_ignored" });
+    expect(empty).toMatchObject({
+      instructions: "",
+      instructionsRevision: 0,
+      instructionsUpdatedAt: null,
+      instructionsUpdatedBy: null,
+    });
+
+    const project = repo.createProject(
+      { title: "Directed", description: "Human-readable summary", instructions: "First line\r\nSecond line" },
+      { instructionsUpdatedBy: "usr_creator" },
+    );
+    expect(project.description).toBe("Human-readable summary");
+    expect(project.instructions).toBe("First line\nSecond line");
+    expect(project.instructionsRevision).toBe(1);
+    expect(project.instructionsUpdatedAt).toBeString();
+    expect(project.instructionsUpdatedBy).toBe("usr_creator");
+
+    const unchangedInstructions = repo.updateProject(
+      project.id,
+      { title: "Directed renamed", instructions: "First line\r\nSecond line", expectedInstructionsRevision: 1 },
+      { instructionsUpdatedBy: "usr_editor" },
+    );
+    expect(unchangedInstructions.title).toBe("Directed renamed");
+    expect(unchangedInstructions.instructionsRevision).toBe(1);
+    expect(unchangedInstructions.instructionsUpdatedAt).toBe(project.instructionsUpdatedAt);
+    expect(unchangedInstructions.instructionsUpdatedBy).toBe("usr_creator");
+
+    const updated = repo.updateProject(
+      project.id,
+      { instructions: "Replacement", expected_instructions_revision: 1 },
+      { instructionsUpdatedBy: "usr_editor" },
+    );
+    expect(updated.instructions).toBe("Replacement");
+    expect(updated.instructionsRevision).toBe(2);
+    expect(updated.instructionsUpdatedAt).toBeString();
+    expect(updated.instructionsUpdatedBy).toBe("usr_editor");
+
+    expect(() => repo.updateProject(
+      project.id,
+      { instructions: "Stale overwrite", expectedInstructionsRevision: 1 },
+      { instructionsUpdatedBy: "usr_stale" },
+    )).toThrow(ProjectInstructionsRevisionConflictError);
+    expect(repo.getProject(project.id)).toMatchObject({
+      instructions: "Replacement",
+      instructionsRevision: 2,
+      instructionsUpdatedBy: "usr_editor",
+    });
+
+    // Expected revisions are scoped to instruction writes, not ordinary project edits.
+    expect(repo.updateProject(project.id, {
+      description: "Updated summary",
+      expectedInstructionsRevision: 0,
+    }).description).toBe("Updated summary");
+  });
+
+  it("does not overwrite an unrelated Project field changed during an instruction CAS", () => {
+    const repo = createRepo();
+    const project = repo.createProject({
+      title: "Before concurrent edit",
+      instructions: "Before instruction edit",
+    });
+    db!.exec(`
+      CREATE TRIGGER concurrent_project_title_edit
+      BEFORE UPDATE OF instructions ON multiremi_projects
+      BEGIN
+        UPDATE multiremi_projects
+        SET title = 'Concurrent title edit'
+        WHERE id = OLD.id;
+      END
+    `);
+
+    const updated = repo.updateProject(project.id, {
+      instructions: "After instruction edit",
+      expectedInstructionsRevision: 1,
+    });
+
+    expect(updated.title).toBe("Concurrent title edit");
+    expect(updated.instructions).toBe("After instruction edit");
+    expect(updated.instructionsRevision).toBe(2);
   });
 
   it("binds, resolves and clears a project default assignee", () => {

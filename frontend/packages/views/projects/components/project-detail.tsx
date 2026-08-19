@@ -46,6 +46,7 @@ import {
 } from "../../issues/components/pickers/property-picker";
 import { AssigneePicker } from "../../issues/components/pickers/assignee-picker";
 import { ProjectResourcesSection } from "./project-resources-section";
+import { ProjectInstructionsSection } from "./project-instructions-section";
 import { ProjectContentTabs, type ProjectContentTab } from "./wiki/project-content-tabs";
 import { IssuesHeader } from "../../issues/components/issues-header";
 import { BoardView } from "../../issues/components/board-view";
@@ -518,6 +519,18 @@ export function ProjectDetail({
     });
   }, [archiveProject, project, t]);
 
+  const handleSaveInstructions = useCallback(
+    async (instructions: string, expectedRevision: number) => {
+      if (!project) return;
+      await updateProject.mutateAsync({
+        id: project.id,
+        instructions,
+        expected_instructions_revision: expectedRevision,
+      });
+    },
+    [project, updateProject],
+  );
+
   const handleRestore = useCallback(() => {
     if (!project) return;
     restoreProject.mutate(project.id, {
@@ -742,6 +755,19 @@ export function ProjectDetail({
           </button>
         )}
       </section>
+
+      <ProjectInstructionsSection
+        instructions={project.instructions}
+        revision={project.instructions_revision}
+        updatedAt={project.instructions_updated_at}
+        updatedByName={
+          project.instructions_updated_by
+            ? getActorName("member", project.instructions_updated_by)
+            : undefined
+        }
+        editable={!isArchived}
+        onSave={handleSaveInstructions}
+      />
 
       <ProjectResourcesSection projectId={projectId} editable={!isArchived} />
 

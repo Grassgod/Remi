@@ -5,6 +5,7 @@ import {
   denyTaskTokenProjectAccess,
   isJsonApiError,
   loadProjectForDocs,
+  loadProjectForHumanMutation,
   loadProjectResourceForMutation,
   projectDocCreateInput,
   projectDocUpdateInput,
@@ -17,21 +18,27 @@ import {
   publishProjectResourceUpdated,
   publishProjectUpdated,
   readJsonStrict,
+  validateProjectInstructions,
+  validateProjectInstructionsUpdate,
   validateImportedProjectResources,
 } from "../helpers.js";
 import {
   cleanString,
+  currentRequestUserId,
   currentTaskAccessToken,
   parseOptionalInt,
   projectCompatibilityResponse,
+  projectCompatibilitySummaryResponse,
   projectCreateCompatibilityInput,
   projectCreateInputWithDefaultLead,
   projectDocCompatibilityResponse,
   projectDocErrorResponse,
   projectDocRevisionCompatibilityResponse,
   projectErrorResponse,
+  projectNativeSummaryResponse,
   projectResourceCompatibilityResponse,
   projectResourceErrorResponse,
+  projectSearchNativeResponse,
   projectSearchCompatibilityResponse,
   projectSearchErrorResponse,
   projectUpdateCompatibilityInput,
@@ -55,7 +62,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = c.req.query("workspaceId") ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const projects = store.listProjects(workspaceId);
+    const projects = store.listProjects(workspaceId).map(projectNativeSummaryResponse);
     return c.json({ projects, total: projects.length });
   });
   app.get("/api/multiremi/projects/search", (c) => {
@@ -69,7 +76,10 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       limit: parseOptionalInt(c.req.query("limit")),
       offset: parseOptionalInt(c.req.query("offset")),
     });
-    return c.json(result);
+    return c.json({
+      projects: result.projects.map(projectSearchNativeResponse),
+      total: result.total,
+    });
   });
   app.get("/api/projects/search", (c) => {
     const workspaceId = c.req.query("workspace_id") ?? "local";
@@ -100,12 +110,14 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const projects = store
       .listProjects(workspaceId)
-      .map(projectCompatibilityResponse);
+      .map(projectCompatibilitySummaryResponse);
     return c.json({ projects, total: projects.length });
   });
   app.post("/api/projects", async (c) => {
     const body = await readJsonStrict<CreateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const invalidInstructions = validateProjectInstructions(c, body.instructions);
+    if (invalidInstructions) return invalidInstructions;
     const projectInput = projectCreateCompatibilityInput(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
     if (denied) return denied;
@@ -116,7 +128,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     );
     if (repositoryError) return c.json({ error: repositoryError }, 400);
     try {
-      const project = store.createProject(projectInput);
+      const project = store.createProject(projectInput, { instructionsUpdatedBy: currentRequestUserId(c) });
       const response = projectCompatibilityResponse(project);
       publishProjectCreated(c, store, project, response);
       return c.json(response, 201);
@@ -129,6 +141,8 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/projects", async (c) => {
     const body = await readJsonStrict<CreateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const invalidInstructions = validateProjectInstructions(c, body.instructions);
+    if (invalidInstructions) return invalidInstructions;
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
     const repositoryError = validateImportedProjectResources(
@@ -137,17 +151,35 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       body.resources,
     );
     if (repositoryError) return c.json({ error: repositoryError }, 400);
-    return c.json({ project: store.createProject(projectCreateInputWithDefaultLead(c, body)) }, 201);
+    return c.json({
+      project: store.createProject(projectCreateInputWithDefaultLead(c, body), {
+        instructionsUpdatedBy: currentRequestUserId(c),
+      }),
+    }, 201);
   });
   app.get("/api/multiremi/projects/:id", (c) => {
-    const project = store.getProject(c.req.param("id"));
-    if (!project) return c.json({ error: "project not found" }, 404);
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     return c.json({ project, resources: store.listProjectResources(project.id) });
   });
   app.patch("/api/multiremi/projects/:id", async (c) => {
     const body = await readJsonStrict<UpdateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    return c.json({ project: store.updateProject(c.req.param("id"), body) });
+    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const invalidInstructions = validateProjectInstructionsUpdate(c, body);
+    if (invalidInstructions) return invalidInstructions;
+    try {
+      return c.json({
+        project: store.updateProject(project.id, body, {
+          instructionsUpdatedBy: currentRequestUserId(c),
+        }),
+      });
+    } catch (err) {
+      const response = projectErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.delete("/api/multiremi/projects/:id", (c) => {
     return c.json({ project: store.archiveProject(c.req.param("id")) });
@@ -194,15 +226,21 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ ok: true });
   });
   app.get("/api/projects/:id", (c) => {
-    const project = store.getProject(c.req.param("id"));
-    if (!project) return c.json({ error: "project not found" }, 404);
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     return c.json(projectCompatibilityResponse(project));
   });
   app.put("/api/projects/:id", async (c) => {
     const body = await readJsonStrict<UpdateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const loadedProject = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (loadedProject instanceof Response) return loadedProject;
+    const invalidInstructions = validateProjectInstructionsUpdate(c, body);
+    if (invalidInstructions) return invalidInstructions;
     try {
-      const project = store.updateProject(c.req.param("id"), projectUpdateCompatibilityInput(body));
+      const project = store.updateProject(loadedProject.id, projectUpdateCompatibilityInput(body), {
+        instructionsUpdatedBy: currentRequestUserId(c),
+      });
       const response = projectCompatibilityResponse(project);
       publishProjectUpdated(c, store, project, response);
       return c.json(response);
