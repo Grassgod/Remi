@@ -40,6 +40,25 @@ describe("daemon Session archive GC orchestration", () => {
     expect(await Promise.all([first, second])).toEqual([summary, summary]);
   });
 
+  it("defers the first automatic GC until its interval", async () => {
+    const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
+    let calls = 0;
+    Object.assign(daemon, {
+      gcTimer: null,
+      options: { gcEnabled: true, once: false, gcIntervalMs: 20 },
+      runGcOnce: async () => {
+        calls++;
+        return { cleaned: 0, orphaned: 0, skipped: 0 };
+      },
+    });
+
+    (daemon as unknown as { startGcLoop(): void }).startGcLoop();
+    expect(calls).toBe(0);
+    await Bun.sleep(35);
+    expect(calls).toBeGreaterThanOrEqual(1);
+    (daemon as unknown as { stopGcLoop(): void }).stopGcLoop();
+  });
+
   it("does not let shutdown or restart finish while an active GC is blocked", async () => {
     const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
     let finishGc!: () => void;
@@ -196,6 +215,17 @@ describe("daemon Session archive GC orchestration", () => {
       "codex-provider-exited",
       "claude-gc-archive-and-delete",
     ]);
+  });
+
+  it("assigns workspace GC to one co-resident provider", () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-multi-provider-gc-leader-"));
+    roots.push(root);
+    const daemons = instantiateCoResidentWorkerDaemons([
+      { serverUrl: "http://127.0.0.1:1", provider: "claude", workspacesRoot: root },
+      { serverUrl: "http://127.0.0.1:1", provider: "codex", workspacesRoot: root },
+    ]) as unknown as Array<{ options: { gcEnabled: boolean } }>;
+
+    expect(daemons.map((daemon) => daemon.options.gcEnabled)).toEqual([true, false]);
   });
 
   it("reports supervisor readiness only after every provider is ready", () => {

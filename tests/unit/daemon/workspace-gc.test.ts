@@ -185,6 +185,28 @@ describe("Issue workspace GC", () => {
     expect(existsSync(workspace)).toBe(true);
   });
 
+  it("keeps a completed Issue workspace when Git metadata is unreadable", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-unreadable-git", "iss_unreadable_git");
+    const repo = join(workspace, "repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    chmodSync(repo, 0o000);
+    try {
+      const result = await runWorkspaceGcOnce({
+        root,
+        ttlMs: 0,
+        orphanTtlMs: 0,
+        client: gcClient(),
+        now: Date.now() + 1_000,
+      });
+
+      expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+      expect(existsSync(workspace)).toBe(true);
+    } finally {
+      chmodSync(repo, 0o700);
+    }
+  });
+
   it("keeps a clean completed Issue workspace when a commit is not pushed", async () => {
     const root = tempRoot();
     const remoteRoot = tempRoot();

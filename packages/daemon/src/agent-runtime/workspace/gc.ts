@@ -27,13 +27,15 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import type { MultiremiIssueWorkspaceArchiveBinding } from "@multiremi/contracts/types.js";
+import { createLogger } from "@shared/logger.js";
 import {
   OWNED_DIRECTORY_QUARANTINE,
   recoverOwnedDirectoryQuarantineSync,
   removeOwnedDirectorySync,
 } from "./safe-remove.js";
+
+const log = createLogger("multiremi-workspace-gc");
 
 export interface MultiremiDaemonGcSummary {
   cleaned: number;
@@ -81,6 +83,8 @@ export interface RunWorkspaceGcOnceOptions {
   ) => Promise<void>;
   /** Synchronous process-ownership fence, called immediately before local mutations. */
   assertRootOwner?: () => void;
+  /** Isolated Git inspection; failures must make cleanup fail closed. */
+  hasDirtyGitWorktree?: (workspaceDir: string) => Promise<boolean>;
   onError?: (workspaceDir: string, error: unknown) => void;
   now?: number;
 }
@@ -117,13 +121,16 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
   const summary: MultiremiDaemonGcSummary = { cleaned: 0, orphaned: 0, skipped: 0 };
   const root = resolve(options.root);
   if (!isRealDirectory(root)) return summary;
+  log.debug(`Workspace GC started: ${root}`);
   options.assertRootOwner?.();
   // A prior process may have crashed after atomically moving an approved
   // deletion out of its live path. Finish that deletion before replaying the
   // cleaned-state outbox so the control plane never reports retained bytes as
   // physically removed.
   recoverOwnedDirectoryQuarantineSync(root, { assertRootOwner: options.assertRootOwner });
+  log.debug(`Workspace GC quarantine recovery finished: ${root}`);
   await flushIssueWorkspaceCleanedOutbox(root, options);
+  log.debug(`Workspace GC outbox flush finished: ${root}`);
 
   const workspaces = safeReadDir(root) ?? [];
   for (const workspace of workspaces) {
@@ -132,6 +139,7 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
       || GC_RESERVED_ROOTS.has(workspace.name)
     ) continue;
     const workspaceDir = join(root, workspace.name);
+    log.debug(`Workspace GC evaluating: ${workspaceDir}`);
     // A corrupt/missing gc.json must not make a v2 Issue workspace look like
     // the legacy <workspace>/<task> layout. Keep the workspace as one GC unit
     // whenever daemon control state or provider Session state is present.
@@ -153,6 +161,7 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
     }
   }
 
+  log.debug(`Workspace GC finished: ${root}`, summary);
   return summary;
 }
 
@@ -411,10 +420,15 @@ async function getIssueGcDecision(
   if (!issueId) return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
   try {
     const status = await options.client.getIssueGcCheck(issueId);
+    log.debug(`Workspace GC Issue status: ${taskDir} status=${status.status}`);
     if (!isTerminalIssueStatus(status.status)) return gcResolution("skip");
     options.assertRootOwner?.();
-    const eligibleForDeletion = isOlderThan(status.updated_at, options.ttlMs, now)
-      && !hasDirtyGitWorktree(taskDir);
+    log.debug(`Workspace GC inspecting Git state: ${taskDir}`);
+    const dirty = options.hasDirtyGitWorktree
+      ? await options.hasDirtyGitWorktree(taskDir)
+      : hasPotentialGitWorktree(taskDir);
+    log.debug(`Workspace GC Git state inspected: ${taskDir} dirty=${dirty}`);
+    const eligibleForDeletion = isOlderThan(status.updated_at, options.ttlMs, now) && !dirty;
     if (options.requireIssueSessionArchive) {
       if (!options.ensureIssueSessionArchive) return gcResolution("skip");
       // Archive immediately when the Issue becomes terminal, but never trust
@@ -422,7 +436,9 @@ async function getIssueGcDecision(
       // receive tail events while cancellation drains, so the TTL-expired
       // sweep must compute and verify a fresh snapshot immediately before rm.
       options.assertRootOwner?.();
+      log.debug(`Workspace GC preparing Session archive: ${taskDir} fresh=${eligibleForDeletion}`);
       const archive = await options.ensureIssueSessionArchive(issueId, taskDir, eligibleForDeletion);
+      log.debug(`Workspace GC Session archive prepared: ${taskDir} available=${Boolean(archive)}`);
       if (!archive) return gcResolution("skip");
       return eligibleForDeletion ? gcResolution("clean", archive) : gcResolution("skip");
     }
@@ -476,15 +492,21 @@ function hasIssueSessionState(workspaceDir: string): boolean {
   return false;
 }
 
-function hasDirtyGitWorktree(workspaceDir: string): boolean {
-  for (const entry of safeReadDir(workspaceDir) ?? []) {
+function hasPotentialGitWorktree(workspaceDir: string): boolean {
+  const entries = safeReadDir(workspaceDir);
+  if (!entries) return true;
+  for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === ".multiremi") continue;
     const repoPath = join(workspaceDir, entry.name);
-    if (!safeStat(join(repoPath, ".git"))) continue;
-    const status = spawnSync("git", ["status", "--porcelain"], { cwd: repoPath, encoding: "utf8" });
-    if (status.status !== 0 || String(status.stdout ?? "").trim()) return true;
-    const contained = spawnSync("git", ["branch", "-r", "--contains", "HEAD"], { cwd: repoPath, encoding: "utf8" });
-    if (contained.status !== 0 || !String(contained.stdout ?? "").trim()) return true;
+    // The production daemon injects the pure-JavaScript inspector. Direct
+    // callers without one must retain Git workspaces instead of spawning a
+    // native process from this shared GC module.
+    try {
+      lstatSync(join(repoPath, ".git"));
+      return true;
+    } catch (error) {
+      if (!isFsNotFoundError(error)) return true;
+    }
   }
   return false;
 }

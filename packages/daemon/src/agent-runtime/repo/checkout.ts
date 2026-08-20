@@ -195,24 +195,6 @@ export class MultiremiRepoCache {
     });
   }
 
-  pruneWorktrees(): number {
-    let pruned = 0;
-    for (const workspace of safeReadDir(this.root)) {
-      if (!workspace.isDirectory()) continue;
-      const workspaceRoot = join(this.root, workspace.name);
-      for (const repo of safeReadDir(workspaceRoot)) {
-        if (!repo.isDirectory()) continue;
-        const barePath = join(workspaceRoot, repo.name);
-        if (!isBareRepo(barePath)) continue;
-        this.withRepoLock(barePath, () => {
-          git(barePath, ["worktree", "prune"], { allowFailure: true });
-        });
-        pruned++;
-      }
-    }
-    return pruned;
-  }
-
   inspectWorktree(worktreePath: string): MultiremiWorktreeState {
     if (!isGitWorktree(worktreePath)) throw new Error(`not a git worktree: ${worktreePath}`);
     const hasChanges = Boolean(git(worktreePath, ["status", "--porcelain"]));
@@ -260,6 +242,10 @@ export class MultiremiRepoCache {
     }
 
     mkdirSync(params.workDir, { recursive: true });
+    // A workspace GC may remove the worktree directory while the bare repo still
+    // retains its registration. Prune only this repository immediately before
+    // adding its next worktree instead of sweeping every cached repo on each GC.
+    git(barePath, ["worktree", "prune"], { allowFailure: true });
     if (gitRefExists(barePath, `refs/heads/${branchName}`)) {
       git(barePath, ["worktree", "add", worktreePath, branchName]);
     } else if (gitRefExists(barePath, `refs/remotes/origin/${branchName}`)) {
@@ -466,10 +452,36 @@ function acquireRepoCacheLock(barePath: string, timeoutMs: number, staleLockMs: 
 }
 
 function isStaleRepoCacheLock(lockPath: string, staleLockMs: number): boolean {
+  if (repoCacheLockOwnerExited(lockPath)) return true;
   if (staleLockMs <= 0) return false;
   try {
     return Date.now() - statSync(lockPath).mtimeMs > staleLockMs;
   } catch {
+    return false;
+  }
+}
+
+function repoCacheLockOwnerExited(lockPath: string): boolean {
+  try {
+    const holder = JSON.parse(readFileSync(join(lockPath, "holder.json"), "utf8")) as { pid?: unknown };
+    const pid = holder.pid;
+    if (!Number.isSafeInteger(pid) || Number(pid) <= 0) return false;
+    try {
+      process.kill(Number(pid), 0);
+      return false;
+    } catch (error) {
+      // EPERM means the process exists but is owned by another user. Unknown
+      // errors are also kept conservative; only ESRCH proves the owner exited.
+      return Boolean(
+        error
+        && typeof error === "object"
+        && "code" in error
+        && (error as { code?: unknown }).code === "ESRCH"
+      );
+    }
+  } catch {
+    // A missing, partially written, or legacy holder remains governed by the
+    // age-based fallback rather than risking removal of a live lock.
     return false;
   }
 }

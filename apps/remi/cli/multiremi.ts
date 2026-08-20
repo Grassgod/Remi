@@ -380,12 +380,17 @@ export function instantiateCoResidentWorkerDaemons(
   // lifecycle and GC must cross the same archive-and-delete barrier.
   const issueWorkspaceLifecycleLocker = new IssueWorkspaceLifecycleLocker();
   const readyProviders = new Set<number>();
+  const gcLeaderIndex = options.findIndex((daemonOptions) => daemonOptions.gcEnabled !== false);
   return options.map((daemonOptions, index) => {
     const extraReadyCheck = daemonOptions.supervisorReady;
     const notifyReadyChange = daemonOptions.onReadyChange;
     return new MultiremiDaemon({
       ...daemonOptions,
       issueWorkspaceLifecycleLocker,
+      // Provider lanes share one Issue workspace tree. A single lane owns its
+      // periodic GC so Claude and Codex cannot duplicate the same archive and
+      // repository maintenance pass inside one Bun process.
+      gcEnabled: index === gcLeaderIndex ? daemonOptions.gcEnabled : false,
       supervisorReady: () =>
         readyProviders.size === options.length && (extraReadyCheck?.() ?? true),
       onReadyChange: (ready) => {

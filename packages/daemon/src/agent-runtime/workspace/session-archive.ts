@@ -7,6 +7,9 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
+import { createLogger } from "@shared/logger.js";
+
+const log = createLogger("multiremi-session-archive");
 
 const TAR_BLOCK_SIZE = 512;
 const DEFAULT_MAX_SOURCE_BYTES = 512 * 1024 * 1024;
@@ -86,6 +89,7 @@ export async function prepareIssueSessionArchive(
   options: PrepareIssueSessionArchiveOptions = {},
 ): Promise<PreparedIssueSessionArchive> {
   const workspaceRoot = resolve(workspaceDir);
+  log.debug(`Issue Session archive started: ${workspaceRoot}`);
   const sessionsRoot = join(workspaceRoot, ".multiremi", "sessions");
   const maxSourceBytes = positiveLimit(options.maxSourceBytes, DEFAULT_MAX_SOURCE_BYTES);
   const sessionsExist = await assertOptionalRealDirectoryTree(
@@ -93,8 +97,10 @@ export async function prepareIssueSessionArchive(
     sessionsRoot,
     "Issue session history root",
   );
+  log.debug(`Issue Session archive root checked: ${workspaceRoot} exists=${sessionsExist}`);
   assertSessionArchiveTraversalSupported();
   const sourceSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes, !sessionsExist);
+  log.debug(`Issue Session archive source scanned: ${workspaceRoot} files=${sourceSnapshot.files.length}`);
   const entries = sourceSnapshot.files;
   const metadata = {
     format: ARCHIVE_FORMAT,
@@ -105,23 +111,29 @@ export async function prepareIssueSessionArchive(
   const stagingRoot = resolve(options.stagingRoot ?? join(workspaceRoot, ".multiremi", "archive-spool"));
   assertContained(workspaceRoot, stagingRoot, "archive staging root");
   await ensureRealDirectoryTree(workspaceRoot, stagingRoot, "archive staging root");
+  log.debug(`Issue Session archive staging ready: ${workspaceRoot}`);
   const archivePath = join(stagingRoot, `${sourceRevision}.tar.gz`);
   const partialPath = `${archivePath}.${process.pid}.${randomUUID()}.partial`;
 
   await rm(partialPath, { force: true });
   try {
+    log.debug(`Issue Session archive compression started: ${workspaceRoot}`);
     await pipeline(
       Readable.from(tarStream(workspaceRoot, entries, manifest)),
       createGzip({ level: 6 }),
       createWriteStream(partialPath, { flags: "wx", mode: 0o600 }),
     );
+    log.debug(`Issue Session archive compression finished: ${workspaceRoot}`);
     const verifiedSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes, !sessionsExist);
+    log.debug(`Issue Session archive verification scan finished: ${workspaceRoot}`);
     assertSameArchiveSnapshot(sourceSnapshot, verifiedSnapshot);
     await rename(partialPath, archivePath).catch(async (error) => {
       if (!isAlreadyExists(error)) throw error;
       await rm(partialPath, { force: true });
     });
+    log.debug(`Issue Session archive published locally: ${workspaceRoot}`);
     const archived = await inspectRegularFile(archivePath);
+    log.debug(`Issue Session archive digest verified: ${workspaceRoot}`);
     return {
       archivePath,
       sourceRevision,
@@ -246,7 +258,9 @@ async function scanArchiveEntries(
         }
         if (EXCLUDED_FILE_NAMES.has(child.name)) continue;
         if (!info.isFile()) throw new Error(`Refusing to archive non-regular file: ${archivePath}`);
+        log.debug(`Issue Session archive scanning file: ${archivePath} bytes=${info.size}`);
         const inspected = await inspectOpenRegularFile(handle, archivePath, info);
+        log.debug(`Issue Session archive scanned file: ${archivePath}`);
         totalBytes += inspected.stats.size;
         if (totalBytes > maxBytes) throw new Error(`Issue session history exceeds ${maxBytes} bytes`);
         files.push({

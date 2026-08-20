@@ -95,6 +95,10 @@ import {
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
 import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
 import { resolveWorkspaceGcPolicy, type WorkspaceGcPolicy } from "@daemon/agent-runtime/workspace/gc-policy.js";
+import {
+  IsomorphicGitWorktreeInspector,
+  type GitWorktreeInspector,
+} from "@daemon/agent-runtime/workspace/git-worktree-inspector.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 import { configuredMultiremiWorkspacesRoot } from "@daemon/agent-runtime/workspace/process-owner.js";
 import { ownedDirectoryRemovalSupport } from "@daemon/agent-runtime/workspace/safe-remove.js";
@@ -259,6 +263,8 @@ export async function installCodexPluginReadinessHome(
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
 const TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
+const IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED =
+  "Runtime model discovery is temporarily disabled in the daemon process; gateway models remain available";
 
 export interface MultiremiDaemonOptions {
   serverUrl: string;
@@ -297,6 +303,8 @@ export interface MultiremiDaemonOptions {
   gcOrphanTtlMs?: number;
   /** Session archives are a mandatory Issue GC precondition by default. */
   gcRequireArchive?: boolean;
+  /** Injectable isolated Git inspector for GC tests. */
+  gitWorktreeInspector?: GitWorktreeInspector;
   /** Maximum uncompressed provider history accepted for one Issue snapshot. */
   sessionArchiveMaxSourceBytes?: number;
   /** Runtime-global immutable Agent Plugin cache. */
@@ -307,6 +315,12 @@ export interface MultiremiDaemonOptions {
   runtimeModelRetryBaseMs?: number;
   /** Maximum retry delay for Runtime model discovery/reporting. */
   runtimeModelRetryMaxMs?: number;
+  /**
+   * Test-only escape hatch for the legacy in-process ACP model probe. Production
+   * callers must leave this disabled until discovery runs in an isolated OS
+   * process: a native ACP/Bun crash would otherwise terminate the daemon.
+   */
+  inProcessRuntimeModelDiscoveryEnabled?: boolean;
   /** Injectable SSH Mesh lifecycle for daemon integration tests. */
   sshMeshManager?: MultiremiDaemonSshMeshRuntime;
   /** Injectable retry schedule for terminal-authority SSH Mesh cleanup tests. */
@@ -382,7 +396,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -420,6 +434,7 @@ export class MultiremiDaemon {
   private restartRequestedFlag = false;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
   private gcInFlight: Promise<MultiremiDaemonGcSummary> | null = null;
+  private readonly gitWorktreeInspector: GitWorktreeInspector;
   private localPathLocks = new LocalPathLocker();
   private issueWorkspaceLifecycleLocks: IssueWorkspaceLifecycleLocker;
   private runtimeGoneInflight = new Set<string>();
@@ -451,6 +466,11 @@ export class MultiremiDaemon {
   private runtimeModelRetryWake: (() => void) | null = null;
 
   constructor(options: MultiremiDaemonOptions) {
+    if (options.inProcessRuntimeModelDiscoveryEnabled && !options.providerFactory) {
+      throw new Error(
+        "In-process Runtime model discovery may only be enabled with an injected test provider",
+      );
+    }
     const workspacesRoot = configuredMultiremiWorkspacesRoot(options.workspacesRoot);
     const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
     const deviceName = options.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
@@ -469,6 +489,8 @@ export class MultiremiDaemon {
     this.explicitRuntimeId = Boolean(runtimeId);
     this.issueWorkspaceLifecycleLocks = options.issueWorkspaceLifecycleLocker
       ?? new IssueWorkspaceLifecycleLocker();
+    this.gitWorktreeInspector = options.gitWorktreeInspector
+      ?? new IsomorphicGitWorktreeInspector();
     this.workspaceRootFence = options.workspaceRootFence ?? null;
     this.supervisorReady = options.supervisorReady ?? (() => this.ready);
     this.onReadyChange = options.onReadyChange ?? (() => {});
@@ -502,6 +524,8 @@ export class MultiremiDaemon {
         ?? join(homedir(), ".remi", "plugin-cache", "sha256"),
       runtimeModelRetryBaseMs,
       runtimeModelRetryMaxMs,
+      inProcessRuntimeModelDiscoveryEnabled:
+        options.inProcessRuntimeModelDiscoveryEnabled === true,
       serverUrl: options.serverUrl,
     };
     this.defaultGcPolicy = {
@@ -569,7 +593,7 @@ export class MultiremiDaemon {
       this.startGcLoop();
       // One-shot mode is primarily used for a single queued task (and tests), so
       // avoid paying for a second ACP process unless a model-list request exists.
-      if (!this.options.once) {
+      if (this.options.inProcessRuntimeModelDiscoveryEnabled && !this.options.once) {
         this.startRuntimeModelRefresh();
       }
       await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
@@ -676,6 +700,7 @@ export class MultiremiDaemon {
       // tasks drain before waiting for the GC lease they may currently hold.
       await Promise.allSettled([...this.inflight]);
       await this.drainGcInFlight();
+      this.gitWorktreeInspector?.close();
       this.stopRepoCheckoutServer();
     }
   }
@@ -705,7 +730,7 @@ export class MultiremiDaemon {
       const runtime = response.runtimes.find((item) => (item.provider ?? item.type) === this.options.provider) ?? response.runtimes[0];
       if (!runtime) throw new Error("daemon register returned no runtimes");
       this.options.runtimeId = runtime.id;
-      this.syncWorkspaceRepos(response);
+      this.applyWorkspaceRegistrationState(response);
       this.runtimeRegistrationGeneration++;
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
       return this.options.runtimeId;
@@ -717,14 +742,15 @@ export class MultiremiDaemon {
     return this.options.runtimeId;
   }
 
-  private syncWorkspaceRepos(response: MultiremiDaemonRegisterResponse): void {
+  private applyWorkspaceRegistrationState(response: MultiremiDaemonRegisterResponse): void {
     const workspaceId = response.workspace_id ?? this.options.workspaceId ?? "local";
     const repos = normalizeRepoList(response.repos ?? []);
     this.workspaceRepoUrls.set(workspaceId, new Set(repos.map((repo) => repo.url.trim()).filter(Boolean)));
     this.applyWorkspaceSettings(workspaceId, response.settings ?? {});
     this.workspaceRelays.set(workspaceId, response.relay);
-    this.assertWorkspaceRootOwner();
-    this.repoCache.sync(workspaceId, repos);
+    // Keep startup metadata-only. Eager Git sync blocks Bun's event loop and is
+    // duplicated by co-resident Claude/Codex daemons. Tasks and explicit
+    // checkouts populate only the repositories they actually need.
   }
 
   /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
@@ -826,7 +852,12 @@ export class MultiremiDaemon {
         log.warn(`Re-register after runtime_gone failed for ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
-      if (this.runtimeModels || !this.options.once) this.startRuntimeModelRefresh();
+      if (
+        this.options.inProcessRuntimeModelDiscoveryEnabled
+        && (this.runtimeModels || !this.options.once)
+      ) {
+        this.startRuntimeModelRefresh();
+      }
       await this.refreshWorkspaceRepos(workspaceId);
       try {
         await this.client.recoverOrphans(newRuntimeId);
@@ -911,6 +942,13 @@ export class MultiremiDaemon {
   }
 
   private async handleRuntimeModelList(runtimeId: string, requestId: string): Promise<void> {
+    if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
+      await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
+        status: "failed",
+        error: IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED,
+      });
+      return;
+    }
     try {
       const models = await this.discoverRuntimeModels(true);
       await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
@@ -946,7 +984,7 @@ export class MultiremiDaemon {
   }
 
   private startRuntimeModelRefresh(): void {
-    if (this.stopped) return;
+    if (!this.options.inProcessRuntimeModelDiscoveryEnabled || this.stopped) return;
     if (this.runtimeModelRefreshTask) {
       this.wakeRuntimeModelRetry();
       return;
@@ -1038,6 +1076,9 @@ export class MultiremiDaemon {
   }
 
   private async discoverRuntimeModels(force: boolean): Promise<MultiremiRuntimeModel[]> {
+    if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
+      throw new Error(IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED);
+    }
     if (!force && this.runtimeModels) return this.runtimeModels;
     if (this.runtimeModelProbe) return this.runtimeModelProbe;
 
@@ -1376,6 +1417,8 @@ export class MultiremiDaemon {
       ensureIssueSessionArchive: (issueId, workspaceDir, forceFreshSnapshot) =>
         this.ensureIssueSessionArchive(issueId, workspaceDir, forceFreshSnapshot),
       assertRootOwner: () => this.assertWorkspaceRootOwner(),
+      hasDirtyGitWorktree: (workspaceDir) =>
+        this.gitWorktreeInspector.hasDirtyWorktree(workspaceDir),
       withIssueWorkspaceLock: (issueId, _workspaceDir, action) =>
         this.issueWorkspaceLifecycleLocks.runExclusive(issueId, async () => {
           this.assertWorkspaceRootOwner();
@@ -1387,7 +1430,9 @@ export class MultiremiDaemon {
       },
     });
     this.assertWorkspaceRootOwner();
-    this.repoCache.pruneWorktrees();
+    // Repo worktree metadata is pruned lazily for the repository that is about
+    // to create a worktree. Sweeping every cached repository here creates a
+    // large burst of synchronous child processes in the long-lived Bun daemon.
     return summary;
   }
 
@@ -1425,6 +1470,7 @@ export class MultiremiDaemon {
       prepared = await prepareIssueSessionArchive(workspaceDir, {
         maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
       });
+      log.debug(`Issue Session archive prepared for ${issueId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try {
@@ -1440,6 +1486,7 @@ export class MultiremiDaemon {
       throw error;
     }
     try {
+      log.debug(`Checking Issue Session archive status for ${issueId}`);
       const status = await this.client.getIssueSessionArchiveStatus(
         runtimeId,
         issueId,
@@ -1447,6 +1494,7 @@ export class MultiremiDaemon {
         prepared.sha256,
         forceFreshSnapshot,
       );
+      log.debug(`Issue Session archive status checked for ${issueId}: ready=${status.gc_ready}`);
       if (status.gc_ready) {
         if (
           status.latest?.source_revision === MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION
@@ -1479,6 +1527,7 @@ export class MultiremiDaemon {
         };
       }
 
+      log.debug(`Initializing Issue Session archive for ${issueId}`);
       const initialized = await this.client.initIssueSessionArchive(runtimeId, issueId, {
         sourceRevision: prepared.sourceRevision,
         sha256: prepared.sha256,
@@ -1489,6 +1538,7 @@ export class MultiremiDaemon {
           source: ".multiremi/sessions",
         },
       });
+      log.debug(`Issue Session archive initialized for ${issueId}: status=${initialized.archive.status}`);
       if (initialized.archive.status === "ready") {
         this.assertWorkspaceRootOwner();
         await writeIssueSessionArchiveReceipt(workspaceDir, {
@@ -1503,12 +1553,14 @@ export class MultiremiDaemon {
           sha256: prepared.sha256,
         };
       }
+      log.debug(`Uploading Issue Session archive for ${issueId}`);
       await this.client.uploadIssueSessionArchive(
         runtimeId,
         issueId,
         initialized.archive.id,
         prepared.archivePath,
       );
+      log.debug(`Issue Session archive uploaded for ${issueId}`);
       const completed = await this.client.completeIssueSessionArchive(
         runtimeId,
         issueId,
@@ -2215,10 +2267,10 @@ export class MultiremiDaemon {
 
   private startGcLoop(): void {
     if (!this.options.gcEnabled || this.options.once) return;
-    this.runGcOnce().catch((err) => {
-      log.warn(`Workspace GC failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
     if (this.options.gcIntervalMs <= 0) return;
+    // Do not burst synchronous repository inspections into the startup path.
+    // Registration and Plugin preflight also launch provider child processes;
+    // the first GC runs on the normal interval after the daemon is fully ready.
     this.gcTimer = setInterval(() => {
       this.runGcOnce().catch((err) => {
         log.warn(`Workspace GC failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -2318,8 +2370,6 @@ export class MultiremiDaemon {
       this.workspaceRepoUrls.set(workspaceId, new Set(response.repos.map((repo) => repo.url.trim()).filter(Boolean)));
       this.applyWorkspaceSettings(workspaceId, response.settings ?? {});
       this.workspaceRelays.set(workspaceId, response.relay);
-      this.assertWorkspaceRootOwner();
-      this.repoCache.sync(workspaceId, response.repos);
     } catch (err) {
       log.warn(`Workspace repo sync failed for ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`);
     }

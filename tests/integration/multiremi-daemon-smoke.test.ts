@@ -32,6 +32,18 @@ afterEach(() => {
 });
 
 describe("Bun Multiremi daemon smoke", () => {
+  it("keeps the unsafe in-process model probe restricted to injected test providers", () => {
+    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-model-probe-guard-"));
+    expect(() => new MultiremiDaemon({
+      serverUrl: "http://127.0.0.1:1",
+      workspaceId: "local",
+      daemonPort: 0,
+      workspacesRoot: join(workDir!, "workspaces"),
+      repoCacheRoot: join(workDir!, ".repo-cache"),
+      inProcessRuntimeModelDiscoveryEnabled: true,
+    })).toThrow("In-process Runtime model discovery may only be enabled with an injected test provider");
+  });
+
   it("maps ACP model-specific effort capabilities to runtime model metadata", () => {
     expect(runtimeModelsFromAcpCapabilities("codex", [
       {
@@ -142,6 +154,7 @@ describe("Bun Multiremi daemon smoke", () => {
       daemonPort: 0,
       pollIntervalMs: 25,
       gcEnabled: false,
+      inProcessRuntimeModelDiscoveryEnabled: true,
       workspacesRoot,
       repoCacheRoot: join(root, ".repo-cache-claude"),
       providerFactory: providerFactory("claude"),
@@ -156,6 +169,7 @@ describe("Bun Multiremi daemon smoke", () => {
       daemonPort: 0,
       pollIntervalMs: 25,
       gcEnabled: false,
+      inProcessRuntimeModelDiscoveryEnabled: true,
       workspacesRoot,
       repoCacheRoot: join(root, ".repo-cache-codex"),
       providerFactory: providerFactory("codex"),
@@ -208,6 +222,110 @@ describe("Bun Multiremi daemon smoke", () => {
       else process.env.CLAUDE_CONFIG_DIR = previousClaudeHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
+      server.stop(true);
+    }
+  });
+
+  it("runs production tasks without starting in-process Runtime model discovery", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-model-probe-disabled-task-");
+    const agent = store.createAgent({ name: "Probe-disabled Claude", provider: "claude", cwd: workDir });
+    const task = store.createTask({ agentId: agent.id, prompt: "Run without a model probe" });
+    const daemonToken = await store.createAccessToken({
+      name: "Probe-disabled daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-model-probe-disabled-task-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const taskProviderFactory = messageProviderFactory({
+      text: "completed without probing",
+      sessionId: "sess-model-probe-disabled",
+      requestId: "req-model-probe-disabled",
+    });
+    let modelProbeCount = 0;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      runtimeName: "model-probe-disabled-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 10,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory: (options) => ({
+        ...taskProviderFactory(options),
+        discoverModelCapabilities: async () => {
+          modelProbeCount++;
+          return [{ id: "must-not-probe", label: "Must Not Probe", default: true }];
+        },
+      }),
+    });
+
+    let daemonRun: Promise<void> | null = null;
+    try {
+      daemonRun = daemon.start();
+      await waitForCondition(() => store.getTask(task.id)?.status === "completed", 5_000);
+      const runtime = store.listRuntimes()[0]!;
+
+      expect(runtime.status).toBe("online");
+      expect(modelProbeCount).toBe(0);
+      expect(store.listRuntimeModels(runtime.id)).toEqual([]);
+    } finally {
+      daemon.stop();
+      await daemonRun?.catch(() => {});
+      server.stop(true);
+    }
+  });
+
+  it("loads workspace repository metadata without eagerly cloning every repository", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-lazy-repo-cache-");
+    const unavailableRepo = join(workDir, "unavailable-source.git");
+    const repoCacheRoot = join(workDir, ".repo-cache");
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [{ url: unavailableRepo, description: "must remain lazy" }],
+    });
+    const daemonToken = await store.createAccessToken({
+      name: "Lazy repo cache daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-lazy-repo-cache-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeName: "lazy-repo-cache-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        repoCacheRoot,
+        providerFactory: () => {
+          throw new Error("startup must not create a task provider");
+        },
+      });
+
+      await daemon.start();
+
+      const allowed = (daemon as unknown as {
+        workspaceRepoUrls: Map<string, Set<string>>;
+      }).workspaceRepoUrls.get("local");
+      expect([...allowed ?? []]).toEqual([unavailableRepo]);
+      expect(existsSync(repoCacheRoot)).toBe(false);
+    } finally {
       server.stop(true);
     }
   });
@@ -837,6 +955,7 @@ describe("Bun Multiremi daemon smoke", () => {
       daemonPort: 0,
       pollIntervalMs: 25,
       maxConcurrency: 2,
+      inProcessRuntimeModelDiscoveryEnabled: true,
       repoCacheRoot: join(workDir, ".repo-cache"),
       providerFactory,
     });
@@ -897,6 +1016,7 @@ describe("Bun Multiremi daemon smoke", () => {
       workspaceId: "local",
       daemonPort: 0,
       pollIntervalMs: 25,
+      inProcessRuntimeModelDiscoveryEnabled: true,
       repoCacheRoot: join(workDir, ".repo-cache"),
       providerFactory: () => ({
         async *sendStream() {},
@@ -979,6 +1099,7 @@ describe("Bun Multiremi daemon smoke", () => {
       pollIntervalMs: 10,
       runtimeModelRetryBaseMs: 10,
       runtimeModelRetryMaxMs: 20,
+      inProcessRuntimeModelDiscoveryEnabled: true,
       repoCacheRoot: join(workDir, ".repo-cache"),
       providerFactory,
     });
@@ -1029,6 +1150,7 @@ describe("Bun Multiremi daemon smoke", () => {
       pollIntervalMs: 10,
       runtimeModelRetryBaseMs: 10,
       runtimeModelRetryMaxMs: 20,
+      inProcessRuntimeModelDiscoveryEnabled: true,
       repoCacheRoot: join(workDir, ".repo-cache"),
       providerFactory: () => ({
         async *sendStream() {},
@@ -1795,6 +1917,7 @@ describe("Bun Multiremi daemon smoke", () => {
         provider: "claude",
         workspaceId: "local",
         once: true,
+        inProcessRuntimeModelDiscoveryEnabled: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
         localSkillRoots: { claude: skillsRoot },
@@ -1948,6 +2071,7 @@ describe("Bun Multiremi daemon smoke", () => {
         provider: "claude",
         workspaceId: "local",
         once: true,
+        inProcessRuntimeModelDiscoveryEnabled: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
         providerFactory: () => ({
@@ -1965,6 +2089,75 @@ describe("Bun Multiremi daemon smoke", () => {
         status: "failed",
         error: "probe unavailable",
       });
+      expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toEqual(["claude-known-good"]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("fails Runtime model-list requests closed without probing or clearing the last snapshot", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-model-probe-disabled-request-");
+    const runtimeId = "rt_model_probe_disabled_request";
+    store.registerRuntime({
+      id: runtimeId,
+      name: "model-probe-disabled-request-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      models: [{
+        id: "claude-known-good",
+        label: "Claude Known Good",
+        provider: "anthropic",
+        default: true,
+      }],
+    });
+    const request = store.createRuntimeModelListRequest(runtimeId);
+    const daemonToken = await store.createAccessToken({
+      name: "Model probe disabled request daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-model-probe-disabled-request-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    let providerFactoryCalls = 0;
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeId,
+        runtimeName: "model-probe-disabled-request-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        repoCacheRoot: join(workDir, ".repo-cache"),
+        providerFactory: () => {
+          providerFactoryCalls++;
+          return {
+            async *sendStream() {},
+            getLastResponse: () => null,
+            discoverModelCapabilities: async () => [{
+              id: "must-not-probe",
+              label: "Must Not Probe",
+              default: true,
+            }],
+          };
+        },
+      });
+
+      await daemon.start();
+
+      expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
+        status: "failed",
+        supported: true,
+        error: "Runtime model discovery is temporarily disabled in the daemon process; gateway models remain available",
+      });
+      expect(providerFactoryCalls).toBe(0);
       expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toEqual(["claude-known-good"]);
     } finally {
       server.stop(true);
@@ -2039,6 +2232,7 @@ describe("Bun Multiremi daemon smoke", () => {
       workspaceId: "local",
       daemonPort: 0,
       pollIntervalMs: 25,
+      gcIntervalMs: 10,
       repoCacheRoot: join(workDir, ".repo-cache"),
     });
     const gcStarted = deferred<void>();
@@ -2056,7 +2250,7 @@ describe("Bun Multiremi daemon smoke", () => {
       daemonRun = daemon.start();
       const port = await waitForLocalPort(daemon);
       const health = await waitForRunningHealth(port);
-      await withTimeout(gcStarted.promise, 5_000, "startup GC did not begin");
+      await withTimeout(gcStarted.promise, 5_000, "scheduled GC did not begin");
 
       expect(health).toMatchObject({
         status: "running",
@@ -2373,6 +2567,7 @@ describe("Bun Multiremi daemon smoke", () => {
       pollIntervalMs: 10,
       runtimeModelRetryBaseMs: 10,
       runtimeModelRetryMaxMs: 20,
+      inProcessRuntimeModelDiscoveryEnabled: true,
       repoCacheRoot: join(workDir, ".repo-cache"),
       providerFactory: () => ({
         async *sendStream() {},

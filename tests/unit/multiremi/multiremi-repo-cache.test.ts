@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
@@ -209,6 +209,7 @@ describe("Multiremi repo cache", () => {
     const lockPath = multiremiRepoCacheLockPath(barePath);
 
     mkdirSync(lockPath);
+    writeFileSync(join(lockPath, "holder.json"), JSON.stringify({ pid: process.pid }));
     try {
       const lockedCache = new MultiremiRepoCache(cacheRoot, { lockTimeoutMs: 25, staleLockMs: 60_000 });
       expect(() => lockedCache.createWorktree({
@@ -221,6 +222,19 @@ describe("Multiremi repo cache", () => {
     } finally {
       rmSync(lockPath, { recursive: true, force: true });
     }
+
+    const exited = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+    if (!exited.pid) throw new Error("expected exited lock-holder PID");
+    mkdirSync(lockPath);
+    writeFileSync(join(lockPath, "holder.json"), JSON.stringify({ pid: exited.pid }));
+    const deadOwnerAwareCache = new MultiremiRepoCache(cacheRoot, { lockTimeoutMs: 500, staleLockMs: 60_000 });
+    expect(deadOwnerAwareCache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      agentName: "Claude",
+      taskId: "tsk_dead_lock_owner",
+    }).path).toContain("repo");
 
     mkdirSync(lockPath);
     const stale = new Date(Date.now() - 10_000);
@@ -237,7 +251,7 @@ describe("Multiremi repo cache", () => {
     expect(result.path).toContain("repo");
   });
 
-  it("prunes stale git worktree metadata from cached bare repos", () => {
+  it("prunes stale metadata for the target repo before recreating its worktree", () => {
     const source = createRepo("main", "prune repo");
     const cacheRoot = tempDir("multiremi-repo-prune-");
     const workDir = tempDir("multiremi-repo-prune-work-");
@@ -255,8 +269,20 @@ describe("Multiremi repo cache", () => {
     rmSync(result.path, { recursive: true, force: true });
     expect(git(barePath, ["worktree", "list", "--porcelain"])).toContain(result.path);
 
-    expect(cache.pruneWorktrees()).toBe(1);
-    expect(git(barePath, ["worktree", "list", "--porcelain"])).not.toContain(result.path);
+    const recreated = cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      branchName: result.branchName,
+      agentName: "Codex",
+      taskId: "tsk_prune",
+    });
+
+    expect(recreated.created).toBe(true);
+    expect(recreated.path).toBe(result.path);
+    expect(existsSync(recreated.path)).toBe(true);
+    const registrations = git(barePath, ["worktree", "list", "--porcelain"]);
+    expect(registrations.split(recreated.path).length - 1).toBe(1);
   });
 
   it("installs and removes the daemon co-authored-by hook from agent worktrees", () => {

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiProjectDocIndexEntry,
@@ -491,10 +492,12 @@ export class MultiremiDaemonClient {
   ): Promise<MultiremiDaemonSessionArchiveWire> {
     const attempt = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
     const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
+    // Bun 1.3.14 can crash when Bun.file is used as a fetch body in the co-resident ACP daemon.
+    const archive = await readFile(archivePath);
     const resp = await fetch(this.baseUrl + path, {
       method: "PUT",
       headers: this.headers("application/octet-stream"),
-      body: Bun.file(archivePath),
+      body: archive,
     });
     return (await parseResponse<{ archive: MultiremiDaemonSessionArchiveWire }>(resp, "PUT", path)).archive;
   }

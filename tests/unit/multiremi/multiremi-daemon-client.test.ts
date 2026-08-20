@@ -183,7 +183,7 @@ describe("MultiremiDaemonClient workspace configuration", () => {
 });
 
 describe("MultiremiDaemonClient Issue session archive wire", () => {
-  it("encodes archive scope and streams the prepared file with daemon auth", async () => {
+  it("encodes archive scope and uploads the prepared bytes with daemon auth", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-archive-"));
     temporaryRoots.push(root);
     const archivePath = join(root, "sessions.tar.gz");
@@ -256,12 +256,70 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       error: "pack failed",
     });
     expect(requests[4]?.headers.get("content-type")).toBe("application/octet-stream");
-    expect(requests[4]?.body).toBeTruthy();
+    expect(requests[4]?.body).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(requests[4]?.body as Uint8Array).toString("utf8")).toBe("archive-bytes");
     expect(JSON.parse(String(requests[6]?.body))).toEqual({
       runtime_id: "runtime/1",
       archive_id: "archive/1",
       source_revision: "revision/1",
       sha256: "abc",
     });
+  });
+
+  it("uploads archive bytes through Bun native fetch without a file-backed body", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-native-upload-"));
+    temporaryRoots.push(root);
+    const archivePath = join(root, "sessions.tar.gz");
+    writeFileSync(archivePath, "native-fetch-archive");
+    let uploaded = "";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/init")) {
+          return Response.json({
+            archive: {
+              id: "archive-native",
+              status: "pending",
+              source_revision: "revision-native",
+              sha256: "def",
+              size_bytes: 20,
+            },
+            upload_attempt: 3,
+          });
+        }
+        if (request.method === "PUT") {
+          uploaded = Buffer.from(await request.arrayBuffer()).toString("utf8");
+        }
+        return Response.json({
+          archive: {
+            id: "archive-native",
+            status: "uploading",
+            source_revision: "revision-native",
+            sha256: "def",
+            size_bytes: 20,
+          },
+        });
+      },
+    });
+    try {
+      const client = new MultiremiDaemonClient(`http://127.0.0.1:${server.port}`, "daemon-token");
+      await client.initIssueSessionArchive("runtime-native", "issue-native", {
+        sourceRevision: "revision-native",
+        sha256: "def",
+        sizeBytes: 20,
+        fileCount: 1,
+      });
+      await client.uploadIssueSessionArchive(
+        "runtime-native",
+        "issue-native",
+        "archive-native",
+        archivePath,
+      );
+      expect(uploaded).toBe("native-fetch-archive");
+    } finally {
+      server.stop(true);
+    }
   });
 });
