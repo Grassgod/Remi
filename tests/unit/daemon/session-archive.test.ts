@@ -21,6 +21,7 @@ import {
 
 describe("Issue session archive", () => {
   const roots: string[] = [];
+  const supportedPlatformIt = process.platform === "linux" ? it : it.skip;
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -28,11 +29,25 @@ describe("Issue session archive", () => {
 
   it("uses the native descriptor filesystem on supported daemon platforms", () => {
     expect(resolveSessionArchiveFileDescriptorPath(17, "linux")).toBe("/proc/self/fd/17");
-    expect(resolveSessionArchiveFileDescriptorPath(17, "darwin")).toBe("/dev/fd/17");
+    expect(() => resolveSessionArchiveFileDescriptorPath(17, "darwin")).toThrow("unsupported on darwin");
     expect(() => resolveSessionArchiveFileDescriptorPath(17, "win32")).toThrow("unsupported on win32");
   });
 
-  it("archives provider history deterministically without credentials or config", async () => {
+  it("fails closed instead of emitting an empty archive on unsupported platforms", async () => {
+    if (process.platform === "linux") return;
+    const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-unsupported-"));
+    roots.push(root);
+    const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "history.jsonl"), "{\"message\":\"must-not-be-lost\"}\n");
+
+    await expect(prepareIssueSessionArchive(root)).rejects.toThrow(
+      `unsupported on ${process.platform}`,
+    );
+    expect(() => readdirSync(join(root, ".multiremi", "archive-spool"))).toThrow();
+  });
+
+  supportedPlatformIt("archives provider history deterministically without credentials or config", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
@@ -58,7 +73,7 @@ describe("Issue session archive", () => {
     expect(gunzipSync(readFileSync(first.archivePath)).toString()).not.toContain("DO_NOT_ARCHIVE");
   });
 
-  it("refuses unexpected symlinks", async () => {
+  supportedPlatformIt("refuses unexpected symlinks", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-link-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
@@ -70,7 +85,7 @@ describe("Issue session archive", () => {
     await expect(prepareIssueSessionArchive(root)).rejects.toThrow("Refusing to archive symlink");
   });
 
-  it("enforces the source byte limit against bytes read from regular files", async () => {
+  supportedPlatformIt("enforces the source byte limit against bytes read from regular files", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-limit-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
@@ -81,7 +96,7 @@ describe("Issue session archive", () => {
       .rejects.toThrow("Issue session history exceeds 8 bytes");
   });
 
-  it("rejects a snapshot when a provider adds history during archive creation", async () => {
+  supportedPlatformIt("rejects a snapshot when a provider adds history during archive creation", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-late-file-"));
     roots.push(root);
     const home = join(root, ".multiremi", "sessions", "ises_1", "agt_1", "1", "home");
@@ -95,7 +110,7 @@ describe("Issue session archive", () => {
     await expect(pending).rejects.toThrow("history changed while archiving");
   });
 
-  it("rejects an intermediate directory replaced by a symlink while archiving", async () => {
+  supportedPlatformIt("rejects an intermediate directory replaced by a symlink while archiving", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-parent-race-"));
     roots.push(root);
     const outside = mkdtempSync(join(tmpdir(), "multiremi-session-archive-parent-race-outside-"));
@@ -116,7 +131,7 @@ describe("Issue session archive", () => {
     await expect(pending).rejects.toThrow(/symlink|changed while archiving/);
   });
 
-  it("refuses a symlink in the provider history parent path", async () => {
+  supportedPlatformIt("refuses a symlink in the provider history parent path", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-parent-link-"));
     roots.push(root);
     const outside = mkdtempSync(join(tmpdir(), "multiremi-session-parent-outside-"));
@@ -128,7 +143,7 @@ describe("Issue session archive", () => {
     await expect(prepareIssueSessionArchive(root)).rejects.toThrow("must not contain symlinks");
   });
 
-  it("produces a valid empty archive when an Issue has no provider history", async () => {
+  supportedPlatformIt("produces a valid empty archive when an Issue has no provider history", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-empty-"));
     roots.push(root);
     const archive = await prepareIssueSessionArchive(root);
@@ -160,7 +175,7 @@ describe("Issue session archive", () => {
     });
   });
 
-  it("rejects a staging directory symlink or non-directory", async () => {
+  supportedPlatformIt("rejects a staging directory symlink or non-directory", async () => {
     const symlinkRoot = mkdtempSync(join(tmpdir(), "multiremi-session-staging-link-"));
     roots.push(symlinkRoot);
     const outside = mkdtempSync(join(tmpdir(), "multiremi-session-staging-outside-"));

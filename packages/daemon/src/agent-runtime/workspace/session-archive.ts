@@ -88,8 +88,13 @@ export async function prepareIssueSessionArchive(
   const workspaceRoot = resolve(workspaceDir);
   const sessionsRoot = join(workspaceRoot, ".multiremi", "sessions");
   const maxSourceBytes = positiveLimit(options.maxSourceBytes, DEFAULT_MAX_SOURCE_BYTES);
-  await assertOptionalRealDirectoryTree(workspaceRoot, sessionsRoot, "Issue session history root");
-  const sourceSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes);
+  const sessionsExist = await assertOptionalRealDirectoryTree(
+    workspaceRoot,
+    sessionsRoot,
+    "Issue session history root",
+  );
+  assertSessionArchiveTraversalSupported();
+  const sourceSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes, !sessionsExist);
   const entries = sourceSnapshot.files;
   const metadata = {
     format: ARCHIVE_FORMAT,
@@ -110,7 +115,7 @@ export async function prepareIssueSessionArchive(
       createGzip({ level: 6 }),
       createWriteStream(partialPath, { flags: "wx", mode: 0o600 }),
     );
-    const verifiedSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes);
+    const verifiedSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes, !sessionsExist);
     assertSameArchiveSnapshot(sourceSnapshot, verifiedSnapshot);
     await rename(partialPath, archivePath).catch(async (error) => {
       if (!isAlreadyExists(error)) throw error;
@@ -211,8 +216,12 @@ export async function removePreparedIssueSessionArchive(archivePath: string): Pr
   }
 }
 
-async function scanArchiveEntries(workspaceRoot: string, maxBytes: number): Promise<IssueSessionArchiveSnapshot> {
-  const root = await openWorkspaceDirectory(workspaceRoot, [".multiremi", "sessions"], true);
+async function scanArchiveEntries(
+  workspaceRoot: string,
+  maxBytes: number,
+  optionalRoot: boolean,
+): Promise<IssueSessionArchiveSnapshot> {
+  const root = await openWorkspaceDirectory(workspaceRoot, [".multiremi", "sessions"], optionalRoot);
   if (!root) return { files: [], directories: [] };
 
   const files: IssueSessionArchiveEntry[] = [];
@@ -521,8 +530,11 @@ export function resolveSessionArchiveFileDescriptorPath(
     throw new Error(`Invalid session archive file descriptor: ${descriptor}`);
   }
   if (platform === "linux") return `/proc/self/fd/${descriptor}`;
-  if (platform === "darwin") return `/dev/fd/${descriptor}`;
   throw new Error(`Secure Issue session archive traversal is unsupported on ${platform}`);
+}
+
+function assertSessionArchiveTraversalSupported(): void {
+  resolveSessionArchiveFileDescriptorPath(0);
 }
 
 function assertPathSegment(value: string): void {
@@ -656,7 +668,7 @@ async function ensureRealDirectoryTree(root: string, candidate: string, label: s
   }
 }
 
-async function assertOptionalRealDirectoryTree(root: string, candidate: string, label: string): Promise<void> {
+async function assertOptionalRealDirectoryTree(root: string, candidate: string, label: string): Promise<boolean> {
   const resolvedRoot = resolve(root);
   const resolvedCandidate = resolve(candidate);
   assertContained(resolvedRoot, resolvedCandidate, label);
@@ -665,7 +677,7 @@ async function assertOptionalRealDirectoryTree(root: string, candidate: string, 
     throw new Error(`Issue workspace must be a real directory: ${resolvedRoot}`);
   }
   const pathFromRoot = relative(resolvedRoot, resolvedCandidate);
-  if (!pathFromRoot || pathFromRoot === ".") return;
+  if (!pathFromRoot || pathFromRoot === ".") return true;
   let current = resolvedRoot;
   for (const segment of pathFromRoot.split(sep)) {
     current = join(current, segment);
@@ -673,13 +685,14 @@ async function assertOptionalRealDirectoryTree(root: string, candidate: string, 
     try {
       info = await lstat(current);
     } catch (error) {
-      if (isNotFound(error)) return;
+      if (isNotFound(error)) return false;
       throw error;
     }
     if (!info.isDirectory() || info.isSymbolicLink()) {
       throw new Error(`${label} must not contain symlinks or non-directories: ${current}`);
     }
   }
+  return true;
 }
 
 function slashPath(path: string): string {
