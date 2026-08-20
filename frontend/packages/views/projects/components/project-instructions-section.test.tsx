@@ -56,7 +56,7 @@ function renderSection(
   const props = {
     instructions: "**Test first.**",
     revision: 3,
-    updatedAt: "2026-08-19T08:30:00.000Z",
+    updatedAt: new Date().toISOString(),
     updatedByName: "Ada",
     editable: true,
     onSave: vi.fn().mockResolvedValue(undefined),
