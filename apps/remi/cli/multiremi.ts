@@ -85,7 +85,9 @@ interface RunMultiremiOptions {
   programName?: string;
 }
 
-const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
+// A cold start may download Node and install both ACP bridges before the
+// supervisor can become ready. Leave headroom above their command timeouts.
+const DEFAULT_STARTUP_TIMEOUT_MS = 12 * 60_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const SUPERVISOR_INSTANCE_ENV = "MULTIREMI_SUPERVISOR_INSTANCE_ID";
 
@@ -494,6 +496,7 @@ export function stopChannelWhenProvidersFinish(
 
 async function startDaemonBackground(options: CliOptions, programName: string): Promise<void> {
   const spec = buildMultiremiDaemonLaunchSpec(options, programName);
+  const startupTimeoutMs = daemonStartupTimeoutMs(options);
   if (spec.port === 0) throw new Error("--daemon-port 0 requires --foreground because background daemon control needs a stable port");
   const live = await checkManagedDaemonHealth(spec.port);
   const running = live.find((entry) => daemonAlive(entry.health));
@@ -532,7 +535,7 @@ async function startDaemonBackground(options: CliOptions, programName: string): 
 
   try {
     const health = await Promise.race([
-      waitForDaemonReady(spec.port, DEFAULT_STARTUP_TIMEOUT_MS, {
+      waitForDaemonReady(spec.port, startupTimeoutMs, {
         expectedPid: childPid,
         requireSupervisorReady: true,
       }),
@@ -540,7 +543,7 @@ async function startDaemonBackground(options: CliOptions, programName: string): 
     ]);
     if (!daemonSupervisorReady(health, { expectedPid: childPid, requireSupervisorReady: true })) {
       throw new Error(
-        `Multiremi daemon did not make every provider ready within ${DEFAULT_STARTUP_TIMEOUT_MS}ms. `
+        `Multiremi daemon did not make every provider ready within ${startupTimeoutMs}ms. `
           + `The failed supervisor has been stopped; check logs: ${spec.logPath}`,
       );
     }
@@ -941,6 +944,21 @@ function daemonShutdownTimeoutMs(options: CliOptions): number {
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error("--shutdown-timeout-ms must be a positive integer");
+  }
+  return parsed;
+}
+
+export function daemonStartupTimeoutMs(options: CliOptions): number {
+  const option = options.startupTimeoutMs ?? options["startup-timeout-ms"];
+  const value = Array.isArray(option) ? option.at(-1) : option;
+  const raw = value ?? process.env.MULTIREMI_DAEMON_STARTUP_TIMEOUT_MS;
+  if (raw === undefined) return DEFAULT_STARTUP_TIMEOUT_MS;
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
+    throw new Error("--startup-timeout-ms must be a positive integer");
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error("--startup-timeout-ms must be a positive integer");
   }
   return parsed;
 }

@@ -5,8 +5,8 @@ platform with a new connector, provider, or plugin.
 
 ## Requirements
 
-- **[Bun](https://bun.sh) 1.3.10+** — runtime, package manager, test runner, and bundler.
-  CI pins 1.3.10 (`.github/workflows/release-build-check.yml`).
+- **[Bun](https://bun.sh) 1.3.14+** — runtime, package manager, test runner, and bundler.
+  CI pins 1.3.14 (`.github/workflows/release-build-check.yml`).
 - **Git**.
 - **Optional**: [Claude Code CLI](https://docs.claude.com/claude-code) or Codex signed in, if you
   want to exercise a real ACP provider locally.
@@ -84,7 +84,7 @@ regenerated golden file in the PR.
 
 Installing through a fast internal npm mirror (a `registry=` line in your `~/.npmrc` or
 `~/.bunfig.toml`) is fine and encouraged — keep it. But bun records an absolute tarball URL in
-`bun.lock` for every package it resolves off a non-default registry, and bun 1.3.10 offers no way
+`bun.lock` for every package it resolves off a non-default registry, and Bun offers no way
 to fetch from a mirror while writing a registry-neutral lockfile. So whenever `bun.lock` changes
 (`bun add`, a bumped range, `bun install --force`), run `bun run lock:clean` before committing: it
 blanks those URLs back to the default-registry form and leaves integrity hashes untouched. Everyday

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  daemonStartupTimeoutMs,
   runMultiremi,
   stopChannelWhenProvidersFinish,
   terminateUnreadyBackgroundProcess,
@@ -93,6 +94,14 @@ describe("Multiremi CLI daemon lifecycle fence", () => {
       "--shutdown-timeout-ms",
       "0",
     ], { programName: "multiremi" })).rejects.toThrow("must be a positive integer");
+  });
+
+  it("allows the daemon startup window to cover cold ACP bridge setup", () => {
+    expect(daemonStartupTimeoutMs({})).toBe(12 * 60_000);
+    expect(daemonStartupTimeoutMs({ "startup-timeout-ms": "900000" })).toBe(900_000);
+    expect(() => daemonStartupTimeoutMs({ "startup-timeout-ms": "0" })).toThrow(
+      "--startup-timeout-ms must be a positive integer",
+    );
   });
 
   it("does not treat one ready provider as supervisor readiness", async () => {

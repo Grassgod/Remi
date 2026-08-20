@@ -12,7 +12,7 @@
  * every time bun re-resolves a package (`bun add`, a changed dependency
  * range, `--force`). That leaks an internal hostname into the repository and
  * breaks CI, which installs with `--registry https://registry.npmjs.org
- * --frozen-lockfile`. bun 1.3.10 has no option to fetch from a mirror while
+ * --frozen-lockfile`. Bun has no option to fetch from a mirror while
  * writing a registry-neutral lockfile, so this script does it after the fact.
  *
  *   bun run lock:clean

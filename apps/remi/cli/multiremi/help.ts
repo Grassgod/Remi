@@ -99,6 +99,7 @@ Options:
   --runtime-id <id>      Reuse a fixed runtime id
   --daemon-id <id>       Stable daemon id for local directory resources
   --daemon-port <number> Local daemon helper port (default: 6131)
+  --startup-timeout-ms <number> Daemon readiness timeout (default: 720000)
   --shutdown-timeout-ms <number> Graceful daemon drain timeout (default: 30000)
   --repo-cache-root <p>  Local bare repository cache root
   --name <name>          Runtime display name
