@@ -1,4 +1,6 @@
 import type {
+  AdvanceScmEntitySnapshotResult,
+  ClaimScmSyncStreamInput,
   MultiremiScmConnection,
   MultiremiScmConnectionCredential,
   MultiremiScmEntitySnapshot,
@@ -8,6 +10,8 @@ import type {
   MultiremiScmSyncCursor,
   MultiremiScmSyncStream,
   RecordScmCanonicalEventInput,
+  ReleaseScmSyncStreamInput,
+  UpdateClaimedScmSyncCursorInput,
   UpsertScmEntitySnapshotInput,
   UpsertScmSyncCursorInput,
 } from "@multiremi/contracts/types.js";
@@ -33,6 +37,9 @@ export interface ScmStoreFacade {
     stream: MultiremiScmSyncStream,
   ): MultiremiScmSyncCursor | null;
   upsertScmSyncCursor(input: UpsertScmSyncCursorInput): MultiremiScmSyncCursor;
+  claimScmSyncStream(input: ClaimScmSyncStreamInput): MultiremiScmSyncCursor | null;
+  updateClaimedScmSyncCursor(input: UpdateClaimedScmSyncCursorInput): MultiremiScmSyncCursor | null;
+  releaseScmSyncStream(input: ReleaseScmSyncStreamInput): boolean;
   getScmEntitySnapshot(
     connectionId: string,
     repositoryId: string,
@@ -40,6 +47,7 @@ export interface ScmStoreFacade {
     externalId: string,
   ): MultiremiScmEntitySnapshot | null;
   upsertScmEntitySnapshot(input: UpsertScmEntitySnapshotInput): MultiremiScmEntitySnapshot;
+  advanceScmEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult;
   recordScmCanonicalEvent(input: RecordScmCanonicalEventInput): ScmRecordResult;
 }
 
@@ -52,9 +60,13 @@ export function scmIngestionStore(facade: ScmStoreFacade): ScmIngestionStore {
     getSyncCursor: (connectionId, repositoryId, stream) =>
       facade.getScmSyncCursor(connectionId, repositoryId, stream),
     upsertSyncCursor: (input) => facade.upsertScmSyncCursor(input),
+    claimSyncStream: (input) => facade.claimScmSyncStream(input),
+    updateClaimedSyncCursor: (input) => facade.updateClaimedScmSyncCursor(input),
+    releaseSyncStream: (input) => facade.releaseScmSyncStream(input),
     getEntitySnapshot: (connectionId, repositoryId, entityType, externalId) =>
       facade.getScmEntitySnapshot(connectionId, repositoryId, entityType, externalId),
     upsertEntitySnapshot: (input) => facade.upsertScmEntitySnapshot(input),
+    advanceEntitySnapshot: (input) => facade.advanceScmEntitySnapshot(input),
     recordCanonicalEvent: (input) => facade.recordScmCanonicalEvent(input),
   };
 }

@@ -31,13 +31,15 @@ describe("Multiremi Git credential broker", () => {
       workspaceId: "wsp_1",
       repositoryUrl: "git@github.com:owner/repo.git",
       helperCommand: "'remi' git-credential",
+      fallbackHelpers: ["cache --timeout=60"],
     });
 
-    expect(env.GIT_CONFIG_COUNT).toBe("4");
+    expect(env.GIT_CONFIG_COUNT).toBe("5");
     expect(env.GIT_CONFIG_KEY_1).toBe("credential.helper");
     expect(env.GIT_CONFIG_VALUE_1).toBe("");
     expect(env.GIT_CONFIG_VALUE_2).toBe("!'remi' git-credential");
-    expect(env.GIT_CONFIG_KEY_3).toBe("credential.useHttpPath");
+    expect(env.GIT_CONFIG_VALUE_3).toBe("cache --timeout=60");
+    expect(env.GIT_CONFIG_KEY_4).toBe("credential.useHttpPath");
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
     expect(env.GIT_SSH_COMMAND).toContain("BatchMode=yes");
     expect(env.MULTIREMI_TOKEN).toBe("daemon-secret");
@@ -104,6 +106,21 @@ describe("Multiremi Git credential broker", () => {
         password: "secret",
       })),
     })).rejects.toThrow(/different repository/);
+  });
+
+  it("returns no fields so Git can fall back when the repository is not centrally configured", async () => {
+    const output = await runGitCredentialHelper("get", {
+      input: "protocol=https\nhost=github.com\npath=owner/repo.git\n\n",
+      env: {
+        MULTIREMI_SERVER_URL: "https://multiremi.example",
+        MULTIREMI_WORKSPACE_ID: "wsp_1",
+      },
+      fetchImpl: async () => Response.json(
+        { error: "repository credential not found" },
+        { status: 404 },
+      ),
+    });
+    expect(output).toBe("");
   });
 
   it("rejects credential-protocol field injection from a compromised upstream", async () => {

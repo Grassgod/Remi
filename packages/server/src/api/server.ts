@@ -23,6 +23,7 @@ import { registerCloudRuntimeRoutes } from "./routers/cloud-runtime.js";
 import { registerCloudBillingRoutes } from "./routers/cloud-billing.js";
 import { registerMeRoutes } from "./routers/me.js";
 import { registerWorkspaceRoutes } from "./routers/workspaces.js";
+import { registerScmRoutes } from "./routers/scm.js";
 import { registerMemberRoutes } from "./routers/members.js";
 import { registerInvitationRoutes } from "./routers/invitations.js";
 import { registerAgentRoutes } from "./routers/agents.js";
@@ -389,6 +390,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   registerMeRoutes(app, deps);
   registerWorkspaceRoutes(app, deps);
+  registerScmRoutes(app, deps);
   registerMemberRoutes(app, deps);
   registerInvitationRoutes(app, deps);
   app.post("/api/lark/binding/redeem", async (c) => {

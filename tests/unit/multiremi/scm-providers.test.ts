@@ -23,6 +23,7 @@ describe("SCM provider adapters", () => {
 
   it("polls GitHub pull requests with authenticated pagination", async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
+    let heartbeats = 0;
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
       requests.push({ url, authorization: new Headers(init?.headers).get("authorization") });
@@ -41,13 +42,17 @@ describe("SCM provider adapters", () => {
       }]), { status: 200, headers: { "Content-Type": "application/json" } });
     }) as typeof fetch;
 
-    const result = await new GitHubScmProviderAdapter().poll(context("change_requests"));
+    const result = await new GitHubScmProviderAdapter().poll({
+      ...context("change_requests"),
+      heartbeat: () => { heartbeats += 1; },
+    });
     expect(result.done).toBe(true);
     expect(result.observations).toHaveLength(1);
     expect(result.observations[0]?.payload).toMatchObject({ state: "open", source_branch: "feature", target_branch: "main" });
     expect(requests[0]?.url).toContain("/repos/acme/widgets/pulls");
     expect(requests[0]?.url).toContain("per_page=100");
     expect(requests[0]?.authorization).toBe("Bearer token");
+    expect(heartbeats).toBe(2);
   });
 
   it("uses one logical identity for GitHub workflow runs from polling and webhooks", async () => {
@@ -178,6 +183,7 @@ describe("SCM provider adapters", () => {
 
   it("calls the Codebase action API with its updated-since cursor", async () => {
     const requests: Array<{ action: string | null; body: Record<string, unknown>; authorization: string | null }> = [];
+    let heartbeats = 0;
     globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input));
       requests.push({
@@ -234,6 +240,7 @@ describe("SCM provider adapters", () => {
         leaseToken: null,
         updatedAt: "2026-08-21T07:55:00.000Z",
       },
+      heartbeat: () => { heartbeats += 1; },
     };
     const result = await new CodebaseScmProviderAdapter().poll(codebaseContext);
     expect(result.observations[0]?.payload).toMatchObject({ state: "merged", merge_sha: "abc", head_sha: "commit-3" });
@@ -248,6 +255,7 @@ describe("SCM provider adapters", () => {
       Version: true,
     });
     expect(requests[0]?.authorization).toBe("Bearer token");
+    expect(heartbeats).toBe(2);
   });
 
   it("resumes Codebase related-MR and pipeline pages without timestamp cutoffs", async () => {

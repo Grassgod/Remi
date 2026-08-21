@@ -1,4 +1,6 @@
 import type {
+  AdvanceScmEntitySnapshotResult,
+  ClaimScmSyncStreamInput,
   MultiremiScmCanonicalEvent,
   MultiremiScmCanonicalEventType,
   MultiremiScmConnection,
@@ -11,6 +13,8 @@ import type {
   MultiremiScmSyncCursor,
   MultiremiScmSyncStream,
   RecordScmCanonicalEventInput,
+  ReleaseScmSyncStreamInput,
+  UpdateClaimedScmSyncCursorInput,
   UpsertScmEntitySnapshotInput,
   UpsertScmSyncCursorInput,
 } from "@multiremi/contracts/types.js";
@@ -60,6 +64,7 @@ export interface ScmPollContext {
   cursor: MultiremiScmSyncCursor | null;
   now: Date;
   signal?: AbortSignal;
+  heartbeat?: () => void;
 }
 
 export interface ScmCanonicalCandidate {
@@ -85,6 +90,8 @@ export interface ScmWebhookCandidate extends ScmCanonicalCandidate {
   repositoryOwner: string | null;
   repositoryName: string | null;
   providerEventId: string | null;
+  /** The provider-neutral snapshot that polling would observe for this event. */
+  snapshotObservation?: ScmEntityObservation | null;
 }
 
 export interface ScmWebhookParseResult {
@@ -128,6 +135,9 @@ export interface ScmIngestionStore {
     stream: MultiremiScmSyncStream,
   ): MultiremiScmSyncCursor | null;
   upsertSyncCursor(input: UpsertScmSyncCursorInput): MultiremiScmSyncCursor;
+  claimSyncStream(input: ClaimScmSyncStreamInput): MultiremiScmSyncCursor | null;
+  updateClaimedSyncCursor(input: UpdateClaimedScmSyncCursorInput): MultiremiScmSyncCursor | null;
+  releaseSyncStream(input: ReleaseScmSyncStreamInput): boolean;
   getEntitySnapshot(
     connectionId: string,
     repositoryId: string,
@@ -135,6 +145,7 @@ export interface ScmIngestionStore {
     externalId: string,
   ): MultiremiScmEntitySnapshot | null;
   upsertEntitySnapshot(input: UpsertScmEntitySnapshotInput): MultiremiScmEntitySnapshot;
+  advanceEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult;
   recordCanonicalEvent(input: RecordScmCanonicalEventInput): ScmRecordResult;
 }
 

@@ -345,22 +345,27 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
     const base = context.connection.apiBaseUrl.replace(/\/$/u, "") + "/";
     const url = appendQuery(base, { Action: action });
     const token = context.credential.accessToken?.trim();
-    const response = await scmRequestJson<Record<string, unknown>>(url, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "multiremi-scm-poller",
-        ...codebaseAuthHeaders(token),
-      },
-      body: JSON.stringify(removeUndefined(body)),
-    }, { signal: context.signal });
-    const metadata = recordPick(response.data, "ResponseMetadata", "response_metadata");
-    const error = recordPick(metadata, "Error", "error");
-    if (Object.keys(error).length) {
-      throw new Error(`Codebase ${action} failed: ${stringPick(error, "Code", "code") || "Error"}: ${stringPick(error, "Message", "message")}`);
+    context.heartbeat?.();
+    try {
+      const response = await scmRequestJson<Record<string, unknown>>(url, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": "multiremi-scm-poller",
+          ...codebaseAuthHeaders(token),
+        },
+        body: JSON.stringify(removeUndefined(body)),
+      }, { signal: context.signal });
+      const metadata = recordPick(response.data, "ResponseMetadata", "response_metadata");
+      const error = recordPick(metadata, "Error", "error");
+      if (Object.keys(error).length) {
+        throw new Error(`Codebase ${action} failed: ${stringPick(error, "Code", "code") || "Error"}: ${stringPick(error, "Message", "message")}`);
+      }
+      return recordPick(response.data, "Result", "result");
+    } finally {
+      context.heartbeat?.();
     }
-    return recordPick(response.data, "Result", "result");
   }
 }
 

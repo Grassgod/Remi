@@ -1153,6 +1153,159 @@ export function runMigrations(db: SqlDatabase): void {
       ON multiremi_webhook_deliveries(trigger_id, dedupe_key)
       WHERE dedupe_key IS NOT NULL AND status NOT IN ('rejected', 'failed');
 
+    CREATE TABLE IF NOT EXISTS multiremi_scm_connections (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'poll',
+      base_url TEXT NOT NULL,
+      api_base_url TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 60,
+      access_token_encrypted TEXT,
+      access_token_hint TEXT,
+      webhook_secret_encrypted TEXT,
+      webhook_secret_hint TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, provider, name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_connections_poll
+      ON multiremi_scm_connections(enabled, mode, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_repository_bindings (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      repository_url TEXT NOT NULL,
+      external_id TEXT,
+      owner TEXT,
+      name TEXT NOT NULL,
+      default_branch TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, repository_id),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_repository_bindings_connection
+      ON multiremi_scm_repository_bindings(connection_id, enabled, repository_id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_repository_bindings_url
+      ON multiremi_scm_repository_bindings(workspace_id, repository_url);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_sync_cursors (
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      stream TEXT NOT NULL,
+      cursor TEXT,
+      watermark TEXT,
+      baseline_completed_at TEXT,
+      last_started_at TEXT,
+      last_completed_at TEXT,
+      last_error TEXT,
+      lease_owner TEXT,
+      lease_until TEXT,
+      lease_token TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(connection_id, repository_id, stream),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_entity_snapshots (
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      version TEXT,
+      revision_at TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      observed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(connection_id, repository_id, entity_type, external_id),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_entity_snapshots_observed
+      ON multiremi_scm_entity_snapshots(connection_id, repository_id, entity_type, observed_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_events (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      type TEXT NOT NULL,
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      logical_key TEXT NOT NULL,
+      primary_source TEXT NOT NULL,
+      fidelity TEXT NOT NULL,
+      occurred_at TEXT,
+      observed_at TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT NOT NULL,
+      lease_until TEXT,
+      last_error TEXT,
+      processed_at TEXT,
+      targets_initialized INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      UNIQUE(connection_id, logical_key),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_events_pending
+      ON multiremi_scm_events(status, available_at, lease_until, observed_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_events_repository
+      ON multiremi_scm_events(workspace_id, repository_id, observed_at, id);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_event_evidence (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      provider_event_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      payload TEXT,
+      raw_body TEXT,
+      observed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(event_id, source, dedupe_key),
+      FOREIGN KEY(event_id) REFERENCES multiremi_scm_events(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_event_evidence_event
+      ON multiremi_scm_event_evidence(event_id, observed_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_event_deliveries (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      trigger_id TEXT NOT NULL,
+      autopilot_run_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT NOT NULL,
+      lease_until TEXT,
+      last_error TEXT,
+      delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(event_id, trigger_id),
+      FOREIGN KEY(event_id) REFERENCES multiremi_scm_events(id) ON DELETE CASCADE,
+      FOREIGN KEY(trigger_id) REFERENCES multiremi_autopilot_triggers(id) ON DELETE CASCADE,
+      FOREIGN KEY(autopilot_run_id) REFERENCES multiremi_autopilot_runs(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_event_deliveries_pending
+      ON multiremi_scm_event_deliveries(status, available_at, lease_until, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_chat_sessions (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1515,6 +1668,22 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_autopilot_runs", "trigger_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_runs", "event_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_runs", "issue_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_owner TEXT");
+  addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_until TEXT");
+  addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_token TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_sync_cursors_lease
+      ON multiremi_scm_sync_cursors(lease_until, connection_id, repository_id, stream);
+  `);
+  addColumnIfMissing(db, "multiremi_scm_entity_snapshots", "revision_at TEXT");
+  addColumnIfMissing(db, "multiremi_scm_entity_snapshots", "revision TEXT");
+  addColumnIfMissing(db, "multiremi_scm_events", "targets_initialized INTEGER NOT NULL DEFAULT 0");
+  db.run(
+    `UPDATE multiremi_scm_entity_snapshots
+     SET revision_at = COALESCE(revision_at, observed_at),
+         revision = COALESCE(revision, version, content_hash)
+     WHERE revision_at IS NULL OR revision IS NULL`,
+  );
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_system_event
       ON multiremi_autopilot_runs(trigger_id, event_id)

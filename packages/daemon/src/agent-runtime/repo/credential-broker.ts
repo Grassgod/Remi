@@ -13,6 +13,8 @@ export interface GitCredentialBrokerEnvOptions {
   repositoryUrls?: string[];
   timeoutMs?: number;
   helperCommand?: string;
+  /** Trusted machine-level helpers used only when Multiremi has no credential. */
+  fallbackHelpers?: string[];
 }
 
 export interface GitCredentialProtocolInput {
@@ -53,6 +55,10 @@ export function appendGitCredentialBrokerEnv(
   const helper = options.helperCommand?.trim() || defaultRemiGitCredentialHelperCommand();
   appendGitConfig(env, "credential.helper", "");
   appendGitConfig(env, "credential.helper", `!${helper}`);
+  for (const fallback of options.fallbackHelpers ?? trustedGlobalCredentialHelpers(base)) {
+    const value = fallback.trim();
+    if (value && value !== `!${helper}`) appendGitConfig(env, "credential.helper", value);
+  }
   appendGitConfig(env, "credential.useHttpPath", "true");
 
   env.GIT_TERMINAL_PROMPT = "0";
@@ -152,6 +158,11 @@ export async function runGitCredentialHelper(
       }),
       signal: controller.signal,
     });
+    // No binding/credential is not an authentication failure. Returning no
+    // fields lets Git continue to a trusted machine-level helper. This keeps
+    // existing HTTPS repositories working while SCM connections are adopted
+    // incrementally.
+    if ([404, 409, 502, 503, 504].includes(response.status)) return "";
     if (!response.ok) {
       throw new Error(`Git credential broker returned HTTP ${response.status}`);
     }
@@ -215,6 +226,24 @@ function appendGitConfig(env: NodeJS.ProcessEnv, key: string, value: string): vo
   env.GIT_CONFIG_COUNT = String(index + 1);
   env[`GIT_CONFIG_KEY_${index}`] = key;
   env[`GIT_CONFIG_VALUE_${index}`] = value;
+}
+
+function trustedGlobalCredentialHelpers(
+  base: NodeJS.ProcessEnv | Record<string, string>,
+): string[] {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of Object.keys(env)) {
+    if (key === "GIT_CONFIG_COUNT" || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/u.test(key)) delete env[key];
+  }
+  const result = spawnSync("git", ["config", "--global", "--get-all", "credential.helper"], {
+    encoding: "utf8",
+    env,
+  });
+  if (result.status !== 0 && result.status !== 1) return [];
+  return String(result.stdout ?? "")
+    .split(/\r?\n/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 function isLocalRepositoryUrl(value: string): boolean {

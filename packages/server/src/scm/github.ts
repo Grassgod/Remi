@@ -334,15 +334,20 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
   private async get<T>(context: ScmPollContext, pathOrUrl: string, absolute = false) {
     const url = absolute ? pathOrUrl : this.apiUrl(context, pathOrUrl);
     const token = context.credential.accessToken?.trim();
-    return scmRequestJson<T>(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "multiremi-scm-poller",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    }, { signal: context.signal });
+    context.heartbeat?.();
+    try {
+      return await scmRequestJson<T>(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "multiremi-scm-poller",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }, { signal: context.signal });
+    } finally {
+      context.heartbeat?.();
+    }
   }
 }
 

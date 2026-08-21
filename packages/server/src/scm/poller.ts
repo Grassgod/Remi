@@ -161,14 +161,19 @@ export class ScmPollingScheduler {
           stream,
           cursor: cursor ? { ...cursor, watermark: previousWatermark } : null,
           now: startedAt,
+          heartbeat: () => this.renewClaimedLease(
+            connection.id,
+            binding.repositoryId,
+            stream,
+            leaseToken!,
+            startedAt,
+          ),
         });
-        cursor = this.writeClaimedCursor(
+        this.renewClaimedLease(
           connection.id,
           binding.repositoryId,
           stream,
           leaseToken,
-          cursor,
-          {},
           startedAt,
         );
         latestWatermark = maxTimestamp(latestWatermark, page.watermark);
@@ -271,6 +276,23 @@ export class ScmPollingScheduler {
   private leaseExpiry(reference: Date): string {
     const base = Math.max(reference.getTime(), this.now().getTime());
     return new Date(base + this.streamLeaseMs).toISOString();
+  }
+
+  private renewClaimedLease(
+    connectionId: string,
+    repositoryId: string,
+    stream: MultiremiScmSyncStream,
+    leaseToken: string,
+    leaseReference: Date,
+  ): void {
+    const cursor = this.store.updateClaimedSyncCursor({
+      connectionId,
+      repositoryId,
+      stream,
+      leaseToken,
+      leaseUntil: this.leaseExpiry(leaseReference),
+    });
+    if (!cursor) throw new ScmStreamLeaseLostError();
   }
 }
 

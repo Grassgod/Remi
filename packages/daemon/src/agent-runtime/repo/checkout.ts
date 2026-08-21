@@ -125,14 +125,29 @@ export class MultiremiRepoCache {
         const gitAuth = this.gitAuth(workspaceId, url);
         const cloneUrl = this.cloneUrl(url);
         if (isBareRepo(barePath)) {
-          configureRepoTransport(barePath, url, cloneUrl);
-          gitFetch(barePath, { allowFailure: true, env: gitAuth });
+          if (cloneUrl !== url && gitFetchFromUrl(barePath, cloneUrl, { allowFailure: true, env: gitAuth })) {
+            configureRepoTransport(barePath, url, cloneUrl);
+          } else {
+            configureRepoTransport(barePath, url, url);
+            if (!gitFetch(barePath, { allowFailure: true, env: gitAuth })) {
+              gitFetch(barePath, { allowFailure: true });
+            }
+          }
         } else {
           mkdirSync(workspaceRoot, { recursive: true });
           try {
-            git(null, ["clone", "--bare", cloneUrl, barePath], { env: gitAuth });
-            configureRepoTransport(barePath, url, cloneUrl);
-            gitFetch(barePath, { env: gitAuth });
+            let selectedUrl = cloneUrl;
+            try {
+              git(null, ["clone", "--bare", cloneUrl, barePath], { env: gitAuth });
+            } catch {
+              rmSync(barePath, { recursive: true, force: true });
+              git(null, ["clone", "--bare", url, barePath]);
+              selectedUrl = url;
+            }
+            configureRepoTransport(barePath, url, selectedUrl);
+            if (!gitFetch(barePath, { allowFailure: true, env: selectedUrl === cloneUrl ? gitAuth : undefined })) {
+              gitFetch(barePath, { env: selectedUrl === url ? undefined : gitAuth });
+            }
           } catch (err) {
             rmSync(barePath, { recursive: true, force: true });
             throw err;
@@ -370,7 +385,7 @@ function git(
 function gitFetch(
   barePath: string,
   options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
-): void {
+): boolean {
   try {
     ensureRemoteTrackingLayout(barePath);
     git(barePath, [
@@ -380,10 +395,34 @@ function gitFetch(
       "origin",
       MODERN_FETCH_REFSPEC,
       MIRRORED_TAG_FETCH_REFSPEC,
-    ], { allowFailure: options.allowFailure, env: options.env });
+    ], { env: options.env });
     git(barePath, ["remote", "set-head", "origin", "--auto"], { allowFailure: true });
+    return true;
   } catch (err) {
     if (!options.allowFailure) throw err;
+    return false;
+  }
+}
+
+function gitFetchFromUrl(
+  barePath: string,
+  url: string,
+  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  try {
+    ensureRemoteTrackingLayout(barePath);
+    git(barePath, [
+      "fetch",
+      "--prune",
+      "--prune-tags",
+      url,
+      MODERN_FETCH_REFSPEC,
+      MIRRORED_TAG_FETCH_REFSPEC,
+    ], { env: options.env });
+    return true;
+  } catch (error) {
+    if (!options.allowFailure) throw error;
+    return false;
   }
 }
 

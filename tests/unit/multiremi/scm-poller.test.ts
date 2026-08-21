@@ -46,9 +46,14 @@ class BlockingAdapter extends FakeAdapter {
   readonly entered = new Promise<void>((resolve) => { this.enteredResolve = resolve; });
   readonly release = new Promise<void>((resolve) => { this.releaseResolve = resolve; });
 
+  constructor(private readonly beforeBlock?: (context: ScmPollContext) => void) {
+    super();
+  }
+
   override async poll(context: ScmPollContext): Promise<ScmPollPage> {
     if (context.stream === "default_branch") {
       this.defaultBranchAttempts += 1;
+      this.beforeBlock?.(context);
       this.enteredResolve();
       await this.release;
     }
@@ -141,6 +146,40 @@ describe("SCM polling scheduler", () => {
     adapter.unblock();
     await firstRun;
     expect(store.getSyncCursor("scm_1", "repo_1", "default_branch")?.leaseToken).toBeNull();
+  });
+
+  it("renews a long provider page so another scheduler cannot take over after the original expiry", async () => {
+    const store = new MemoryScmIngestionStore();
+    let clock = new Date("2026-08-21T08:00:00.000Z");
+    const adapter = new BlockingAdapter((context) => {
+      clock = new Date("2026-08-21T08:04:00.000Z");
+      context.heartbeat?.();
+    });
+    const first = new ScmPollingScheduler({
+      store,
+      adapters: [adapter],
+      leaseOwner: "server-a",
+      now: () => clock,
+    });
+    const second = new ScmPollingScheduler({
+      store,
+      adapters: [adapter],
+      leaseOwner: "server-b",
+      now: () => clock,
+    });
+
+    const firstRun = first.runOnce(clock);
+    await adapter.entered;
+    expect(store.getSyncCursor("scm_1", "repo_1", "default_branch")?.leaseUntil)
+      .toBe("2026-08-21T08:09:00.000Z");
+
+    clock = new Date("2026-08-21T08:06:00.000Z");
+    const secondRun = await second.runOnce(clock);
+    expect(adapter.defaultBranchAttempts).toBe(1);
+    expect(secondRun.skipped).toBeGreaterThan(0);
+
+    adapter.unblock();
+    await firstRun;
   });
 
   it("rejects stale lease tokens after another owner claims an expired stream", () => {
