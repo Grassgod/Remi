@@ -65,6 +65,40 @@ class BlockingAdapter extends FakeAdapter {
   }
 }
 
+class CrossTickPaginationAdapter implements ScmProviderAdapter {
+  readonly provider = "github" as const;
+  readonly capabilities = {
+    ...GITHUB_SCM_CAPABILITIES,
+    streams: {
+      ...GITHUB_SCM_CAPABILITIES.streams,
+      default_branch: { ...GITHUB_SCM_CAPABILITIES.streams.default_branch, poll: false },
+      comments: { ...GITHUB_SCM_CAPABILITIES.streams.comments, poll: false },
+      reviews: { ...GITHUB_SCM_CAPABILITIES.streams.reviews, poll: false },
+      pipelines: { ...GITHUB_SCM_CAPABILITIES.streams.pipelines, poll: false },
+    },
+  };
+  calls: Array<{ cursor: Record<string, unknown> | null; watermark: string | null }> = [];
+
+  async poll(context: ScmPollContext): Promise<ScmPollPage> {
+    this.calls.push({ cursor: context.cursor?.cursor ?? null, watermark: context.cursor?.watermark ?? null });
+    const call = this.calls.length;
+    const entity = call === 1
+      ? change("old-page-1", "2026-08-20T07:00:00.000Z", context.now)
+      : call === 2
+        ? change("old-page-2", "2026-08-20T06:00:00.000Z", context.now)
+        : change("inserted-during-cycle", "2026-08-21T08:01:00.000Z", context.now);
+    return {
+      observations: [entity],
+      cursor: call === 1 ? { page: 2 } : null,
+      watermark: context.now.toISOString(),
+      done: call !== 1,
+    };
+  }
+
+  verifyWebhook(): boolean { return true; }
+  parseWebhook() { return { providerEvent: "test", deliveryId: null, candidates: [], ignoredReason: null }; }
+}
+
 describe("SCM polling scheduler", () => {
   it("establishes a baseline first and emits only subsequent changes", async () => {
     const store = new MemoryScmIngestionStore();
@@ -215,4 +249,56 @@ describe("SCM polling scheduler", () => {
       leaseToken: first.leaseToken!,
     })).toBe(false);
   });
+
+  it("keeps a fixed cycle watermark across ticks so front-page inserts are scanned next", async () => {
+    const store = new MemoryScmIngestionStore();
+    const adapter = new CrossTickPaginationAdapter();
+    let clock = new Date("2026-08-21T08:00:00.000Z");
+    const scheduler = new ScmPollingScheduler({
+      store,
+      adapters: [adapter],
+      maxPagesPerStream: 1,
+      now: () => clock,
+    });
+
+    const first = await scheduler.runOnce(clock);
+    expect(first.completed).toBe(0);
+    expect(store.getSyncCursor("scm_1", "repo_1", "change_requests")?.cursor).toEqual({
+      __multiremi_cycle: {
+        startedAt: "2026-08-21T08:00:00.000Z",
+        providerCursor: { page: 2 },
+      },
+    });
+
+    clock = new Date("2026-08-21T08:02:00.000Z");
+    const second = await scheduler.runOnce(clock);
+    expect(second.completed).toBe(1);
+    expect(adapter.calls[1]?.cursor).toEqual({ page: 2 });
+    expect(store.getSyncCursor("scm_1", "repo_1", "change_requests")?.watermark)
+      .toBe("2026-08-21T08:00:00.000Z");
+
+    clock = new Date("2026-08-21T08:04:00.000Z");
+    const third = await scheduler.runOnce(clock);
+    expect(adapter.calls[2]?.watermark).toBe("2026-08-21T08:00:00.000Z");
+    expect(third.eventsCreated).toBe(1);
+    expect([...store.events.values()][0]?.subjectId).toBe("inserted-during-cycle");
+  });
 });
+
+function change(externalId: string, updatedAt: string, observedAt: Date) {
+  return {
+    stream: "change_requests" as const,
+    entityType: "change_request" as const,
+    externalId,
+    version: updatedAt,
+    occurredAt: updatedAt,
+    observedAt: observedAt.toISOString(),
+    payload: {
+      id: externalId,
+      state: "open",
+      title: externalId,
+      head_sha: `sha-${externalId}`,
+      updated_at: updatedAt,
+    },
+  };
+}

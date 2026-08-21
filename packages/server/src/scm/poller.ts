@@ -16,6 +16,7 @@ const log = createLogger("multiremi-scm-poller");
 const DEFAULT_TICK_INTERVAL_MS = 10_000;
 const DEFAULT_MAX_PAGES_PER_TICK = 50;
 const DEFAULT_STREAM_LEASE_MS = 5 * 60 * 1_000;
+const POLLING_CYCLE_CURSOR_KEY = "__multiremi_cycle";
 
 export interface ScmPollingSchedulerOptions {
   store: ScmIngestionStore;
@@ -132,7 +133,8 @@ export class ScmPollingScheduler {
     let baseline = false;
     let eventsCreated = 0;
     let completed = false;
-    let latestWatermark: string | null = null;
+    let cycleStartedAt = startedAt;
+    let providerCursor: Record<string, unknown> | null = null;
     try {
       cursor = this.store.claimSyncStream({
         connectionId: connection.id,
@@ -146,7 +148,7 @@ export class ScmPollingScheduler {
       leaseToken = cursor.leaseToken;
       baseline = !cursor.baselineCompletedAt;
       previousWatermark = cursor.watermark;
-      latestWatermark = cursor.watermark;
+      ({ cycleStartedAt, providerCursor } = pollingCycle(cursor, startedAt));
       cursor = this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
         lastStartedAt: startedAt.toISOString(),
         lastError: null,
@@ -159,7 +161,7 @@ export class ScmPollingScheduler {
           credential,
           binding,
           stream,
-          cursor: cursor ? { ...cursor, watermark: previousWatermark } : null,
+          cursor: cursor ? { ...cursor, cursor: providerCursor, watermark: previousWatermark } : null,
           now: startedAt,
           heartbeat: () => this.renewClaimedLease(
             connection.id,
@@ -176,7 +178,6 @@ export class ScmPollingScheduler {
           leaseToken,
           startedAt,
         );
-        latestWatermark = maxTimestamp(latestWatermark, page.watermark);
         for (const observation of page.observations) {
           const reconciliation = reconcileObservation({
             store: this.store,
@@ -188,8 +189,9 @@ export class ScmPollingScheduler {
           });
           eventsCreated += reconciliation.events.filter((event) => event.created).length;
         }
+        providerCursor = page.cursor;
         cursor = this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
-          cursor: page.cursor,
+          cursor: page.done ? null : encodePollingCycle(cycleStartedAt, providerCursor),
           watermark: previousWatermark,
           lastError: null,
         }, startedAt);
@@ -197,7 +199,7 @@ export class ScmPollingScheduler {
           const completedAt = this.now().toISOString();
           cursor = this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
             cursor: null,
-            watermark: latestWatermark ?? startedAt.toISOString(),
+            watermark: cycleStartedAt.toISOString(),
             baselineCompletedAt: cursor?.baselineCompletedAt ?? completedAt,
             lastCompletedAt: completedAt,
             lastError: null,
@@ -318,10 +320,50 @@ export function pollIsDue(
   return now.getTime() - timestamp >= intervalSeconds * 1_000;
 }
 
-function maxTimestamp(first: string | null, second: string | null): string | null {
-  if (!first) return second;
-  if (!second) return first;
-  return Date.parse(first) >= Date.parse(second) ? first : second;
+function pollingCycle(
+  cursor: MultiremiScmSyncCursor,
+  fallbackStartedAt: Date,
+): { cycleStartedAt: Date; providerCursor: Record<string, unknown> | null } {
+  const storedCursor = cursor.cursor;
+  const envelope = recordValue(storedCursor?.[POLLING_CYCLE_CURSOR_KEY]);
+  const encodedStartedAt = stringValue(envelope?.startedAt);
+  const encodedTimestamp = Date.parse(encodedStartedAt);
+  if (Number.isFinite(encodedTimestamp)) {
+    return {
+      cycleStartedAt: new Date(encodedTimestamp),
+      providerCursor: recordValue(envelope?.providerCursor),
+    };
+  }
+  if (storedCursor) {
+    const legacyTimestamp = cursor.lastStartedAt ? Date.parse(cursor.lastStartedAt) : Number.NaN;
+    return {
+      cycleStartedAt: Number.isFinite(legacyTimestamp) ? new Date(legacyTimestamp) : fallbackStartedAt,
+      providerCursor: storedCursor,
+    };
+  }
+  return { cycleStartedAt: fallbackStartedAt, providerCursor: null };
+}
+
+function encodePollingCycle(
+  cycleStartedAt: Date,
+  providerCursor: Record<string, unknown> | null,
+): Record<string, unknown> {
+  return {
+    [POLLING_CYCLE_CURSOR_KEY]: {
+      startedAt: cycleStartedAt.toISOString(),
+      providerCursor,
+    },
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function errorMessage(error: unknown): string {
