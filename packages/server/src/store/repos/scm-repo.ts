@@ -108,7 +108,8 @@ export class ScmRepo {
     const apiBaseUrl = normalizeApiBaseUrl(input.apiBaseUrl ?? input.api_base_url, provider, baseUrl);
     const pollIntervalSeconds = normalizePollInterval(input.pollIntervalSeconds ?? input.poll_interval_seconds);
     const accessToken = optionalSecret(input.accessToken ?? input.access_token, "access token");
-    const webhookSecret = optionalSecret(input.webhookSecret ?? input.webhook_secret, "webhook secret");
+    const webhookSecret = optionalWebhookSecret(input.webhookSecret ?? input.webhook_secret);
+    assertWebhookSecretForMode(mode, Boolean(webhookSecret));
     const now = nowIso();
     const repositoryIds = uniqueStrings(input.repositoryIds ?? input.repository_ids ?? []);
 
@@ -159,7 +160,8 @@ export class ScmRepo {
     if (!current) throw new Error(`SCM connection not found: ${id}`);
     const replaceAccessToken = input.accessToken !== undefined || input.access_token !== undefined;
     const clearAccessToken = Boolean(input.clearAccessToken ?? input.clear_access_token);
-    const replaceWebhookSecret = input.webhookSecret !== undefined || input.webhook_secret !== undefined;
+    const webhookSecretInput = input.webhookSecret ?? input.webhook_secret;
+    const replaceWebhookSecret = typeof webhookSecretInput === "string" && Boolean(webhookSecretInput.trim());
     const clearWebhookSecret = Boolean(input.clearWebhookSecret ?? input.clear_webhook_secret);
     if (replaceAccessToken && clearAccessToken) throw new Error("accessToken and clearAccessToken cannot be used together");
     if (replaceWebhookSecret && clearWebhookSecret) throw new Error("webhookSecret and clearWebhookSecret cannot be used together");
@@ -168,8 +170,10 @@ export class ScmRepo {
       ? requiredSecret(input.accessToken ?? input.access_token, "access token")
       : null;
     const webhookSecret = replaceWebhookSecret
-      ? requiredSecret(input.webhookSecret ?? input.webhook_secret, "webhook secret")
+      ? requiredSecret(webhookSecretInput, "webhook secret")
       : null;
+    const nextMode = input.mode === undefined ? current.mode : normalizeMode(input.mode);
+    assertWebhookSecretForMode(nextMode, replaceWebhookSecret || (!clearWebhookSecret && current.webhookSecretSet));
     const baseUrl = input.baseUrl !== undefined || input.base_url !== undefined
       ? normalizeBaseUrl(input.baseUrl ?? input.base_url, current.provider)
       : current.baseUrl;
@@ -191,7 +195,7 @@ export class ScmRepo {
        WHERE id = ?`,
       [
         input.name === undefined ? current.name : requiredString(input.name, "SCM connection name"),
-        input.mode === undefined ? current.mode : normalizeMode(input.mode),
+        nextMode,
         baseUrl,
         apiBaseUrl,
         input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
@@ -1243,6 +1247,17 @@ function requiredString(value: unknown, label: string): string {
 function optionalSecret(value: unknown, label: string): string | null {
   if (value == null) return null;
   return requiredSecret(value, label);
+}
+
+function optionalWebhookSecret(value: unknown): string | null {
+  if (typeof value === "string" && !value.trim()) return null;
+  return optionalSecret(value, "webhook secret");
+}
+
+function assertWebhookSecretForMode(mode: MultiremiScmSyncMode, webhookSecretSet: boolean): void {
+  if ((mode === "webhook" || mode === "hybrid") && !webhookSecretSet) {
+    throw new Error("SCM webhook secret is required when sync mode is webhook or hybrid");
+  }
 }
 
 function requiredSecret(value: unknown, label: string): string {
