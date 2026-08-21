@@ -14,6 +14,7 @@ import {
   cleanString,
   currentTaskAccessToken,
   taskCompatibilityResponse,
+  taskPublicResponse,
 } from "../wire/index.js";
 import type { CreateTaskInput } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
@@ -26,9 +27,9 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const taskToken = currentTaskAccessToken(c);
     if (taskToken?.taskId) {
       const task = store.getTask(taskToken.taskId);
-      return c.json({ tasks: task && (!status || task.status === status) ? [task] : [] });
+      return c.json({ tasks: task && (!status || task.status === status) ? [taskPublicResponse(task)] : [] });
     }
-    return c.json({ tasks: store.listTasks(status) });
+    return c.json({ tasks: store.listTasks(status).map(taskPublicResponse) });
   });
   app.post("/api/multiremi/tasks", async (c) => {
     if (currentTaskAccessToken(c)) {
@@ -66,25 +67,29 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       execution_fingerprint: _executionFingerprintSnake,
       issueSessionGeneration: _issueSessionGeneration,
       issue_session_generation: _issueSessionGenerationSnake,
+      delegationId: _delegationId,
+      delegation_id: _delegationIdSnake,
+      delegatedByAgentId: _delegatedByAgentId,
+      delegated_by_agent_id: _delegatedByAgentIdSnake,
       assignmentSourceEventId: _assignmentSourceEventId,
       assignment_source_event_id: _assignmentSourceEventIdSnake,
       ...publicInput
     } = body;
-    return c.json({ task: store.createTask(publicInput) }, 201);
+    return c.json({ task: taskPublicResponse(store.createTask(publicInput)) }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
     const task = store.getTaskWithAgent(c.req.param("id"));
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyTaskTokenTaskAccess(c, task);
     if (taskDenied) return taskDenied;
-    return c.json({ task });
+    return c.json({ task: taskPublicResponse(task) });
   });
   app.post("/api/multiremi/tasks/:id/cancel", (c) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyTaskTokenTaskAccess(c, task);
     if (taskDenied) return taskDenied;
-    return c.json({ task: store.cancelTask(task.id) });
+    return c.json({ task: taskPublicResponse(store.cancelTask(task.id)) });
   });
   app.post("/api/tasks/:id/cancel", (c) => {
     const task = taskFromParam(store, c, "id");

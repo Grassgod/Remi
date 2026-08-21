@@ -1258,7 +1258,7 @@ export class IssuesRepo {
         });
       }
     }
-    this.ctx.issueSessions().appendSessionEvent(issueSessionId, {
+    const messageEvent = this.ctx.issueSessions().appendSessionEvent(issueSessionId, {
       authorType,
       authorId: input.authorId ?? null,
       kind: "message",
@@ -1303,7 +1303,7 @@ export class IssuesRepo {
       mentionedMemberIds,
       { comment_id: id, issue_session_id: issueSessionId },
     );
-    const mentionTasks = this.triggerCommentMentions(issue, comment);
+    const mentionTasks = this.triggerCommentMentions(issue, comment, messageEvent.seq);
     this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
     return comment;
   }
@@ -1363,7 +1363,7 @@ export class IssuesRepo {
     );
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, current.issueId, attachmentIds);
-    if (current.body !== body) this.cancelTasksByTriggerComments([id]);
+    if (current.body !== body) this.cancelTasksByTriggerComments(current.issueId, [id]);
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId && current.body !== body) {
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
@@ -1393,7 +1393,7 @@ export class IssuesRepo {
       .map((commentId) => this.ctx.getRawIssueComment(commentId))
       .filter((comment): comment is MultiremiIssueComment => comment !== null);
     const now = nowIso();
-    this.cancelTasksByTriggerComments(ids);
+    this.cancelTasksByTriggerComments(current.issueId, ids);
     for (const commentId of ids) {
       this.ctx.db.run("DELETE FROM multiremi_comment_reactions WHERE comment_id = ?", [commentId]);
       this.ctx.db.run("DELETE FROM multiremi_attachments WHERE comment_id = ?", [commentId]);
@@ -2246,16 +2246,10 @@ export class IssuesRepo {
     return active.length;
   }
 
-  private cancelTasksByTriggerComments(commentIds: string[]): number {
-    if (!commentIds.length) return 0;
-    const placeholders = commentIds.map(() => "?").join(", ");
-    const rows = this.ctx.db.query(
-      `SELECT id FROM multiremi_tasks
-       WHERE trigger_comment_id IN (${placeholders})
-         AND status NOT IN ('completed', 'failed', 'cancelled')`,
-    ).all(...commentIds) as Row[];
-    for (const row of rows) this.ctx.tasks().cancelTask(String(row.id));
-    return rows.length;
+  private cancelTasksByTriggerComments(issueId: string, commentIds: string[]): number {
+    const issue = this.getIssue(issueId);
+    if (!issue || !commentIds.length) return 0;
+    return this.ctx.tasks().cancelTasksByTriggerComments(issue.workspaceId, commentIds);
   }
 
   private hydrateIssue(issue: MultiremiIssue): MultiremiIssue {
@@ -2397,23 +2391,57 @@ export class IssuesRepo {
     return notified;
   }
 
-  private triggerCommentMentions(issue: MultiremiIssue, comment: MultiremiIssueComment): MultiremiTask[] {
+  private triggerCommentMentions(
+    issue: MultiremiIssue,
+    comment: MultiremiIssueComment,
+    sourceEventSeq: number,
+  ): MultiremiTask[] {
     const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
 
     const tasks: MultiremiTask[] = [];
     const seenAgents = new Set<string>();
+    const sourceTask = comment.taskId ? this.ctx.tasks().getTask(comment.taskId) : null;
+    const taskAuthoredByCommentAgent = comment.authorType === "agent"
+      && !!comment.authorId
+      && sourceTask?.agentId === comment.authorId
+      && sourceTask.issueId === issue.id
+      && sourceTask.issueSessionId === comment.issueSessionId;
     for (const target of targets) {
       const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
       if (!agent || seenAgents.has(agent.id)) continue;
       if (comment.authorType === "agent" && comment.authorId === agent.id) continue;
       seenAgents.add(agent.id);
+
+      // A delegated child explicitly mentioning its original delegator is a
+      // return signal for the existing delegation, not a fresh A -> B edge.
+      // The same coalescer handles the later terminal event, so the explicit
+      // mention and automatic return cannot enqueue equivalent leader work.
+      if (
+        taskAuthoredByCommentAgent
+        && sourceTask?.delegationId
+        && sourceTask.delegatedByAgentId === agent.id
+      ) {
+        const wakeup = this.ctx.tasks().ensureDelegationWakeup({
+          sourceTaskId: sourceTask.id,
+          requiredEventSeq: sourceEventSeq,
+          triggerCommentId: comment.id,
+        });
+        if (wakeup.created && wakeup.task) tasks.push(wakeup.task);
+        continue;
+      }
+
+      const delegationId = taskAuthoredByCommentAgent ? createId("dlg") : null;
       const task = this.ctx.tasks().createTask({
         agentId: agent.id,
         issueId: issue.id,
         triggerCommentId: comment.id,
         workspaceId: issue.workspaceId,
         prompt: commentMentionPrompt(comment),
+        delegationId,
+        delegatedByAgentId: delegationId ? comment.authorId : null,
+        assignmentAuthorType: comment.authorType,
+        assignmentAuthorId: comment.authorId,
       });
       tasks.push(task);
       this.ctx.appendIssueActivity(issue.id, {
@@ -2427,6 +2455,8 @@ export class IssuesRepo {
           assigneeId: target.assigneeId,
           agentId: agent.id,
           taskId: task.id,
+          delegationId,
+          delegatedByAgentId: delegationId ? comment.authorId : null,
         },
       });
     }

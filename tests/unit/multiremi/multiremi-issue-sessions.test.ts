@@ -467,12 +467,13 @@ describe("Issue sessions and per-agent projection lanes", () => {
     const issue = store.createIssue({ title: "Reply linkage", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Reply in thread" });
+    const spoofedTask = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Different run" });
     const token = await store.createTaskAccessToken(task, "local");
 
     const res = await app.request(`/api/issues/${issue.id}/comments`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "In-run reply" }),
+      body: JSON.stringify({ body: "In-run reply", task_id: spoofedTask.id }),
     });
     expect(res.status).toBe(201);
     const created = (await res.json()) as { author_type: string; task_id: string | null };

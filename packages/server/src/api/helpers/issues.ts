@@ -50,7 +50,9 @@ export function issueCommentCreateInput(
       // A comment posted under a task token was written by that run — record the
       // linkage so the reply carries its transcript entry (the auto-reply path
       // in tasks-repo already does this; the in-run tool path landed here).
-      taskId: input.taskId ?? input.task_id ?? taskToken.taskId ?? null,
+      // The token is authoritative: accepting a body-supplied task id would
+      // let one run borrow another task's delegation lineage.
+      taskId: taskToken.taskId ?? null,
     };
   }
   if (cleanString(input.authorType) || cleanString(input.authorId)) return input;

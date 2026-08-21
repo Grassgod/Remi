@@ -256,10 +256,18 @@ export interface TasksSurface {
   createTask(input: CreateTaskInput): MultiremiTask;
   /** Internal primitive for a caller that already owns a database transaction. */
   createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask;
+  ensureDelegationWakeup(input: {
+    sourceTaskId: string;
+    requiredEventSeq: number;
+    triggerCommentId?: string | null;
+    terminalStatus?: "completed" | "failed" | "cancelled" | null;
+    terminalBody?: string | null;
+  }): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
   cancelTask(taskId: string): MultiremiTask;
+  cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number;
   listAgentTasks(agentId: string): MultiremiTask[];
 }
 

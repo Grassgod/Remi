@@ -186,6 +186,68 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     return store.createWorkspace({ name: `PG Test ${wsCounter}`, slug }).id;
   };
 
+  const createDelegationFixture = () => {
+    const workspaceId = freshWorkspace();
+    const leaderRuntime = store.registerRuntime({
+      name: `PG delegation leader runtime ${wsCounter}`,
+      provider: "claude",
+      workspaceId,
+    });
+    const qaRuntime = store.registerRuntime({
+      name: `PG delegation QA runtime ${wsCounter}`,
+      provider: "claude",
+      workspaceId,
+    });
+    const leader = store.createAgent({
+      name: `PG Leader ${wsCounter}`,
+      provider: "claude",
+      runtimeId: leaderRuntime.id,
+      workspaceId,
+    });
+    const qa = store.createAgent({
+      name: `PG QA ${wsCounter}`,
+      provider: "claude",
+      runtimeId: qaRuntime.id,
+      workspaceId,
+    });
+    const issue = store.createIssue({
+      title: `PG delegation ${wsCounter}`,
+      assigneeType: "agent",
+      assigneeId: leader.id,
+      workspaceId,
+    });
+    const leaderTask = store.createTask({
+      agentId: leader.id,
+      issueId: issue.id,
+      prompt: "Lead the PG delegation test.",
+      workspaceId,
+    });
+    expect(store.claimTask(leaderRuntime.id)?.id).toBe(leaderTask.id);
+    store.buildTaskSessionProjection(leaderTask.id);
+    store.startTask(leaderTask.id);
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: `Please verify [@QA](mention://agent/${qa.id})`,
+    });
+    const childTask = store.listTasksForIssue(issue.id).find((task) => task.agentId === qa.id)!;
+    store.completeTask(leaderTask.id, { output: "Delegated to QA." });
+    expect(store.claimTask(qaRuntime.id)?.id).toBe(childTask.id);
+    store.buildTaskSessionProjection(childTask.id);
+    store.startTask(childTask.id);
+    const report = store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: qa.id,
+      taskId: childTask.id,
+      body: `[@Leader](mention://agent/${leader.id}) Intermediate PG report.`,
+    });
+    const explicitReturn = store.listTasksForIssue(issue.id).find((task) => (
+      task.agentId === leader.id && task.delegationId === childTask.delegationId
+    ))!;
+    return { workspaceId, leader, qa, issue, childTask, report, explicitReturn };
+  };
+
   it("migrate() created the core tables in Postgres", () => {
     const tables = db
       .query("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'index')")
@@ -1278,5 +1340,115 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       previous_status: "todo",
       status: "done",
     });
+  });
+
+  it("orders terminal writes after Session projection locks without deadlocking (PG)", async () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({ name: "projection-race-runtime", provider: "codex", workspaceId: ws });
+    const agent = store.createAgent({ name: "Projection Race", provider: "codex", workspaceId: ws });
+    const issue = store.createIssue({ title: "Projection race", workspaceId: ws });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Freeze this prompt" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    expect(task.issueSessionId).toBeString();
+
+    const worker = new Worker(
+      new URL("./fixtures/postgres-session-projection-worker.ts", import.meta.url).href,
+    );
+    const locked = waitForWorkerPhase(worker, "locked");
+    const committed = waitForWorkerPhase(worker, "committed");
+    worker.postMessage({
+      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      sessionId: task.issueSessionId!,
+      taskId: task.id,
+      holdMs: 150,
+    });
+
+    await locked;
+    // The fixed terminal path waits on Session before touching Task. The old
+    // Task -> Session order deadlocked here when the projection worker woke
+    // and tried to write the same Task while still owning Session.
+    expect(store.completeTask(task.id, { output: "Completed after projection." }).status).toBe("completed");
+    await committed;
+    worker.terminate();
+
+    expect(store.getTask(task.id)).toMatchObject({
+      status: "completed",
+      projectionToSeq: 1,
+      projectionMode: "bootstrap",
+    });
+  });
+
+  it("does not cancel a terminal return detached while comment editing waits on the workspace lock (PG)", async () => {
+    const fixture = createDelegationFixture();
+    const worker = new Worker(
+      new URL("./fixtures/postgres-comment-edit-worker.ts", import.meta.url).href,
+    );
+    const ready = waitForWorkerPhase(worker, "ready");
+    worker.postMessage({ type: "init", databaseUrl: `${PG_HOST_URL}/${TEST_DB}` });
+    await ready;
+
+    const blocker = new Bun.SQL(`${PG_HOST_URL}/${TEST_DB}`, { max: 1 });
+    const observer = new Bun.SQL(`${PG_HOST_URL}/${TEST_DB}`, { max: 1 });
+    await blocker`BEGIN`;
+    await blocker`
+      UPDATE multiremi_workspaces
+      SET updated_at = updated_at
+      WHERE id = ${fixture.workspaceId}
+    `;
+
+    const completed = waitForWorkerPhase(worker, "completed");
+    worker.postMessage({
+      type: "edit",
+      commentId: fixture.report.id,
+      body: "Intermediate PG report without a mention.",
+    });
+
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const [comment] = await observer`
+        SELECT body FROM multiremi_issue_comments WHERE id = ${fixture.report.id}
+      `;
+      if (comment?.body === "Intermediate PG report without a mention.") break;
+      await Bun.sleep(10);
+    }
+    const [edited] = await observer`
+      SELECT body FROM multiremi_issue_comments WHERE id = ${fixture.report.id}
+    `;
+    expect(edited?.body).toBe("Intermediate PG report without a mention.");
+
+    await blocker`
+      UPDATE multiremi_tasks
+      SET prompt = ${"Terminal PG report."}, trigger_comment_id = NULL, trigger_summary = NULL
+      WHERE id = ${fixture.explicitReturn.id}
+    `;
+    await blocker`COMMIT`;
+    await completed;
+    worker.terminate();
+    await blocker.end();
+    await observer.end();
+
+    expect(store.getTask(fixture.explicitReturn.id)).toMatchObject({
+      status: "queued",
+      triggerCommentId: null,
+      prompt: "Terminal PG report.",
+    });
+  });
+
+  it("creates a fresh terminal return when comment editing cancels the explicit return first (PG)", () => {
+    const fixture = createDelegationFixture();
+    store.updateIssueComment(fixture.report.id, { body: "Intermediate report withdrawn." });
+    expect(store.getTask(fixture.explicitReturn.id)?.status).toBe("cancelled");
+
+    store.completeTask(fixture.childTask.id, {
+      output: "Final PG QA result after the explicit report was withdrawn.",
+    });
+
+    const leaderReturns = store.listTasksForIssue(fixture.issue.id).filter((task) => (
+      task.agentId === fixture.leader.id && task.delegationId === fixture.childTask.delegationId
+    ));
+    expect(leaderReturns).toHaveLength(2);
+    const terminalReturn = leaderReturns.find((task) => task.id !== fixture.explicitReturn.id)!;
+    expect(terminalReturn.status).toBe("queued");
+    expect(terminalReturn.prompt).toContain("Final PG QA result after the explicit report was withdrawn.");
   });
 });

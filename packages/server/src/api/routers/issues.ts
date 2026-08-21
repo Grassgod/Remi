@@ -64,6 +64,7 @@ import {
   sessionParticipantCompatibilityResponse,
   sessionResultCompatibilityResponse,
   taskCompatibilityResponse,
+  taskPublicResponse,
 } from "../wire/index.js";
 import type {
   AddSessionParticipantInput,
@@ -409,7 +410,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         assigneeId,
         prompt: body.prompt ?? body.title,
       });
-      return c.json({ issue: assigned.issue, task: assigned.task }, 201);
+      return c.json({
+        issue: assigned.issue,
+        task: assigned.task ? taskPublicResponse(assigned.task) : null,
+      }, 201);
     }
     return c.json({ issue, task }, 201);
   });
@@ -461,7 +465,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       taskId: result.task.id,
       task_id: result.task.id,
       issue: result.issue,
-      task: result.task,
+      task: taskPublicResponse(result.task),
     }, 202);
   });
   app.post("/api/issues/quick-create", async (c) => {
@@ -490,7 +494,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const scopedTasks = taskScopedIssueTasks(c, store, issue.id, issue.tasks);
+    const scopedTasks = taskScopedIssueTasks(c, store, issue.id, issue.tasks).map(taskPublicResponse);
     const scopedComments = taskScopedIssueComments(c, store, issue.id, store.listIssueComments(issue.id));
     const productSessionScope = taskTokenProductSessionId(c, store, issue.id);
     return c.json({
@@ -810,7 +814,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
-    return c.json(store.assignIssue(issue.id, body));
+    const result = store.assignIssue(issue.id, body);
+    return c.json({
+      ...result,
+      task: result.task ? taskPublicResponse(result.task) : null,
+    });
   });
   app.get("/api/issues/:id/sessions", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");

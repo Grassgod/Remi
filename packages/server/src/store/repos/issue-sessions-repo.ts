@@ -287,26 +287,35 @@ export class IssueSessionsRepo {
   }
 
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
-    const task = this.ctx.tasks().getTask(taskId);
-    if (!task?.issueSessionId) return null;
-    const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
-    const events = this.listSessionEvents(task.issueSessionId);
-    const projection = buildSessionProjection({
-      sessionId: task.issueSessionId,
-      targetAgentId: task.agentId,
-      events,
-      cursorSeq: lane.cursorSeq,
-      providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
-      currentTaskId: task.id,
-      resolveAuthorName: (type, id) => this.sessionAuthorName(type, id),
-    });
-    this.ctx.db.run(
-      `UPDATE multiremi_tasks
-       SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?, updated_at = ?
-       WHERE id = ?`,
-      [projection.fromSeq, projection.toSeq, projection.mode, nowIso(), taskId],
-    );
-    return projection;
+    return this.ctx.db.transaction(() => {
+      const task = this.ctx.tasks().getTask(taskId);
+      if (!task?.issueSessionId) return null;
+      // Delegation wakeup coalescing uses the same Session row lock. Whichever
+      // side wins decides deterministically whether this prompt includes a new
+      // teammate event or a follow-up Delta task is required.
+      this.ctx.db.run(
+        "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
+        [task.issueSessionId],
+      );
+      const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+      const events = this.listSessionEvents(task.issueSessionId);
+      const projection = buildSessionProjection({
+        sessionId: task.issueSessionId,
+        targetAgentId: task.agentId,
+        events,
+        cursorSeq: lane.cursorSeq,
+        providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
+        currentTaskId: task.id,
+        resolveAuthorName: (type, id) => this.sessionAuthorName(type, id),
+      });
+      this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?, updated_at = ?
+         WHERE id = ?`,
+        [projection.fromSeq, projection.toSeq, projection.mode, nowIso(), taskId],
+      );
+      return projection;
+    })();
   }
 
   createSessionTask(sessionId: string, input: CreateSessionTaskInput): MultiremiTask {

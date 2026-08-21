@@ -29,6 +29,7 @@ import {
   currentRequestUserId,
   skillCompatibilityErrorResponse,
   skillSummaryCompatibilityResponse,
+  taskPublicResponse,
 } from "../wire/index.js";
 import type {
   CreateAgentFromTemplateInput,
@@ -120,7 +121,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/agents/:id/tasks", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    const tasks = store.listAgentTasks(loaded.agent.id);
+    const tasks = store.listAgentTasks(loaded.agent.id).map(taskPublicResponse);
     return c.json({ tasks, total: tasks.length });
   });
   app.put("/api/multiremi/agents/:id/skills", async (c) => {
@@ -133,7 +134,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/agents/:id/tasks", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    return c.json(store.listAgentTasks(loaded.agent.id));
+    return c.json(store.listAgentTasks(loaded.agent.id).map(taskPublicResponse));
   });
   app.get("/api/agents/:id/skills", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
@@ -279,14 +280,14 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const tasks = store.listWorkspaceAgentTaskSnapshot(workspaceId);
+    const tasks = store.listWorkspaceAgentTaskSnapshot(workspaceId).map(taskPublicResponse);
     return c.json({ tasks, total: tasks.length });
   });
   app.get("/api/agent-task-snapshot", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId));
+    return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId).map(taskPublicResponse));
   });
   app.get("/api/multiremi/agent-run-counts", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";

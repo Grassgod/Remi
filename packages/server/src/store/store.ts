@@ -2527,6 +2527,16 @@ runMigrations(this.db);
     return this.tasks.createTaskWithinTransaction(input);
   }
 
+  ensureDelegationWakeup(input: {
+    sourceTaskId: string;
+    requiredEventSeq: number;
+    triggerCommentId?: string | null;
+    terminalStatus?: "completed" | "failed" | "cancelled" | null;
+    terminalBody?: string | null;
+  }): { task: MultiremiTask | null; created: boolean; covered: boolean } {
+    return this.tasks.ensureDelegationWakeup(input);
+  }
+
   resetSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {
     return this.tasks.resetSessionAgentLane(sessionId, agentId);
   }
@@ -2661,6 +2671,10 @@ runMigrations(this.db);
 
   cancelTask(taskId: string): MultiremiTask {
     return this.tasks.cancelTask(taskId);
+  }
+
+  cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
+    return this.tasks.cancelTasksByTriggerComments(workspaceId, commentIds);
   }
 
   getTaskStatus(taskId: string): MultiremiTaskStatus {

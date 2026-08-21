@@ -13,6 +13,7 @@ import {
   chatSessionCompatibilityResponse,
   currentRequestUserId,
   sendChatMessageCompatibilityResponse,
+  taskPublicResponse,
 } from "../wire/index.js";
 import type {
   CreateChatSessionInput,
@@ -63,7 +64,8 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<SendChatMessageInput>(c);
     const message = normalizeSendChatMessageInput(c, body);
     if (message instanceof Response) return message;
-    return c.json(store.sendChatMessage(loaded.session.id, message), 201);
+    const result = store.sendChatMessage(loaded.session.id, message);
+    return c.json({ ...result, task: taskPublicResponse(result.task) }, 201);
   });
   app.get("/api/chat/sessions", (c) => {
     const workspaceId = requestedChatWorkspaceId(c);

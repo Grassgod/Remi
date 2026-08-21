@@ -1113,6 +1113,14 @@ export interface MultiremiTask {
   attempt: number;
   maxAttempts: number;
   parentTaskId: string | null;
+  /** Stable identity shared by a delegated task, its infrastructure retries,
+   *  and any tasks that return control to the delegating agent. */
+  delegationId: string | null;
+  delegation_id?: string | null;
+  /** Agent that initiated this delegation. A return task has
+   *  agentId === delegatedByAgentId, which prevents a return from bouncing. */
+  delegatedByAgentId: string | null;
+  delegated_by_agent_id?: string | null;
   assignmentEventId: string | null;
   assignment_event_id?: string | null;
   /** System event that caused the automation-owned task to be assigned. This
@@ -1238,6 +1246,11 @@ export interface CreateTaskInput {
   maxAttempts?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /** Server-internal delegation lineage. Public task creation strips it. */
+  delegationId?: string | null;
+  delegation_id?: string | null;
+  delegatedByAgentId?: string | null;
+  delegated_by_agent_id?: string | null;
   assignmentEventId?: string | null;
   assignment_event_id?: string | null;
   assignmentAuthorType?: string;

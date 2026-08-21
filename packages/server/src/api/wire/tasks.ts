@@ -9,6 +9,23 @@ import type {
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
 } from "@multiremi/contracts/types.js";
+
+type InternalDelegationTaskField =
+  | "delegationId"
+  | "delegation_id"
+  | "delegatedByAgentId"
+  | "delegated_by_agent_id";
+
+export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, InternalDelegationTaskField> {
+  const {
+    delegationId: _delegationId,
+    delegation_id: _delegationIdSnake,
+    delegatedByAgentId: _delegatedByAgentId,
+    delegated_by_agent_id: _delegatedByAgentIdSnake,
+    ...publicTask
+  } = task;
+  return publicTask;
+}
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createLogger } from "@shared/logger.js";
 import { daemonClaimAgentResponse } from "./agents.js";
@@ -75,7 +92,10 @@ export function taskRealtimePayload(task: MultiremiTask): Record<string, unknown
   return payload;
 }
 
-export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: MultiremiTaskTriggerMetadata | null = null): Omit<MultiremiTask, "result"> & {
+export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: MultiremiTaskTriggerMetadata | null = null): Omit<
+  MultiremiTask,
+  "result" | "delegationId" | "delegation_id" | "delegatedByAgentId" | "delegated_by_agent_id"
+> & {
   result: unknown | null;
   agent_id: string;
   runtime_id: string | null;
@@ -110,7 +130,11 @@ export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: 
   failed_at: string | null;
   cancelled_at: string | null;
 } {
-  const response: Omit<MultiremiTask, "result"> & {
+  const publicTask = taskPublicResponse(task);
+  const response: Omit<
+    MultiremiTask,
+    "result" | "delegationId" | "delegation_id" | "delegatedByAgentId" | "delegated_by_agent_id"
+  > & {
     result: unknown | null;
     agent_id: string;
     runtime_id: string | null;
@@ -148,7 +172,10 @@ export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: 
     // These trigger compat snake-fields are typed `string | null` on MultiremiTask
     // but are never set on stored tasks; they are assigned below from triggerMetadata
     // as `string`. Omit them from the spread's type so the strict response type holds.
-    ...(task as Omit<MultiremiTask, "trigger_thread_id" | "trigger_comment_content" | "trigger_author_type" | "trigger_author_name" | "new_comment_count" | "new_comments_since">),
+    ...(publicTask as Omit<
+      typeof publicTask,
+      "trigger_thread_id" | "trigger_comment_content" | "trigger_author_type" | "trigger_author_name" | "new_comment_count" | "new_comments_since"
+    >),
     result: taskResultWireValue(task),
     agent_id: task.agentId,
     runtime_id: task.runtimeId,

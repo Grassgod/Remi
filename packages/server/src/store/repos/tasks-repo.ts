@@ -73,7 +73,27 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
 const TASK_PROMPT_MAX_BYTES = 2 * 1024 * 1024;
+const DELEGATION_RETURN_BODY_MAX_LENGTH = 16_000;
 const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
+
+interface DelegationWakeupInput {
+  sourceTaskId: string;
+  requiredEventSeq: number;
+  triggerCommentId?: string | null;
+  terminalStatus?: "completed" | "failed" | "cancelled" | null;
+  terminalBody?: string | null;
+}
+
+interface DelegationWakeupResult {
+  task: MultiremiTask | null;
+  created: boolean;
+  covered: boolean;
+}
+
+interface TaskTerminalFollowUps {
+  retry: MultiremiTask | null;
+  delegationReturn: MultiremiTask | null;
+}
 
 class AgentPluginReadinessChangedError extends Error {}
 
@@ -104,6 +124,21 @@ export class TasksRepo {
     const task = this.ctx.db.transaction(() => this.createTaskWithinTransaction(input))();
     this.ctx.notifyTaskEnqueued(task);
     return task;
+  }
+
+  ensureDelegationWakeup(input: DelegationWakeupInput): DelegationWakeupResult {
+    const initial = this.getTask(input.sourceTaskId);
+    if (!initial) return { task: null, created: false, covered: false };
+    const result = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const source = this.getTask(input.sourceTaskId);
+      if (!source || source.workspaceId !== initial.workspaceId) {
+        return { task: null, created: false, covered: false };
+      }
+      return this.ensureDelegationWakeupWithinWorkspaceLock(source, input);
+    })();
+    if (result.created && result.task) this.ctx.notifyTaskEnqueued(result.task);
+    return result;
   }
 
   /** Caller owns the transaction; notification must happen only after it commits. */
@@ -225,6 +260,17 @@ export class TasksRepo {
     const now = nowIso();
     const attempt = normalizePositiveInt(input.attempt, 1);
     const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts, 3));
+    const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
+    const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
+    if (Boolean(delegationId) !== Boolean(delegatedByAgentId)) {
+      throw new Error("delegation_id and delegated_by_agent_id must be set together");
+    }
+    if (delegatedByAgentId) {
+      const delegator = this.ctx.agents().getAgent(delegatedByAgentId);
+      if (!delegator || delegator.workspaceId !== agent.workspaceId) {
+        throw new Error("Delegating agent must belong to the task workspace");
+      }
+    }
     const triggerSummary = normalizeTriggerSummary(input.triggerSummary ?? input.trigger_summary ?? triggerComment?.body ?? null);
     const taskKind = input.taskKind ?? input.task_kind ?? "direct";
     const requestedIssueSessionGeneration = input.issueSessionGeneration ?? input.issue_session_generation;
@@ -235,10 +281,11 @@ export class TasksRepo {
       `INSERT INTO multiremi_tasks (
         id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
-        attempt, max_attempts, parent_task_id, assignment_event_id, assignment_source_event_id,
+        attempt, max_attempts, parent_task_id, delegation_id, delegated_by_agent_id,
+        assignment_event_id, assignment_source_event_id,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         taskKind,
@@ -262,6 +309,8 @@ export class TasksRepo {
         attempt,
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        delegationId,
+        delegatedByAgentId,
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
         cleanOptionalString(input.assignmentSourceEventId ?? input.assignment_source_event_id),
         cleanOptionalString(input.provider),
@@ -324,6 +373,10 @@ export class TasksRepo {
             source_event_id: input.assignmentSourceEventId ?? input.assignment_source_event_id ?? null,
             attempt,
             parent_task_id: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+            ...(delegationId ? {
+              delegation_id: delegationId,
+              delegated_by_agent_id: delegatedByAgentId,
+            } : {}),
           },
         });
         this.ctx.db.run(
@@ -1378,11 +1431,12 @@ export class TasksRepo {
   }): MultiremiTask {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
-    const task = this.ctx.db.transaction(() => {
+    const terminal = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
       if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
+      this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
       const now = nowIso();
       const storedResult = toJson(taskCompletionResultPayload(input));
       const result = this.ctx.db.run(
@@ -1401,10 +1455,12 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       const completed = this.getTask(taskId)!;
-      this.afterTaskTerminal(completed, "completed", input.output, true);
-      return completed;
+      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true);
+      return { task: completed, followUps };
     })();
+    const task = terminal.task;
     this.postAgentReplyComment(task, input.output);
+    if (terminal.followUps.delegationReturn) this.ctx.notifyTaskEnqueued(terminal.followUps.delegationReturn);
     this.ctx.notifyTaskEvent("task:completed", task);
     return task;
   }
@@ -1423,6 +1479,7 @@ export class TasksRepo {
       const current = this.getTask(taskId);
       if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
+      this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
       const now = nowIso();
       const failureReason = cleanOptionalString(input.failureReason ?? input.failure_reason) ?? "agent_error";
       const result = this.ctx.db.run(
@@ -1441,31 +1498,52 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       const failed = this.getTask(taskId)!;
-      const retry = this.afterTaskTerminal(failed, "failed", input.error, true);
-      return { task: failed, retry };
+      const followUps = this.afterTaskTerminal(failed, "failed", input.error, true);
+      return { task: failed, followUps };
     })();
-    if (terminal.retry) this.ctx.notifyTaskEnqueued(terminal.retry);
+    if (terminal.followUps.retry) this.ctx.notifyTaskEnqueued(terminal.followUps.retry);
+    if (terminal.followUps.delegationReturn) this.ctx.notifyTaskEnqueued(terminal.followUps.delegationReturn);
     const task = terminal.task;
     this.ctx.notifyTaskEvent("task:failed", task);
     return task;
   }
 
   cancelTask(taskId: string): MultiremiTask {
-    const task = this.ctx.db.transaction(() => {
-      const now = nowIso();
-      const result = this.ctx.db.run(
-        `UPDATE multiremi_tasks
-         SET status = 'cancelled', wait_reason = NULL, failure_reason = NULL, completed_at = ?, cancelled_at = ?, updated_at = ?
-         WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
-        [now, now, now, taskId],
-      );
-      if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-      const cancelled = this.getTask(taskId)!;
-      this.afterTaskTerminal(cancelled, "cancelled", null, true);
-      return cancelled;
+    const initial = this.getTask(taskId);
+    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
+    const terminal = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const current = this.getTask(taskId);
+      if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+      this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
+      return this.cancelTaskWithinWorkspaceLock(current);
     })();
-    this.ctx.notifyTaskEvent("task:cancelled", task);
-    return task;
+    this.notifyCancelledTask(terminal);
+    return terminal.task;
+  }
+
+  cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
+    const uniqueCommentIds = [...new Set(commentIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
+    if (!uniqueCommentIds.length) return 0;
+    const terminals = this.ctx.db.transaction(() => {
+      // Terminal delegation handling uses this same lock to detach an explicit
+      // @Leader return from its source comment. Re-read only after acquiring
+      // the lock so a stale pre-lock task id cannot cancel the upgraded return.
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const placeholders = uniqueCommentIds.map(() => "?").join(", ");
+      const rows = this.ctx.db.query(
+        `SELECT * FROM multiremi_tasks
+         WHERE workspace_id = ?
+           AND trigger_comment_id IN (${placeholders})
+           AND status NOT IN ('completed', 'failed', 'cancelled')
+         ORDER BY created_at ASC, id ASC`,
+      ).all(workspaceId, ...uniqueCommentIds) as Row[];
+      const tasks = rows.map(toTask);
+      this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
+      return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task));
+    })();
+    for (const terminal of terminals) this.notifyCancelledTask(terminal);
+    return terminals.length;
   }
 
   getTaskStatus(taskId: string): MultiremiTaskStatus {
@@ -1502,11 +1580,18 @@ export class TasksRepo {
         throw new Error(`Runtime not found: ${runtimeId}`);
       }
       const orphanRows = this.ctx.db.query(
-        "SELECT id FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
-      ).all(runtimeId) as Array<{ id: string }>;
-      if (!orphanRows.length) return { failedTasks: [] as MultiremiTask[], retries: [] as MultiremiTask[] };
+        "SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+      ).all(runtimeId) as Row[];
+      if (!orphanRows.length) {
+        return {
+          failedTasks: [] as MultiremiTask[],
+          retries: [] as MultiremiTask[],
+          delegationReturns: [] as MultiremiTask[],
+        };
+      }
 
       const now = nowIso();
+      this.lockTaskIssueSessionsWithinWorkspaceLock(orphanRows.map(toTask));
       const orphanIds = orphanRows.map((row) => String(row.id));
       const placeholders = orphanIds.map(() => "?").join(", ");
       this.ctx.db.run(
@@ -1524,14 +1609,17 @@ export class TasksRepo {
       const failedRows = this.ctx.db.query(`SELECT * FROM multiremi_tasks WHERE id IN (${placeholders})`).all(...orphanIds) as Row[];
       const failedTasks = this.withTaskAutopilotRuns(failedRows.map(toTask));
       const retries: MultiremiTask[] = [];
+      const delegationReturns: MultiremiTask[] = [];
       for (const task of failedTasks) {
-        const retry = this.afterTaskTerminal(task, "failed", task.error, true);
-        if (retry) retries.push(retry);
+        const followUps = this.afterTaskTerminal(task, "failed", task.error, true);
+        if (followUps.retry) retries.push(followUps.retry);
+        if (followUps.delegationReturn) delegationReturns.push(followUps.delegationReturn);
       }
-      return { failedTasks, retries };
+      return { failedTasks, retries, delegationReturns };
     })();
 
     for (const retry of recovered.retries) this.ctx.notifyTaskEnqueued(retry);
+    for (const delegationReturn of recovered.delegationReturns) this.ctx.notifyTaskEnqueued(delegationReturn);
     for (const task of recovered.failedTasks) this.ctx.notifyTaskEvent("task:failed", task);
     return { orphaned: recovered.failedTasks.length, retried: recovered.retries.length };
   }
@@ -1601,6 +1689,8 @@ export class TasksRepo {
       attempt: parent.attempt + 1,
       maxAttempts: parent.maxAttempts,
       parentTaskId: parent.id,
+      delegationId: parent.delegationId,
+      delegatedByAgentId: parent.delegatedByAgentId,
       assignmentSourceEventId: parent.assignmentSourceEventId,
     };
     const retry = workspaceLockHeld
@@ -1658,14 +1748,137 @@ export class TasksRepo {
     return Number(row?.count ?? 0);
   }
 
+  /** Caller holds the source task's workspace lifecycle lock. */
+  private ensureDelegationWakeupWithinWorkspaceLock(
+    source: MultiremiTask,
+    input: DelegationWakeupInput,
+  ): DelegationWakeupResult {
+    const rawRequiredEventSeq = Number(input.requiredEventSeq);
+    const requiredEventSeq = Number.isFinite(rawRequiredEventSeq)
+      ? Math.max(1, Math.floor(rawRequiredEventSeq))
+      : 1;
+    if (
+      !source.issueId ||
+      !source.issueSessionId ||
+      !source.delegationId ||
+      !source.delegatedByAgentId ||
+      source.agentId === source.delegatedByAgentId
+    ) {
+      return { task: null, created: false, covered: false };
+    }
+
+    const delegator = this.ctx.agents().getAgent(source.delegatedByAgentId);
+    if (!delegator || delegator.archivedAt || delegator.workspaceId !== source.workspaceId) {
+      log.warn(`delegation ${source.delegationId} cannot return to unavailable agent ${source.delegatedByAgentId}`);
+      return { task: null, created: false, covered: false };
+    }
+
+    // Serialize against prompt projection. A queued task with no projection
+    // will read every event committed before it is claimed; a frozen projection
+    // only covers events through projection_to_seq and needs a later Delta task.
+    this.ctx.db.run(
+      "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
+      [source.issueSessionId],
+    );
+    const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(source.issueSessionId, delegator.id);
+    if (lane.cursorSeq >= requiredEventSeq) {
+      return { task: null, created: false, covered: true };
+    }
+
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_tasks
+       WHERE delegation_id = ? AND agent_id = ? AND issue_session_id = ?
+       ORDER BY created_at DESC`,
+    ).all(source.delegationId, delegator.id, source.issueSessionId) as Row[];
+    for (const row of rows) {
+      const candidate = toTask(row);
+      const projectedThrough = candidate.projectionToSeq;
+      if (isActiveTaskStatus(candidate.status) && projectedThrough == null) {
+        if (!input.terminalStatus) {
+          return { task: candidate, created: false, covered: true };
+        }
+        // An explicit @Leader may have queued this return before the child
+        // produced its final output. While the task is still queued and its
+        // prompt is unfrozen, enrich Current Request with that terminal report.
+        // Once dispatched, the daemon may already hold the old prompt, so a
+        // second Delta task is safer than pretending the output was covered.
+        if (candidate.status === "queued") {
+          const sourceAgent = this.ctx.agents().getAgent(source.agentId);
+          const updated = this.ctx.db.run(
+            `UPDATE multiremi_tasks
+             SET prompt = ?, trigger_comment_id = NULL, trigger_summary = NULL, updated_at = ?
+             WHERE id = ? AND status = 'queued' AND projection_to_seq IS NULL`,
+            [
+              delegationReturnPrompt({
+                sourceTaskId: source.id,
+                sourceAgentName: sourceAgent?.name ?? source.agentId,
+                terminalStatus: input.terminalStatus,
+                terminalBody: input.terminalBody ?? null,
+              }),
+              nowIso(),
+              candidate.id,
+            ],
+          );
+          if (updated.changes > 0) {
+            return { task: this.getTask(candidate.id)!, created: false, covered: true };
+          }
+        }
+        continue;
+      }
+      if (
+        (isActiveTaskStatus(candidate.status) && projectedThrough != null && projectedThrough >= requiredEventSeq)
+        || (candidate.status === "completed" && projectedThrough != null && projectedThrough >= requiredEventSeq)
+      ) {
+        return { task: candidate, created: false, covered: true };
+      }
+    }
+
+    const sourceAgent = this.ctx.agents().getAgent(source.agentId);
+    const task = this.createTaskWithinWorkspaceLock({
+      agentId: delegator.id,
+      issueId: source.issueId,
+      issueSessionId: source.issueSessionId,
+      triggerCommentId: cleanOptionalString(input.triggerCommentId),
+      workspaceId: source.workspaceId,
+      priority: source.priority,
+      prompt: delegationReturnPrompt({
+        sourceTaskId: source.id,
+        sourceAgentName: sourceAgent?.name ?? source.agentId,
+        terminalStatus: input.terminalStatus ?? null,
+        terminalBody: input.terminalBody ?? null,
+      }),
+      delegationId: source.delegationId,
+      delegatedByAgentId: delegator.id,
+      assignmentAuthorType: "system",
+      assignmentAuthorId: null,
+    });
+    this.ctx.appendIssueActivity(source.issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "delegation_return_triggered",
+      body: `Queued ${delegator.name} to review ${sourceAgent?.name ?? "a delegated teammate"}`,
+      data: {
+        delegationId: source.delegationId,
+        sourceTaskId: source.id,
+        returnTaskId: task.id,
+        delegatorAgentId: delegator.id,
+        delegateAgentId: source.agentId,
+        requiredEventSeq,
+        terminalStatus: input.terminalStatus ?? null,
+      },
+    });
+    return { task, created: true, covered: false };
+  }
+
   private afterTaskTerminal(
     task: MultiremiTask,
     status: "completed" | "failed" | "cancelled",
     body: string | null,
     workspaceLockHeld = false,
-  ): MultiremiTask | null {
+  ): TaskTerminalFollowUps {
     const now = nowIso();
     const retry = status === "failed" ? this.maybeRetryFailedTask(task, workspaceLockHeld) : null;
+    let delegationReturn: MultiremiTask | null = null;
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
     if (task.chatSessionId && (status === "completed" || (status === "failed" && !retry))) {
       const role = "assistant";
@@ -1734,12 +1947,7 @@ export class TasksRepo {
     }
 
     if (task.issueId) {
-      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status);
       const issue = this.ctx.issues().getIssue(task.issueId);
-      if (issueStatus) {
-        if (workspaceLockHeld) this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus);
-        else this.syncIssueStatusFromTask(task, issueStatus);
-      }
       this.ctx.appendIssueActivity(task.issueId, {
         actorType: "agent",
         actorId: task.agentId,
@@ -1762,13 +1970,35 @@ export class TasksRepo {
             failure_reason: task.failureReason,
           },
         };
-        if (workspaceLockHeld) {
-          this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, event);
-        } else {
-          this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, event);
-        }
+        const terminalEvent = workspaceLockHeld
+          ? this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, event)
+          : this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, event);
         if (status === "completed") this.promoteSessionAgentLane(task);
         else if (!retry) this.resetSessionAgentLane(task.issueSessionId, task.agentId);
+        if (!retry) {
+          const wakeup = workspaceLockHeld
+            ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
+                sourceTaskId: task.id,
+                requiredEventSeq: terminalEvent.seq,
+                terminalStatus: status,
+                terminalBody: body,
+              })
+            : this.ensureDelegationWakeup({
+                sourceTaskId: task.id,
+                requiredEventSeq: terminalEvent.seq,
+                terminalStatus: status,
+                terminalBody: body,
+              });
+          if (wakeup.created) delegationReturn = wakeup.task;
+        }
+      }
+      // Compute status after the return task is present. Otherwise the child
+      // completion can mark the Issue done and the queued leader follow-up is
+      // deliberately unable to reopen that explicit terminal state.
+      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status);
+      if (issueStatus) {
+        if (workspaceLockHeld) this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus);
+        else this.syncIssueStatusFromTask(task, issueStatus);
       }
       if (issue?.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
     }
@@ -1798,7 +2028,56 @@ export class TasksRepo {
         else this.ctx.analytics().recordAutopilotRunFailedAnalytics(autopilot, run, failureReason);
       }
     }
-    return retry;
+    return { retry, delegationReturn };
+  }
+
+  /** Caller holds the task workspace lifecycle lock. */
+  private cancelTaskWithinWorkspaceLock(current: MultiremiTask): {
+    task: MultiremiTask;
+    followUps: TaskTerminalFollowUps;
+  } {
+    const now = nowIso();
+    const result = this.ctx.db.run(
+      `UPDATE multiremi_tasks
+       SET status = 'cancelled', wait_reason = NULL, failure_reason = NULL, completed_at = ?, cancelled_at = ?, updated_at = ?
+       WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+      [now, now, now, current.id],
+    );
+    if (result.changes === 0) throw new Error(`Task not found or terminal: ${current.id}`);
+    const cancelled = this.getTask(current.id)!;
+    return {
+      task: cancelled,
+      followUps: this.afterTaskTerminal(cancelled, "cancelled", null, true),
+    };
+  }
+
+  private notifyCancelledTask(terminal: {
+    task: MultiremiTask;
+    followUps: TaskTerminalFollowUps;
+  }): void {
+    if (terminal.followUps.delegationReturn) {
+      this.ctx.notifyTaskEnqueued(terminal.followUps.delegationReturn);
+    }
+    this.ctx.notifyTaskEvent("task:cancelled", terminal.task);
+  }
+
+  /**
+   * Prompt projection locks Session before Task. Terminal paths must do the
+   * same or PostgreSQL can deadlock when one transaction freezes a prompt
+   * while another finalizes that task. Callers already hold the workspace
+   * lifecycle lock; sorting also makes multi-task recovery deterministic.
+   */
+  private lockTaskIssueSessionsWithinWorkspaceLock(tasks: MultiremiTask[]): void {
+    const sessionIds = [...new Set(tasks
+      .map((task) => cleanOptionalString(task.issueSessionId))
+      .filter((id): id is string => Boolean(id)))]
+      .sort();
+    for (const sessionId of sessionIds) {
+      this.ctx.db.run(
+        "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
+        [sessionId],
+      );
+    }
   }
 
   /** Caller holds the task workspace lifecycle lock. */
@@ -2066,6 +2345,50 @@ function normalizeTriggerSummary(value: unknown): string | null {
   return `${chars.slice(0, TRIGGER_SUMMARY_MAX_LENGTH).join("")}\u2026`;
 }
 
+function delegationReturnPrompt(input: {
+  sourceTaskId: string;
+  sourceAgentName: string;
+  terminalStatus: "completed" | "failed" | "cancelled" | null;
+  terminalBody: string | null;
+}): string {
+  if (!input.terminalStatus) {
+    return [
+      `${input.sourceAgentName} requested your attention while working on a task you delegated.`,
+      "Read the latest Session Updates, respond to the teammate's report, and continue owning the parent task.",
+      "Do not repeat work that the teammate already completed.",
+      "",
+      `Source task: ${input.sourceTaskId}`,
+    ].join("\n");
+  }
+
+  const opening = input.terminalStatus === "completed"
+    ? `${input.sourceAgentName} completed a task you delegated.`
+    : input.terminalStatus === "failed"
+      ? `${input.sourceAgentName} could not complete a task you delegated.`
+      : `A task you delegated to ${input.sourceAgentName} was cancelled.`;
+  const prompt = [
+    opening,
+    "Read the latest Session Updates and terminal report, then continue owning the parent task.",
+    "Validate the result, decide the next action, and communicate the final outcome to the user.",
+    "Do not repeat work that the teammate already completed.",
+    "",
+    `Source task: ${input.sourceTaskId}`,
+  ];
+  const body = input.terminalBody?.trim();
+  if (body) {
+    const chars = Array.from(body);
+    const truncated = chars.length > DELEGATION_RETURN_BODY_MAX_LENGTH;
+    prompt.push(
+      "",
+      "## Terminal Report",
+      truncated
+        ? `${chars.slice(0, DELEGATION_RETURN_BODY_MAX_LENGTH).join("")}\n\n[terminal report truncated]`
+        : body,
+    );
+  }
+  return prompt.join("\n");
+}
+
 function taskPluginSnapshotInput(input: CreateTaskInput): MultiremiTaskPluginSnapshotEntry[] | null {
   const value = input.pluginSnapshot ?? input.plugin_snapshot;
   return Array.isArray(value) ? value.map((entry) => ({ ...entry, config: { ...entry.config } })) : null;
@@ -2130,6 +2453,10 @@ function toTask(row: Row): MultiremiTask {
     attempt: Number(row.attempt ?? 1),
     maxAttempts: Number(row.max_attempts ?? 3),
     parentTaskId: nullableString(row.parent_task_id),
+    delegationId: nullableString(row.delegation_id),
+    delegation_id: nullableString(row.delegation_id),
+    delegatedByAgentId: nullableString(row.delegated_by_agent_id),
+    delegated_by_agent_id: nullableString(row.delegated_by_agent_id),
     assignmentEventId: nullableString(row.assignment_event_id),
     assignment_event_id: nullableString(row.assignment_event_id),
     assignmentSourceEventId: nullableString(row.assignment_source_event_id),
