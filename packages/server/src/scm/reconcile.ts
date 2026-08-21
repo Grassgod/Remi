@@ -4,6 +4,7 @@ import type {
   MultiremiScmEventFidelity,
   MultiremiScmEventSource,
   MultiremiScmRepositoryBinding,
+  UpsertScmEntitySnapshotInput,
 } from "@multiremi/contracts/types.js";
 import type {
   ScmCanonicalCandidate,
@@ -39,25 +40,12 @@ export function reconcileObservation(input: ReconcileObservationInput): Reconcil
     source = "poll",
     fidelity = source === "webhook" ? "exact" : "inferred",
   } = input;
-  const previous = store.getEntitySnapshot(
-    binding.connectionId,
-    binding.repositoryId,
-    observation.entityType,
-    observation.externalId,
-  );
   const contentHash = stableJsonHash(observation.payload);
-  const changed = previous?.contentHash !== contentHash || previous?.version !== observation.version;
-  const snapshot = store.upsertEntitySnapshot({
-    connectionId: binding.connectionId,
-    repositoryId: binding.repositoryId,
-    entityType: observation.entityType,
-    externalId: observation.externalId,
-    version: observation.version,
-    contentHash,
-    payload: observation.payload,
-    observedAt: observation.observedAt,
-  });
-  if (!changed || baseline) return { changed, snapshot, events: [] };
+  const advanced = store.advanceEntitySnapshot(observationSnapshotInput(binding, observation, contentHash));
+  const previous = advanced.previous;
+  const changed = advanced.applied
+    && (previous?.contentHash !== contentHash || previous?.version !== observation.version);
+  if (!changed || baseline) return { changed, snapshot: advanced.snapshot, events: [] };
 
   const candidates = deriveCanonicalCandidates(observation, previous);
   const events = candidates.map((candidate) => {
@@ -83,7 +71,26 @@ export function reconcileObservation(input: ReconcileObservationInput): Reconcil
       },
     });
   });
-  return { changed, snapshot, events };
+  return { changed, snapshot: advanced.snapshot, events };
+}
+
+export function observationSnapshotInput(
+  binding: MultiremiScmRepositoryBinding,
+  observation: ScmEntityObservation,
+  contentHash = stableJsonHash(observation.payload),
+): UpsertScmEntitySnapshotInput {
+  return {
+    connectionId: binding.connectionId,
+    repositoryId: binding.repositoryId,
+    entityType: observation.entityType,
+    externalId: observation.externalId,
+    version: observation.version,
+    revisionAt: observationRevisionAt(observation),
+    revision: observation.version || contentHash,
+    contentHash,
+    payload: observation.payload,
+    observedAt: observation.observedAt,
+  };
 }
 
 export function deriveCanonicalCandidates(
@@ -220,6 +227,24 @@ function eventOccurredAt(
   return fallback;
 }
 
+function observationRevisionAt(observation: ScmEntityObservation): string {
+  if (observation.stream === "default_branch") return canonicalTimestamp(observation.observedAt);
+  if (observation.payload.deleted === true) {
+    return canonicalTimestamp(observation.occurredAt ?? observation.observedAt);
+  }
+  for (const value of [observation.payload.updated_at, observation.occurredAt, observation.observedAt]) {
+    if (typeof value !== "string") continue;
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp)) return new Date(timestamp).toISOString();
+  }
+  return canonicalTimestamp(observation.observedAt);
+}
+
+function canonicalTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : new Date(0).toISOString();
+}
+
 function normalizeChangeState(value: unknown): "open" | "closed" | "merged" {
   const state = stringValue(value).toLowerCase();
   if (state === "merged" || state === "merge") return "merged";
@@ -239,4 +264,3 @@ function nullableString(value: unknown): string | null {
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : value == null ? "" : String(value);
 }
-

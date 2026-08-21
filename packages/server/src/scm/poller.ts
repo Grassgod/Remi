@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createLogger } from "@shared/logger.js";
 import type {
   MultiremiScmConnection,
@@ -14,12 +15,15 @@ import { SCM_SYNC_STREAMS } from "./types.js";
 const log = createLogger("multiremi-scm-poller");
 const DEFAULT_TICK_INTERVAL_MS = 10_000;
 const DEFAULT_MAX_PAGES_PER_TICK = 50;
+const DEFAULT_STREAM_LEASE_MS = 5 * 60 * 1_000;
 
 export interface ScmPollingSchedulerOptions {
   store: ScmIngestionStore;
   adapters?: ScmProviderAdapter[];
   tickIntervalMs?: number;
   maxPagesPerStream?: number;
+  streamLeaseMs?: number;
+  leaseOwner?: string;
   now?: () => Date;
 }
 
@@ -36,6 +40,8 @@ export class ScmPollingScheduler {
   private readonly adapters: Map<string, ScmProviderAdapter>;
   private readonly tickIntervalMs: number;
   private readonly maxPagesPerStream: number;
+  private readonly streamLeaseMs: number;
+  private readonly leaseOwner: string;
   private readonly now: () => Date;
   private readonly inFlight = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -50,6 +56,8 @@ export class ScmPollingScheduler {
     );
     this.tickIntervalMs = Math.max(250, options.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS);
     this.maxPagesPerStream = Math.max(1, options.maxPagesPerStream ?? DEFAULT_MAX_PAGES_PER_TICK);
+    this.streamLeaseMs = Math.max(30_000, options.streamLeaseMs ?? DEFAULT_STREAM_LEASE_MS);
+    this.leaseOwner = options.leaseOwner?.trim() || `scm-poller:${process.pid}:${randomUUID()}`;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -118,17 +126,31 @@ export class ScmPollingScheduler {
     const key = `${connection.id}:${binding.repositoryId}:${stream}`;
     if (this.inFlight.has(key)) return { completed: false, eventsCreated: 0, error: null };
     this.inFlight.add(key);
-    let cursor = this.store.getSyncCursor(connection.id, binding.repositoryId, stream);
-    const baseline = !cursor?.baselineCompletedAt;
-    const previousWatermark = cursor?.watermark ?? null;
+    let cursor: MultiremiScmSyncCursor | null = null;
+    let leaseToken: string | null = null;
+    let previousWatermark: string | null = null;
+    let baseline = false;
     let eventsCreated = 0;
     let completed = false;
-    let latestWatermark = cursor?.watermark ?? null;
+    let latestWatermark: string | null = null;
     try {
-      cursor = this.writeCursor(connection.id, binding.repositoryId, stream, cursor, {
+      cursor = this.store.claimSyncStream({
+        connectionId: connection.id,
+        repositoryId: binding.repositoryId,
+        stream,
+        owner: this.leaseOwner,
+        now: startedAt.toISOString(),
+        leaseMs: this.streamLeaseMs,
+      });
+      if (!cursor?.leaseToken) return { completed: false, eventsCreated: 0, error: null };
+      leaseToken = cursor.leaseToken;
+      baseline = !cursor.baselineCompletedAt;
+      previousWatermark = cursor.watermark;
+      latestWatermark = cursor.watermark;
+      cursor = this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
         lastStartedAt: startedAt.toISOString(),
         lastError: null,
-      });
+      }, startedAt);
       const credential = this.store.getConnectionCredential(connection.id);
       if (!credential) throw new Error("SCM connection credential is unavailable");
       for (let pageNumber = 0; pageNumber < this.maxPagesPerStream; pageNumber += 1) {
@@ -140,6 +162,15 @@ export class ScmPollingScheduler {
           cursor: cursor ? { ...cursor, watermark: previousWatermark } : null,
           now: startedAt,
         });
+        cursor = this.writeClaimedCursor(
+          connection.id,
+          binding.repositoryId,
+          stream,
+          leaseToken,
+          cursor,
+          {},
+          startedAt,
+        );
         latestWatermark = maxTimestamp(latestWatermark, page.watermark);
         for (const observation of page.observations) {
           const reconciliation = reconcileObservation({
@@ -152,52 +183,74 @@ export class ScmPollingScheduler {
           });
           eventsCreated += reconciliation.events.filter((event) => event.created).length;
         }
-        cursor = this.writeCursor(connection.id, binding.repositoryId, stream, cursor, {
+        cursor = this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
           cursor: page.cursor,
           watermark: previousWatermark,
           lastError: null,
-        });
+        }, startedAt);
         if (page.done) {
           const completedAt = this.now().toISOString();
-          cursor = this.writeCursor(connection.id, binding.repositoryId, stream, cursor, {
+          cursor = this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
             cursor: null,
             watermark: latestWatermark ?? startedAt.toISOString(),
             baselineCompletedAt: cursor?.baselineCompletedAt ?? completedAt,
             lastCompletedAt: completedAt,
             lastError: null,
-          });
+          }, startedAt);
           completed = true;
           break;
         }
       }
       return { completed, eventsCreated, error: null };
     } catch (error) {
+      if (error instanceof ScmStreamLeaseLostError) {
+        log.warn(`SCM poll lease was lost for ${key}; stale results were discarded`);
+        return { completed: false, eventsCreated, error: null };
+      }
       const message = errorMessage(error).slice(0, 1_000);
-      this.writeCursor(connection.id, binding.repositoryId, stream, cursor, {
-        watermark: previousWatermark,
-        lastError: message,
-      });
+      if (leaseToken) {
+        try {
+          this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
+            watermark: previousWatermark,
+            lastError: message,
+          }, startedAt);
+        } catch (writeError) {
+          if (!(writeError instanceof ScmStreamLeaseLostError)) throw writeError;
+        }
+      }
       log.warn(`SCM poll failed for ${key}: ${message}`);
       return { completed: false, eventsCreated, error: message };
     } finally {
+      if (leaseToken) {
+        this.store.releaseSyncStream({
+          connectionId: connection.id,
+          repositoryId: binding.repositoryId,
+          stream,
+          leaseToken,
+        });
+      }
       this.inFlight.delete(key);
     }
   }
 
-  private writeCursor(
+  private writeClaimedCursor(
     connectionId: string,
     repositoryId: string,
     stream: MultiremiScmSyncStream,
+    leaseToken: string,
     current: MultiremiScmSyncCursor | null,
     patch: Partial<Pick<
       MultiremiScmSyncCursor,
       "cursor" | "watermark" | "baselineCompletedAt" | "lastStartedAt" | "lastCompletedAt" | "lastError"
     >>,
+    leaseReference: Date,
   ): MultiremiScmSyncCursor {
-    return this.store.upsertSyncCursor({
+    const cursor = this.store.updateClaimedSyncCursor({
       connectionId,
       repositoryId,
       stream,
+      leaseToken,
+      leaseUntil: this.leaseExpiry(leaseReference),
       cursor: Object.prototype.hasOwnProperty.call(patch, "cursor") ? patch.cursor ?? null : current?.cursor ?? null,
       watermark: Object.prototype.hasOwnProperty.call(patch, "watermark") ? patch.watermark ?? null : current?.watermark ?? null,
       baselineCompletedAt: Object.prototype.hasOwnProperty.call(patch, "baselineCompletedAt")
@@ -211,14 +264,27 @@ export class ScmPollingScheduler {
         : current?.lastCompletedAt ?? null,
       lastError: Object.prototype.hasOwnProperty.call(patch, "lastError") ? patch.lastError ?? null : current?.lastError ?? null,
     });
+    if (!cursor) throw new ScmStreamLeaseLostError();
+    return cursor;
+  }
+
+  private leaseExpiry(reference: Date): string {
+    const base = Math.max(reference.getTime(), this.now().getTime());
+    return new Date(base + this.streamLeaseMs).toISOString();
   }
 }
+
+class ScmStreamLeaseLostError extends Error {}
 
 export function pollIsDue(
   connection: MultiremiScmConnection,
   cursor: MultiremiScmSyncCursor | null,
   now: Date,
 ): boolean {
+  if (cursor?.leaseToken) {
+    const leaseUntil = cursor.leaseUntil ? Date.parse(cursor.leaseUntil) : Number.NaN;
+    return !Number.isFinite(leaseUntil) || leaseUntil <= now.getTime();
+  }
   if (cursor?.cursor) return true;
   const latest = cursor?.lastStartedAt || cursor?.lastCompletedAt;
   if (!latest) return true;

@@ -39,6 +39,27 @@ class FakeAdapter implements ScmProviderAdapter {
   parseWebhook() { return { providerEvent: "test", deliveryId: null, candidates: [], ignoredReason: null }; }
 }
 
+class BlockingAdapter extends FakeAdapter {
+  defaultBranchAttempts = 0;
+  private enteredResolve!: () => void;
+  private releaseResolve!: () => void;
+  readonly entered = new Promise<void>((resolve) => { this.enteredResolve = resolve; });
+  readonly release = new Promise<void>((resolve) => { this.releaseResolve = resolve; });
+
+  override async poll(context: ScmPollContext): Promise<ScmPollPage> {
+    if (context.stream === "default_branch") {
+      this.defaultBranchAttempts += 1;
+      this.enteredResolve();
+      await this.release;
+    }
+    return super.poll(context);
+  }
+
+  unblock(): void {
+    this.releaseResolve();
+  }
+}
+
 describe("SCM polling scheduler", () => {
   it("establishes a baseline first and emits only subsequent changes", async () => {
     const store = new MemoryScmIngestionStore();
@@ -76,10 +97,83 @@ describe("SCM polling scheduler", () => {
       connectionId: "scm_1", repositoryId: "repo_1", stream: "comments" as const,
       cursor: null, watermark: null, baselineCompletedAt: "2026-08-21T07:00:00.000Z",
       lastStartedAt: "2026-08-21T08:00:30.000Z", lastCompletedAt: "2026-08-21T08:00:30.000Z",
-      lastError: null, updatedAt: "2026-08-21T08:00:30.000Z",
+      lastError: null, leaseOwner: null, leaseUntil: null, leaseToken: null,
+      updatedAt: "2026-08-21T08:00:30.000Z",
     };
     expect(pollIsDue(connection, cursor, now)).toBe(false);
     expect(pollIsDue(connection, { ...cursor, cursor: { page: 2 } }, now)).toBe(true);
+    expect(pollIsDue(connection, {
+      ...cursor,
+      leaseOwner: "server-a",
+      leaseToken: "lease-a",
+      leaseUntil: "2026-08-21T08:02:00.000Z",
+    }, now)).toBe(false);
+    expect(pollIsDue(connection, {
+      ...cursor,
+      leaseOwner: "server-a",
+      leaseToken: "lease-a",
+      leaseUntil: "2026-08-21T08:00:59.000Z",
+    }, now)).toBe(true);
+  });
+
+  it("uses a shared store lease to fence concurrent scheduler instances", async () => {
+    const store = new MemoryScmIngestionStore();
+    const adapter = new BlockingAdapter();
+    const first = new ScmPollingScheduler({
+      store,
+      adapters: [adapter],
+      leaseOwner: "server-a",
+      now: () => new Date("2026-08-21T08:00:00.000Z"),
+    });
+    const second = new ScmPollingScheduler({
+      store,
+      adapters: [adapter],
+      leaseOwner: "server-b",
+      now: () => new Date("2026-08-21T08:02:00.000Z"),
+    });
+
+    const firstRun = first.runOnce(new Date("2026-08-21T08:00:00.000Z"));
+    await adapter.entered;
+    const secondRun = await second.runOnce(new Date("2026-08-21T08:02:00.000Z"));
+    expect(adapter.defaultBranchAttempts).toBe(1);
+    expect(secondRun.skipped).toBeGreaterThan(0);
+
+    adapter.unblock();
+    await firstRun;
+    expect(store.getSyncCursor("scm_1", "repo_1", "default_branch")?.leaseToken).toBeNull();
+  });
+
+  it("rejects stale lease tokens after another owner claims an expired stream", () => {
+    const store = new MemoryScmIngestionStore();
+    const first = store.claimSyncStream({
+      connectionId: "scm_1",
+      repositoryId: "repo_1",
+      stream: "comments",
+      owner: "server-a",
+      now: "2026-08-21T08:00:00.000Z",
+      leaseMs: 30_000,
+    })!;
+    const second = store.claimSyncStream({
+      connectionId: "scm_1",
+      repositoryId: "repo_1",
+      stream: "comments",
+      owner: "server-b",
+      now: "2026-08-21T08:01:00.000Z",
+      leaseMs: 30_000,
+    })!;
+    expect(second.leaseToken).not.toBe(first.leaseToken);
+    expect(store.updateClaimedSyncCursor({
+      connectionId: "scm_1",
+      repositoryId: "repo_1",
+      stream: "comments",
+      leaseToken: first.leaseToken!,
+      cursor: { page: 99 },
+    })).toBeNull();
+    expect(store.releaseSyncStream({
+      connectionId: "scm_1",
+      repositoryId: "repo_1",
+      stream: "comments",
+      leaseToken: first.leaseToken!,
+    })).toBe(false);
   });
 });
-

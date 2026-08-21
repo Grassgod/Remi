@@ -1,7 +1,7 @@
 import type { MultiremiScmRepositoryBinding } from "@multiremi/contracts/types.js";
 import { CodebaseScmProviderAdapter } from "./codebase.js";
 import { GitHubScmProviderAdapter } from "./github.js";
-import { buildScmLogicalKey, stableJsonHash } from "./reconcile.js";
+import { buildScmLogicalKey, observationSnapshotInput, stableJsonHash } from "./reconcile.js";
 import type {
   ScmIngestionStore,
   ScmProviderAdapter,
@@ -79,6 +79,9 @@ export class ScmWebhookIngestor {
       if (!binding) continue;
       const logicalKey = buildScmLogicalKey(binding.repositoryId, candidate);
       const providerEventId = candidate.providerEventId ?? parsed.deliveryId;
+      if (candidate.snapshotObservation) {
+        this.store.advanceEntitySnapshot(observationSnapshotInput(binding, candidate.snapshotObservation));
+      }
       events.push(this.store.recordCanonicalEvent({
         workspaceId: binding.workspaceId,
         connectionId: binding.connectionId,

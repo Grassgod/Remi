@@ -14,7 +14,6 @@ import type {
 
 const PAGE_SIZE = 100;
 const OVERLAP_MS = 2 * 60 * 1000;
-const MAX_RELATED_MR_PAGES = 10;
 
 export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
   readonly provider = "codebase" as const;
@@ -61,6 +60,8 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
       const normalized = normalizeCodebaseMergeRequest(mergeRequest);
       const normalizedAction = action.toLowerCase();
       const state = normalizeCodebaseChangeState(stringPick(normalized, "state"));
+      const subjectId = stringPick(mergeRequest, "id", "Id") || stringPick(mergeRequest, "number", "Number");
+      const version = codebaseChangeVersion(normalized);
       const type = normalizedAction.includes("merge") || state === "merged"
         ? "change.merged"
         : normalizedAction === "close" || normalizedAction === "closed" || state === "closed"
@@ -71,18 +72,22 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
               ? "change.opened"
               : "change.updated";
       const logicalState = type === "change.merged" ? "merged" : type === "change.closed" ? "closed" : "open";
+      const occurredAt = type === "change.merged"
+        ? nullableString(normalized.merged_at)
+        : type === "change.closed"
+          ? nullableString(normalized.closed_at)
+          : nullableString(normalized.updated_at);
       candidates.push({
         ...base,
         type,
         subjectType: "change_request",
-        subjectId: stringPick(mergeRequest, "id", "Id") || stringPick(mergeRequest, "number", "Number"),
-        logicalVersion: `${codebaseChangeVersion(normalized)}:${logicalState}`,
-        occurredAt: type === "change.merged"
-          ? nullableString(normalized.merged_at)
-          : type === "change.closed"
-            ? nullableString(normalized.closed_at)
-            : nullableString(normalized.updated_at),
+        subjectId,
+        logicalVersion: `${version}:${logicalState}`,
+        occurredAt,
         payload: normalized,
+        snapshotObservation: webhookObservation(
+          "change_requests", "change_request", subjectId, version, occurredAt, request.observedAt, normalized,
+        ),
       });
     } else if (providerEvent === "comment" || providerEvent === "merge_request_review_thread") {
       const comment = webhookEntity(request.body, "comment", "Comment", "note", "Note");
@@ -94,28 +99,43 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
           || action === "update" || action === "updated" || action === "edit" || action === "edited"
           ? "comment.updated"
           : "comment.created";
+      const subjectId = stringPick(comment, "id", "Id");
+      const version = codebaseCommentVersion(normalized);
+      const occurredAt = type === "comment.deleted"
+        ? request.observedAt
+        : nullableString(normalized.updated_at) ?? nullableString(normalized.created_at);
+      const payload = { ...normalized, deleted: type === "comment.deleted" };
       candidates.push({
         ...base,
         type,
         subjectType: "comment",
-        subjectId: stringPick(comment, "id", "Id"),
-        logicalVersion: `${codebaseCommentVersion(normalized)}:${type.split(".")[1]}`,
-        occurredAt: nullableString(normalized.updated_at) ?? nullableString(normalized.created_at),
-        payload: { ...normalized, deleted: type === "comment.deleted" },
+        subjectId,
+        logicalVersion: `${version}:${type.split(".")[1]}`,
+        occurredAt,
+        payload,
+        snapshotObservation: webhookObservation(
+          "comments", "comment", subjectId, version, occurredAt, request.observedAt, payload,
+        ),
       });
     } else if (providerEvent === "merge_request_review") {
       const review = webhookEntity(request.body, "review", "Review");
       const action = (stringPick(request.body, "action", "Action") || stringPick(review, "action", "Action", "status", "Status")).toLowerCase();
       const normalized = normalizeCodebaseReview(review, null);
       const dismissed = action === "dismiss" || action === "dismissed" || stringPick(normalized, "state") === "dismissed";
+      const subjectId = stringPick(review, "id", "Id");
+      const version = codebaseReviewVersion(normalized);
+      const occurredAt = dismissed ? request.observedAt : nullableString(normalized.submitted_at);
       candidates.push({
         ...base,
         type: dismissed ? "review.dismissed" : "review.submitted",
         subjectType: "review",
-        subjectId: stringPick(review, "id", "Id"),
-        logicalVersion: `${codebaseReviewVersion(normalized)}:${dismissed ? "dismissed" : stringPick(normalized, "state") || "submitted"}`,
-        occurredAt: nullableString(normalized.submitted_at),
+        subjectId,
+        logicalVersion: `${version}:${dismissed ? "dismissed" : stringPick(normalized, "state") || "submitted"}`,
+        occurredAt,
         payload: normalized,
+        snapshotObservation: webhookObservation(
+          "reviews", "review", subjectId, version, occurredAt, request.observedAt, normalized,
+        ),
       });
     } else if (providerEvent === "push") {
       const ref = stringPick(request.body, "ref", "Ref").replace(/^refs\/heads\//u, "");
@@ -136,7 +156,15 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
         payload,
       };
       candidates.push({ ...common, type: "push.observed" });
-      if (ref && ref === defaultBranch) candidates.push({ ...common, type: "default_branch.updated" });
+      if (ref && ref === defaultBranch) {
+        candidates.push({
+          ...common,
+          type: "default_branch.updated",
+          snapshotObservation: webhookObservation(
+            "default_branch", "ref", ref, after, common.occurredAt, request.observedAt, payload,
+          ),
+        });
+      }
     }
 
     const validCandidates = candidates.filter(validWebhookCandidate);
@@ -183,7 +211,13 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
       PageNumber: page,
       PageSize: PAGE_SIZE,
       SortOrder: "desc",
-      Selector: { URL: true, ReviewStatus: true, CheckRunSummaryStatus: true },
+      Selector: {
+        URL: true,
+        ReviewStatus: true,
+        CheckRunSummaryStatus: true,
+        Branch: true,
+        Version: true,
+      },
     });
     const mergeRequests = arrayRecords(valuePick(result, "MergeRequests", "merge_requests"));
     const observations = mergeRequests.map((mergeRequest) => codebaseChangeObservation(mergeRequest, context.now));
@@ -199,7 +233,7 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
 
   private async pollComments(context: ScmPollContext): Promise<ScmPollPage> {
     const repoId = await this.resolveRepositoryId(context);
-    const mergeRequests = await this.listRecentMergeRequests(context, repoId);
+    const { mergeRequests, nextCursor } = await this.listRelatedMergeRequestsPage(context, repoId);
     const observations: ScmEntityObservation[] = [];
     for (const mergeRequest of mergeRequests) {
       const changeId = stringPick(mergeRequest, "Id", "id");
@@ -215,12 +249,17 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
         }
       }
     }
-    return { observations, cursor: null, watermark: context.now.toISOString(), done: true };
+    return {
+      observations,
+      cursor: nextCursor,
+      watermark: context.now.toISOString(),
+      done: nextCursor === null,
+    };
   }
 
   private async pollReviews(context: ScmPollContext): Promise<ScmPollPage> {
     const repoId = await this.resolveRepositoryId(context);
-    const mergeRequests = await this.listRecentMergeRequests(context, repoId);
+    const { mergeRequests, nextCursor } = await this.listRelatedMergeRequestsPage(context, repoId);
     const observations: ScmEntityObservation[] = [];
     for (const mergeRequest of mergeRequests) {
       const changeId = stringPick(mergeRequest, "Id", "id");
@@ -231,7 +270,12 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
         observations.push(codebaseReviewObservation(review, mergeRequest, context.now));
       }
     }
-    return { observations, cursor: null, watermark: context.now.toISOString(), done: true };
+    return {
+      observations,
+      cursor: nextCursor,
+      watermark: context.now.toISOString(),
+      done: nextCursor === null,
+    };
   }
 
   private async pollPipelines(context: ScmPollContext): Promise<ScmPollPage> {
@@ -245,11 +289,12 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
     });
     const checkRuns = arrayRecords(valuePick(result, "CheckRuns", "check_runs"));
     const observations = checkRuns
-      .filter((run) => !threshold || timestampValue(valuePick(run, "UpdatedAt", "updated_at")) >= threshold)
+      .filter((run) => !threshold || timestampValue(
+        valuePick(run, "UpdatedAt", "updated_at") ?? valuePick(run, "CreatedAt", "created_at"),
+      ) >= threshold)
       .map((run) => codebasePipelineObservation(run, context.now));
     const total = numberPick(result, "TotalCount", "total_count");
-    const reachedWatermark = Boolean(threshold && checkRuns.some((run) => timestampValue(valuePick(run, "UpdatedAt", "updated_at")) < threshold));
-    const hasNext = !reachedWatermark && (total !== null ? page * PAGE_SIZE < total : checkRuns.length === PAGE_SIZE);
+    const hasNext = total !== null ? page * PAGE_SIZE < total : checkRuns.length === PAGE_SIZE;
     return {
       observations,
       cursor: hasNext ? { page: page + 1 } : null,
@@ -258,22 +303,22 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
     };
   }
 
-  private async listRecentMergeRequests(context: ScmPollContext, repoId: string): Promise<Record<string, unknown>[]> {
-    const mergeRequests: Record<string, unknown>[] = [];
-    for (let page = 1; page <= MAX_RELATED_MR_PAGES; page += 1) {
-      const result = await this.action(context, "ListRepoMergeRequests", {
-        TargetRepoId: repoId,
-        Since: overlapWatermarkIso(context.cursor?.watermark),
-        PageNumber: page,
-        PageSize: PAGE_SIZE,
-        SortOrder: "desc",
-      });
-      const batch = arrayRecords(valuePick(result, "MergeRequests", "merge_requests"));
-      mergeRequests.push(...batch);
-      const total = numberPick(result, "TotalCount", "total_count");
-      if (batch.length < PAGE_SIZE || (total !== null && page * PAGE_SIZE >= total)) break;
-    }
-    return mergeRequests;
+  private async listRelatedMergeRequestsPage(
+    context: ScmPollContext,
+    repoId: string,
+  ): Promise<{ mergeRequests: Record<string, unknown>[]; nextCursor: Record<string, unknown> | null }> {
+    const page = cursorNumber(context, "page", 1);
+    const result = await this.action(context, "ListRepoMergeRequests", {
+      TargetRepoId: repoId,
+      Since: overlapWatermarkIso(context.cursor?.watermark),
+      PageNumber: page,
+      PageSize: PAGE_SIZE,
+      SortOrder: "desc",
+    });
+    const mergeRequests = arrayRecords(valuePick(result, "MergeRequests", "merge_requests"));
+    const total = numberPick(result, "TotalCount", "total_count");
+    const hasNext = total !== null ? page * PAGE_SIZE < total : mergeRequests.length === PAGE_SIZE;
+    return { mergeRequests, nextCursor: hasNext ? { page: page + 1 } : null };
   }
 
   private async resolveRepositoryId(context: ScmPollContext): Promise<string> {
@@ -336,6 +381,7 @@ function normalizeCodebaseMergeRequest(value: Record<string, unknown>): Record<s
   const status = stringPick(value, "Status", "status");
   const sourceBranch = recordPick(value, "SourceBranch", "source_branch");
   const sourceCommit = recordPick(sourceBranch, "Commit", "commit");
+  const latestVersion = latestCodebaseMergeRequestVersion(valuePick(value, "Versions", "versions"));
   return {
     id: nullableString(valuePick(value, "Id", "id")),
     number: numberPick(value, "Number", "number"),
@@ -346,6 +392,7 @@ function normalizeCodebaseMergeRequest(value: Record<string, unknown>): Record<s
     source_branch: stringPick(value, "SourceBranchName", "source_branch_name", "source_branch"),
     target_branch: stringPick(value, "TargetBranchName", "target_branch_name", "target_branch"),
     head_sha: stringPick(sourceCommit, "Id", "id", "Sha", "sha")
+      || nullableString(valuePick(latestVersion, "SourceCommitId", "source_commit_id"))
       || nullableString(valuePick(value, "SourceCommitId", "source_commit_id")),
     author: stringPick(recordPick(value, "CreatedBy", "created_by", "author"), "Username", "username") || null,
     created_at: nullableString(valuePick(value, "CreatedAt", "created_at")),
@@ -464,6 +511,30 @@ function codebaseReviewVersion(payload: Record<string, unknown>): string {
     stringPick(payload, "state"),
     stableJsonHash(payload.body),
   ].join(":");
+}
+
+function latestCodebaseMergeRequestVersion(value: unknown): Record<string, unknown> {
+  return arrayRecords(value).reduce<Record<string, unknown>>((latest, candidate) => {
+    if (!Object.keys(latest).length) return candidate;
+    const latestNumber = numberPick(latest, "Number", "number") ?? Number.NEGATIVE_INFINITY;
+    const candidateNumber = numberPick(candidate, "Number", "number") ?? Number.NEGATIVE_INFINITY;
+    if (candidateNumber !== latestNumber) return candidateNumber > latestNumber ? candidate : latest;
+    const latestTime = timestampValue(valuePick(latest, "CreatedAt", "created_at"));
+    const candidateTime = timestampValue(valuePick(candidate, "CreatedAt", "created_at"));
+    return candidateTime >= latestTime ? candidate : latest;
+  }, {});
+}
+
+function webhookObservation(
+  stream: ScmEntityObservation["stream"],
+  entityType: ScmEntityObservation["entityType"],
+  externalId: string,
+  version: string | null,
+  occurredAt: string | null,
+  observedAt: string,
+  payload: Record<string, unknown>,
+): ScmEntityObservation {
+  return { stream, entityType, externalId, version, occurredAt, observedAt, payload };
 }
 
 function normalizeCodebaseChangeState(value: string): "open" | "closed" | "merged" {

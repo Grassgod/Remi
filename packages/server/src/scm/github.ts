@@ -15,7 +15,6 @@ import type {
 
 const PAGE_SIZE = 100;
 const OVERLAP_MS = 2 * 60 * 1000;
-const MAX_REVIEW_PULL_PAGES = 10;
 
 export class GitHubScmProviderAdapter implements ScmProviderAdapter {
   readonly provider = "github" as const;
@@ -59,6 +58,8 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
       const pull = record(body.pull_request);
       const action = stringValue(body.action).toLowerCase();
       const normalized = normalizeGitHubPull(pull);
+      const subjectId = stringValue(pull.id) || stringValue(pull.number);
+      const version = changeVersion(normalized);
       const type = pull.merged === true || action === "merged"
         ? "change.merged"
         : action === "closed"
@@ -69,59 +70,97 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
               ? "change.opened"
               : "change.updated";
       const state = type === "change.merged" ? "merged" : type === "change.closed" ? "closed" : "open";
+      const occurredAt = type === "change.merged"
+        ? nullableString(normalized.merged_at)
+        : type === "change.closed"
+          ? nullableString(normalized.closed_at)
+          : nullableString(normalized.updated_at);
       candidates.push({
         ...base,
         type,
         subjectType: "change_request",
-        subjectId: stringValue(pull.id) || stringValue(pull.number),
-        logicalVersion: `${changeVersion(normalized)}:${state}`,
-        occurredAt: type === "change.merged"
-          ? nullableString(normalized.merged_at)
-          : type === "change.closed"
-            ? nullableString(normalized.closed_at)
-            : nullableString(normalized.updated_at),
+        subjectId,
+        logicalVersion: `${version}:${state}`,
+        occurredAt,
         payload: normalized,
+        snapshotObservation: webhookObservation(
+          "change_requests", "change_request", subjectId, version, occurredAt, request.observedAt, normalized,
+        ),
       });
     } else if (providerEvent === "issue_comment" || providerEvent === "pull_request_review_comment") {
+      if (providerEvent === "issue_comment" && !isPullRequestIssue(record(body.issue))) {
+        return {
+          providerEvent,
+          deliveryId,
+          candidates: [],
+          ignoredReason: "GitHub issue comment is not attached to a pull request",
+        };
+      }
       const comment = record(body.comment);
       const action = stringValue(body.action).toLowerCase();
       const normalized = normalizeGitHubComment(comment, providerEvent === "issue_comment" ? "issue" : "review");
       const type = action === "deleted" ? "comment.deleted" : action === "edited" ? "comment.updated" : "comment.created";
+      const subjectId = stringValue(comment.id);
+      const version = commentVersion(normalized);
+      const occurredAt = type === "comment.deleted"
+        ? request.observedAt
+        : nullableString(normalized.updated_at) ?? nullableString(normalized.created_at);
       candidates.push({
         ...base,
         type,
         subjectType: "comment",
-        subjectId: stringValue(comment.id),
-        logicalVersion: `${commentVersion(normalized)}:${type.split(".")[1]}`,
-        occurredAt: nullableString(normalized.updated_at) ?? nullableString(normalized.created_at),
+        subjectId,
+        logicalVersion: `${version}:${type.split(".")[1]}`,
+        occurredAt,
         payload: { ...normalized, deleted: type === "comment.deleted" },
+        snapshotObservation: webhookObservation(
+          "comments",
+          "comment",
+          subjectId,
+          version,
+          occurredAt,
+          request.observedAt,
+          { ...normalized, deleted: type === "comment.deleted" },
+        ),
       });
     } else if (providerEvent === "pull_request_review") {
       const review = record(body.review);
       const action = stringValue(body.action).toLowerCase();
       const normalized = normalizeGitHubReview(review, record(body.pull_request));
       const dismissed = action === "dismissed" || stringValue(review.state).toLowerCase() === "dismissed";
+      const subjectId = stringValue(review.id);
+      const version = reviewVersion(normalized);
+      const occurredAt = dismissed ? request.observedAt : nullableString(normalized.submitted_at);
       candidates.push({
         ...base,
         type: dismissed ? "review.dismissed" : "review.submitted",
         subjectType: "review",
-        subjectId: stringValue(review.id),
-        logicalVersion: `${reviewVersion(normalized)}:${dismissed ? "dismissed" : stringValue(normalized.state).toLowerCase() || "submitted"}`,
-        occurredAt: nullableString(normalized.submitted_at),
+        subjectId,
+        logicalVersion: `${version}:${dismissed ? "dismissed" : stringValue(normalized.state).toLowerCase() || "submitted"}`,
+        occurredAt,
         payload: normalized,
+        snapshotObservation: webhookObservation(
+          "reviews", "review", subjectId, version, occurredAt, request.observedAt, normalized,
+        ),
       });
     } else if (providerEvent === "workflow_run" || providerEvent === "check_run") {
       const pipeline = record(providerEvent === "workflow_run" ? body.workflow_run : body.check_run);
       const normalized = normalizeGitHubPipeline(pipeline, providerEvent);
       const completed = stringValue(normalized.status).toLowerCase() === "completed" || Boolean(normalized.conclusion);
+      const subjectId = githubPipelineSubjectId(pipeline, providerEvent);
+      const version = pipelineVersion(normalized);
+      const occurredAt = nullableString(normalized.updated_at) ?? nullableString(normalized.created_at);
       candidates.push({
         ...base,
         type: completed ? "pipeline.completed" : "pipeline.started",
         subjectType: "pipeline",
-        subjectId: stringValue(pipeline.id),
-        logicalVersion: `${pipelineVersion(normalized)}:${completed ? stringValue(normalized.conclusion) || "completed" : stringValue(normalized.status) || "started"}`,
-        occurredAt: nullableString(normalized.updated_at) ?? nullableString(normalized.created_at),
+        subjectId,
+        logicalVersion: `${version}:${completed ? stringValue(normalized.conclusion) || "completed" : stringValue(normalized.status) || "started"}`,
+        occurredAt,
         payload: normalized,
+        snapshotObservation: webhookObservation(
+          "pipelines", "pipeline", subjectId, version, occurredAt, request.observedAt, normalized,
+        ),
       });
     } else if (providerEvent === "push") {
       const ref = stringValue(body.ref).replace(/^refs\/heads\//u, "");
@@ -144,7 +183,15 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
         payload,
       };
       candidates.push({ ...common, type: "push.observed" });
-      if (ref && ref === defaultBranch) candidates.push({ ...common, type: "default_branch.updated" });
+      if (ref && ref === defaultBranch) {
+        candidates.push({
+          ...common,
+          type: "default_branch.updated",
+          snapshotObservation: webhookObservation(
+            "default_branch", "ref", ref, after, common.occurredAt, request.observedAt, payload,
+          ),
+        });
+      }
     }
 
     const validCandidates = candidates.filter(validWebhookCandidate);
@@ -207,7 +254,10 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
     const response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/${path}`), {
       sort: "updated", direction: "asc", since, per_page: PAGE_SIZE, page,
     }), true);
-    const observations = arrayRecords(response.data).map((comment) => githubCommentObservation(comment, kind, context.now));
+    const comments = arrayRecords(response.data);
+    const observations = comments
+      .filter((comment) => kind === "review" || isPullRequestIssueCommentRecord(comment))
+      .map((comment) => githubCommentObservation(comment, kind, context.now));
     const hasNext = hasNextLink(response.headers.get("link"));
     const nextKind = kind === "issue" && !hasNext ? "review" : kind;
     const done = kind === "review" && !hasNext;
@@ -220,19 +270,36 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
   }
 
   private async pollReviews(context: ScmPollContext): Promise<ScmPollPage> {
-    const pulls = await this.listRecentlyChangedPulls(context);
+    const page = cursorNumber(context, "page", 1);
+    const threshold = overlapWatermark(context.cursor?.watermark);
+    const response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls`), {
+      state: "all", sort: "updated", direction: "desc", per_page: PAGE_SIZE, page,
+    }), true);
+    const batch = arrayRecords(response.data);
+    const pulls = batch.filter((pull) => !threshold || timestampValue(pull.updated_at) >= threshold);
     const observations: ScmEntityObservation[] = [];
     for (const pull of pulls) {
       const number = numberValue(pull.number);
       if (!number) continue;
-      const response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls/${number}/reviews`), {
-        per_page: PAGE_SIZE,
-      }), true);
-      for (const review of arrayRecords(response.data)) {
-        observations.push(githubReviewObservation(review, pull, context.now));
+      for (let reviewPage = 1; ; reviewPage += 1) {
+        const reviewsResponse = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls/${number}/reviews`), {
+          per_page: PAGE_SIZE,
+          page: reviewPage,
+        }), true);
+        for (const review of arrayRecords(reviewsResponse.data)) {
+          observations.push(githubReviewObservation(review, pull, context.now));
+        }
+        if (!hasNextLink(reviewsResponse.headers.get("link"))) break;
       }
     }
-    return { observations, cursor: null, watermark: context.now.toISOString(), done: true };
+    const reachedWatermark = Boolean(threshold && batch.some((pull) => timestampValue(pull.updated_at) < threshold));
+    const hasNext = hasNextLink(response.headers.get("link")) && !reachedWatermark;
+    return {
+      observations,
+      cursor: hasNext ? { page: page + 1 } : null,
+      watermark: context.now.toISOString(),
+      done: !hasNext,
+    };
   }
 
   private async pollPipelines(context: ScmPollContext): Promise<ScmPollPage> {
@@ -245,28 +312,13 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
     const observations = runs
       .filter((run) => !threshold || timestampValue(run.updated_at) >= threshold)
       .map((run) => githubPipelineObservation(run, "workflow_run", context.now));
-    const reachedWatermark = Boolean(threshold && runs.some((run) => timestampValue(run.updated_at) < threshold));
-    const hasNext = runs.length === PAGE_SIZE && !reachedWatermark;
+    const hasNext = runs.length === PAGE_SIZE;
     return {
       observations,
       cursor: hasNext ? { page: page + 1 } : null,
       watermark: context.now.toISOString(),
       done: !hasNext,
     };
-  }
-
-  private async listRecentlyChangedPulls(context: ScmPollContext): Promise<Record<string, unknown>[]> {
-    const threshold = overlapWatermark(context.cursor?.watermark);
-    const pulls: Record<string, unknown>[] = [];
-    for (let page = 1; page <= MAX_REVIEW_PULL_PAGES; page += 1) {
-      const response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls`), {
-        state: "all", sort: "updated", direction: "desc", per_page: PAGE_SIZE, page,
-      }), true);
-      const batch = arrayRecords(response.data);
-      pulls.push(...batch.filter((pull) => !threshold || timestampValue(pull.updated_at) >= threshold));
-      if (!hasNextLink(response.headers.get("link")) || (threshold && batch.some((pull) => timestampValue(pull.updated_at) < threshold))) break;
-    }
-    return pulls;
   }
 
   private repoPath(context: ScmPollContext): string {
@@ -386,11 +438,10 @@ function normalizeGitHubReview(review: Record<string, unknown>, pull: Record<str
 
 function githubPipelineObservation(pipeline: Record<string, unknown>, kind: string, now: Date): ScmEntityObservation {
   const payload = normalizeGitHubPipeline(pipeline, kind);
-  const attempt = numberValue(pipeline.run_attempt) ?? 1;
   return {
     stream: "pipelines",
     entityType: "pipeline",
-    externalId: `${stringValue(pipeline.id)}:${attempt}`,
+    externalId: githubPipelineSubjectId(pipeline, kind),
     version: pipelineVersion(payload),
     occurredAt: nullableString(payload.updated_at) ?? nullableString(payload.created_at),
     observedAt: now.toISOString(),
@@ -448,6 +499,42 @@ function pipelineVersion(payload: Record<string, unknown>): string {
     String(numberValue(payload.attempt) ?? 1),
     stringValue(payload.head_sha),
   ].join(":");
+}
+
+function githubPipelineSubjectId(pipeline: Record<string, unknown>, kind: string): string {
+  const id = stringValue(pipeline.id);
+  if (!id) return "";
+  return kind === "workflow_run"
+    ? `workflow_run:${id}:${numberValue(pipeline.run_attempt) ?? 1}`
+    : `check_run:${id}`;
+}
+
+function webhookObservation(
+  stream: ScmEntityObservation["stream"],
+  entityType: ScmEntityObservation["entityType"],
+  externalId: string,
+  version: string | null,
+  occurredAt: string | null,
+  observedAt: string,
+  payload: Record<string, unknown>,
+): ScmEntityObservation {
+  return { stream, entityType, externalId, version, occurredAt, observedAt, payload };
+}
+
+function isPullRequestIssue(issue: Record<string, unknown>): boolean {
+  return Object.keys(record(issue.pull_request)).length > 0;
+}
+
+function isPullRequestIssueCommentRecord(comment: Record<string, unknown>): boolean {
+  if (nullableString(comment.pull_request_url)) return true;
+  const htmlUrl = nullableString(comment.html_url);
+  if (!htmlUrl) return false;
+  try {
+    const parsed = new URL(htmlUrl);
+    return /\/pull\/\d+(?:\/|#|$)/u.test(parsed.pathname + parsed.hash);
+  } catch {
+    return /\/pull\/\d+(?:\/|#|$)/u.test(htmlUrl);
+  }
 }
 
 function validWebhookCandidate(candidate: ScmWebhookCandidate): boolean {
