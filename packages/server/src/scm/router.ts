@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import type { RouterDeps } from "@multiremi/api/routers/deps.js";
-import { webhookClientIpKey } from "@multiremi/api/helpers/webhooks.js";
+import { readRequestBodyLimited, webhookClientIpKey } from "@multiremi/api/helpers/webhooks.js";
 import { lowerCaseHeaders } from "./http.js";
 import { SCM_PROVIDER_CAPABILITIES } from "./capabilities.js";
 import { scmIngestionStore } from "./store.js";
@@ -17,16 +17,14 @@ export function registerScmWebhookRoutes(app: Hono, deps: RouterDeps): void {
     if (!deps.webhookRateLimiter.allow(`scm:${connectionId}`)) {
       return c.json({ error: "rate limit exceeded" }, 429);
     }
-    let bytes: ArrayBuffer;
-    try {
-      bytes = await c.req.raw.arrayBuffer();
-    } catch {
-      return c.json({ error: "failed to read request body", code: "scm_webhook_body_unreadable" }, 400);
+    const bodyResult = await readRequestBodyLimited(c.req.raw, MAX_SCM_WEBHOOK_BODY_BYTES);
+    if ("apiError" in bodyResult) {
+      const code = bodyResult.statusCode === 413
+        ? "scm_webhook_payload_too_large"
+        : "scm_webhook_body_unreadable";
+      return c.json({ error: bodyResult.apiError, code }, bodyResult.statusCode);
     }
-    if (bytes.byteLength > MAX_SCM_WEBHOOK_BODY_BYTES) {
-      return c.json({ error: "payload too large", code: "scm_webhook_payload_too_large" }, 413);
-    }
-    const rawBody = Buffer.from(bytes).toString("utf8");
+    const rawBody = Buffer.from(bodyResult.bytes).toString("utf8");
     let body: unknown;
     try {
       body = JSON.parse(rawBody);

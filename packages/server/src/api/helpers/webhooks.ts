@@ -1,6 +1,7 @@
 // Inbound webhook plumbing: the size-capped raw body reader, HMAC signature verification and the
 // in-memory per-workspace / per-IP rate limiters.
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import { isObjectRecord } from "../wire/index.js";
 import type {
   MultiremiWebhookProvider,
@@ -21,6 +22,84 @@ export interface WebhookRateLimitConfig {
   windowMs: number;
 }
 
+export type LimitedRequestBody =
+  | { bytes: Uint8Array }
+  | { apiError: "failed to read request body" | "payload too large"; statusCode: 400 | 413 };
+
+const webhookClientIps = new WeakMap<Request, string>();
+
+/** Record Bun's socket address before the Request enters Hono. */
+export function setWebhookClientIpAddress(request: Request, address: string | null | undefined): void {
+  const host = remoteAddrHost(String(address ?? "").trim());
+  if (isIP(host)) webhookClientIps.set(request, host);
+}
+
+/** Resolve proxy headers only when the immediate peer is trusted. */
+export function resolveWebhookClientIpAddress(
+  request: Request,
+  socketAddress: string | null | undefined,
+  trustedProxyIps = process.env.MULTIREMI_TRUSTED_PROXY_IPS ?? "",
+): string {
+  const socketHost = remoteAddrHost(String(socketAddress ?? "").trim());
+  if (!isIP(socketHost)) return "";
+  if (!isTrustedWebhookProxy(socketHost, trustedProxyIps)) return socketHost;
+
+  // nginx-remi.conf overwrites X-Real-IP with the direct client address, while an inbound
+  // X-Forwarded-For value may already contain caller-controlled entries.
+  const forwarded = request.headers.get("x-real-ip")?.trim()
+    ?? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    ?? "";
+  const forwardedHost = remoteAddrHost(forwarded.replace(/^"|"$/gu, ""));
+  return isIP(forwardedHost) ? forwardedHost : socketHost;
+}
+
+/** Read at most maxBytes without first buffering an unbounded request body. */
+export async function readRequestBodyLimited(request: Request, maxBytes: number): Promise<LimitedRequestBody> {
+  const limit = Math.max(0, Math.floor(maxBytes));
+  const declaredLength = request.headers.get("content-length")?.trim() ?? "";
+  if (/^\d+$/u.test(declaredLength) && Number(declaredLength) > limit) {
+    try {
+      await request.body?.cancel();
+    } catch {
+      // The response is still 413 if the peer closes while its body is cancelled.
+    }
+    return { apiError: "payload too large", statusCode: 413 };
+  }
+
+  if (!request.body) return { bytes: new Uint8Array() };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        try {
+          await reader.cancel();
+        } catch {
+          // Limit enforcement has already succeeded; cancellation is best effort.
+        }
+        return { apiError: "payload too large", statusCode: 413 };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { apiError: "failed to read request body", statusCode: 400 };
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { bytes };
+}
+
 export async function readPublicWebhookBody(c: {
   req: {
     raw: Request;
@@ -29,14 +108,9 @@ export async function readPublicWebhookBody(c: {
   rawBody: string;
   body: (RunAutopilotInput & { payload?: unknown }) | unknown[];
 } | { apiError: string; statusCode: 400 | 413 }> {
-  let bytes: ArrayBuffer;
-  try {
-    bytes = await c.req.raw.arrayBuffer();
-  } catch {
-    return { apiError: "failed to read request body", statusCode: 400 };
-  }
-  if (bytes.byteLength > MAX_WEBHOOK_BODY_BYTES) return { apiError: "payload too large", statusCode: 413 };
-  const rawBody = Buffer.from(bytes).toString("utf8");
+  const result = await readRequestBodyLimited(c.req.raw, MAX_WEBHOOK_BODY_BYTES);
+  if ("apiError" in result) return result;
+  const rawBody = Buffer.from(result.bytes).toString("utf8");
   const bodyText = stripUtf8Bom(rawBody);
   if (!bodyText.trim()) return { apiError: "empty body", statusCode: 400 };
   let body: unknown;
@@ -84,8 +158,23 @@ export class MemoryWebhookRateLimiter {
 }
 
 export function webhookClientIpKey(request: Request): string {
-  const remote = requestRemoteAddress(request);
+  const remote = webhookClientIps.get(request) ?? requestRemoteAddress(request);
   return remoteAddrHost(remote) || "unknown";
+}
+
+function isTrustedWebhookProxy(socketHost: string, configured: string): boolean {
+  const normalized = socketHost.toLowerCase();
+  if (
+    normalized === "::1"
+    || normalized === "0:0:0:0:0:0:0:1"
+    || normalized.startsWith("127.")
+    || normalized.startsWith("::ffff:127.")
+  ) return true;
+  return configured
+    .split(",")
+    .map((value) => remoteAddrHost(value.trim()).toLowerCase())
+    .filter((value) => Boolean(isIP(value)))
+    .includes(normalized);
 }
 
 export function webhookSignatureStatus(

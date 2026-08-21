@@ -88,6 +88,8 @@ import {
   isTaskTokenForbiddenRequest,
   log,
   readJson,
+  resolveWebhookClientIpAddress,
+  setWebhookClientIpAddress,
   verifyJwtToken,
   withFeedbackRequestMetadata,
 } from "./helpers.js";
@@ -510,6 +512,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     port,
     hostname,
     async fetch(req, server) {
+      const socketAddress = server.requestIP(req)?.address;
+      setWebhookClientIpAddress(req, resolveWebhookClientIpAddress(req, socketAddress));
       const url = new URL(req.url);
       if (url.pathname === "/api/daemon/ws") {
         const runtimeIds = parseDaemonWebSocketRuntimeIds(url);
