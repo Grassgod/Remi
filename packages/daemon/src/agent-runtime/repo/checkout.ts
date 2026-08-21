@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSyn
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
+import { createLogger } from "@shared/logger.js";
 
 export type { RepoSpec } from "@daemon/contracts/types.js";
 // Back-compat alias for existing `MultiremiRepoData` importers (e.g. worker/daemon.ts).
@@ -52,6 +53,8 @@ export interface MultiremiSnapshotResult {
 export interface MultiremiRepoCacheOptions {
   lockTimeoutMs?: number;
   staleLockMs?: number;
+  /** Injectable so tests can exercise fetch retries without real delays. */
+  fetchRetryDelaysMs?: readonly number[];
 }
 
 export interface MultiremiWorktreeState {
@@ -65,6 +68,7 @@ const MODERN_FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_STALE_LOCK_MS = 60 * 60_000;
+const DEFAULT_FETCH_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 const RESERVED_ISSUE_WORKSPACE_DIRECTORIES = new Set(["wiki", ".multiremi"]);
 const MULTIREMI_HOOK_MARKER = "# multiremi:prepare-commit-msg:co-authored-by";
 const LEGACY_DAEMON_HOOK_SIGNATURES = [
@@ -100,6 +104,8 @@ fi
 git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 `;
 
+const log = createLogger("multiremi-repo-cache");
+
 export class MultiremiRepoCache {
   constructor(private root: string, private options: MultiremiRepoCacheOptions = {}) {}
 
@@ -112,12 +118,12 @@ export class MultiremiRepoCache {
       const barePath = this.barePath(workspaceId, url);
       this.withRepoLock(barePath, () => {
         if (isBareRepo(barePath)) {
-          gitFetch(barePath, { allowFailure: true });
+          this.fetch(barePath, { allowFailure: true });
         } else {
           mkdirSync(workspaceRoot, { recursive: true });
           try {
             git(null, ["clone", "--bare", url, barePath]);
-            gitFetch(barePath);
+            this.fetch(barePath);
           } catch (err) {
             rmSync(barePath, { recursive: true, force: true });
             throw err;
@@ -150,7 +156,7 @@ export class MultiremiRepoCache {
       // Intake workspaces promise a fresh view for every round. A failed fetch
       // must fail preparation instead of silently presenting an old commit as
       // current.
-      gitFetch(barePath);
+      this.fetch(barePath);
       const baseRef = resolveBaseRef(barePath, params.ref);
       const commit = git(barePath, ["rev-parse", `${baseRef}^{commit}`]);
       const repoRoot = join(
@@ -223,7 +229,7 @@ export class MultiremiRepoCache {
       return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
     }
 
-    gitFetch(barePath, { allowFailure: true });
+    this.fetch(barePath, { allowFailure: true });
 
     const baseRef = resolveBaseRef(barePath, params.ref);
     const branchName = requestedBranch ?? `agent/${sanitizeName(params.agentName ?? "agent")}/${shortId(params.taskId ?? "task")}`;
@@ -260,6 +266,13 @@ export class MultiremiRepoCache {
 
   private barePath(workspaceId: string, repoUrl: string): string {
     return join(this.root, safePathPart(workspaceId), bareDirName(repoUrl));
+  }
+
+  private fetch(barePath: string, options: { allowFailure?: boolean } = {}): void {
+    gitFetch(barePath, {
+      ...options,
+      retryDelaysMs: this.options.fetchRetryDelaysMs ?? DEFAULT_FETCH_RETRY_DELAYS_MS,
+    });
   }
 
   private withRepoLock<T>(barePath: string, fn: () => T): T {
@@ -326,21 +339,61 @@ function git(cwd: string | null, args: string[], options: { allowFailure?: boole
   return String(result.stdout ?? "").trim();
 }
 
-function gitFetch(barePath: string, options: { allowFailure?: boolean } = {}): void {
+function gitFetch(
+  barePath: string,
+  options: { allowFailure?: boolean; retryDelaysMs?: readonly number[] } = {},
+): void {
   try {
     ensureRemoteTrackingLayout(barePath);
-    git(barePath, [
-      "fetch",
-      "--prune",
-      "--prune-tags",
-      "origin",
-      MODERN_FETCH_REFSPEC,
-      MIRRORED_TAG_FETCH_REFSPEC,
-    ], { allowFailure: options.allowFailure });
+    const retryDelaysMs = options.retryDelaysMs ?? DEFAULT_FETCH_RETRY_DELAYS_MS;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        git(barePath, [
+          "fetch",
+          "--prune",
+          "--prune-tags",
+          "origin",
+          MODERN_FETCH_REFSPEC,
+          MIRRORED_TAG_FETCH_REFSPEC,
+        ]);
+        break;
+      } catch (error) {
+        const retryDelayMs = retryDelaysMs[attempt];
+        if (retryDelayMs === undefined || !isRetryableGitFetchError(error)) throw error;
+        log.warn("Repo fetch hit a transient network error; retrying", {
+          barePath,
+          attempt: attempt + 1,
+          maxAttempts: retryDelaysMs.length + 1,
+          retryDelayMs,
+          error: errorMessage(error),
+        });
+        sleepSync(Math.max(0, retryDelayMs));
+      }
+    }
     git(barePath, ["remote", "set-head", "origin", "--auto"], { allowFailure: true });
   } catch (err) {
     if (!options.allowFailure) throw err;
   }
+}
+
+function isRetryableGitFetchError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return [
+    "connection timed out",
+    "operation timed out",
+    "connection reset",
+    "connection refused",
+    "could not resolve host",
+    "could not resolve hostname",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "no route to host",
+    "broken pipe",
+  ].some((marker) => message.includes(marker));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function ensureRemoteTrackingLayout(barePath: string): void {

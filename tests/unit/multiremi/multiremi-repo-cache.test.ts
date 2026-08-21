@@ -199,6 +199,42 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(second.path, "README.md"), "utf8")).toBe("tagged snapshot v2\n");
   });
 
+  it("retries transient network failures while refreshing a cached repository", () => {
+    const source = createRepo("main", "retry snapshot");
+    const cacheRoot = tempDir("multiremi-repo-retry-cache-");
+    const snapshotsRoot = tempDir("multiremi-repo-retry-snapshots-");
+    const cache = new MultiremiRepoCache(cacheRoot, { fetchRetryDelaysMs: [0, 0] });
+    cache.sync("local", [{ url: source }]);
+
+    const attempts = tempDir("multiremi-repo-retry-attempts-");
+    const restorePath = installGitFetchWrapper(attempts, 2, "ssh: connect to host code.byted.org port 22: Connection timed out");
+    try {
+      const snapshot = cache.createSnapshot({ workspaceId: "local", repoUrl: source, snapshotsRoot });
+      expect(readFileSync(join(snapshot.path, "README.md"), "utf8")).toBe("retry snapshot\n");
+      expect(readFetchAttempts(attempts)).toBe(3);
+    } finally {
+      restorePath();
+    }
+  });
+
+  it("does not retry deterministic fetch failures", () => {
+    const source = createRepo("main", "auth failure snapshot");
+    const cacheRoot = tempDir("multiremi-repo-no-retry-cache-");
+    const snapshotsRoot = tempDir("multiremi-repo-no-retry-snapshots-");
+    const cache = new MultiremiRepoCache(cacheRoot, { fetchRetryDelaysMs: [0, 0] });
+    cache.sync("local", [{ url: source }]);
+
+    const attempts = tempDir("multiremi-repo-no-retry-attempts-");
+    const restorePath = installGitFetchWrapper(attempts, Number.MAX_SAFE_INTEGER, "Permission denied (publickey)");
+    try {
+      expect(() => cache.createSnapshot({ workspaceId: "local", repoUrl: source, snapshotsRoot }))
+        .toThrow(/Permission denied \(publickey\)/);
+      expect(readFetchAttempts(attempts)).toBe(1);
+    } finally {
+      restorePath();
+    }
+  });
+
   it("serializes repo mutations with lock dirs and recovers stale locks", () => {
     const source = createRepo("main", "locked repo");
     const cacheRoot = tempDir("multiremi-repo-lock-");
@@ -423,6 +459,42 @@ function tryGit(cwd: string, args: string[]): void {
 function prepareCommitMsgHookPath(worktreePath: string): string {
   const commonDir = git(worktreePath, ["rev-parse", "--git-common-dir"]);
   return join(isAbsolute(commonDir) ? commonDir : join(worktreePath, commonDir), "hooks", "prepare-commit-msg");
+}
+
+function installGitFetchWrapper(root: string, failures: number, failureMessage: string): () => void {
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const wrapperDir = join(root, "bin");
+  const attemptsFile = join(root, "attempts");
+  mkdirSync(wrapperDir);
+  writeFileSync(join(wrapperDir, "git"), `#!/bin/sh
+case " $* " in
+  *" fetch "*)
+    attempts=0
+    if [ -f ${shellQuote(attemptsFile)} ]; then attempts=$(cat ${shellQuote(attemptsFile)}); fi
+    attempts=$((attempts + 1))
+    printf '%s' "$attempts" > ${shellQuote(attemptsFile)}
+    if [ "$attempts" -le ${failures} ]; then
+      printf '%s\\n' ${shellQuote(failureMessage)} >&2
+      exit 128
+    fi
+    ;;
+esac
+exec ${shellQuote(realGit)} "$@"
+`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${wrapperDir}:${previousPath ?? ""}`;
+  return () => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  };
+}
+
+function readFetchAttempts(root: string): number {
+  return Number.parseInt(readFileSync(join(root, "attempts"), "utf8"), 10);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function gitEnv(): NodeJS.ProcessEnv {
