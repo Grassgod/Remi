@@ -343,7 +343,9 @@ export function ScmConnectionsSection({
               </Field>
               <Field label={t(($) => $.github.scm.mode)}>
                 <Select value={draft.mode} onValueChange={(value) => updateDraft("mode", value as ScmConnectionMode)}>
-                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full">
+                    <SelectValue>{() => t(($) => $.github.scm.modes[draft.mode])}</SelectValue>
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="poll">{t(($) => $.github.scm.modes.poll)}</SelectItem>
                     <SelectItem value="webhook">{t(($) => $.github.scm.modes.webhook)}</SelectItem>

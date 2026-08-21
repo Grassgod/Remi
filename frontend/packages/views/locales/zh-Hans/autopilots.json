@@ -324,7 +324,7 @@
     },
     "scm_event": {
       "connection_label": "代码托管连接",
-      "all_connections": "所有启用的连接",
+      "all_connections": "全部连接",
       "repositories_label": "仓库范围",
       "all_repositories": "所有已绑定仓库",
       "no_repositories": "没有可用仓库，请先在代码托管设置中绑定。",

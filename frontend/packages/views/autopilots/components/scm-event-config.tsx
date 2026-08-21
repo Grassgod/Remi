@@ -122,6 +122,9 @@ export function ScmEventConfigSection({
   const selectedConnection = connections.find(
     (connection) => connection.id === config.connectionId,
   );
+  const selectedConnectionLabel = selectedConnection
+    ? formatConnectionLabel(selectedConnection)
+    : t(($) => $.dialog.scm_event.all_connections);
   const repositoryOptions = useMemo(() => {
     const source = selectedConnection ? [selectedConnection] : connections;
     const byId = new Map<string, { id: string; name: string; url: string }>();
@@ -188,12 +191,14 @@ export function ScmEventConfigSection({
             })
           }
         >
-          <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full bg-background">
+            <SelectValue>{() => selectedConnectionLabel}</SelectValue>
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="__all__">{t(($) => $.dialog.scm_event.all_connections)}</SelectItem>
             {connections.map((connection) => (
               <SelectItem key={connection.id} value={connection.id}>
-                {connection.name} · {connection.provider === "github" ? "GitHub" : "Codebase"}
+                {formatConnectionLabel(connection)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -280,6 +285,10 @@ export function ScmEventConfigSection({
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><div className="mb-1 text-xs font-medium text-muted-foreground">{label}</div>{children}</div>;
+}
+
+function formatConnectionLabel(connection: Pick<ScmConnection, "name" | "provider">): string {
+  return `${connection.name} · ${connection.provider === "github" ? "GitHub" : "Codebase"}`;
 }
 
 function connectionSupportsEvent(
