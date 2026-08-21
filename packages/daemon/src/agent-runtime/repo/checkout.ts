@@ -3,6 +3,13 @@ import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSyn
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
+import {
+  appendGitCredentialBrokerEnv,
+  isBrokerCompatibleRepositoryUrl,
+  preferredHttpsCloneUrl,
+  redactGitCredentialError,
+  type GitCredentialBrokerEnvOptions,
+} from "./credential-broker.js";
 
 export type { RepoSpec } from "@daemon/contracts/types.js";
 // Back-compat alias for existing `MultiremiRepoData` importers (e.g. worker/daemon.ts).
@@ -52,6 +59,10 @@ export interface MultiremiSnapshotResult {
 export interface MultiremiRepoCacheOptions {
   lockTimeoutMs?: number;
   staleLockMs?: number;
+  credentialBroker?: Omit<
+    GitCredentialBrokerEnvOptions,
+    "workspaceId" | "taskId" | "repositoryUrl" | "repositoryUrls"
+  >;
 }
 
 export interface MultiremiWorktreeState {
@@ -111,13 +122,17 @@ export class MultiremiRepoCache {
       if (!url) continue;
       const barePath = this.barePath(workspaceId, url);
       this.withRepoLock(barePath, () => {
+        const gitAuth = this.gitAuth(workspaceId, url);
+        const cloneUrl = this.cloneUrl(url);
         if (isBareRepo(barePath)) {
-          gitFetch(barePath, { allowFailure: true });
+          configureRepoTransport(barePath, url, cloneUrl);
+          gitFetch(barePath, { allowFailure: true, env: gitAuth });
         } else {
           mkdirSync(workspaceRoot, { recursive: true });
           try {
-            git(null, ["clone", "--bare", url, barePath]);
-            gitFetch(barePath);
+            git(null, ["clone", "--bare", cloneUrl, barePath], { env: gitAuth });
+            configureRepoTransport(barePath, url, cloneUrl);
+            gitFetch(barePath, { env: gitAuth });
           } catch (err) {
             rmSync(barePath, { recursive: true, force: true });
             throw err;
@@ -150,7 +165,7 @@ export class MultiremiRepoCache {
       // Intake workspaces promise a fresh view for every round. A failed fetch
       // must fail preparation instead of silently presenting an old commit as
       // current.
-      gitFetch(barePath);
+      gitFetch(barePath, { env: this.gitAuth(params.workspaceId, params.repoUrl) });
       const baseRef = resolveBaseRef(barePath, params.ref);
       const commit = git(barePath, ["rev-parse", `${baseRef}^{commit}`]);
       const repoRoot = join(
@@ -223,7 +238,10 @@ export class MultiremiRepoCache {
       return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
     }
 
-    gitFetch(barePath, { allowFailure: true });
+    gitFetch(barePath, {
+      allowFailure: true,
+      env: this.gitAuth(params.workspaceId, params.repoUrl),
+    });
 
     const baseRef = resolveBaseRef(barePath, params.ref);
     const branchName = requestedBranch ?? `agent/${sanitizeName(params.agentName ?? "agent")}/${shortId(params.taskId ?? "task")}`;
@@ -260,6 +278,25 @@ export class MultiremiRepoCache {
 
   private barePath(workspaceId: string, repoUrl: string): string {
     return join(this.root, safePathPart(workspaceId), bareDirName(repoUrl));
+  }
+
+  private gitAuth(workspaceId: string, repositoryUrl: string): NodeJS.ProcessEnv | undefined {
+    const broker = this.options.credentialBroker;
+    if (!broker) return undefined;
+    return appendGitCredentialBrokerEnv(process.env, {
+      ...broker,
+      workspaceId,
+      repositoryUrl,
+      repositoryUrls: [repositoryUrl],
+    });
+  }
+
+  private cloneUrl(repositoryUrl: string): string {
+    if (!this.options.credentialBroker) return repositoryUrl;
+    if (!isBrokerCompatibleRepositoryUrl(repositoryUrl)) {
+      throw new Error(`repository SSH URL cannot be converted safely to HTTPS: ${repositoryUrl}`);
+    }
+    return preferredHttpsCloneUrl(repositoryUrl);
   }
 
   private withRepoLock<T>(barePath: string, fn: () => T): T {
@@ -313,20 +350,27 @@ function makeTreeReadOnly(root: string): void {
   chmodSync(root, 0o555);
 }
 
-function git(cwd: string | null, args: string[], options: { allowFailure?: boolean } = {}): string {
+function git(
+  cwd: string | null,
+  args: string[],
+  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+): string {
   const result = spawnSync("git", args, {
     cwd: cwd ?? undefined,
     encoding: "utf8",
-    env: gitEnv(),
+    env: gitEnv(options.env),
   });
-  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+  const output = redactGitCredentialError(`${result.stdout ?? ""}${result.stderr ?? ""}`.trim());
   if (result.status !== 0 && !options.allowFailure) {
-    throw new Error(`git ${args.join(" ")} failed${output ? `: ${output}` : ""}`);
+    throw new Error(`git ${redactedGitArguments(args)} failed${output ? `: ${output}` : ""}`);
   }
   return String(result.stdout ?? "").trim();
 }
 
-function gitFetch(barePath: string, options: { allowFailure?: boolean } = {}): void {
+function gitFetch(
+  barePath: string,
+  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+): void {
   try {
     ensureRemoteTrackingLayout(barePath);
     git(barePath, [
@@ -336,7 +380,7 @@ function gitFetch(barePath: string, options: { allowFailure?: boolean } = {}): v
       "origin",
       MODERN_FETCH_REFSPEC,
       MIRRORED_TAG_FETCH_REFSPEC,
-    ], { allowFailure: options.allowFailure });
+    ], { allowFailure: options.allowFailure, env: options.env });
     git(barePath, ["remote", "set-head", "origin", "--auto"], { allowFailure: true });
   } catch (err) {
     if (!options.allowFailure) throw err;
@@ -349,14 +393,23 @@ function ensureRemoteTrackingLayout(barePath: string): void {
   git(barePath, ["config", "remote.origin.fetch", MODERN_FETCH_REFSPEC]);
 }
 
-function gitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+function gitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, GIT_TERMINAL_PROMPT: "0" };
   const existing = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10);
   const index = Number.isFinite(existing) && existing >= 0 ? existing : 0;
   env.GIT_CONFIG_COUNT = String(index + 1);
   env[`GIT_CONFIG_KEY_${index}`] = "safe.directory";
   env[`GIT_CONFIG_VALUE_${index}`] = "*";
   return env;
+}
+
+function configureRepoTransport(barePath: string, repositoryUrl: string, cloneUrl: string): void {
+  git(barePath, ["remote", "set-url", "origin", cloneUrl]);
+  git(barePath, ["config", "multiremi.repository-url", repositoryUrl]);
+}
+
+function redactedGitArguments(args: string[]): string {
+  return args.map((arg) => redactGitCredentialError(arg)).join(" ");
 }
 
 function isBareRepo(path: string): boolean {

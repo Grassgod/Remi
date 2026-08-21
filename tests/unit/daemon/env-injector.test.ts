@@ -132,8 +132,19 @@ describe("buildTaskEnv", () => {
     }), OPTS);
     expect(env.ONLY_AGENT).toBe("1");
     expect(Object.keys(env).sort()).toEqual([
+      "GCM_INTERACTIVE",
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0",
+      "GIT_CONFIG_KEY_1",
+      "GIT_CONFIG_KEY_2",
+      "GIT_CONFIG_VALUE_0",
+      "GIT_CONFIG_VALUE_1",
+      "GIT_CONFIG_VALUE_2",
+      "GIT_SSH_COMMAND",
+      "GIT_TERMINAL_PROMPT",
       "MULTIREMI_AGENT_NAME",
       "MULTIREMI_DAEMON_PORT",
+      "MULTIREMI_GIT_CREDENTIAL_TIMEOUT_MS",
       "MULTIREMI_SERVER_URL",
       "MULTIREMI_TASK_ID",
       "MULTIREMI_WORKSPACE_ID",

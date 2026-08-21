@@ -54,6 +54,7 @@ export function isTaskTokenForbiddenRequest(request: Request): boolean {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method.toUpperCase();
+  if (path === "/api/daemon/scm/git-credentials" && method === "POST") return false;
   if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
@@ -75,6 +76,13 @@ export function denyNonDaemonOperationalAccess(
   if (!authToken) return null;
   if (c.req.header("Authorization") === `Bearer ${authToken}`) return null;
   const token = currentAccessToken(c);
+  if (
+    c.req.path === "/api/daemon/scm/git-credentials"
+    && c.req.method === "POST"
+    && token?.type === "task"
+  ) {
+    return null;
+  }
   if (
     c.req.path === "/api/daemon/heartbeat" &&
     token?.type === "pat" &&

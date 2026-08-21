@@ -121,6 +121,69 @@ function validateDaemonInstallRequestBody(
 export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
 
+  app.post("/api/daemon/scm/git-credentials", async (c) => {
+    const body = await readJsonStrict<{
+      workspaceId?: string;
+      workspace_id?: string;
+      repositoryUrl?: string;
+      repository_url?: string;
+    }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const repositoryUrl = cleanString(body.repositoryUrl ?? body.repository_url);
+    if (!repositoryUrl) return c.json({ error: "repositoryUrl is required" }, 400);
+
+    const token = currentAccessToken(c);
+    const task = token?.type === "task" && token.taskId
+      ? store.getTaskWithAgent(token.taskId)
+      : null;
+    if (token?.type === "task" && (!task || isTerminalTaskStatus(task.status))) {
+      return c.json({ error: "task credential is no longer active", code: "task_credential_inactive" }, 403);
+    }
+    const workspaceId = token?.workspaceId
+      ?? cleanString(body.workspaceId ?? body.workspace_id)
+      ?? "local";
+    const assertedWorkspaceId = cleanString(body.workspaceId ?? body.workspace_id);
+    if (assertedWorkspaceId && assertedWorkspaceId !== workspaceId) {
+      return c.json({ error: "forbidden for token workspace" }, 403);
+    }
+
+    const binding = store.findScmRepositoryBindingByUrl(workspaceId, repositoryUrl);
+    if (!binding?.enabled) return c.json({ error: "repository credential not found" }, 404);
+    if (task) {
+      const taskMayUseRepository = task.workspaceId === workspaceId && task.repos.some((repo) => {
+        const allowed = store.findScmRepositoryBindingByUrl(workspaceId, repo.url);
+        return allowed?.repositoryId === binding.repositoryId
+          && allowed.connectionId === binding.connectionId;
+      });
+      if (!taskMayUseRepository) return c.json({ error: "repository credential not found" }, 404);
+    }
+
+    const connection = store.getScmConnection(binding.connectionId);
+    const credential = connection?.enabled
+      ? store.getScmConnectionCredential(binding.connectionId)
+      : null;
+    if (!connection || !credential?.accessToken) {
+      return c.json({ error: "repository credential is not configured", code: "scm_credential_missing" }, 409);
+    }
+    if (/[\r\n]/u.test(credential.accessToken)) {
+      return c.json({ error: "repository credential is invalid", code: "scm_credential_invalid" }, 500);
+    }
+    const cloneUrl = scmHttpsCloneUrl(binding.repositoryUrl, connection.baseUrl);
+    if (!cloneUrl) {
+      return c.json({ error: "repository has no safe HTTPS clone URL", code: "scm_https_clone_unavailable" }, 409);
+    }
+    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      repositoryId: binding.repositoryId,
+      repositoryUrl: binding.repositoryUrl,
+      cloneUrl,
+      username: connection.provider === "github" ? "x-access-token" : "oauth2",
+      password: credential.accessToken,
+      expiresAt,
+    });
+  });
+
   app.get("/api/multiremi/install/daemon", (c) => {
     return c.json(buildDaemonInstallInstructions({
       requestUrl: c.req.url,
@@ -727,6 +790,30 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status, completed_at: task.completedAt });
   });
+}
+
+function scmHttpsCloneUrl(repositoryUrl: string, baseUrl: string): string | null {
+  const value = repositoryUrl.trim();
+  if (/^https:\/\//iu.test(value)) return value;
+  let repositoryPath = "";
+  const scp = value.match(/^(?:[^@/:]+@)?[^/:]+:(.+)$/u);
+  if (scp) repositoryPath = scp[1] ?? "";
+  else {
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "ssh:" && parsed.protocol !== "git+ssh:") return null;
+      repositoryPath = parsed.pathname;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const provider = new URL(baseUrl);
+    if (provider.protocol !== "https:") return null;
+    return `${provider.origin}/${repositoryPath.replace(/^\/+/, "")}`;
+  } catch {
+    return null;
+  }
 }
 
 function safeProjectKnowledgeError(error: unknown): string {
