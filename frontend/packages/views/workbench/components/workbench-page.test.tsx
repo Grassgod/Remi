@@ -10,6 +10,9 @@ const TEST_RESOURCES = { en: { common: enCommon, workbench: enWorkbench } };
 
 const listIssues = vi.hoisted(() => vi.fn());
 const getAgentTaskSnapshot = vi.hoisted(() => vi.fn());
+const navigationState = vi.hoisted(() => ({
+  searchParams: new URLSearchParams(),
+}));
 
 // The real workbench/agents query modules stay in play — only the api
 // singleton is stubbed — so this test exercises the actual query wiring
@@ -28,12 +31,34 @@ vi.mock("@multiremi/core/hooks", () => ({
 vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
     workbench: () => "/test/workbench",
+    workbenchIssue: (issueId: string, sessionId?: string) =>
+      `/test/workbench?issue=${issueId}${sessionId ? `&session=${sessionId}` : ""}`,
   }),
 }));
 
 vi.mock("../../issues/components", () => ({
-  IssueDetail: ({ issueId }: { issueId: string }) => (
-    <div data-testid="issue-detail">{issueId}</div>
+  IssueDetail: ({
+    issueId,
+    initialIssueSessionId,
+    onIssueSessionChange,
+  }: {
+    issueId: string;
+    initialIssueSessionId?: string;
+    onIssueSessionChange?: (sessionId: string) => void;
+  }) => (
+    <div
+      data-testid="issue-detail"
+      data-session-route-owned={String(Boolean(onIssueSessionChange))}
+      data-initial-session={initialIssueSessionId}
+    >
+      {issueId}
+      <button
+        type="button"
+        onClick={() => onIssueSessionChange?.("session-review")}
+      >
+        Select Review session
+      </button>
+    </div>
   ),
   StatusIcon: () => <span data-testid="status-icon" />,
 }));
@@ -41,7 +66,7 @@ vi.mock("../../issues/components", () => ({
 const replace = vi.hoisted(() => vi.fn());
 vi.mock("../../navigation", () => ({
   useNavigation: () => ({
-    searchParams: new URLSearchParams(),
+    searchParams: navigationState.searchParams,
     replace,
     push: vi.fn(),
   }),
@@ -115,6 +140,7 @@ function renderWorkbench() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  navigationState.searchParams = new URLSearchParams();
   getAgentTaskSnapshot.mockResolvedValue([]);
 });
 
@@ -138,11 +164,11 @@ describe("WorkbenchPage", () => {
     expect(screen.getByText("Issue c")).toBeInTheDocument();
   });
 
-  it("opens the issue detail and records the selection in the URL on click", async () => {
+  it("switches issue detail in place while keeping the workbench route", async () => {
     listIssues.mockImplementation(({ status }: { status: string }) =>
       Promise.resolve(
         status === "in_review"
-          ? { issues: [issue("a", "in_review")], total: 1 }
+          ? { issues: [issue("a", "in_review"), issue("b", "in_review")], total: 2 }
           : { issues: [], total: 0 },
       ),
     );
@@ -150,7 +176,43 @@ describe("WorkbenchPage", () => {
 
     fireEvent.click(await screen.findByText("Issue a"));
     expect(screen.getByTestId("issue-detail")).toHaveTextContent("a");
+    expect(screen.getByTestId("issue-detail")).toHaveAttribute(
+      "data-session-route-owned",
+      "true",
+    );
     expect(replace).toHaveBeenCalledWith("/test/workbench?issue=a");
+
+    fireEvent.click(screen.getByText("Issue b"));
+    expect(screen.getByTestId("issue-detail")).toHaveTextContent("b");
+    expect(replace).toHaveBeenLastCalledWith("/test/workbench?issue=b");
+
+    fireEvent.click(screen.getByRole("button", { name: "Select Review session" }));
+    expect(replace).toHaveBeenLastCalledWith(
+      "/test/workbench?issue=b&session=session-review",
+    );
+    expect(
+      replace.mock.calls.every(([path]) => String(path).startsWith("/test/workbench")),
+    ).toBe(true);
+  });
+
+  it("restores a deep-linked Session inside the selected workbench issue", async () => {
+    navigationState.searchParams = new URLSearchParams(
+      "issue=a&session=session-main",
+    );
+    listIssues.mockImplementation(({ status }: { status: string }) =>
+      Promise.resolve(
+        status === "in_review"
+          ? { issues: [issue("a", "in_review")], total: 1 }
+          : { issues: [], total: 0 },
+      ),
+    );
+
+    renderWorkbench();
+
+    expect(await screen.findByTestId("issue-detail")).toHaveAttribute(
+      "data-initial-session",
+      "session-main",
+    );
   });
 
   it("distinguishes a failed fetch from an empty workbench and offers a retry", async () => {

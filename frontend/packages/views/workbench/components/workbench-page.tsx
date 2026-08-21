@@ -68,6 +68,7 @@ export function WorkbenchPage() {
   const { t: tCommon } = useT("common");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
+  const urlSession = searchParams.get("session") ?? "";
   const wsPaths = useWorkspacePaths();
   const wsId = useWorkspaceId();
 
@@ -81,10 +82,16 @@ export function WorkbenchPage() {
   const setSelectedId = useCallback(
     (id: string) => {
       setSelectedIdState(id);
-      const basePath = wsPaths.workbench();
-      replace(id ? `${basePath}?issue=${id}` : basePath);
+      replace(id ? wsPaths.workbenchIssue(id) : wsPaths.workbench());
     },
     [replace, wsPaths],
+  );
+
+  const handleIssueSessionChange = useCallback(
+    (sessionId: string) => {
+      if (selectedId) replace(wsPaths.workbenchIssue(selectedId, sessionId));
+    },
+    [replace, selectedId, wsPaths],
   );
 
   const {
@@ -176,6 +183,10 @@ export function WorkbenchPage() {
         key={selectedId}
         issueId={selectedId}
         layoutId="multimira_workbench_issue_detail_layout"
+        initialIssueSessionId={
+          urlIssue === selectedId ? urlSession || undefined : undefined
+        }
+        onIssueSessionChange={handleIssueSessionChange}
         onDelete={advanceSelection}
         onDone={advanceSelection}
       />

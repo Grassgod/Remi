@@ -51,6 +51,8 @@ interface IssueDetailProps {
   highlightCommentId?: string;
   /** Selects the product Session that owns a deep-linked comment. */
   initialIssueSessionId?: string;
+  /** Lets the host decide whether and how Session selection changes its URL. */
+  onIssueSessionChange?: (sessionId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +72,7 @@ export function IssueDetail({
   layoutId = "multimira_issue_detail_layout",
   highlightCommentId,
   initialIssueSessionId,
+  onIssueSessionChange,
 }: IssueDetailProps) {
   const { t } = useT("issues");
   const id = issueId;
@@ -80,14 +83,10 @@ export function IssueDetail({
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const handleSessionSelection = useCallback(
-    (sessionId: string) => router.replace(paths.issueSession(id, sessionId)),
-    [id, paths, router],
-  );
   const sessions = useIssueSessionSelection(
     id,
     initialIssueSessionId,
-    handleSessionSelection,
+    onIssueSessionChange,
   );
   // Workspace owners and admins moderate any comment authored by anyone
   // (mirrors backend `comment.go:507-512`). Computed here so per-comment

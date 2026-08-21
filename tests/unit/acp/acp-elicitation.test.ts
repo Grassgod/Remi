@@ -162,6 +162,75 @@ describe("elicitationToQuestions (codex)", () => {
   });
 });
 
+// Mirrors claude-agent-acp >= 0.66.0 (dist/elicitation.js:75-110): the single
+// form-level `customAnswer` is replaced by a per-question free-text companion
+// `question_<n>_custom`, which the agent reads back in preference to the
+// parent field. Left unfolded it renders as a required standalone question and
+// blocks form submission (MUL-58).
+function claudeCustomRequest(): ElicitationCreateParams {
+  return {
+    mode: "form",
+    sessionId: "sess_1",
+    message: "您这次让我用 AskUserQuestion 提问，主要是想测试什么？",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        question_0: {
+          type: "string",
+          title: "测试目的",
+          oneOf: [
+            { const: "测试交互问答功能" },
+            { const: "只是随便玩玩" },
+          ],
+        },
+        question_0_custom: {
+          type: "string",
+          title: "Other",
+          description: "Type your own answer instead of choosing an option above (optional).",
+        },
+      },
+    },
+  };
+}
+
+describe("elicitationToQuestions (claude >= 0.66)", () => {
+  it("folds question_<n>_custom into its parent question instead of rendering it standalone", () => {
+    const questions = elicitationToQuestions(claudeCustomRequest())!;
+    expect(questions).toHaveLength(1);
+    expect(questions[0].fieldKey).toBe("question_0");
+    expect(questions[0].otherFieldKey).toBe("question_0_custom");
+    expect(questions[0].question.header).toBe("测试目的");
+    expect(questions[0].question.options.map((o) => o.label)).toEqual([
+      "测试交互问答功能",
+      "只是随便玩玩",
+    ]);
+  });
+
+  it("keeps a _custom-suffixed field that owns no parent question", () => {
+    const params: ElicitationCreateParams = {
+      mode: "form",
+      sessionId: "sess_1",
+      message: "What is your custom name?",
+      requestedSchema: { type: "object", properties: { question_9_custom: { type: "string" } } },
+    };
+    const questions = elicitationToQuestions(params)!;
+    expect(questions).toHaveLength(1);
+    expect(questions[0].fieldKey).toBe("question_9_custom");
+    expect(questions[0].otherFieldKey).toBeUndefined();
+  });
+
+  it("posts option labels to the parent field and free text to the _custom companion", () => {
+    const questions = elicitationToQuestions(claudeCustomRequest())!;
+    const questionText = "您这次让我用 AskUserQuestion 提问，主要是想测试什么？";
+    expect(answersToElicitationContent(questions, { [questionText]: "只是随便玩玩" })).toEqual({
+      question_0: "只是随便玩玩",
+    });
+    expect(answersToElicitationContent(questions, { [questionText]: "有点问题, 我无法点击提交" })).toEqual({
+      question_0_custom: "有点问题, 我无法点击提交",
+    });
+  });
+});
+
 describe("answersToElicitationContent", () => {
   it("posts a free-text answer to the __other field and an option label to the parent", () => {
     const questions = elicitationToQuestions(codexRequest())!;

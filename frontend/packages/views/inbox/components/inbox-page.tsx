@@ -87,6 +87,7 @@ export function InboxPage() {
   const { t: tCommon } = useT("common");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
+  const urlSession = searchParams.get("session") ?? "";
   const wsPaths = useWorkspacePaths();
 
   const [selectedKey, setSelectedKeyState] = useState(() => urlIssue);
@@ -116,12 +117,20 @@ export function InboxPage() {
     if (selected) lastResolvedKeyRef.current = selectedKey;
   }, [selected, selectedKey]);
 
-  const setSelectedKey = useCallback((key: string) => {
-    setSelectedKeyState(key);
-    const inboxPath = wsPaths.inbox();
-    const url = key ? `${inboxPath}?issue=${key}` : inboxPath;
-    replace(url);
-  }, [replace, wsPaths]);
+  const setSelectedKey = useCallback(
+    (key: string, sessionId?: string) => {
+      setSelectedKeyState(key);
+      replace(key ? wsPaths.inboxIssue(key, sessionId) : wsPaths.inbox());
+    },
+    [replace, wsPaths],
+  );
+
+  const handleIssueSessionChange = useCallback(
+    (sessionId: string) => {
+      if (selectedKey) replace(wsPaths.inboxIssue(selectedKey, sessionId));
+    },
+    [replace, selectedKey, wsPaths],
+  );
 
   // Shared inbox links (?issue=<id>) may point to notifications not in this
   // user's inbox (archived, or never received). Fall back to the issue page
@@ -141,8 +150,22 @@ export function InboxPage() {
       setSelectedKey("");
       return;
     }
-    replace(wsPaths.issueDetail(selectedKey));
-  }, [loading, loadFailed, selectedKey, selected, replace, wsPaths, setSelectedKey]);
+    replace(
+      urlIssue === selectedKey && urlSession
+        ? wsPaths.issueSession(selectedKey, urlSession)
+        : wsPaths.issueDetail(selectedKey),
+    );
+  }, [
+    loading,
+    loadFailed,
+    selectedKey,
+    selected,
+    replace,
+    wsPaths,
+    setSelectedKey,
+    urlIssue,
+    urlSession,
+  ]);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multimira_inbox_layout",
@@ -182,7 +205,10 @@ export function InboxPage() {
   }, [selectedId, selectedRead, markReadMutate, t]);
 
   const handleSelect = (item: InboxItem) => {
-    setSelectedKey(item.issue_id ?? item.id);
+    setSelectedKey(
+      item.issue_id ?? item.id,
+      item.details?.issue_session_id ?? undefined,
+    );
   };
 
   const handleArchive = (id: string) => {
@@ -195,7 +221,10 @@ export function InboxPage() {
       // to the previous (newer) one when archiving at the bottom, and only
       // clear the selection when nothing else is left.
       const next = items[idx + 1] ?? items[idx - 1] ?? null;
-      setSelectedKey(next ? (next.issue_id ?? next.id) : "");
+      setSelectedKey(
+        next ? (next.issue_id ?? next.id) : "",
+        next?.details?.issue_session_id ?? undefined,
+      );
     }
     archiveMutation.mutate(id, {
       onError: (err) =>
@@ -336,7 +365,12 @@ export function InboxPage() {
         defaultSidebarOpen={false}
         layoutId="multimira_inbox_issue_detail_layout"
         highlightCommentId={selected.details?.comment_id ?? undefined}
-        initialIssueSessionId={selected.details?.issue_session_id ?? undefined}
+        initialIssueSessionId={
+          urlIssue === selected.issue_id && urlSession
+            ? urlSession
+            : selected.details?.issue_session_id ?? undefined
+        }
+        onIssueSessionChange={handleIssueSessionChange}
         onDelete={() => {
           // Issue deletion CASCADE-deletes the inbox item server-side, and the
           // issue:deleted WS event prunes it from the inbox cache. Just clear

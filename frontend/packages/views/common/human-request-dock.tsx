@@ -91,6 +91,10 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
   const respond = useRespondHumanRequest();
   const questions = request.payload.questions ?? [];
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Free-text "other" answers, kept separate from option picks. A non-empty
+  // other-answer wins over a picked option, matching the agent's read-back
+  // precedence for its custom-answer field.
+  const [others, setOthers] = useState<Record<string, string>>({});
 
   const setAnswer = (question: string, value: string) => {
     setAnswers((old) => ({ ...old, [question]: value }));
@@ -105,7 +109,11 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
     else chosen.add(label);
     setAnswer(question.question, [...chosen].join(", "));
   };
-  const answered = questions.every(({ question }) => (answers[question.question] ?? "").trim().length > 0);
+  const effectiveAnswer = (question: string) =>
+    (others[question] ?? "").trim() || (answers[question] ?? "").trim();
+  const answered = questions.every(({ question }) => effectiveAnswer(question.question).length > 0);
+  const submitAnswers = () =>
+    Object.fromEntries(questions.map(({ question }) => [question.question, effectiveAnswer(question.question)]));
 
   return (
     <div className="min-w-0 rounded-md border border-blue-500/40 bg-background p-2.5">
@@ -117,50 +125,64 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
         <div className="mt-1 break-words text-xs text-muted-foreground">{request.payload.message}</div>
       )}
       <div className="mt-2 flex flex-col gap-2.5">
-        {questions.map(({ fieldKey, question }) => (
-          <div key={fieldKey} className="flex flex-col gap-1">
-            <div className="text-xs font-medium">{question.header ?? question.question}</div>
-            {question.header && question.header !== question.question && (
-              <div className="text-xs text-muted-foreground">{question.question}</div>
-            )}
-            {question.options.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {question.options.map((option) => {
-                  const selected = question.multiSelect
-                    ? (answers[question.question] ?? "").split(", ").includes(option.label)
-                    : answers[question.question] === option.label;
-                  return (
-                    <Button
-                      key={option.label}
-                      size="sm"
-                      variant={selected ? "default" : "outline"}
-                      title={option.description}
-                      className={cn(
-                        "h-auto max-w-full whitespace-normal break-words text-left",
-                        !selected && "text-muted-foreground",
-                      )}
-                      onClick={() => toggleOption(question, option.label)}
-                    >
-                      {option.label}
-                    </Button>
-                  );
-                })}
-              </div>
-            ) : (
-              <Input
-                value={answers[question.question] ?? ""}
-                placeholder={t(($) => $.human_requests.answer_placeholder)}
-                onChange={(event) => setAnswer(question.question, event.target.value)}
-              />
-            )}
-          </div>
-        ))}
+        {questions.map(({ fieldKey, otherFieldKey, question }) => {
+          const customText = (others[question.question] ?? "").trim();
+          return (
+            <div key={fieldKey} className="flex flex-col gap-1">
+              <div className="text-xs font-medium">{question.header ?? question.question}</div>
+              {question.header && question.header !== question.question && (
+                <div className="text-xs text-muted-foreground">{question.question}</div>
+              )}
+              {question.options.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {question.options.map((option) => {
+                    const selected =
+                      customText.length === 0 &&
+                      (question.multiSelect
+                        ? (answers[question.question] ?? "").split(", ").includes(option.label)
+                        : answers[question.question] === option.label);
+                    return (
+                      <Button
+                        key={option.label}
+                        size="sm"
+                        variant={selected ? "default" : "outline"}
+                        title={option.description}
+                        className={cn(
+                          "h-auto max-w-full whitespace-normal break-words text-left",
+                          !selected && "text-muted-foreground",
+                        )}
+                        onClick={() => toggleOption(question, option.label)}
+                      >
+                        {option.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <Input
+                  value={answers[question.question] ?? ""}
+                  placeholder={t(($) => $.human_requests.answer_placeholder)}
+                  onChange={(event) => setAnswer(question.question, event.target.value)}
+                />
+              )}
+              {question.options.length > 0 && otherFieldKey && (
+                <Input
+                  value={others[question.question] ?? ""}
+                  placeholder={t(($) => $.human_requests.other_answer_placeholder)}
+                  onChange={(event) =>
+                    setOthers((old) => ({ ...old, [question.question]: event.target.value }))
+                  }
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
       <div className="mt-2 flex justify-end">
         <Button
           size="sm"
           disabled={!answered || respond.isPending}
-          onClick={() => respond.mutate({ taskId, requestId: request.id, response: { answers } })}
+          onClick={() => respond.mutate({ taskId, requestId: request.id, response: { answers: submitAnswers() } })}
         >
           {t(($) => $.human_requests.submit)}
         </Button>
