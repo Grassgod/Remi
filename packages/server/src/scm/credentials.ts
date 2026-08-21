@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 const SCM_KEY_ENV = "MULTIREMI_SCM_ENCRYPTION_KEY";
+const PREVIOUS_KEYS_ENV = "MULTIREMI_SCM_ENCRYPTION_PREVIOUS_KEYS";
 const FALLBACK_KEY_ENVS = ["MULTIREMI_SSH_MESH_ENCRYPTION_KEY", "MULTIREMI_TOKEN"] as const;
 
 export class ScmCredentialEncryptionError extends Error {
@@ -77,6 +78,16 @@ function resolveEncryptionKeys(): Array<{ id: string; key: Buffer }> {
     const value = process.env[name]?.trim();
     if (!value) continue;
     candidates.push(createHash("sha256").update(`multiremi-scm\0${name}\0${value}`).digest());
+  }
+  for (const value of (process.env[PREVIOUS_KEYS_ENV] ?? "").split(",").map((entry) => entry.trim()).filter(Boolean)) {
+    const decoded = Buffer.from(value, "base64");
+    if (decoded.length !== 32 || decoded.toString("base64").replace(/=+$/u, "") !== value.replace(/=+$/u, "")) {
+      throw new ScmCredentialEncryptionError(
+        `${PREVIOUS_KEYS_ENV} must contain comma-separated base64-encoded 32-byte keys`,
+        "encryption_key_invalid",
+      );
+    }
+    candidates.push(decoded);
   }
   if (!candidates.length) {
     throw new ScmCredentialEncryptionError(

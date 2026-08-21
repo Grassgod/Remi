@@ -6,6 +6,7 @@ import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 const previousScmKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
 const previousAllowedApiHosts = process.env.MULTIREMI_SCM_ALLOWED_API_HOSTS;
 const previousMultiremiToken = process.env.MULTIREMI_TOKEN;
+const previousScmPreviousKeys = process.env.MULTIREMI_SCM_ENCRYPTION_PREVIOUS_KEYS;
 
 afterEach(() => {
   resetMultiremiTestEnv();
@@ -15,6 +16,8 @@ afterEach(() => {
   else process.env.MULTIREMI_SCM_ALLOWED_API_HOSTS = previousAllowedApiHosts;
   if (previousMultiremiToken === undefined) delete process.env.MULTIREMI_TOKEN;
   else process.env.MULTIREMI_TOKEN = previousMultiremiToken;
+  if (previousScmPreviousKeys === undefined) delete process.env.MULTIREMI_SCM_ENCRYPTION_PREVIOUS_KEYS;
+  else process.env.MULTIREMI_SCM_ENCRYPTION_PREVIOUS_KEYS = previousScmPreviousKeys;
 });
 
 function seedConnection() {
@@ -107,6 +110,22 @@ describe("SCM connection and canonical event store", () => {
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
     expect(decryptScmCredential(v2, context)).toBe("secret-token");
     expect(decryptScmCredential(legacyV1, context)).toBe("secret-token");
+  });
+
+  it("rotates dedicated encryption keys through an explicit previous-key ring", () => {
+    delete process.env.MULTIREMI_TOKEN;
+    const oldKey = Buffer.alloc(32, 12).toString("base64");
+    const newKey = Buffer.alloc(32, 13).toString("base64");
+    const context = { workspaceId: "local", connectionId: "scm_rotation", field: "webhook_secret" as const };
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = oldKey;
+    const ciphertext = encryptScmCredential("rotating-secret", context);
+
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = newKey;
+    process.env.MULTIREMI_SCM_ENCRYPTION_PREVIOUS_KEYS = oldKey;
+    expect(decryptScmCredential(ciphertext, context)).toBe("rotating-secret");
+
+    delete process.env.MULTIREMI_SCM_ENCRYPTION_PREVIOUS_KEYS;
+    expect(() => decryptScmCredential(ciphertext, context)).toThrow("could not be decrypted");
   });
 
   it("uses the Codebase action API as the default API endpoint", () => {
