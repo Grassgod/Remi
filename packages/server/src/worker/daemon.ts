@@ -554,7 +554,12 @@ export class MultiremiDaemon {
         return await this.client.getSshMeshConfig(runtimeId, signal);
       },
     });
-    this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot);
+    this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot, {
+      credentialBroker: {
+        serverUrl: this.options.serverUrl,
+        token: this.options.token,
+      },
+    });
     this.agentPluginCache = new AgentPluginCache({
       root: this.options.pluginCacheRoot,
       serverUrl: this.options.serverUrl,

@@ -165,6 +165,8 @@ export type {
   AutopilotRunSource,
   AutopilotSystemEventCondition,
   AutopilotSystemEventConfig,
+  AutopilotScmEventConfig,
+  AutopilotEventConfig,
   WebhookEventFilter,
   CreateAutopilotRequest,
   UpdateAutopilotRequest,
@@ -178,6 +180,24 @@ export type {
   WebhookSignatureStatus,
   ListWebhookDeliveriesResponse,
 } from "./autopilot";
+export type {
+  ScmProvider,
+  ScmConnectionMode,
+  ScmSyncStream,
+  ScmStreamCapability,
+  ScmProviderCapabilities,
+  ScmCapabilitiesResponse,
+  CanonicalScmEventType,
+  ScmRepositoryBinding,
+  ScmConnection,
+  ListScmConnectionsResponse,
+  ScmConnectionResponse,
+  CreateScmConnectionRequest,
+  UpdateScmConnectionRequest,
+  UpdateScmRepositoryBindingRequest,
+  CanonicalScmEvent,
+  ListScmEventsResponse,
+} from "./scm";
 export type {
   Squad,
   SquadMember,

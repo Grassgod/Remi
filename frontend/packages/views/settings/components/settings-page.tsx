@@ -12,8 +12,8 @@ import {
   Plug,
   Waypoints,
   Archive,
+  GitBranch,
 } from "lucide-react";
-import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multiremi/ui/components/ui/tabs";
 import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { useNavigation } from "../../navigation";
@@ -58,7 +58,7 @@ const WORKSPACE_TAB_VALUES = {
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
-  github: GitHubMark,
+  github: GitBranch,
   integrations: Plug,
   model_gateway: Waypoints,
   storage_cleanup: Archive,

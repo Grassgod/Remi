@@ -31,6 +31,7 @@ import type { Workspace } from "@multiremi/core/types";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { GitHubMark } from "./github-mark";
+import { ScmConnectionsSection } from "./scm-connections-section";
 
 type SettingsKey =
   | "github_enabled"
@@ -49,6 +50,7 @@ export function GitHubTab() {
 
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
+  const canManageScm = currentMember?.role === "owner" || currentMember?.role === "admin";
   // `canView` gates the read-only installation list (every workspace member
   // sees it after MUL-2413); `canManage` gates the Connect / Disconnect
   // actions and comes from the backend response (`can_manage`) so the
@@ -130,6 +132,8 @@ export function GitHubTab() {
           {t(($) => $.github.page_description)}
         </p>
       </section>
+
+      <ScmConnectionsSection workspaceId={wsId} canManage={canManageScm} />
 
       <section className="space-y-3">
         <Card>

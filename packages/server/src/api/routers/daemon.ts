@@ -47,6 +47,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
+import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -120,6 +121,75 @@ function validateDaemonInstallRequestBody(
 
 export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
+
+  app.post("/api/daemon/scm/git-credentials", async (c) => {
+    const body = await readJsonStrict<{
+      workspaceId?: string;
+      workspace_id?: string;
+      repositoryUrl?: string;
+      repository_url?: string;
+    }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const repositoryUrl = cleanString(body.repositoryUrl ?? body.repository_url);
+    if (!repositoryUrl) return c.json({ error: "repositoryUrl is required" }, 400);
+
+    const token = currentAccessToken(c);
+    const task = token?.type === "task" && token.taskId
+      ? store.getTaskWithAgent(token.taskId)
+      : null;
+    if (token?.type === "task" && (!task || isTerminalTaskStatus(task.status))) {
+      return c.json({ error: "task credential is no longer active", code: "task_credential_inactive" }, 403);
+    }
+    const workspaceId = token?.workspaceId
+      ?? cleanString(body.workspaceId ?? body.workspace_id)
+      ?? "local";
+    const assertedWorkspaceId = cleanString(body.workspaceId ?? body.workspace_id);
+    if (assertedWorkspaceId && assertedWorkspaceId !== workspaceId) {
+      return c.json({ error: "forbidden for token workspace" }, 403);
+    }
+
+    const binding = store.findScmRepositoryBindingByUrl(workspaceId, repositoryUrl);
+    if (!binding?.enabled) return c.json({ error: "repository credential not found" }, 404);
+    if (task) {
+      const taskMayUseRepository = task.workspaceId === workspaceId && task.repos.some((repo) => {
+        const allowed = store.findScmRepositoryBindingByUrl(workspaceId, repo.url);
+        return allowed?.repositoryId === binding.repositoryId
+          && allowed.connectionId === binding.connectionId;
+      });
+      if (!taskMayUseRepository) return c.json({ error: "repository credential not found" }, 404);
+    }
+
+    const connection = store.getScmConnection(binding.connectionId);
+    if (!connection?.enabled) {
+      return c.json({ error: "repository credential is not configured", code: "scm_credential_missing" }, 409);
+    }
+    let cloneUrl: string;
+    try {
+      cloneUrl = resolveScmRepositoryRemote(binding.repositoryUrl, connection.baseUrl).cloneUrl;
+    } catch {
+      return c.json({
+        error: "repository does not match its SCM connection",
+        code: "scm_repository_origin_mismatch",
+      }, 409);
+    }
+    const credential = store.getScmConnectionCredential(binding.connectionId);
+    if (!credential?.accessToken) {
+      return c.json({ error: "repository credential is not configured", code: "scm_credential_missing" }, 409);
+    }
+    if (/[\r\n]/u.test(credential.accessToken)) {
+      return c.json({ error: "repository credential is invalid", code: "scm_credential_invalid" }, 500);
+    }
+    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      repositoryId: binding.repositoryId,
+      repositoryUrl: binding.repositoryUrl,
+      cloneUrl,
+      username: connection.provider === "github" ? "x-access-token" : "oauth2",
+      password: credential.accessToken,
+      expiresAt,
+    });
+  });
 
   app.get("/api/multiremi/install/daemon", (c) => {
     return c.json(buildDaemonInstallInstructions({

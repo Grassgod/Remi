@@ -12,12 +12,16 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { SCM_PROVIDER_CAPABILITIES } from "@multiremi/scm/capabilities.js";
 import type {
   CreateAutopilotInput,
   CreateAutopilotTriggerInput,
   MultiremiAutopilot,
+  MultiremiAutopilotEventConfig,
   MultiremiAutopilotRun,
+  MultiremiAutopilotScmEventConfig,
   MultiremiAutopilotSystemEventConfig,
+  MultiremiScmCanonicalEventType,
   MultiremiAutopilotTrigger,
   MultiremiIssue,
   MultiremiSystemEvent,
@@ -175,13 +179,17 @@ export class AutopilotsRepo {
     if (
       nextExecutionMode === "trigger_issue"
       && (
-        existingTriggers.some((trigger) => trigger.kind === "schedule" || trigger.kind === "webhook")
+        existingTriggers.some((trigger) => trigger.kind === "schedule" || trigger.kind === "webhook" || trigger.kind === "scm_event")
         || (existingTriggers.length === 0 && Boolean(current.cronExpression))
       )
     ) {
       throw new Error("trigger_issue execution does not support schedule or webhook triggers");
     }
-    if (nextProjectId && systemEventTriggers.some((trigger) => trigger.eventConfig?.projectId && trigger.eventConfig.projectId !== nextProjectId)) {
+    if (nextProjectId && systemEventTriggers.some((trigger) =>
+      trigger.eventConfig?.resource === "issue"
+      && trigger.eventConfig.projectId
+      && trigger.eventConfig.projectId !== nextProjectId
+    )) {
       throw new Error("event_config.project_id must match the Autopilot project");
     }
     const now = nowIso();
@@ -254,14 +262,27 @@ export class AutopilotsRepo {
     const autopilot = this.getAutopilot(autopilotId);
     if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
     const kind = input.kind ?? (input.cronExpression || input.cron_expression ? "schedule" : "webhook");
-    if (kind !== "schedule" && kind !== "webhook" && kind !== "api" && kind !== "system_event") {
+    if (kind !== "schedule" && kind !== "webhook" && kind !== "api" && kind !== "system_event" && kind !== "scm_event") {
       throw new Error("Invalid Autopilot trigger kind");
     }
     const eventFilters = normalizeWebhookEventFilters(input.eventFilters ?? input.event_filters ?? null);
-    const eventConfig = normalizeSystemEventConfig(input.eventConfig ?? input.event_config ?? null);
-    if (kind === "system_event" && !eventConfig) throw new Error("event_config is required for system_event triggers");
-    if (kind !== "system_event" && eventConfig) throw new Error("event_config is only valid for system_event triggers");
-    if (eventConfig?.projectId) {
+    const eventConfig = normalizeAutopilotEventConfig(input.eventConfig ?? input.event_config ?? null);
+    if ((kind === "system_event" || kind === "scm_event") && !eventConfig) {
+      throw new Error(`event_config is required for ${kind} triggers`);
+    }
+    if (kind === "system_event" && eventConfig?.resource !== "issue") {
+      throw new Error("system_event triggers require an issue event_config");
+    }
+    if (kind === "scm_event" && eventConfig?.resource !== "scm") {
+      throw new Error("scm_event triggers require an SCM event_config");
+    }
+    if (eventConfig?.resource === "scm") {
+      this.assertScmEventConfigScope(eventConfig, autopilot.workspaceId);
+    }
+    if (kind !== "system_event" && kind !== "scm_event" && eventConfig) {
+      throw new Error("event_config is only valid for system_event or scm_event triggers");
+    }
+    if (eventConfig?.resource === "issue" && eventConfig.projectId) {
       const project = this.ctx.projects().getProject(eventConfig.projectId);
       if (!project || project.workspaceId !== autopilot.workspaceId) {
         throw new Error("event_config.project_id must reference a project in this workspace");
@@ -272,6 +293,9 @@ export class AutopilotsRepo {
     }
     if (kind === "system_event" && autopilot.executionMode !== "trigger_issue") {
       throw new Error("system_event triggers require execution_mode trigger_issue");
+    }
+    if (kind === "scm_event" && autopilot.executionMode === "trigger_issue") {
+      throw new Error("scm_event triggers do not support execution_mode trigger_issue");
     }
     if (
       autopilot.executionMode === "trigger_issue"
@@ -322,16 +346,31 @@ export class AutopilotsRepo {
   updateAutopilotTrigger(autopilotId: string, triggerId: string, input: UpdateAutopilotTriggerInput): MultiremiAutopilotTrigger {
     const current = this.getAutopilotTrigger(triggerId);
     if (!current || current.autopilotId !== autopilotId) throw new Error(`Autopilot trigger not found: ${triggerId}`);
+    const autopilot = this.getAutopilot(autopilotId);
+    if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
     const now = nowIso();
     const eventFiltersInput = input.eventFilters !== undefined ? input.eventFilters : input.event_filters;
     const eventFilters = eventFiltersInput === undefined ? current.eventFilters : normalizeWebhookEventFilters(eventFiltersInput);
     const eventConfigInput = input.eventConfig !== undefined ? input.eventConfig : input.event_config;
-    const eventConfig = eventConfigInput === undefined ? current.eventConfig : normalizeSystemEventConfig(eventConfigInput);
-    if (current.kind === "system_event" && !eventConfig) throw new Error("event_config is required for system_event triggers");
-    if (current.kind !== "system_event" && eventConfig) throw new Error("event_config is only valid for system_event triggers");
-    if (eventConfig?.projectId) {
+    const eventConfig = eventConfigInput === undefined ? current.eventConfig : normalizeAutopilotEventConfig(eventConfigInput);
+    const enabled = input.enabled === undefined ? current.enabled : input.enabled;
+    if ((current.kind === "system_event" || current.kind === "scm_event") && !eventConfig) {
+      throw new Error(`event_config is required for ${current.kind} triggers`);
+    }
+    if (current.kind === "system_event" && eventConfig?.resource !== "issue") {
+      throw new Error("system_event triggers require an issue event_config");
+    }
+    if (current.kind === "scm_event" && eventConfig?.resource !== "scm") {
+      throw new Error("scm_event triggers require an SCM event_config");
+    }
+    if (eventConfig?.resource === "scm" && enabled) {
+      this.assertScmEventConfigScope(eventConfig, autopilot.workspaceId);
+    }
+    if (current.kind !== "system_event" && current.kind !== "scm_event" && eventConfig) {
+      throw new Error("event_config is only valid for system_event or scm_event triggers");
+    }
+    if (eventConfig?.resource === "issue" && eventConfig.projectId) {
       const project = this.ctx.projects().getProject(eventConfig.projectId);
-      const autopilot = this.getAutopilot(autopilotId);
       if (!project || project.workspaceId !== autopilot?.workspaceId) {
         throw new Error("event_config.project_id must reference a project in this workspace");
       }
@@ -339,7 +378,6 @@ export class AutopilotsRepo {
         throw new Error("event_config.project_id must match the Autopilot project");
       }
     }
-    const enabled = input.enabled === undefined ? current.enabled : input.enabled;
     const cronExpression = input.cronExpression ?? input.cron_expression ?? current.cronExpression;
     const timezone = input.timezone === undefined ? current.timezone : normalizeOptionalTimezone(input.timezone);
     const shouldRecomputeNextRun = current.kind === "schedule"
@@ -715,6 +753,77 @@ export class AutopilotsRepo {
     if (!agent?.ownerId) return [];
     const owner = this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId, agent.ownerId);
     return owner ? [owner.id] : [];
+  }
+
+  private assertScmEventConfigScope(
+    config: MultiremiAutopilotScmEventConfig,
+    workspaceId: string,
+  ): void {
+    const connectionId = config.connectionId ?? config.connection_id ?? null;
+    const repositoryIds = config.repositoryIds ?? config.repository_ids ?? [];
+    if (connectionId) {
+      const connection = this.ctx.db.query(
+        "SELECT workspace_id FROM multiremi_scm_connections WHERE id = ?",
+      ).get(connectionId) as Row | null;
+      if (!connection || String(connection.workspace_id) !== workspaceId) {
+        throw new Error("event_config.connection_id must reference an SCM connection in this workspace");
+      }
+    }
+    for (const repositoryId of repositoryIds) {
+      const binding = connectionId
+        ? this.ctx.db.query(
+          `SELECT 1 AS found FROM multiremi_scm_repository_bindings
+           WHERE workspace_id = ? AND repository_id = ? AND connection_id = ?`,
+        ).get(workspaceId, repositoryId, connectionId)
+        : this.ctx.db.query(
+          `SELECT 1 AS found FROM multiremi_scm_repository_bindings
+           WHERE workspace_id = ? AND repository_id = ?`,
+        ).get(workspaceId, repositoryId);
+      if (!binding) {
+        throw new Error("event_config.repository_ids must reference repositories bound in this workspace");
+      }
+    }
+    if (config.branch && config.events.some((event) => event.startsWith("comment.") || event.startsWith("review."))) {
+      throw new Error("event_config.branch is not supported for comment or review events because providers do not expose branch context");
+    }
+
+    const args: unknown[] = [workspaceId];
+    const clauses = ["b.workspace_id = ?", "b.enabled = 1", "c.enabled = 1"];
+    if (connectionId) {
+      clauses.push("b.connection_id = ?");
+      args.push(connectionId);
+    }
+    if (repositoryIds.length) {
+      clauses.push(`b.repository_id IN (${repositoryIds.map(() => "?").join(", ")})`);
+      args.push(...repositoryIds);
+    }
+    const scopes = this.ctx.db.query(
+      `SELECT b.repository_id, b.default_branch, c.provider, c.mode
+       FROM multiremi_scm_repository_bindings b
+       JOIN multiremi_scm_connections c ON c.id = b.connection_id
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY b.repository_id ASC`,
+    ).all(...args) as Row[];
+    if (!scopes.length) {
+      throw new Error("event_config must select at least one bound SCM repository");
+    }
+    for (const scope of scopes) {
+      const provider = String(scope.provider);
+      const mode = String(scope.mode);
+      for (const event of config.events) {
+        if (!scmConnectionCanProduceEvent(
+          provider,
+          mode,
+          event,
+          config.branch ?? null,
+          cleanOptionalString(scope.default_branch) ?? null,
+        )) {
+          throw new Error(
+            `event_config.events includes ${event}, which ${provider} ${mode} cannot produce for repository ${String(scope.repository_id)}`,
+          );
+        }
+      }
+    }
   }
 
   runAutopilot(autopilotId: string, input: RunAutopilotInput = {}): MultiremiAutopilotRun {
@@ -1095,7 +1204,8 @@ function isAutopilotExecutionMode(value: unknown): value is MultiremiAutopilot["
 }
 
 function normalizeWebhookProvider(value: unknown): MultiremiWebhookProvider {
-  return value === "github" ? "github" : "generic";
+  if (value === "github" || value === "codebase") return value;
+  return "generic";
 }
 
 function normalizeWebhookSignatureStatus(value: unknown): MultiremiWebhookSignatureStatus {
@@ -1234,8 +1344,14 @@ const SYSTEM_EVENT_ISSUE_STATUSES = new Set([
   "cancelled",
 ]);
 
-function normalizeSystemEventConfig(value: unknown): MultiremiAutopilotSystemEventConfig | null {
+function normalizeAutopilotEventConfig(value: unknown): MultiremiAutopilotEventConfig | null {
   if (value == null) return null;
+  if (!isRecord(value)) throw new Error("event_config must be an object");
+  if (value.resource === "scm") return normalizeScmEventConfig(value);
+  return normalizeSystemEventConfig(value);
+}
+
+function normalizeSystemEventConfig(value: unknown): MultiremiAutopilotSystemEventConfig {
   if (!isRecord(value)) throw new Error("event_config must be an object");
   if (value.resource !== "issue") throw new Error("event_config.resource must be issue");
   if (value.event !== "status_changed") throw new Error("event_config.event must be status_changed");
@@ -1261,10 +1377,90 @@ function normalizeSystemEventConfig(value: unknown): MultiremiAutopilotSystemEve
   };
 }
 
-function parseSystemEventConfigRow(value: unknown): MultiremiAutopilotSystemEventConfig | null {
+const SCM_EVENT_TYPES = new Set<MultiremiScmCanonicalEventType>([
+  "change.opened",
+  "change.updated",
+  "change.closed",
+  "change.reopened",
+  "change.merged",
+  "comment.created",
+  "comment.updated",
+  "comment.deleted",
+  "review.submitted",
+  "review.dismissed",
+  "pipeline.started",
+  "pipeline.completed",
+  "default_branch.updated",
+  "push.observed",
+]);
+
+function scmConnectionCanProduceEvent(
+  provider: string,
+  mode: string,
+  event: MultiremiScmCanonicalEventType,
+  branch: string | null,
+  defaultBranch: string | null,
+): boolean {
+  if (provider !== "github" && provider !== "codebase") return false;
+  if (mode !== "poll" && mode !== "webhook" && mode !== "hybrid") return false;
+  const stream = scmEventStream(event);
+  const capabilities = SCM_PROVIDER_CAPABILITIES[provider];
+  if (event === "default_branch.updated" && branch && branch !== defaultBranch) return false;
+  const pollCanMatchBranch = !branch || branch === defaultBranch;
+  const canPoll = (mode === "poll" || mode === "hybrid")
+    && capabilities.streams[stream].poll
+    && (event !== "push.observed" || pollCanMatchBranch)
+    && (event !== "comment.deleted" || capabilities.supportsDeleteTombstones);
+  const canWebhook = (mode === "webhook" || mode === "hybrid")
+    && capabilities.streams[stream].webhook;
+  return canPoll || canWebhook;
+}
+
+function scmEventStream(event: MultiremiScmCanonicalEventType): keyof typeof SCM_PROVIDER_CAPABILITIES.github.streams {
+  if (event.startsWith("change.")) return "change_requests";
+  if (event.startsWith("comment.")) return "comments";
+  if (event.startsWith("review.")) return "reviews";
+  if (event.startsWith("pipeline.")) return "pipelines";
+  return "default_branch";
+}
+
+function normalizeScmEventConfig(value: Record<string, unknown>): MultiremiAutopilotScmEventConfig {
+  if (!Array.isArray(value.events) || value.events.length === 0) {
+    throw new Error("event_config.events must be a non-empty array");
+  }
+  const events = [...new Set(value.events.map((event, index) => {
+    const normalized = typeof event === "string" ? event.trim() : "";
+    if (!SCM_EVENT_TYPES.has(normalized as MultiremiScmCanonicalEventType)) {
+      throw new Error(`event_config.events[${index}] must be a supported SCM event`);
+    }
+    return normalized as MultiremiScmCanonicalEventType;
+  }))];
+  const connectionId = cleanOptionalString(value.connectionId ?? value.connection_id) ?? null;
+  const branch = cleanOptionalString(value.branch) ?? null;
+  const repositoryIdsValue = value.repositoryIds ?? value.repository_ids;
+  if (repositoryIdsValue != null && !Array.isArray(repositoryIdsValue)) {
+    throw new Error("event_config.repositoryIds must be an array");
+  }
+  const repositoryIds = repositoryIdsValue == null
+    ? []
+    : [...new Set(repositoryIdsValue.map((repositoryId, index) => {
+      const normalized = typeof repositoryId === "string" ? repositoryId.trim() : "";
+      if (!normalized) throw new Error(`event_config.repositoryIds[${index}] must not be empty`);
+      return normalized;
+    }))];
+  return {
+    resource: "scm",
+    events,
+    ...(connectionId ? { connectionId, connection_id: connectionId } : {}),
+    ...(repositoryIds.length ? { repositoryIds, repository_ids: repositoryIds } : {}),
+    ...(branch ? { branch } : {}),
+  };
+}
+
+function parseAutopilotEventConfigRow(value: unknown): MultiremiAutopilotEventConfig | null {
   if (value == null || value === "") return null;
   try {
-    return normalizeSystemEventConfig(parseJson(value, null));
+    return normalizeAutopilotEventConfig(parseJson(value, null));
   } catch {
     return null;
   }
@@ -1468,7 +1664,7 @@ function toAutopilotTrigger(row: Row): MultiremiAutopilotTrigger {
     provider: kind === "webhook" ? normalizeWebhookProvider(row.provider) : null,
     label: nullableString(row.label),
     eventFilters: parseWebhookEventFiltersRow(row.event_filters),
-    eventConfig: parseSystemEventConfigRow(row.event_config),
+    eventConfig: parseAutopilotEventConfigRow(row.event_config),
     signingSecretSet: Boolean(signingSecret),
     signingSecretHint: nullableString(row.signing_secret_hint),
     lastFiredAt: nullableString(row.last_fired_at),
@@ -1518,9 +1714,9 @@ function toSystemEvent(row: Row): MultiremiSystemEvent {
 
 function systemEventMatchesConfig(
   event: MultiremiSystemEvent,
-  config: MultiremiAutopilotSystemEventConfig | null,
+  config: MultiremiAutopilotEventConfig | null,
 ): boolean {
-  if (!config || config.resource !== event.resource || config.event !== event.event) return false;
+  if (!config || config.resource !== "issue" || config.resource !== event.resource || config.event !== event.event) return false;
   // Task lifecycle status writes belong to the automation run that assigned
   // the task. Keep them in the outbox for audit/replay visibility, but never
   // feed them back into system-event automations: otherwise an `in_review`

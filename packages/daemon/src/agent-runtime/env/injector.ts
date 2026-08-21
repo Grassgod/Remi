@@ -10,6 +10,7 @@
 
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { IssueSessionProviderHome } from "../workspace/session-home.js";
+import { appendGitCredentialBrokerEnv } from "../repo/credential-broker.js";
 
 export interface BuildTaskEnvOptions {
   /** Port of the daemon's local repo-checkout server. */
@@ -38,7 +39,7 @@ export interface BuildTaskEnvOptions {
 export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record<string, string> {
   const agent = task.agent;
   const taskAuthToken = task.authToken ?? task.auth_token ?? opts.fallbackToken;
-  return {
+  const env = {
     ...(task.workspaceEnv ?? task.workspace_env),
     ...agent?.customEnv,
     ...opts.providerEnv,
@@ -60,6 +61,13 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
         : {}),
     ...(taskAuthToken ? { MULTIREMI_TOKEN: taskAuthToken } : {}),
   };
+  return cleanProcessEnv(appendGitCredentialBrokerEnv(env, {
+    serverUrl: opts.serverUrl,
+    token: taskAuthToken,
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    repositoryUrls: task.repos.map((repo) => repo.url),
+  }));
 }
 
 /** Drop undefined values so the result is a string-only env for Bun.spawn. */

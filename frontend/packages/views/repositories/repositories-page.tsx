@@ -5,6 +5,7 @@ import { GitBranch, GitFork, Plus, Search, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { scmConnectionsOptions } from "@multiremi/core/scm";
 import {
   repositoryListOptions,
   useInspectWorkspaceRepository,
@@ -24,6 +25,7 @@ import {
   AlertDialogTitle,
 } from "@multiremi/ui/components/ui/alert-dialog";
 import { Button } from "@multiremi/ui/components/ui/button";
+import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
@@ -37,7 +39,7 @@ import { RepositoryDescriptionEditor } from "./repository-description-editor";
 
 const EMPTY_REPOSITORIES: WorkspaceRepository[] = [];
 const TABLE_GRID =
-  "grid min-w-[700px] grid-cols-[minmax(240px,1.2fr)_130px_minmax(180px,1fr)_120px_44px]";
+  "grid min-w-[840px] grid-cols-[minmax(240px,1.2fr)_130px_130px_minmax(180px,1fr)_120px_44px]";
 
 function formatImportedDate(value: string | null): string {
   if (!value) return "--";
@@ -141,6 +143,7 @@ export function RepositoriesPage() {
   const { data: repositoryResponse, isLoading } = useQuery(
     repositoryListOptions(workspaceId),
   );
+  const { data: scmResponse } = useQuery(scmConnectionsOptions(workspaceId));
   const { data: members = [] } = useQuery(memberListOptions(workspaceId));
   const repositories = repositoryResponse?.repositories ?? EMPTY_REPOSITORIES;
   const removeRepository = useRemoveWorkspaceRepository(workspaceId);
@@ -151,6 +154,13 @@ export function RepositoriesPage() {
 
   const currentMember = members.find((member) => member.user_id === userId);
   const canManage = currentMember?.role === "owner" || currentMember?.role === "admin";
+  const connectionByRepositoryId = useMemo(() => {
+    const result = new Map<string, NonNullable<typeof scmResponse>["connections"][number]>();
+    for (const connection of scmResponse?.connections ?? []) {
+      for (const binding of connection.repositories) result.set(binding.repositoryId, connection);
+    }
+    return result;
+  }, [scmResponse]);
 
   const filteredRepositories = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -212,10 +222,11 @@ export function RepositoriesPage() {
 
       <div className="min-h-0 flex-1 overflow-auto">
         {isLoading ? (
-          <div className="min-w-[700px]">
+          <div className="min-w-[840px]">
             {Array.from({ length: 7 }).map((_, index) => (
               <div key={index} className={cn(TABLE_GRID, "h-12 items-center gap-3 border-b px-5")}>
                 <Skeleton className="h-4 w-44" />
+                <Skeleton className="h-4 w-20" />
                 <Skeleton className="h-4 w-20" />
                 <Skeleton className="h-4 w-40" />
                 <Skeleton className="h-4 w-20" />
@@ -241,10 +252,11 @@ export function RepositoriesPage() {
             <p className="text-sm">{t(($) => $.empty.search)}</p>
           </div>
         ) : (
-          <div className="min-w-[700px]">
+          <div className="min-w-[840px]">
             <div className={cn(TABLE_GRID, "sticky top-0 z-10 h-9 items-center gap-3 border-b bg-background px-5 text-xs font-medium text-muted-foreground")}>
               <span>{t(($) => $.table.repository)}</span>
               <span>{t(($) => $.table.default_branch)}</span>
+              <span>{t(($) => $.table.sync)}</span>
               <span>{t(($) => $.table.description)}</span>
               <span>{t(($) => $.table.imported)}</span>
               <span />
@@ -266,6 +278,19 @@ export function RepositoriesPage() {
                   repository={repository}
                   canManage={canManage}
                 />
+                {(() => {
+                  const connection = connectionByRepositoryId.get(repository.id);
+                  return connection ? (
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium">{connection.name}</div>
+                      <Badge variant="secondary" className="mt-1 max-w-full truncate text-[10px]">
+                        {t(($) => $.table.sync_modes[connection.mode])}
+                      </Badge>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{t(($) => $.table.not_connected)}</span>
+                  );
+                })()}
                 <RepositoryDescriptionEditor
                   workspaceId={workspaceId}
                   repository={repository}

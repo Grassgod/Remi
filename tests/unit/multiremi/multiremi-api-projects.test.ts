@@ -899,7 +899,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       body: JSON.stringify({ kind: "api" }),
     });
     expect(invalidTriggerKind.status).toBe(400);
-    expect(await invalidTriggerKind.json()).toEqual({ error: "kind must be schedule, webhook, or system_event" });
+    expect(await invalidTriggerKind.json()).toEqual({ error: "kind must be schedule, webhook, system_event, or scm_event" });
 
     const webhookTimezone = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, {
       method: "POST",
@@ -923,7 +923,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       body: JSON.stringify({ kind: "webhook", provider: "slack" }),
     });
     expect(invalidProvider.status).toBe(400);
-    expect(await invalidProvider.json()).toEqual({ error: "provider must be generic or github" });
+    expect(await invalidProvider.json()).toEqual({ error: "provider must be generic, github, or codebase" });
 
     const camelSchedule = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, {
       method: "POST",

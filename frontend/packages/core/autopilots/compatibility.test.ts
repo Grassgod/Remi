@@ -15,10 +15,12 @@ describe("Autopilot trigger compatibility", () => {
     ]);
     expect(getCompatibleConfigurableTriggerKinds("create_issue")).toEqual([
       "schedule",
+      "scm_event",
       "webhook",
     ]);
     expect(getCompatibleConfigurableTriggerKinds("run_only")).toEqual([
       "schedule",
+      "scm_event",
       "webhook",
     ]);
   });
@@ -40,6 +42,10 @@ describe("Autopilot trigger compatibility", () => {
 
   it("intersects execution modes across every existing trigger", () => {
     expect(getCompatibleAutopilotExecutionModes(["schedule", "webhook"])).toEqual([
+      "create_issue",
+      "run_only",
+    ]);
+    expect(getCompatibleAutopilotExecutionModes(["scm_event"])).toEqual([
       "create_issue",
       "run_only",
     ]);

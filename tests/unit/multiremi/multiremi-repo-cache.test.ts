@@ -235,6 +235,117 @@ describe("Multiremi repo cache", () => {
     }
   });
 
+  it("retries a transient broker HTTPS fetch without losing the original repository identity", () => {
+    const source = createRepo("main", "broker retry");
+    const cacheRoot = tempDir("multiremi-repo-broker-retry-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-broker-retry-wrapper-");
+    const repositoryUrl = "git@example.test:team/repo.git";
+    const httpsUrl = "https://example.test/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl,
+      explicitFetchFailures: 2,
+    });
+    try {
+      cache.sync("wsp_broker", [{ url: repositoryUrl }]);
+      cache.sync("wsp_broker", [{ url: repositoryUrl }]);
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_broker", repositoryUrl)!;
+    expect(readFetchAttempts(wrapperRoot)).toBe(3);
+    expect(readFileSync(join(wrapperRoot, "broker-workspace"), "utf8")).toBe("wsp_broker");
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(httpsUrl);
+    expect(git(barePath, ["config", "--get", "multiremi.repository-url"])).toBe(repositoryUrl);
+  });
+
+  it("falls back to the original transport when the broker clone path is unavailable", () => {
+    const source = createRepo("main", "broker fallback");
+    const cacheRoot = tempDir("multiremi-repo-broker-fallback-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-broker-fallback-wrapper-");
+    const repositoryUrl = "git@example.test:team/repo.git";
+    const httpsUrl = "https://example.test/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl,
+      failBrokerClone: true,
+    });
+    try {
+      cache.sync("wsp_fallback", [{ url: repositoryUrl }]);
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_fallback", repositoryUrl)!;
+    expect(readFileSync(join(wrapperRoot, "clone-urls"), "utf8").trim().split("\n"))
+      .toEqual([httpsUrl, repositoryUrl]);
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(repositoryUrl);
+  });
+
+  it("falls back to the original transport without broker env when broker fetch is unavailable", () => {
+    const source = createRepo("main", "broker fetch fallback");
+    const cacheRoot = tempDir("multiremi-repo-broker-fetch-fallback-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-broker-fetch-fallback-wrapper-");
+    const repositoryUrl = "git@example.test:team/repo.git";
+    const httpsUrl = "https://example.test/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl,
+      failBrokerFetch: true,
+    });
+    try {
+      cache.sync("wsp_fetch_fallback", [{ url: repositoryUrl }]);
+      cache.sync("wsp_fetch_fallback", [{ url: repositoryUrl }]);
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_fetch_fallback", repositoryUrl)!;
+    expect(Number(readFileSync(join(wrapperRoot, "plain-fetches"), "utf8"))).toBeGreaterThanOrEqual(2);
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(repositoryUrl);
+  });
+
+  it("preserves custom-port SSH transports when broker HTTPS conversion is unsafe", () => {
+    const source = createRepo("main", "custom ssh transport");
+    const cacheRoot = tempDir("multiremi-repo-custom-ssh-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-custom-ssh-wrapper-");
+    const repositoryUrl = "ssh://git@example.test:2222/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl: repositoryUrl,
+    });
+    try {
+      expect(() => cache.sync("wsp_custom_ssh", [{ url: repositoryUrl }])).not.toThrow();
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_custom_ssh", repositoryUrl)!;
+    expect(readFileSync(join(wrapperRoot, "clone-urls"), "utf8").trim()).toBe(repositoryUrl);
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(repositoryUrl);
+  });
+
   it("serializes repo mutations with lock dirs and recovers stale locks", () => {
     const source = createRepo("main", "locked repo");
     const cacheRoot = tempDir("multiremi-repo-lock-");
@@ -415,7 +526,7 @@ describe("Multiremi repo cache", () => {
       agentName: "Codex",
       taskId: "tsk_ambiguous",
     })).toThrow(/origin\/\* is empty or ambiguous/);
-  });
+  }, 15_000);
 });
 
 function createRepo(branch: string, readme: string): string {
@@ -481,6 +592,73 @@ case " $* " in
 esac
 exec ${shellQuote(realGit)} "$@"
 `, { mode: 0o755 });
+  return prependPath(wrapperDir);
+}
+
+function installGitTransportWrapper(
+  root: string,
+  options: {
+    source: string;
+    repositoryUrl: string;
+    httpsUrl: string;
+    explicitFetchFailures?: number;
+    failBrokerClone?: boolean;
+    failBrokerFetch?: boolean;
+  },
+): () => void {
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const wrapperDir = join(root, "bin");
+  const attemptsFile = join(root, "attempts");
+  const cloneUrlsFile = join(root, "clone-urls");
+  const brokerWorkspaceFile = join(root, "broker-workspace");
+  const plainFetchesFile = join(root, "plain-fetches");
+  mkdirSync(wrapperDir);
+  writeFileSync(join(wrapperDir, "git"), `#!/bin/sh
+if [ "$1" = "clone" ] && [ "$2" = "--bare" ]; then
+  printf '%s\\n' "$3" >> ${shellQuote(cloneUrlsFile)}
+  if [ "${options.failBrokerClone ? "1" : "0"}" = "1" ] && [ -n "\${MULTIREMI_SERVER_URL:-}" ] && [ "$3" = ${shellQuote(options.httpsUrl)} ]; then
+    printf '%s\\n' 'credential broker unavailable' >&2
+    exit 128
+  fi
+  if [ "$3" = ${shellQuote(options.httpsUrl)} ] || [ "$3" = ${shellQuote(options.repositoryUrl)} ]; then
+    exec ${shellQuote(realGit)} clone --bare ${shellQuote(options.source)} "$4"
+  fi
+fi
+if [ "$1" = "fetch" ]; then
+  remote="$4"
+  if [ -n "\${MULTIREMI_SERVER_URL:-}" ]; then
+    printf '%s' "\${MULTIREMI_WORKSPACE_ID:-}" > ${shellQuote(brokerWorkspaceFile)}
+    if [ "${options.failBrokerFetch ? "1" : "0"}" = "1" ]; then
+      printf '%s\\n' 'credential broker unavailable' >&2
+      exit 128
+    fi
+  else
+    plain=0
+    if [ -f ${shellQuote(plainFetchesFile)} ]; then plain=$(cat ${shellQuote(plainFetchesFile)}); fi
+    plain=$((plain + 1))
+    printf '%s' "$plain" > ${shellQuote(plainFetchesFile)}
+  fi
+  if [ "$remote" = ${shellQuote(options.httpsUrl)} ]; then
+    attempts=0
+    if [ -f ${shellQuote(attemptsFile)} ]; then attempts=$(cat ${shellQuote(attemptsFile)}); fi
+    attempts=$((attempts + 1))
+    printf '%s' "$attempts" > ${shellQuote(attemptsFile)}
+    if [ "$attempts" -le ${options.explicitFetchFailures ?? 0} ]; then
+      printf '%s\\n' 'Connection timed out' >&2
+      exit 128
+    fi
+  fi
+  exec ${shellQuote(realGit)} fetch --prune --prune-tags ${shellQuote(options.source)} "$5" "$6"
+fi
+if [ "$1" = "remote" ] && [ "$2" = "set-head" ]; then
+  exit 0
+fi
+exec ${shellQuote(realGit)} "$@"
+`, { mode: 0o755 });
+  return prependPath(wrapperDir);
+}
+
+function prependPath(wrapperDir: string): () => void {
   const previousPath = process.env.PATH;
   process.env.PATH = `${wrapperDir}:${previousPath ?? ""}`;
   return () => {
@@ -491,6 +669,15 @@ exec ${shellQuote(realGit)} "$@"
 
 function readFetchAttempts(root: string): number {
   return Number.parseInt(readFileSync(join(root, "attempts"), "utf8"), 10);
+}
+
+function brokerOptions() {
+  return {
+    serverUrl: "https://multiremi.example",
+    token: "daemon-token",
+    helperCommand: "'remi' git-credential",
+    fallbackHelpers: [],
+  };
 }
 
 function shellQuote(value: string): string {

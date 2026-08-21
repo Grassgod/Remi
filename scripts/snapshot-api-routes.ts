@@ -715,6 +715,10 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       return "apb_snapshot";
     case "daemonId":
       return "dmn_snapshot";
+    case "connectionId":
+      return "scm_snapshot";
+    case "eventId":
+      return "sce_snapshot";
     case "engine":
       return "claude";
     case "key":

@@ -9,6 +9,9 @@
     "default_branch": "默认分支",
     "default_branch_aria": "{{name}} 的默认分支",
     "default_branch_placeholder": "选择分支",
+    "sync": "事件采集",
+    "not_connected": "未连接",
+    "sync_modes": { "poll": "主动拉取", "webhook": "Webhook", "hybrid": "混合" },
     "description": "描述",
     "imported": "导入时间"
   },

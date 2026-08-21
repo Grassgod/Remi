@@ -9,6 +9,9 @@
     "default_branch": "Default branch",
     "default_branch_aria": "Default branch for {{name}}",
     "default_branch_placeholder": "Select branch",
+    "sync": "Event ingestion",
+    "not_connected": "Not connected",
+    "sync_modes": { "poll": "Polling", "webhook": "Webhook", "hybrid": "Hybrid" },
     "description": "Description",
     "imported": "Imported"
   },
