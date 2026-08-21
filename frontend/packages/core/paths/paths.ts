@@ -23,6 +23,10 @@ function workspaceScoped(slug: string) {
     issueDetail: (id: string) => `${ws}/issues/${encode(id)}`,
     issueSession: (id: string, sessionId: string) =>
       `${ws}/issues/${encode(id)}?session=${encode(sessionId)}`,
+    inboxIssue: (id: string, sessionId?: string) =>
+      `${ws}/inbox?issue=${encode(id)}${sessionId ? `&session=${encode(sessionId)}` : ""}`,
+    workbenchIssue: (id: string, sessionId?: string) =>
+      `${ws}/workbench?issue=${encode(id)}${sessionId ? `&session=${encode(sessionId)}` : ""}`,
     projects: () => `${ws}/projects`,
     repositories: () => `${ws}/repos`,
     projectDetail: (id: string) => `${ws}/projects/${encode(id)}`,

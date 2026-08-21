@@ -8,6 +8,9 @@ import enInbox from "../../locales/en/inbox.json";
 const TEST_RESOURCES = { en: { common: enCommon, inbox: enInbox } };
 
 const listInbox = vi.hoisted(() => vi.fn());
+const navigationState = vi.hoisted(() => ({
+  searchParams: new URLSearchParams(),
+}));
 
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -16,7 +19,11 @@ vi.mock("@multiremi/core/hooks", () => ({
 vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
     inbox: () => "/test/inbox",
+    inboxIssue: (issueId: string, sessionId?: string) =>
+      `/test/inbox?issue=${issueId}${sessionId ? `&session=${sessionId}` : ""}`,
     issueDetail: (id: string) => `/test/issues/${id}`,
+    issueSession: (id: string, sessionId: string) =>
+      `/test/issues/${id}?session=${sessionId}`,
   }),
 }));
 
@@ -54,21 +61,51 @@ vi.mock("@multiremi/core/inbox/mutations", () => {
 });
 
 vi.mock("../../issues/components", () => ({
-  IssueDetail: () => <div data-testid="issue-detail" />,
+  IssueDetail: ({
+    issueId,
+    initialIssueSessionId,
+    onIssueSessionChange,
+  }: {
+    issueId: string;
+    initialIssueSessionId?: string;
+    onIssueSessionChange?: (sessionId: string) => void;
+  }) => (
+    <div
+      data-testid="issue-detail"
+      data-session-route-owned={String(Boolean(onIssueSessionChange))}
+      data-initial-session={initialIssueSessionId}
+    >
+      {issueId}
+      <button
+        type="button"
+        onClick={() => onIssueSessionChange?.("session-review")}
+      >
+        Select Review session
+      </button>
+    </div>
+  ),
 }));
 
 const replace = vi.hoisted(() => vi.fn());
 vi.mock("../../navigation", () => ({
   useNavigation: () => ({
-    searchParams: new URLSearchParams(),
+    searchParams: navigationState.searchParams,
     replace,
     push: vi.fn(),
   }),
 }));
 
 vi.mock("./inbox-list-item", () => ({
-  InboxListItem: ({ item }: { item: { id: string } }) => (
-    <div data-testid="inbox-row">{item.id}</div>
+  InboxListItem: ({
+    item,
+    onClick,
+  }: {
+    item: { id: string };
+    onClick: () => void;
+  }) => (
+    <button type="button" data-testid="inbox-row" onClick={onClick}>
+      {item.id}
+    </button>
   ),
   useTimeAgo: () => () => "just now",
 }));
@@ -102,6 +139,7 @@ function renderInbox() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  navigationState.searchParams = new URLSearchParams();
 });
 
 describe("InboxPage", () => {
@@ -128,5 +166,90 @@ describe("InboxPage", () => {
 
     expect(await screen.findByText("No notifications")).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+  });
+
+  it("opens issue notifications in place and keeps Session routing under inbox", async () => {
+    listInbox.mockResolvedValue([
+      {
+        id: "inbox-1",
+        workspace_id: "ws-1",
+        user_id: "user-1",
+        type: "comment",
+        issue_id: "issue-1",
+        title: "Needs review",
+        body: null,
+        details: { issue_session_id: "session-notification" },
+        read: true,
+        archived: false,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByTestId("inbox-row"));
+
+    expect(screen.getByTestId("issue-detail")).toHaveTextContent("issue-1");
+    expect(screen.getByTestId("issue-detail")).toHaveAttribute(
+      "data-session-route-owned",
+      "true",
+    );
+    expect(screen.getByTestId("issue-detail")).toHaveAttribute(
+      "data-initial-session",
+      "session-notification",
+    );
+    expect(replace).toHaveBeenLastCalledWith(
+      "/test/inbox?issue=issue-1&session=session-notification",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Select Review session" }));
+    expect(replace).toHaveBeenLastCalledWith(
+      "/test/inbox?issue=issue-1&session=session-review",
+    );
+    expect(
+      replace.mock.calls.every(([path]) => String(path).startsWith("/test/inbox")),
+    ).toBe(true);
+  });
+
+  it("prefers a deep-linked Session over the notification Session", async () => {
+    navigationState.searchParams = new URLSearchParams(
+      "issue=issue-1&session=session-url",
+    );
+    listInbox.mockResolvedValue([
+      {
+        id: "inbox-1",
+        workspace_id: "ws-1",
+        user_id: "user-1",
+        type: "comment",
+        issue_id: "issue-1",
+        title: "Needs review",
+        body: null,
+        details: { issue_session_id: "session-notification" },
+        read: true,
+        archived: false,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+
+    renderInbox();
+
+    expect(await screen.findByTestId("issue-detail")).toHaveAttribute(
+      "data-initial-session",
+      "session-url",
+    );
+  });
+
+  it("preserves a Session deep link when falling back to the issue page", async () => {
+    navigationState.searchParams = new URLSearchParams(
+      "issue=issue-missing&session=session-main",
+    );
+    listInbox.mockResolvedValue([]);
+
+    renderInbox();
+
+    await waitFor(() => {
+      expect(replace).toHaveBeenCalledWith(
+        "/test/issues/issue-missing?session=session-main",
+      );
+    });
   });
 });

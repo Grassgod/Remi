@@ -485,12 +485,20 @@ function createTestQueryClient() {
   });
 }
 
-function renderIssueDetail(issueId = "issue-1", initialIssueSessionId?: string) {
+function renderIssueDetail(
+  issueId = "issue-1",
+  initialIssueSessionId?: string,
+  onIssueSessionChange?: (sessionId: string) => void,
+) {
   const queryClient = createTestQueryClient();
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
-        <IssueDetail issueId={issueId} initialIssueSessionId={initialIssueSessionId} />
+        <IssueDetail
+          issueId={issueId}
+          initialIssueSessionId={initialIssueSessionId}
+          onIssueSessionChange={onIssueSessionChange}
+        />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -767,6 +775,25 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
+  it("does not leave an embedding surface when the default Session resolves", async () => {
+    renderIssueDetail();
+
+    await waitFor(() => {
+      expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", "session-main");
+    });
+    expect(mockNavigationReplace).not.toHaveBeenCalled();
+  });
+
+  it("lets the host synchronize the resolved Session without hard-coding its route", async () => {
+    const onIssueSessionChange = vi.fn();
+    renderIssueDetail("issue-1", undefined, onIssueSessionChange);
+
+    await waitFor(() => {
+      expect(onIssueSessionChange).toHaveBeenCalledWith("session-main");
+    });
+    expect(mockNavigationReplace).not.toHaveBeenCalled();
+  });
+
   it("keeps the session rail mounted on a single-session issue, with the only New-session control in its header", async () => {
     // Default fixture: one default "Main" session. The rail still mounts —
     // it is where sessions are read *and* created, so hiding it on the
@@ -834,6 +861,7 @@ describe("IssueDetail (shared)", () => {
   });
 
   it("names the target session in the comment composer placeholder", async () => {
+    const onIssueSessionChange = vi.fn();
     mockApiObj.listIssueSessions.mockResolvedValue([
       {
         id: "session-main",
@@ -864,7 +892,7 @@ describe("IssueDetail (shared)", () => {
         participants: [],
       },
     ]);
-    renderIssueDetail();
+    renderIssueDetail("issue-1", undefined, onIssueSessionChange);
 
     // The composer sits far below the rail, so it has to say which of the
     // issue's parallel tracks a comment would join — under the localized
@@ -874,10 +902,9 @@ describe("IssueDetail (shared)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Review/ }));
     expect(await screen.findByPlaceholderText("Comment in Review…")).toBeInTheDocument();
     await waitFor(() => {
-      expect(mockNavigationReplace).toHaveBeenLastCalledWith(
-        "/test/issues/issue-1?session=session-review",
-      );
+      expect(onIssueSessionChange).toHaveBeenLastCalledWith("session-review");
     });
+    expect(mockNavigationReplace).not.toHaveBeenCalled();
   });
 
   it("creates a second session from the rail header and switches to it", async () => {
