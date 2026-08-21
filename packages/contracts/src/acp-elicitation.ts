@@ -20,8 +20,19 @@ import type {
 /** A single renderable question (matches the connector's AskUserQuestion shape). */
 type AskQuestion = AskUserQuestionData["questions"][number];
 
-/** The agent's free-text field appended after the question fields. */
+/** The agent's free-text field appended after the question fields (claude-agent-acp < 0.66). */
 const CUSTOM_ANSWER_FIELD = "customAnswer";
+
+/**
+ * claude-agent-acp >= 0.66.0 replaces the single form-level `customAnswer`
+ * with a per-question companion field `question_<n>_custom` (mirroring the
+ * CLI's per-question "Other" box; dist/elicitation.js:83). Like codex's
+ * `__other`, it is not a question of its own and the agent reads it back in
+ * preference to the parent field, so it must be folded into the owning
+ * question — left standalone it renders as a required free-text question and
+ * blocks form submission.
+ */
+const CLAUDE_CUSTOM_FIELD_RE = /^(question_\d+)_custom$/;
 
 /**
  * codex-acp appends a free-text companion field named `<questionId>__other` to
@@ -76,6 +87,8 @@ function otherFieldParent(
 ): string | null {
   const meta = (prop._meta as { codex?: { isOtherAnswer?: boolean; questionId?: string } } | undefined)?.codex;
   if (meta?.isOtherAnswer && meta.questionId && meta.questionId in properties) return meta.questionId;
+  const claudeParent = CLAUDE_CUSTOM_FIELD_RE.exec(fieldKey)?.[1];
+  if (claudeParent && claudeParent in properties) return claudeParent;
   if (!fieldKey.endsWith(OTHER_FIELD_SUFFIX)) return null;
   const parent = fieldKey.slice(0, -OTHER_FIELD_SUFFIX.length);
   return parent in properties ? parent : null;

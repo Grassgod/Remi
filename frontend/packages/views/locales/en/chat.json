@@ -126,6 +126,7 @@
     "permission_title": "Permission required",
     "question_title": "Agent question",
     "answer_placeholder": "Type an answer…",
+    "other_answer_placeholder": "Other answer (optional)…",
     "submit": "Submit",
     "load_failed": "Could not load this request.",
     "response_failed": "Response failed. Try again.",
