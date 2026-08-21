@@ -188,6 +188,53 @@ describe("SCM connection and canonical event store", () => {
     expect(store.listScmConnections({ provider: "codebase" })).toEqual([]);
   });
 
+  it("binds unknown-source repositories only when their remote matches the connection", () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 14).toString("base64");
+    const store = createLocalStore();
+    const connection = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+
+    expect(store.upsertScmRepositoryBinding({
+      workspaceId: "local",
+      connectionId: connection.id,
+      repositoryId: "repo_https",
+      repositoryUrl: "https://github.com/acme/https.git",
+      repositorySource: "unknown",
+      name: "https",
+    }).repositoryId).toBe("repo_https");
+    expect(store.upsertScmRepositoryBinding({
+      workspaceId: "local",
+      connectionId: connection.id,
+      repositoryId: "repo_ssh",
+      repositoryUrl: "git@github.com:acme/ssh.git",
+      repositorySource: "unknown",
+      name: "ssh",
+    }).repositoryId).toBe("repo_ssh");
+    expect(() => store.upsertScmRepositoryBinding({
+      workspaceId: "local",
+      connectionId: connection.id,
+      repositoryId: "repo_evil",
+      repositoryUrl: "https://evil.example/acme/widgets.git",
+      repositorySource: "unknown",
+      name: "evil",
+    })).toThrow("HTTPS origin does not match");
+    expect(store.getScmRepositoryBinding(connection.id, "repo_evil")).toBeNull();
+  });
+
+  it("rejects connection base URL changes that would orphan existing bindings", () => {
+    const { store, connection } = seedConnection();
+    process.env.MULTIREMI_SCM_ALLOWED_API_HOSTS = "github.enterprise.example";
+    expect(() => store.updateScmConnection(connection.id, {
+      baseUrl: "https://github.enterprise.example",
+      apiBaseUrl: "https://github.enterprise.example/api/v3",
+    })).toThrow("SSH host does not match");
+    expect(store.getScmConnection(connection.id)?.baseUrl).toBe("https://github.com");
+  });
+
   it("explicitly cleans baseline state when deleting a connection without event history", () => {
     const { store, connection } = seedConnection();
     expect(store.deleteScmRepositoryBinding(connection.id, "repo_missing")).toBe(false);

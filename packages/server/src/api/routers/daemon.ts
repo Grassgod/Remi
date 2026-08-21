@@ -47,6 +47,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
+import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -159,18 +160,24 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
 
     const connection = store.getScmConnection(binding.connectionId);
-    const credential = connection?.enabled
-      ? store.getScmConnectionCredential(binding.connectionId)
-      : null;
-    if (!connection || !credential?.accessToken) {
+    if (!connection?.enabled) {
+      return c.json({ error: "repository credential is not configured", code: "scm_credential_missing" }, 409);
+    }
+    let cloneUrl: string;
+    try {
+      cloneUrl = resolveScmRepositoryRemote(binding.repositoryUrl, connection.baseUrl).cloneUrl;
+    } catch {
+      return c.json({
+        error: "repository does not match its SCM connection",
+        code: "scm_repository_origin_mismatch",
+      }, 409);
+    }
+    const credential = store.getScmConnectionCredential(binding.connectionId);
+    if (!credential?.accessToken) {
       return c.json({ error: "repository credential is not configured", code: "scm_credential_missing" }, 409);
     }
     if (/[\r\n]/u.test(credential.accessToken)) {
       return c.json({ error: "repository credential is invalid", code: "scm_credential_invalid" }, 500);
-    }
-    const cloneUrl = scmHttpsCloneUrl(binding.repositoryUrl, connection.baseUrl);
-    if (!cloneUrl) {
-      return c.json({ error: "repository has no safe HTTPS clone URL", code: "scm_https_clone_unavailable" }, 409);
     }
     const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
     c.header("Cache-Control", "no-store");
@@ -790,30 +797,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status, completed_at: task.completedAt });
   });
-}
-
-function scmHttpsCloneUrl(repositoryUrl: string, baseUrl: string): string | null {
-  const value = repositoryUrl.trim();
-  if (/^https:\/\//iu.test(value)) return value;
-  let repositoryPath = "";
-  const scp = value.match(/^(?:[^@/:]+@)?[^/:]+:(.+)$/u);
-  if (scp) repositoryPath = scp[1] ?? "";
-  else {
-    try {
-      const parsed = new URL(value);
-      if (parsed.protocol !== "ssh:" && parsed.protocol !== "git+ssh:") return null;
-      repositoryPath = parsed.pathname;
-    } catch {
-      return null;
-    }
-  }
-  try {
-    const provider = new URL(baseUrl);
-    if (provider.protocol !== "https:") return null;
-    return `${provider.origin}/${repositoryPath.replace(/^\/+/, "")}`;
-  } catch {
-    return null;
-  }
 }
 
 function safeProjectKnowledgeError(error: unknown): string {

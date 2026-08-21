@@ -2,6 +2,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
+import { assertScmRepositoryMatchesConnection } from "@multiremi/scm/repository-url.js";
 import type {
   AdvanceScmEntitySnapshotResult,
   ClaimScmSyncStreamInput,
@@ -175,6 +176,9 @@ export class ScmRepo {
     const apiBaseUrl = input.apiBaseUrl !== undefined || input.api_base_url !== undefined
       ? normalizeApiBaseUrl(input.apiBaseUrl ?? input.api_base_url, current.provider, baseUrl)
       : current.apiBaseUrl;
+    for (const binding of this.listRepositoryBindings({ connectionId: id })) {
+      assertScmRepositoryMatchesConnection(binding.repositoryUrl, baseUrl);
+    }
     const now = nowIso();
     this.ctx.db.run(
       `UPDATE multiremi_scm_connections SET
@@ -300,13 +304,15 @@ export class ScmRepo {
       if (repositorySource !== "unknown" && repositorySource !== connection.provider) {
         throw new Error(`Repository source ${repositorySource} does not match SCM connection provider ${connection.provider}`);
       }
+      const repositoryUrl = requiredString(input.repositoryUrl, "repository URL");
+      assertScmRepositoryMatchesConnection(repositoryUrl, connection.baseUrl);
       const existing = this.ctx.db.query(
         "SELECT connection_id FROM multiremi_scm_repository_bindings WHERE workspace_id = ? AND repository_id = ?",
       ).get(input.workspaceId, input.repositoryId) as Row | null;
       if (existing && String(existing.connection_id) !== input.connectionId) {
         throw new Error("Repository is already bound to another SCM connection; unbind it before moving providers");
       }
-      const coordinates = repositoryCoordinatesFromUrl(input.repositoryUrl);
+      const coordinates = repositoryCoordinatesFromUrl(repositoryUrl);
       const id = createId("srb");
       const now = nowIso();
       this.ctx.db.run(
@@ -327,7 +333,7 @@ export class ScmRepo {
         input.workspaceId,
         input.connectionId,
         requiredString(input.repositoryId, "repository ID"),
-        requiredString(input.repositoryUrl, "repository URL"),
+        repositoryUrl,
         cleanOptionalString(input.externalId),
         cleanOptionalString(input.owner) ?? coordinates.owner,
         requiredString(input.name, "repository name"),

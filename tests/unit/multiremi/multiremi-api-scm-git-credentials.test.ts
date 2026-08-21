@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 const originalEncryptionKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
 
@@ -93,5 +93,19 @@ describe("Multiremi API — JIT Git credentials", () => {
     const terminal = await requestCredential(taskCredential.token, repositoryUrl);
     // Completion revokes the task token before the route can issue anything.
     expect(terminal.status).toBe(401);
+
+    // Defense in depth for legacy or tampered rows: even a matching stored URL
+    // must be checked against the connection before its PAT is decrypted.
+    const hostileRepositoryUrl = "https://evil.example/example/private.git";
+    db!.run(
+      "UPDATE multiremi_scm_repository_bindings SET repository_url = ? WHERE repository_id = ?",
+      [hostileRepositoryUrl, "repo_private"],
+    );
+    const hostile = await requestCredential(daemon.token, hostileRepositoryUrl);
+    expect(hostile.status).toBe(409);
+    expect(await hostile.json()).toEqual({
+      error: "repository does not match its SCM connection",
+      code: "scm_repository_origin_mismatch",
+    });
   });
 });
