@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
 import {
@@ -30,6 +30,9 @@ export interface MultiremiWorktreeParams {
   // resumed task never wipes uncommitted work; the CLI keeps the default
   // destructive-reset semantics (an agent asking again wants a clean tree).
   reuseExisting?: boolean;
+  /** The caller already refreshed this repo in the same preparation flow. */
+  skipFetch?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface MultiremiWorktreeResult {
@@ -47,6 +50,9 @@ export interface MultiremiSnapshotParams {
   repoUrl: string;
   snapshotsRoot: string;
   ref?: string;
+  /** The caller already refreshed this repo in the same preparation flow. */
+  skipFetch?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface MultiremiSnapshotResult {
@@ -61,10 +67,20 @@ export interface MultiremiRepoCacheOptions {
   staleLockMs?: number;
   /** Injectable so tests can exercise fetch retries without real delays. */
   fetchRetryDelaysMs?: readonly number[];
+  fetchTimeoutMs?: number;
+  cloneTimeoutMs?: number;
+  repoSyncTimeoutMs?: number;
+  processKillGraceMs?: number;
   credentialBroker?: Omit<
     GitCredentialBrokerEnvOptions,
     "workspaceId" | "taskId" | "repositoryUrl" | "repositoryUrls"
   >;
+}
+
+export interface MultiremiRepoSyncResult {
+  repoUrl: string;
+  status: "fresh" | "cached" | "failed";
+  error: string | null;
 }
 
 export interface MultiremiWorktreeState {
@@ -79,6 +95,17 @@ const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_STALE_LOCK_MS = 60 * 60_000;
 const DEFAULT_FETCH_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const DEFAULT_CLONE_TIMEOUT_MS = 120_000;
+const DEFAULT_REPO_SYNC_TIMEOUT_MS = 120_000;
+const DEFAULT_PROCESS_KILL_GRACE_MS = 2_000;
+const DEFAULT_GIT_SSH_COMMAND = [
+  "ssh",
+  "-o BatchMode=yes",
+  "-o ConnectTimeout=10",
+  "-o ServerAliveInterval=15",
+  "-o ServerAliveCountMax=3",
+].join(" ");
 const RESERVED_ISSUE_WORKSPACE_DIRECTORIES = new Set(["wiki", ".multiremi"]);
 const MULTIREMI_HOOK_MARKER = "# multiremi:prepare-commit-msg:co-authored-by";
 const LEGACY_DAEMON_HOOK_SIGNATURES = [
@@ -119,53 +146,92 @@ const log = createLogger("multiremi-repo-cache");
 export class MultiremiRepoCache {
   constructor(private root: string, private options: MultiremiRepoCacheOptions = {}) {}
 
-  sync(workspaceId: string, repos: MultiremiRepoData[]): void {
+  async sync(
+    workspaceId: string,
+    repos: MultiremiRepoData[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<MultiremiRepoSyncResult[]> {
     const workspaceRoot = join(this.root, safePathPart(workspaceId));
     mkdirSync(workspaceRoot, { recursive: true });
+    const results: MultiremiRepoSyncResult[] = [];
     for (const repo of repos) {
       const url = repo.url.trim();
       if (!url) continue;
       const barePath = this.barePath(workspaceId, url);
-      this.withRepoLock(barePath, () => {
-        const gitAuth = this.gitAuth(workspaceId, url);
-        const cloneUrl = this.cloneUrl(url);
-        if (isBareRepo(barePath)) {
-          if (cloneUrl !== url && this.fetch(barePath, {
-            remote: cloneUrl,
-            allowFailure: true,
-            env: gitAuth,
-          })) {
-            configureRepoTransport(barePath, url, cloneUrl);
-          } else {
-            configureRepoTransport(barePath, url, url);
-            if (!this.fetch(barePath, { allowFailure: true, env: gitAuth })) {
-              this.fetch(barePath, { allowFailure: true });
+      const scope = repoSyncAbortScope(
+        options.signal,
+        this.options.repoSyncTimeoutMs ?? DEFAULT_REPO_SYNC_TIMEOUT_MS,
+        url,
+      );
+      try {
+        const result = await this.withRepoLock(barePath, async () => {
+          const gitAuth = this.gitAuth(workspaceId, url);
+          const cloneUrl = this.cloneUrl(url);
+          if (isBareRepo(barePath)) {
+            let lastError: unknown = null;
+            if (cloneUrl !== url) {
+              try {
+                await this.fetch(barePath, { remote: cloneUrl, env: gitAuth, signal: scope.signal });
+                configureRepoTransport(barePath, url, cloneUrl);
+                return repoSyncResult(url, "fresh");
+              } catch (error) {
+                scope.signal.throwIfAborted();
+                lastError = error;
+              }
             }
-          }
-        } else {
-          mkdirSync(workspaceRoot, { recursive: true });
-          try {
-            let selectedUrl = cloneUrl;
-            let selectedEnv = gitAuth;
             try {
-              git(null, ["clone", "--bare", cloneUrl, barePath], { env: gitAuth });
-            } catch {
-              rmSync(barePath, { recursive: true, force: true });
-              git(null, ["clone", "--bare", url, barePath]);
-              selectedUrl = url;
-              selectedEnv = undefined;
+              configureRepoTransport(barePath, url, url);
+              await this.fetch(barePath, { env: gitAuth, signal: scope.signal });
+              return repoSyncResult(url, "fresh");
+            } catch (error) {
+              scope.signal.throwIfAborted();
+              lastError = error;
             }
-            configureRepoTransport(barePath, url, selectedUrl);
-            if (!this.fetch(barePath, { allowFailure: true, env: selectedEnv })) {
-              this.fetch(barePath);
+            if (gitAuth) {
+              try {
+                await this.fetch(barePath, { signal: scope.signal });
+                return repoSyncResult(url, "fresh");
+              } catch (error) {
+                scope.signal.throwIfAborted();
+                lastError = error;
+              }
             }
-          } catch (err) {
-            rmSync(barePath, { recursive: true, force: true });
-            throw err;
+            return repoSyncResult(url, "cached", lastError);
           }
-        }
-      });
+
+          mkdirSync(workspaceRoot, { recursive: true });
+          let selectedUrl = cloneUrl;
+          let selectedEnv = gitAuth;
+          try {
+            await this.clone(cloneUrl, barePath, { env: gitAuth, signal: scope.signal });
+          } catch (preferredError) {
+            rmSync(barePath, { recursive: true, force: true });
+            scope.signal.throwIfAborted();
+            if (cloneUrl === url) throw preferredError;
+            await this.clone(url, barePath, { signal: scope.signal });
+            selectedUrl = url;
+            selectedEnv = undefined;
+          }
+          configureRepoTransport(barePath, url, selectedUrl);
+          try {
+            await this.fetch(barePath, { env: selectedEnv, signal: scope.signal });
+            return repoSyncResult(url, "fresh");
+          } catch (error) {
+            scope.signal.throwIfAborted();
+            return repoSyncResult(url, "cached", error);
+          }
+        }, scope.signal);
+        results.push(result);
+      } catch (error) {
+        options.signal?.throwIfAborted();
+        const status = isBareRepo(barePath) ? "cached" : "failed";
+        if (status === "failed") rmSync(barePath, { recursive: true, force: true });
+        results.push(repoSyncResult(url, status, error));
+      } finally {
+        scope.dispose();
+      }
     }
+    return results;
   }
 
   lookup(workspaceId: string, repoUrl: string): string | null {
@@ -173,25 +239,30 @@ export class MultiremiRepoCache {
     return isBareRepo(barePath) ? barePath : null;
   }
 
-  createWorktree(params: MultiremiWorktreeParams): MultiremiWorktreeResult {
+  async createWorktree(params: MultiremiWorktreeParams): Promise<MultiremiWorktreeResult> {
     const barePath = this.barePath(params.workspaceId, params.repoUrl);
     if (!isBareRepo(barePath)) {
       throw new Error(`repo not found in cache: ${params.repoUrl} (workspace: ${params.workspaceId})`);
     }
 
-    return this.withRepoLock(barePath, () => this.createWorktreeLocked(barePath, params));
+    return await this.withRepoLock(barePath, () => this.createWorktreeLocked(barePath, params), params.signal);
   }
 
-  createSnapshot(params: MultiremiSnapshotParams): MultiremiSnapshotResult {
+  async createSnapshot(params: MultiremiSnapshotParams): Promise<MultiremiSnapshotResult> {
     const barePath = this.barePath(params.workspaceId, params.repoUrl);
     if (!isBareRepo(barePath)) {
       throw new Error(`repo not found in cache: ${params.repoUrl} (workspace: ${params.workspaceId})`);
     }
-    return this.withRepoLock(barePath, () => {
+    return await this.withRepoLock(barePath, async () => {
       // Intake workspaces promise a fresh view for every round. A failed fetch
       // must fail preparation instead of silently presenting an old commit as
       // current.
-      this.fetch(barePath, { env: this.gitAuth(params.workspaceId, params.repoUrl) });
+      if (!params.skipFetch) {
+        await this.fetch(barePath, {
+          env: this.gitAuth(params.workspaceId, params.repoUrl),
+          signal: params.signal,
+        });
+      }
       const baseRef = resolveBaseRef(barePath, params.ref);
       const commit = git(barePath, ["rev-parse", `${baseRef}^{commit}`]);
       const repoRoot = join(
@@ -233,7 +304,7 @@ export class MultiremiRepoCache {
         throw error;
       }
       return { path: snapshotPath, commit, baseRef, created: true };
-    });
+    }, params.signal);
   }
 
   inspectWorktree(worktreePath: string): MultiremiWorktreeState {
@@ -243,7 +314,10 @@ export class MultiremiRepoCache {
     return { dirty: hasChanges || hasUnpushedCommits, hasChanges, hasUnpushedCommits };
   }
 
-  private createWorktreeLocked(barePath: string, params: MultiremiWorktreeParams): MultiremiWorktreeResult {
+  private async createWorktreeLocked(
+    barePath: string,
+    params: MultiremiWorktreeParams,
+  ): Promise<MultiremiWorktreeResult> {
     const worktreePath = join(params.workDir, worktreeDirectoryName(params.repoUrl));
     const legacyWorktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
     if (
@@ -264,10 +338,13 @@ export class MultiremiRepoCache {
       return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
     }
 
-    this.fetch(barePath, {
-      allowFailure: true,
-      env: this.gitAuth(params.workspaceId, params.repoUrl),
-    });
+    if (!params.skipFetch) {
+      await this.fetch(barePath, {
+        allowFailure: true,
+        env: this.gitAuth(params.workspaceId, params.repoUrl),
+        signal: params.signal,
+      });
+    }
 
     const baseRef = resolveBaseRef(barePath, params.ref);
     const branchName = requestedBranch ?? `agent/${sanitizeName(params.agentName ?? "agent")}/${shortId(params.taskId ?? "task")}`;
@@ -322,24 +399,43 @@ export class MultiremiRepoCache {
     return preferredHttpsCloneUrl(repositoryUrl);
   }
 
-  private fetch(
+  private async clone(
+    url: string,
     barePath: string,
-    options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv; remote?: string } = {},
-  ): boolean {
-    return gitFetch(barePath, {
+    options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    await gitNetwork(null, ["clone", "--bare", url, barePath], {
       ...options,
-      retryDelaysMs: this.options.fetchRetryDelaysMs ?? DEFAULT_FETCH_RETRY_DELAYS_MS,
+      timeoutMs: this.options.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS,
+      killGraceMs: this.options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS,
     });
   }
 
-  private withRepoLock<T>(barePath: string, fn: () => T): T {
-    const release = acquireRepoCacheLock(
+  private async fetch(
+    barePath: string,
+    options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv; remote?: string; signal?: AbortSignal } = {},
+  ): Promise<boolean> {
+    return await gitFetch(barePath, {
+      ...options,
+      retryDelaysMs: this.options.fetchRetryDelaysMs ?? DEFAULT_FETCH_RETRY_DELAYS_MS,
+      timeoutMs: this.options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+      killGraceMs: this.options.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS,
+    });
+  }
+
+  private async withRepoLock<T>(
+    barePath: string,
+    fn: () => Promise<T> | T,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const release = await acquireRepoCacheLock(
       barePath,
       this.options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
       this.options.staleLockMs ?? DEFAULT_STALE_LOCK_MS,
+      signal,
     );
     try {
-      return fn();
+      return await fn();
     } finally {
       release();
     }
@@ -400,31 +496,154 @@ function git(
   return String(result.stdout ?? "").trim();
 }
 
-function gitFetch(
+class GitProcessTimeoutError extends Error {
+  constructor(command: string, readonly timeoutMs: number) {
+    super(`${command} timed out after ${timeoutMs}ms`);
+    this.name = "GitProcessTimeoutError";
+  }
+}
+
+class RepoSyncTimeoutError extends Error {
+  constructor(repoUrl: string, readonly timeoutMs: number) {
+    super(`repository sync timed out after ${timeoutMs}ms: ${redactGitCredentialError(repoUrl)}`);
+    this.name = "RepoSyncTimeoutError";
+  }
+}
+
+function repoSyncAbortScope(
+  parent: AbortSignal | undefined,
+  timeoutMs: number,
+  repoUrl: string,
+): { signal: AbortSignal; dispose: () => void } {
+  const controller = new AbortController();
+  const cancel = () => {
+    if (!controller.signal.aborted) controller.abort(parent?.reason ?? new Error("repository sync aborted"));
+  };
+  if (parent?.aborted) cancel();
+  else parent?.addEventListener("abort", cancel, { once: true });
+  const boundedTimeoutMs = Math.max(1, timeoutMs);
+  const timer = setTimeout(() => {
+    if (!controller.signal.aborted) {
+      controller.abort(new RepoSyncTimeoutError(repoUrl, boundedTimeoutMs));
+    }
+  }, boundedTimeoutMs);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", cancel);
+    },
+  };
+}
+
+async function gitNetwork(
+  cwd: string | null,
+  args: string[],
+  options: {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    timeoutMs: number;
+    killGraceMs: number;
+  },
+): Promise<string> {
+  options.signal?.throwIfAborted();
+  const command = `git ${redactedGitArguments(args)}`;
+  const child = spawn("git", args, {
+    cwd: cwd ?? undefined,
+    env: networkGitEnv(options.env),
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout?.on("data", (chunk: Buffer | string) => stdout.push(Buffer.from(chunk)));
+  child.stderr?.on("data", (chunk: Buffer | string) => stderr.push(Buffer.from(chunk)));
+
+  return await new Promise<string>((resolve, reject) => {
+    let terminalError: Error | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const terminate = (error: Error) => {
+      if (terminalError) return;
+      terminalError = error;
+      killProcessTree(child, "SIGTERM");
+      killTimer = setTimeout(() => killProcessTree(child, "SIGKILL"), Math.max(0, options.killGraceMs));
+      killTimer.unref?.();
+    };
+    const timeout = setTimeout(() => {
+      terminate(new GitProcessTimeoutError(command, options.timeoutMs));
+    }, Math.max(1, options.timeoutMs));
+    timeout.unref?.();
+    const onAbort = () => {
+      const reason = options.signal?.reason;
+      terminate(reason instanceof Error ? reason : new Error(`${command} aborted`));
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      options.signal?.removeEventListener("abort", onAbort);
+    };
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      cleanup();
+      if (terminalError) {
+        reject(terminalError);
+        return;
+      }
+      const rawOutput = `${Buffer.concat(stdout).toString("utf8")}${Buffer.concat(stderr).toString("utf8")}`.trim();
+      const output = redactGitCredentialError(rawOutput);
+      if (code !== 0) {
+        reject(new Error(`${command} failed${output ? `: ${output}` : signal ? `: terminated by ${signal}` : ""}`));
+        return;
+      }
+      resolve(Buffer.concat(stdout).toString("utf8").trim());
+    });
+  });
+}
+
+async function gitFetch(
   barePath: string,
   options: {
     allowFailure?: boolean;
     env?: NodeJS.ProcessEnv;
     remote?: string;
     retryDelaysMs?: readonly number[];
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    killGraceMs?: number;
   } = {},
-): boolean {
+): Promise<boolean> {
   try {
     ensureRemoteTrackingLayout(barePath, options.env);
     const remote = options.remote ?? "origin";
     const retryDelaysMs = options.retryDelaysMs ?? DEFAULT_FETCH_RETRY_DELAYS_MS;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+    const killGraceMs = options.killGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS;
     for (let attempt = 0; ; attempt += 1) {
+      options.signal?.throwIfAborted();
       try {
-        git(barePath, [
+        await gitNetwork(barePath, [
           "fetch",
           "--prune",
           "--prune-tags",
           remote,
           MODERN_FETCH_REFSPEC,
           MIRRORED_TAG_FETCH_REFSPEC,
-        ], { env: options.env });
+        ], {
+          env: options.env,
+          signal: options.signal,
+          timeoutMs,
+          killGraceMs,
+        });
         break;
       } catch (error) {
+        options.signal?.throwIfAborted();
         const retryDelayMs = retryDelaysMs[attempt];
         if (retryDelayMs === undefined || !isRetryableGitFetchError(error)) throw error;
         log.warn("Repo fetch hit a transient network error; retrying", {
@@ -435,7 +654,7 @@ function gitFetch(
           retryDelayMs,
           error: errorMessage(error),
         });
-        sleepSync(Math.max(0, retryDelayMs));
+        await sleep(Math.max(0, retryDelayMs), options.signal);
       }
     }
     if (remote === "origin") {
@@ -446,12 +665,14 @@ function gitFetch(
     }
     return true;
   } catch (err) {
+    options.signal?.throwIfAborted();
     if (!options.allowFailure) throw err;
     return false;
   }
 }
 
 function isRetryableGitFetchError(error: unknown): boolean {
+  if (error instanceof GitProcessTimeoutError) return true;
   const message = errorMessage(error).toLowerCase();
   return [
     "connection timed out",
@@ -471,6 +692,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function repoSyncResult(
+  repoUrl: string,
+  status: MultiremiRepoSyncResult["status"],
+  error: unknown = null,
+): MultiremiRepoSyncResult {
+  return {
+    repoUrl,
+    status,
+    error: error == null ? null : redactGitCredentialError(errorMessage(error)),
+  };
+}
+
 function ensureRemoteTrackingLayout(barePath: string, env?: NodeJS.ProcessEnv): void {
   const current = git(barePath, ["config", "--get", "remote.origin.fetch"], {
     allowFailure: true,
@@ -488,6 +721,34 @@ function gitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   env[`GIT_CONFIG_KEY_${index}`] = "safe.directory";
   env[`GIT_CONFIG_VALUE_${index}`] = "*";
   return env;
+}
+
+function networkGitEnv(base?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = gitEnv(base);
+  if (!env.GIT_SSH_COMMAND?.trim()) env.GIT_SSH_COMMAND = DEFAULT_GIT_SSH_COMMAND;
+  // Some managed hosts wrap git with their own fetch retry loop. The daemon
+  // owns retries and deadlines here; nested retries would multiply delays and
+  // obscure which attempt actually timed out.
+  env.GIT_FETCH_RETRIES = "1";
+  return env;
+}
+
+function killProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (!pid) return;
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      // The process may have exited between the timeout and the signal.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Best effort; close/error will settle the runner.
+  }
 }
 
 function configureRepoTransport(barePath: string, repositoryUrl: string, cloneUrl: string): void {
@@ -565,10 +826,16 @@ export function multiremiRepoCacheLockPath(barePath: string): string {
   return `${barePath}.multiremi.lock`;
 }
 
-function acquireRepoCacheLock(barePath: string, timeoutMs: number, staleLockMs: number): () => void {
+async function acquireRepoCacheLock(
+  barePath: string,
+  timeoutMs: number,
+  staleLockMs: number,
+  signal?: AbortSignal,
+): Promise<() => void> {
   const lockPath = multiremiRepoCacheLockPath(barePath);
   const deadline = Date.now() + Math.max(0, timeoutMs);
   while (true) {
+    signal?.throwIfAborted();
     try {
       mkdirSync(lockPath);
       writeFileSync(join(lockPath, "holder.json"), JSON.stringify({
@@ -586,7 +853,7 @@ function acquireRepoCacheLock(barePath: string, timeoutMs: number, staleLockMs: 
       if (Date.now() >= deadline) {
         throw new Error(`timed out waiting for repo cache lock: ${barePath}`);
       }
-      sleepSync(Math.min(50, Math.max(1, deadline - Date.now())));
+      await sleep(Math.min(50, Math.max(1, deadline - Date.now())), signal);
     }
   }
 }
@@ -630,10 +897,22 @@ function isPathAlreadyExistsError(err: unknown): boolean {
   return Boolean(err && typeof err === "object" && "code" in err && (err as { code?: unknown }).code === "EEXIST");
 }
 
-function sleepSync(ms: number): void {
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   if (ms <= 0) return;
-  const view = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(view, 0, 0, ms);
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("operation aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function bareDirName(repoUrl: string): string {

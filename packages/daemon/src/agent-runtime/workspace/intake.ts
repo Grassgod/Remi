@@ -17,6 +17,8 @@ import { MultiremiRepoCache } from "../repo/checkout.js";
 
 export interface IntakeWorkspaceOptions {
   snapshotsRoot: string;
+  skipRepoFetch?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface PreparedIntakeRepo {
@@ -33,14 +35,15 @@ export interface PreparedIntakeRepo {
 export interface PreparedIntakeWorkspace {
   checkouts: [];
   repos: PreparedIntakeRepo[];
+  warnings: [];
 }
 
-export function prepareIntakeWorkspace(
+export async function prepareIntakeWorkspace(
   workDir: string,
   task: AgentTask,
   repoCache: MultiremiRepoCache,
   options: IntakeWorkspaceOptions,
-): PreparedIntakeWorkspace {
+): Promise<PreparedIntakeWorkspace> {
   const contexts = task.projectContexts ?? task.project_contexts ?? [];
   const stagingRoot = join(workDir, `.projects.tmp-${process.pid}-${Date.now()}`);
   const projectsRoot = join(workDir, "projects");
@@ -73,10 +76,12 @@ export function prepareIntakeWorkspace(
       for (const repo of context.repos) {
         const repoName = uniqueRepoDirectory(repo.url, usedRepoDirectories);
         const linkPath = join(projectRoot, "repos", repoName);
-        const snapshot = repoCache.createSnapshot({
+        const snapshot = await repoCache.createSnapshot({
           workspaceId: task.workspaceId,
           repoUrl: repo.url,
           snapshotsRoot: options.snapshotsRoot,
+          skipFetch: options.skipRepoFetch,
+          signal: options.signal,
         });
         symlinkSync(snapshot.path, linkPath, "dir");
         repos.push({
@@ -133,7 +138,7 @@ export function prepareIntakeWorkspace(
     task_id: task.id,
   });
 
-  return { checkouts: [], repos };
+  return { checkouts: [], repos, warnings: [] };
 }
 
 function writeProjectKnowledge(projectRoot: string, context: AgentTaskProjectContext): void {
