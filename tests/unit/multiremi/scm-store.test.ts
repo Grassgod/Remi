@@ -478,6 +478,61 @@ describe("SCM connection and canonical event store", () => {
     expect(delivery.last_error).toContain("trigger is disabled");
   });
 
+  it("dispatches GitHub Actions pipeline events only to matching branch filters", () => {
+    const { store, connection } = seedConnection();
+    const agent = store.createAgent({ name: "Pipeline Agent", provider: "codex" });
+    const main = store.createAutopilot({
+      title: "Main pipeline",
+      workspaceId: "local",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+    const feature = store.createAutopilot({
+      title: "Feature pipeline",
+      workspaceId: "local",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+    store.createAutopilotTrigger(main.id, {
+      kind: "scm_event",
+      eventConfig: {
+        resource: "scm",
+        events: ["pipeline.completed"],
+        repositoryIds: ["repo_widgets"],
+        branch: "main",
+      },
+    });
+    store.createAutopilotTrigger(feature.id, {
+      kind: "scm_event",
+      eventConfig: {
+        resource: "scm",
+        events: ["pipeline.completed"],
+        repositoryIds: ["repo_widgets"],
+        branch: "feature/wiki",
+      },
+    });
+
+    const observedAt = new Date(Date.now() + 1_000);
+    store.recordScmCanonicalEvent({
+      workspaceId: "local",
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      type: "pipeline.completed",
+      subjectType: "pipeline",
+      subjectId: "workflow_run:501:2",
+      logicalKey: "pipeline.completed:repo_widgets:workflow_run:501:2:success",
+      fidelity: "exact",
+      occurredAt: observedAt.toISOString(),
+      observedAt: observedAt.toISOString(),
+      payload: { id: 501, kind: "workflow_run", attempt: 2, branch: "main", conclusion: "success" },
+      evidence: { source: "webhook", dedupeKey: "webhook:delivery-workflow" },
+    });
+
+    const runs = store.dispatchPendingScmEvents(new Date(observedAt.getTime() + 1_000));
+    expect(runs.map((run) => run.autopilotId)).toEqual([main.id]);
+    expect(store.listAutopilotRuns(feature.id)).toEqual([]);
+  });
+
   it("rejects SCM automation filters outside the automation workspace bindings", () => {
     const { store } = seedConnection();
     const agent = store.createAgent({ name: "Wiki Maintainer", provider: "codex" });

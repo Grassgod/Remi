@@ -15,6 +15,8 @@ afterEach(() => {
 describe("SCM provider adapters", () => {
   it("publishes provider differences instead of pretending webhook parity", () => {
     expect(GITHUB_SCM_CAPABILITIES.streams.pipelines.webhook).toBe(true);
+    expect(GITHUB_SCM_CAPABILITIES.streams.pipelines.limitations.join(" ")).toContain("workflow runs only");
+    expect(GITHUB_SCM_CAPABILITIES.streams.pipelines.limitations.join(" ")).toContain("check_run");
     expect(CODEBASE_SCM_CAPABILITIES.streams.pipelines.poll).toBe(true);
     expect(CODEBASE_SCM_CAPABILITIES.streams.pipelines.webhook).toBe(false);
     expect(GITHUB_SCM_CAPABILITIES.supportsDeleteTombstones).toBe(false);
@@ -91,6 +93,43 @@ describe("SCM provider adapters", () => {
     expect(webhook.subjectId).toBe("workflow_run:501:2");
     expect(webhook.subjectId).toBe(polled.subjectId);
     expect(webhook.logicalVersion).toBe(polled.logicalVersion);
+    expect(webhook.payload.branch).toBe("main");
+
+    const rerun = adapter.parseWebhook({
+      connection: scmConnection(),
+      credential: { accessToken: "token", webhookSecret: "secret" },
+      headers: { "x-github-event": "workflow_run", "x-github-delivery": "delivery-2" },
+      rawBody: "{}",
+      body: {
+        repository: { id: 101, name: "widgets", owner: { login: "acme" } },
+        workflow_run: { ...workflowRun, run_attempt: 3, updated_at: "2026-08-21T08:05:00.000Z" },
+      },
+      observedAt: "2026-08-21T08:06:00.000Z",
+    }).candidates[0]!;
+    expect(rerun.subjectId).toBe("workflow_run:501:3");
+    expect(rerun.subjectId).not.toBe(webhook.subjectId);
+  });
+
+  it("ignores GitHub Checks instead of creating a second pipeline identity", () => {
+    const parsed = new GitHubScmProviderAdapter().parseWebhook({
+      connection: scmConnection(),
+      credential: { accessToken: "token", webhookSecret: "secret" },
+      headers: { "x-github-event": "check_run", "x-github-delivery": "delivery-check" },
+      rawBody: "{}",
+      body: {
+        repository: { id: 101, name: "widgets", owner: { login: "acme" } },
+        check_run: {
+          id: 7001,
+          name: "build",
+          status: "completed",
+          conclusion: "success",
+          head_sha: "abc",
+        },
+      },
+      observedAt: "2026-08-21T08:00:00.000Z",
+    });
+    expect(parsed.candidates).toEqual([]);
+    expect(parsed.ignoredReason).toContain("workflow_run only");
   });
 
   it("filters ordinary GitHub issue comments in webhook and polling ingestion", async () => {

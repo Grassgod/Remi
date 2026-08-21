@@ -143,11 +143,11 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
           "reviews", "review", subjectId, version, occurredAt, request.observedAt, normalized,
         ),
       });
-    } else if (providerEvent === "workflow_run" || providerEvent === "check_run") {
-      const pipeline = record(providerEvent === "workflow_run" ? body.workflow_run : body.check_run);
-      const normalized = normalizeGitHubPipeline(pipeline, providerEvent);
+    } else if (providerEvent === "workflow_run") {
+      const pipeline = record(body.workflow_run);
+      const normalized = normalizeGitHubWorkflowRun(pipeline);
       const completed = stringValue(normalized.status).toLowerCase() === "completed" || Boolean(normalized.conclusion);
-      const subjectId = githubPipelineSubjectId(pipeline, providerEvent);
+      const subjectId = githubWorkflowRunSubjectId(pipeline);
       const version = pipelineVersion(normalized);
       const occurredAt = nullableString(normalized.updated_at) ?? nullableString(normalized.created_at);
       candidates.push({
@@ -162,6 +162,13 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
           "pipelines", "pipeline", subjectId, version, occurredAt, request.observedAt, normalized,
         ),
       });
+    } else if (providerEvent === "check_run") {
+      return {
+        providerEvent,
+        deliveryId,
+        candidates: [],
+        ignoredReason: "GitHub check_run is ignored; canonical pipeline events support Actions workflow_run only",
+      };
     } else if (providerEvent === "push") {
       const ref = stringValue(body.ref).replace(/^refs\/heads\//u, "");
       const after = stringValue(body.after);
@@ -311,7 +318,7 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
     const runs = arrayRecords(response.data.workflow_runs);
     const observations = runs
       .filter((run) => !threshold || timestampValue(run.updated_at) >= threshold)
-      .map((run) => githubPipelineObservation(run, "workflow_run", context.now));
+      .map((run) => githubWorkflowRunObservation(run, context.now));
     const hasNext = runs.length === PAGE_SIZE;
     return {
       observations,
@@ -441,12 +448,12 @@ function normalizeGitHubReview(review: Record<string, unknown>, pull: Record<str
   };
 }
 
-function githubPipelineObservation(pipeline: Record<string, unknown>, kind: string, now: Date): ScmEntityObservation {
-  const payload = normalizeGitHubPipeline(pipeline, kind);
+function githubWorkflowRunObservation(pipeline: Record<string, unknown>, now: Date): ScmEntityObservation {
+  const payload = normalizeGitHubWorkflowRun(pipeline);
   return {
     stream: "pipelines",
     entityType: "pipeline",
-    externalId: githubPipelineSubjectId(pipeline, kind),
+    externalId: githubWorkflowRunSubjectId(pipeline),
     version: pipelineVersion(payload),
     occurredAt: nullableString(payload.updated_at) ?? nullableString(payload.created_at),
     observedAt: now.toISOString(),
@@ -454,10 +461,10 @@ function githubPipelineObservation(pipeline: Record<string, unknown>, kind: stri
   };
 }
 
-function normalizeGitHubPipeline(pipeline: Record<string, unknown>, kind: string): Record<string, unknown> {
+function normalizeGitHubWorkflowRun(pipeline: Record<string, unknown>): Record<string, unknown> {
   return {
     id: nullableString(pipeline.id),
-    kind,
+    kind: "workflow_run",
     name: stringValue(pipeline.name),
     status: stringValue(pipeline.status).toLowerCase(),
     conclusion: nullableString(pipeline.conclusion),
@@ -465,7 +472,7 @@ function normalizeGitHubPipeline(pipeline: Record<string, unknown>, kind: string
     branch: nullableString(pipeline.head_branch),
     event: nullableString(pipeline.event),
     attempt: numberValue(pipeline.run_attempt) ?? 1,
-    url: nullableString(pipeline.html_url) ?? nullableString(pipeline.details_url),
+    url: nullableString(pipeline.html_url),
     created_at: nullableString(pipeline.created_at),
     updated_at: nullableString(pipeline.updated_at) ?? nullableString(pipeline.completed_at),
   };
@@ -506,12 +513,10 @@ function pipelineVersion(payload: Record<string, unknown>): string {
   ].join(":");
 }
 
-function githubPipelineSubjectId(pipeline: Record<string, unknown>, kind: string): string {
+function githubWorkflowRunSubjectId(pipeline: Record<string, unknown>): string {
   const id = stringValue(pipeline.id);
   if (!id) return "";
-  return kind === "workflow_run"
-    ? `workflow_run:${id}:${numberValue(pipeline.run_attempt) ?? 1}`
-    : `check_run:${id}`;
+  return `workflow_run:${id}:${numberValue(pipeline.run_attempt) ?? 1}`;
 }
 
 function webhookObservation(

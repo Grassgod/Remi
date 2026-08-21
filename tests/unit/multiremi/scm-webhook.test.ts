@@ -195,6 +195,51 @@ describe("SCM webhook ingestion", () => {
     expect(repeatedPoll.events).toHaveLength(0);
     expect([...store.events.values()][0]?.fidelity).toBe("exact");
   });
+
+  it("deduplicates a GitHub Actions workflow run observed by polling and webhook", () => {
+    const store = new MemoryScmIngestionStore();
+    const adapter = new GitHubScmProviderAdapter();
+    const started = githubWorkflowRunBody("in_progress", null, "2026-08-21T08:00:00.000Z");
+    const completed = githubWorkflowRunBody("completed", "success", "2026-08-21T08:05:00.000Z");
+    const startedObservation = parseGitHubWorkflowRun(adapter, started, "2026-08-21T08:00:01.000Z")
+      .snapshotObservation!;
+    const completedObservation = parseGitHubWorkflowRun(adapter, completed, "2026-08-21T08:05:01.000Z")
+      .snapshotObservation!;
+
+    reconcileObservation({
+      store,
+      binding: scmBinding(),
+      observation: startedObservation,
+      baseline: true,
+      source: "poll",
+    });
+    const inferred = reconcileObservation({
+      store,
+      binding: scmBinding(),
+      observation: completedObservation,
+      baseline: false,
+      source: "poll",
+    });
+    expect(inferred.events).toHaveLength(1);
+    expect(inferred.events[0]?.created).toBe(true);
+    expect(inferred.events[0]?.event.subjectId).toBe("workflow_run:501:2");
+
+    const exact = ingestGitHub(store, "workflow_run", completed, "delivery-workflow", "2026-08-21T08:05:02.000Z");
+    expect(exact.events).toHaveLength(1);
+    expect(exact.events[0]?.created).toBe(false);
+    expect(exact.events[0]?.evidenceCreated).toBe(true);
+    expect(exact.events[0]?.event.fidelity).toBe("exact");
+    expect(store.events.size).toBe(1);
+    expect(store.recordInputs.map((input) => input.evidence.source)).toEqual(["poll", "webhook"]);
+
+    const ignoredCheck = ingestGitHub(store, "check_run", {
+      repository: { id: 101, name: "widgets", owner: { login: "acme" } },
+      check_run: { id: 7001, status: "completed", conclusion: "success", head_sha: "abc" },
+    }, "delivery-check", "2026-08-21T08:05:03.000Z");
+    expect(ignoredCheck.events).toEqual([]);
+    expect(ignoredCheck.ignoredReason).toContain("workflow_run only");
+    expect(store.events.size).toBe(1);
+  });
 });
 
 function githubPullBody(
@@ -232,6 +277,41 @@ function parseGitHubPull(
     connection: scmConnection(),
     credential: { accessToken: "token", webhookSecret: "secret" },
     headers: { "x-github-event": "pull_request" },
+    rawBody: JSON.stringify(body),
+    body,
+    observedAt,
+  }).candidates[0]!;
+}
+
+function githubWorkflowRunBody(status: string, conclusion: string | null, updatedAt: string) {
+  return {
+    action: status === "completed" ? "completed" : "in_progress",
+    repository: { id: 101, name: "widgets", owner: { login: "acme" }, default_branch: "main" },
+    workflow_run: {
+      id: 501,
+      run_attempt: 2,
+      name: "build",
+      status,
+      conclusion,
+      head_sha: "abc",
+      head_branch: "main",
+      event: "push",
+      created_at: "2026-08-21T07:59:00.000Z",
+      updated_at: updatedAt,
+      html_url: "https://github.com/acme/widgets/actions/runs/501",
+    },
+  };
+}
+
+function parseGitHubWorkflowRun(
+  adapter: GitHubScmProviderAdapter,
+  body: ReturnType<typeof githubWorkflowRunBody>,
+  observedAt: string,
+) {
+  return adapter.parseWebhook({
+    connection: scmConnection(),
+    credential: { accessToken: "token", webhookSecret: "secret" },
+    headers: { "x-github-event": "workflow_run" },
     rawBody: JSON.stringify(body),
     body,
     observedAt,

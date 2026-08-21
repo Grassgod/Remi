@@ -36,7 +36,9 @@ export const GITHUB_SCM_CAPABILITIES: ScmProviderCapabilities = {
       webhook: true,
       pollFidelity: "inferred",
       webhookFidelity: "exact",
-      limitations: [],
+      limitations: [
+        "Canonical pipeline events cover GitHub Actions workflow runs only; GitHub Checks check_run events are ignored.",
+      ],
     },
   },
   supportsDeleteTombstones: false,
@@ -90,4 +92,3 @@ export const SCM_PROVIDER_CAPABILITIES = {
   github: GITHUB_SCM_CAPABILITIES,
   codebase: CODEBASE_SCM_CAPABILITIES,
 } as const;
-
