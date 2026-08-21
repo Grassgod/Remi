@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSyn
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
+import { createLogger } from "@shared/logger.js";
 import {
   appendGitCredentialBrokerEnv,
-  isBrokerCompatibleRepositoryUrl,
   preferredHttpsCloneUrl,
   redactGitCredentialError,
   type GitCredentialBrokerEnvOptions,
@@ -59,6 +59,8 @@ export interface MultiremiSnapshotResult {
 export interface MultiremiRepoCacheOptions {
   lockTimeoutMs?: number;
   staleLockMs?: number;
+  /** Injectable so tests can exercise fetch retries without real delays. */
+  fetchRetryDelaysMs?: readonly number[];
   credentialBroker?: Omit<
     GitCredentialBrokerEnvOptions,
     "workspaceId" | "taskId" | "repositoryUrl" | "repositoryUrls"
@@ -76,6 +78,7 @@ const MODERN_FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_STALE_LOCK_MS = 60 * 60_000;
+const DEFAULT_FETCH_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 const RESERVED_ISSUE_WORKSPACE_DIRECTORIES = new Set(["wiki", ".multiremi"]);
 const MULTIREMI_HOOK_MARKER = "# multiremi:prepare-commit-msg:co-authored-by";
 const LEGACY_DAEMON_HOOK_SIGNATURES = [
@@ -111,6 +114,8 @@ fi
 git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 `;
 
+const log = createLogger("multiremi-repo-cache");
+
 export class MultiremiRepoCache {
   constructor(private root: string, private options: MultiremiRepoCacheOptions = {}) {}
 
@@ -125,28 +130,34 @@ export class MultiremiRepoCache {
         const gitAuth = this.gitAuth(workspaceId, url);
         const cloneUrl = this.cloneUrl(url);
         if (isBareRepo(barePath)) {
-          if (cloneUrl !== url && gitFetchFromUrl(barePath, cloneUrl, { allowFailure: true, env: gitAuth })) {
+          if (cloneUrl !== url && this.fetch(barePath, {
+            remote: cloneUrl,
+            allowFailure: true,
+            env: gitAuth,
+          })) {
             configureRepoTransport(barePath, url, cloneUrl);
           } else {
             configureRepoTransport(barePath, url, url);
-            if (!gitFetch(barePath, { allowFailure: true, env: gitAuth })) {
-              gitFetch(barePath, { allowFailure: true });
+            if (!this.fetch(barePath, { allowFailure: true, env: gitAuth })) {
+              this.fetch(barePath, { allowFailure: true });
             }
           }
         } else {
           mkdirSync(workspaceRoot, { recursive: true });
           try {
             let selectedUrl = cloneUrl;
+            let selectedEnv = gitAuth;
             try {
               git(null, ["clone", "--bare", cloneUrl, barePath], { env: gitAuth });
             } catch {
               rmSync(barePath, { recursive: true, force: true });
               git(null, ["clone", "--bare", url, barePath]);
               selectedUrl = url;
+              selectedEnv = undefined;
             }
             configureRepoTransport(barePath, url, selectedUrl);
-            if (!gitFetch(barePath, { allowFailure: true, env: selectedUrl === cloneUrl ? gitAuth : undefined })) {
-              gitFetch(barePath, { env: selectedUrl === url ? undefined : gitAuth });
+            if (!this.fetch(barePath, { allowFailure: true, env: selectedEnv })) {
+              this.fetch(barePath);
             }
           } catch (err) {
             rmSync(barePath, { recursive: true, force: true });
@@ -180,7 +191,7 @@ export class MultiremiRepoCache {
       // Intake workspaces promise a fresh view for every round. A failed fetch
       // must fail preparation instead of silently presenting an old commit as
       // current.
-      gitFetch(barePath, { env: this.gitAuth(params.workspaceId, params.repoUrl) });
+      this.fetch(barePath, { env: this.gitAuth(params.workspaceId, params.repoUrl) });
       const baseRef = resolveBaseRef(barePath, params.ref);
       const commit = git(barePath, ["rev-parse", `${baseRef}^{commit}`]);
       const repoRoot = join(
@@ -253,7 +264,7 @@ export class MultiremiRepoCache {
       return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
     }
 
-    gitFetch(barePath, {
+    this.fetch(barePath, {
       allowFailure: true,
       env: this.gitAuth(params.workspaceId, params.repoUrl),
     });
@@ -308,10 +319,17 @@ export class MultiremiRepoCache {
 
   private cloneUrl(repositoryUrl: string): string {
     if (!this.options.credentialBroker) return repositoryUrl;
-    if (!isBrokerCompatibleRepositoryUrl(repositoryUrl)) {
-      throw new Error(`repository SSH URL cannot be converted safely to HTTPS: ${repositoryUrl}`);
-    }
     return preferredHttpsCloneUrl(repositoryUrl);
+  }
+
+  private fetch(
+    barePath: string,
+    options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv; remote?: string } = {},
+  ): boolean {
+    return gitFetch(barePath, {
+      ...options,
+      retryDelaysMs: this.options.fetchRetryDelaysMs ?? DEFAULT_FETCH_RETRY_DELAYS_MS,
+    });
   }
 
   private withRepoLock<T>(barePath: string, fn: () => T): T {
@@ -384,19 +402,48 @@ function git(
 
 function gitFetch(
   barePath: string,
-  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    allowFailure?: boolean;
+    env?: NodeJS.ProcessEnv;
+    remote?: string;
+    retryDelaysMs?: readonly number[];
+  } = {},
 ): boolean {
   try {
-    ensureRemoteTrackingLayout(barePath);
-    git(barePath, [
-      "fetch",
-      "--prune",
-      "--prune-tags",
-      "origin",
-      MODERN_FETCH_REFSPEC,
-      MIRRORED_TAG_FETCH_REFSPEC,
-    ], { env: options.env });
-    git(barePath, ["remote", "set-head", "origin", "--auto"], { allowFailure: true });
+    ensureRemoteTrackingLayout(barePath, options.env);
+    const remote = options.remote ?? "origin";
+    const retryDelaysMs = options.retryDelaysMs ?? DEFAULT_FETCH_RETRY_DELAYS_MS;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        git(barePath, [
+          "fetch",
+          "--prune",
+          "--prune-tags",
+          remote,
+          MODERN_FETCH_REFSPEC,
+          MIRRORED_TAG_FETCH_REFSPEC,
+        ], { env: options.env });
+        break;
+      } catch (error) {
+        const retryDelayMs = retryDelaysMs[attempt];
+        if (retryDelayMs === undefined || !isRetryableGitFetchError(error)) throw error;
+        log.warn("Repo fetch hit a transient network error; retrying", {
+          barePath,
+          remote: redactGitCredentialError(remote),
+          attempt: attempt + 1,
+          maxAttempts: retryDelaysMs.length + 1,
+          retryDelayMs,
+          error: errorMessage(error),
+        });
+        sleepSync(Math.max(0, retryDelayMs));
+      }
+    }
+    if (remote === "origin") {
+      git(barePath, ["remote", "set-head", "origin", "--auto"], {
+        allowFailure: true,
+        env: options.env,
+      });
+    }
     return true;
   } catch (err) {
     if (!options.allowFailure) throw err;
@@ -404,32 +451,33 @@ function gitFetch(
   }
 }
 
-function gitFetchFromUrl(
-  barePath: string,
-  url: string,
-  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
-): boolean {
-  try {
-    ensureRemoteTrackingLayout(barePath);
-    git(barePath, [
-      "fetch",
-      "--prune",
-      "--prune-tags",
-      url,
-      MODERN_FETCH_REFSPEC,
-      MIRRORED_TAG_FETCH_REFSPEC,
-    ], { env: options.env });
-    return true;
-  } catch (error) {
-    if (!options.allowFailure) throw error;
-    return false;
-  }
+function isRetryableGitFetchError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return [
+    "connection timed out",
+    "operation timed out",
+    "connection reset",
+    "connection refused",
+    "could not resolve host",
+    "could not resolve hostname",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "no route to host",
+    "broken pipe",
+  ].some((marker) => message.includes(marker));
 }
 
-function ensureRemoteTrackingLayout(barePath: string): void {
-  const current = git(barePath, ["config", "--get", "remote.origin.fetch"], { allowFailure: true }).trim();
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function ensureRemoteTrackingLayout(barePath: string, env?: NodeJS.ProcessEnv): void {
+  const current = git(barePath, ["config", "--get", "remote.origin.fetch"], {
+    allowFailure: true,
+    env,
+  }).trim();
   if (current === MODERN_FETCH_REFSPEC || current === MODERN_FETCH_REFSPEC.slice(1)) return;
-  git(barePath, ["config", "remote.origin.fetch", MODERN_FETCH_REFSPEC]);
+  git(barePath, ["config", "remote.origin.fetch", MODERN_FETCH_REFSPEC], { env });
 }
 
 function gitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

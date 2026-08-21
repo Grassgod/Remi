@@ -63,7 +63,9 @@ export function appendGitCredentialBrokerEnv(
 
   env.GIT_TERMINAL_PROMPT = "0";
   env.GCM_INTERACTIVE = "Never";
-  env.GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=10";
+  if (!env.GIT_SSH_COMMAND?.trim()) {
+    env.GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=10";
+  }
   env.MULTIREMI_SERVER_URL = options.serverUrl.replace(/\/+$/, "");
   env.MULTIREMI_WORKSPACE_ID = options.workspaceId;
   if (options.token) env.MULTIREMI_TOKEN = options.token;

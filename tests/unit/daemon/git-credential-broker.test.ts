@@ -50,6 +50,25 @@ describe("Multiremi Git credential broker", () => {
       .not.toContain("daemon-secret");
   });
 
+  it("preserves an existing SSH command and only supplies BatchMode by default", () => {
+    const custom = "ssh -F /etc/multiremi/ssh.conf -o ProxyCommand=custom-proxy";
+    const preserved = appendGitCredentialBrokerEnv({ GIT_SSH_COMMAND: custom }, {
+      serverUrl: "https://multiremi.example",
+      workspaceId: "wsp_1",
+      helperCommand: "'remi' git-credential",
+      fallbackHelpers: [],
+    });
+    const defaulted = appendGitCredentialBrokerEnv({}, {
+      serverUrl: "https://multiremi.example",
+      workspaceId: "wsp_1",
+      helperCommand: "'remi' git-credential",
+      fallbackHelpers: [],
+    });
+
+    expect(preserved.GIT_SSH_COMMAND).toBe(custom);
+    expect(defaulted.GIT_SSH_COMMAND).toContain("BatchMode=yes");
+  });
+
   it("requests a task-scoped JIT credential using the original repository identity", async () => {
     let request: { url: string; headers: Headers; body: Record<string, unknown> } | null = null;
     const output = await runGitCredentialHelper("get", {
