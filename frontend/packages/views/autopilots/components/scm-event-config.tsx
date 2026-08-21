@@ -122,9 +122,14 @@ export function ScmEventConfigSection({
   const selectedConnection = connections.find(
     (connection) => connection.id === config.connectionId,
   );
+  const unavailableConnectionId = config.connectionId && !selectedConnection
+    ? config.connectionId
+    : null;
   const selectedConnectionLabel = selectedConnection
     ? formatConnectionLabel(selectedConnection)
-    : t(($) => $.dialog.scm_event.all_connections);
+    : unavailableConnectionId
+      ? t(($) => $.dialog.scm_event.unavailable_connection)
+      : t(($) => $.dialog.scm_event.all_connections);
   const repositoryOptions = useMemo(() => {
     const source = selectedConnection ? [selectedConnection] : connections;
     const byId = new Map<string, { id: string; name: string; url: string }>();
@@ -196,6 +201,11 @@ export function ScmEventConfigSection({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__all__">{t(($) => $.dialog.scm_event.all_connections)}</SelectItem>
+            {unavailableConnectionId && (
+              <SelectItem value={unavailableConnectionId} disabled>
+                {t(($) => $.dialog.scm_event.unavailable_connection)}
+              </SelectItem>
+            )}
             {connections.map((connection) => (
               <SelectItem key={connection.id} value={connection.id}>
                 {formatConnectionLabel(connection)}

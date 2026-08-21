@@ -95,4 +95,22 @@ describe("ScmEventConfigSection", () => {
     expect(selector).toHaveTextContent(label);
     expect(selector).not.toHaveTextContent(selected.id);
   });
+
+  it("shows an unavailable connection instead of changing a stale selection to all connections", () => {
+    const selected = { ...connection("github"), enabled: false };
+    connectionsRef.current = [selected];
+
+    render(
+      <ScmEventConfigSection
+        config={{ ...getDefaultScmEventConfig(), connectionId: selected.id }}
+        onChange={vi.fn()}
+      />,
+      { wrapper: I18nWrapper },
+    );
+
+    const selector = screen.getByRole("combobox");
+    expect(selector).toHaveTextContent("连接不可用");
+    expect(selector).not.toHaveTextContent("全部连接");
+    expect(selector).not.toHaveTextContent(selected.id);
+  });
 });
