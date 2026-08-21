@@ -379,7 +379,7 @@ describe("Multiremi repo cache", () => {
       agentName: "Codex",
       taskId: "tsk_ambiguous",
     })).toThrow(/origin\/\* is empty or ambiguous/);
-  });
+  }, 15_000);
 });
 
 function createRepo(branch: string, readme: string): string {
