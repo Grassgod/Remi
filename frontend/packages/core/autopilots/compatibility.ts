@@ -11,6 +11,7 @@ export type ConfigurableAutopilotTriggerKind = Exclude<
 const CONFIGURABLE_TRIGGER_KINDS: readonly ConfigurableAutopilotTriggerKind[] = [
   "schedule",
   "system_event",
+  "scm_event",
   "webhook",
 ];
 

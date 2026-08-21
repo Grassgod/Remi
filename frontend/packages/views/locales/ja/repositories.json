@@ -9,6 +9,9 @@
     "default_branch": "デフォルトブランチ",
     "default_branch_aria": "{{name}} のデフォルトブランチ",
     "default_branch_placeholder": "ブランチを選択",
+    "sync": "イベント収集",
+    "not_connected": "未接続",
+    "sync_modes": { "poll": "ポーリング", "webhook": "Webhook", "hybrid": "ハイブリッド" },
     "description": "説明",
     "imported": "インポート日"
   },

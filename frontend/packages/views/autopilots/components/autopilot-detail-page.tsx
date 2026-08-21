@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Zap, Play, Clock, Plus, Trash2, CheckCircle2, XCircle, Loader2, Pencil,
   Ban, ChevronDown, ChevronRight,
-  Activity, Webhook, Copy, Check, RotateCw,
+  Activity, Webhook, Copy, Check, RotateCw, GitPullRequest,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { autopilotDetailOptions, autopilotRunsOptions, autopilotRunOptions } from "@multiremi/core/autopilots/queries";
@@ -62,6 +62,7 @@ import type {
   AutopilotExecutionMode,
   AutopilotRun,
   AutopilotRunSource,
+  AutopilotScmEventConfig,
   AutopilotSystemEventConfig,
   AutopilotTrigger,
 } from "@multiremi/core/types";
@@ -77,6 +78,10 @@ import {
   getDefaultSystemEventConfig,
   SystemEventConfigSection,
 } from "./system-event-config";
+import {
+  getDefaultScmEventConfig,
+  ScmEventConfigSection,
+} from "./scm-event-config";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleString(undefined, {
@@ -306,7 +311,10 @@ function TriggerRow({
 
   const isWebhook = trigger.kind === "webhook";
   const isSystemEvent = trigger.kind === "system_event";
+  const isScmEvent = trigger.kind === "scm_event";
   const isApi = trigger.kind === "api";
+  const triggerSystemEventConfig =
+    trigger.event_config?.resource === "issue" ? trigger.event_config : null;
   // Resolve the URL from the server's webhook_url first, then compose
   // from the API base URL (desktop) or window.origin (web). Falls back
   // to the relative path if neither is available.
@@ -343,7 +351,15 @@ function TriggerRow({
     }
   };
 
-  const Icon = isWebhook ? Webhook : isSystemEvent ? Activity : isApi ? Zap : Clock;
+  const Icon = isWebhook
+    ? Webhook
+    : isSystemEvent
+      ? Activity
+      : isScmEvent
+        ? GitPullRequest
+        : isApi
+          ? Zap
+          : Clock;
   const showWebhookUrlRow = isWebhook && webhookUrl;
 
   // Delete control extracted so a webhook trigger can render it inline
@@ -395,14 +411,24 @@ function TriggerRow({
             {t(($) => $.trigger_row.next_label, { date: formatDate(trigger.next_run_at) })}
           </div>
         )}
-        {isSystemEvent && trigger.event_config && (
+        {isSystemEvent && triggerSystemEventConfig && (
           <div className="mt-0.5 text-xs text-muted-foreground">
             {t(($) => $.trigger_row.system_event_summary, {
               status: t(($) => $.dialog.system_event.statuses[
-                trigger.event_config?.conditions[0]?.value ?? "done"
+                triggerSystemEventConfig.conditions[0]?.value ?? "done"
               ]),
               project:
                 systemEventProjectName ?? t(($) => $.dialog.system_event.all_projects),
+            })}
+          </div>
+        )}
+        {isScmEvent && trigger.event_config?.resource === "scm" && (
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {t(($) => $.trigger_row.scm_event_summary, {
+              count: trigger.event_config.events.length,
+              repositories:
+                trigger.event_config.repositoryIds?.length ||
+                t(($) => $.dialog.scm_event.all_repositories),
             })}
           </div>
         )}
@@ -503,6 +529,8 @@ function AddTriggerDialog({
   const [config, setConfig] = useState<TriggerConfig>(getDefaultTriggerConfig);
   const [systemEventConfig, setSystemEventConfig] =
     useState<AutopilotSystemEventConfig>(getDefaultSystemEventConfig);
+  const [scmEventConfig, setScmEventConfig] =
+    useState<AutopilotScmEventConfig>(getDefaultScmEventConfig);
   const [label, setLabel] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -537,7 +565,7 @@ function AddTriggerDialog({
           label: label.trim() || undefined,
         });
         toast.success(t(($) => $.add_trigger_dialog.toast_added_webhook));
-      } else {
+      } else if (kind === "system_event") {
         await createTrigger.mutateAsync({
           autopilotId,
           kind: "system_event",
@@ -545,11 +573,20 @@ function AddTriggerDialog({
           label: label.trim() || undefined,
         });
         toast.success(t(($) => $.add_trigger_dialog.toast_added_system_event));
+      } else {
+        await createTrigger.mutateAsync({
+          autopilotId,
+          kind: "scm_event",
+          event_config: scmEventConfig,
+          label: label.trim() || undefined,
+        });
+        toast.success(t(($) => $.add_trigger_dialog.toast_added_scm_event));
       }
       onOpenChange(false);
       setKind(getCompatibleConfigurableTriggerKinds(executionMode)[0]!);
       setConfig(getDefaultTriggerConfig());
       setSystemEventConfig(getDefaultSystemEventConfig());
+      setScmEventConfig(getDefaultScmEventConfig());
       setLabel("");
     } catch (err) {
       toast.error(
@@ -622,6 +659,21 @@ function AddTriggerDialog({
                   {t(($) => $.add_trigger_dialog.type_webhook)}
                 </button>
               )}
+              {compatibleKinds.includes("scm_event") && (
+                <button
+                  type="button"
+                  onClick={() => setKind("scm_event")}
+                  className={cn(
+                    "flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-sm transition-colors",
+                    kind === "scm_event"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <GitPullRequest className="h-3.5 w-3.5" />
+                  {t(($) => $.add_trigger_dialog.type_scm_event)}
+                </button>
+              )}
             </div>
           </div>
 
@@ -631,11 +683,13 @@ function AddTriggerDialog({
             <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
               {t(($) => $.add_trigger_dialog.webhook_help)}
             </p>
-          ) : (
+          ) : kind === "system_event" ? (
             <SystemEventConfigSection
               config={systemEventConfig}
               onChange={setSystemEventConfig}
             />
+          ) : (
+            <ScmEventConfigSection config={scmEventConfig} onChange={setScmEventConfig} />
           )}
 
           <div>
@@ -931,9 +985,13 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
                     trigger={trig}
                     autopilotId={autopilotId}
                     systemEventProjectName={
-                      trig.event_config?.project_id
+                      trig.event_config?.resource === "issue" && trig.event_config.project_id
                         ? projects.find(
-                            (candidate) => candidate.id === trig.event_config?.project_id,
+                            (candidate) =>
+                              candidate.id ===
+                              (trig.event_config?.resource === "issue"
+                                ? trig.event_config.project_id
+                                : null),
                           )?.title ?? t(($) => $.detail.project_unavailable)
                         : t(($) => $.dialog.system_event.all_projects)
                     }

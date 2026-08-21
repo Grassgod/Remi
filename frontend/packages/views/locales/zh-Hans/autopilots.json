@@ -113,6 +113,7 @@
     "manual": "手动",
     "webhook": "Webhook",
     "system_event": "系统事件",
+    "scm_event": "代码事件",
     "api": "API"
   },
   "run": {
@@ -138,6 +139,7 @@
   "trigger_kind": {
     "schedule": "时间表",
     "system_event": "系统事件",
+    "scm_event": "代码事件",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -146,6 +148,7 @@
     "deprecated_badge": "已弃用",
     "next_label": "下次：{{date}}",
     "system_event_summary": "Issue 状态变为{{status}} · {{project}}",
+    "scm_event_summary": "{{count}} 种代码事件 · {{repositories}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "复制 URL",
     "url_copied": "已复制 Webhook URL",
@@ -218,6 +221,7 @@
     "type_label": "类型",
     "type_schedule": "时间表",
     "type_system_event": "系统事件",
+    "type_scm_event": "代码事件",
     "type_webhook": "Webhook",
     "label_field": "标签（可选）",
     "label_placeholder": "例如：工作日早晨",
@@ -226,6 +230,7 @@
     "submitting": "添加中...",
     "toast_added_schedule": "已添加时间表触发器",
     "toast_added_system_event": "已添加系统事件触发器",
+    "toast_added_scm_event": "已添加代码事件触发器",
     "toast_added_webhook": "已添加 Webhook 触发器",
     "toast_add_failed": "添加触发器失败"
   },
@@ -269,8 +274,10 @@
     "section_trigger_kind": "触发方式",
     "trigger_kind_schedule": "时间表",
     "trigger_kind_system_event": "系统事件",
+    "trigger_kind_scm_event": "代码事件",
     "trigger_kind_webhook": "Webhook",
     "section_system_event": "系统事件",
+    "section_scm_event": "代码事件",
     "section_webhook": "Webhook",
     "webhook_help_create": "Autopilot 创建后 Multiremi 会生成一个 Webhook URL。向它 POST 任意 JSON 即可触发。",
     "webhook_help_edit": "该 Autopilot 由 Webhook 触发。请在详情页复制或重新生成 URL。",
@@ -314,6 +321,34 @@
         "blocked": "已阻塞",
         "cancelled": "已取消"
       }
+    },
+    "scm_event": {
+      "connection_label": "代码托管连接",
+      "all_connections": "所有启用的连接",
+      "repositories_label": "仓库范围",
+      "all_repositories": "所有已绑定仓库",
+      "no_repositories": "没有可用仓库，请先在代码托管设置中绑定。",
+      "events_label": "事件",
+      "groups": { "changes": "合并请求", "collaboration": "协作", "delivery": "交付" },
+      "events": {
+        "change.opened": "创建 MR/PR",
+        "change.updated": "更新 MR/PR",
+        "change.closed": "关闭 MR/PR",
+        "change.reopened": "重新打开",
+        "change.merged": "合入主干",
+        "comment.created": "新增评论",
+        "comment.updated": "更新评论",
+        "comment.deleted": "删除评论",
+        "review.submitted": "提交评审",
+        "review.dismissed": "撤销评审",
+        "pipeline.started": "流水线开始",
+        "pipeline.completed": "流水线完成",
+        "default_branch.updated": "默认分支更新",
+        "push.observed": "分支推送"
+      },
+      "branch_label": "目标分支（可选）",
+      "branch_placeholder": "例如 main；留空匹配所有分支",
+      "hint": "Webhook 与主动拉取都会转换成同一事件。混合模式下相同事件只触发一次；首次拉取不会回放历史事件。"
     },
     "output_modes": {
       "create_issue": {

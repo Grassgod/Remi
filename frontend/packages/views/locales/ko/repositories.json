@@ -9,6 +9,9 @@
     "default_branch": "기본 브랜치",
     "default_branch_aria": "{{name}}의 기본 브랜치",
     "default_branch_placeholder": "브랜치 선택",
+    "sync": "이벤트 수집",
+    "not_connected": "연결 안 됨",
+    "sync_modes": { "poll": "폴링", "webhook": "Webhook", "hybrid": "혼합" },
     "description": "설명",
     "imported": "가져온 날짜"
   },
