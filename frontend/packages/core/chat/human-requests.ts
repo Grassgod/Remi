@@ -22,6 +22,8 @@ export interface HumanRequestPermissionOption {
 
 export interface HumanRequestQuestion {
   fieldKey: string;
+  /** Present when the agent accepts a free-text answer besides the options. */
+  otherFieldKey?: string;
   question: {
     question: string;
     header?: string;
@@ -55,6 +57,7 @@ const permissionOptionSchema = z.object({
 
 const questionSchema = z.object({
   fieldKey: z.string(),
+  otherFieldKey: z.string().optional(),
   question: z.object({
     question: z.string(),
     header: z.string().optional(),
