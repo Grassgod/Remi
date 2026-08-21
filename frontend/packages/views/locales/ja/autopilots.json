@@ -324,6 +324,7 @@
     "scm_event": {
       "connection_label": "ソース管理接続",
       "all_connections": "有効なすべての接続",
+      "unavailable_connection": "利用できない接続",
       "repositories_label": "リポジトリ範囲",
       "all_repositories": "紐付け済みの全リポジトリ",
       "no_repositories": "利用可能なリポジトリがありません。先にソース管理設定で紐付けてください。",

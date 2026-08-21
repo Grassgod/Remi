@@ -324,6 +324,7 @@
     "scm_event": {
       "connection_label": "소스 제어 연결",
       "all_connections": "활성화된 모든 연결",
+      "unavailable_connection": "사용할 수 없는 연결",
       "repositories_label": "저장소 범위",
       "all_repositories": "연결된 모든 저장소",
       "no_repositories": "사용 가능한 저장소가 없습니다. 먼저 소스 제어 설정에서 연결하세요.",

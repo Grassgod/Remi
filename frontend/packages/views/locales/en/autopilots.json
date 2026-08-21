@@ -325,6 +325,7 @@
     "scm_event": {
       "connection_label": "Source control connection",
       "all_connections": "All enabled connections",
+      "unavailable_connection": "Unavailable connection",
       "repositories_label": "Repository scope",
       "all_repositories": "All bound repositories",
       "no_repositories": "No repositories available. Bind one in Source Control settings first.",

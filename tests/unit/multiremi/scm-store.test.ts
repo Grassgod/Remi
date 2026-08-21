@@ -141,6 +141,51 @@ describe("SCM connection and canonical event store", () => {
     expect(connection.apiBaseUrl).toBe("https://codebase-api.byted.org/v2");
   });
 
+  it("requires a webhook secret exactly when the connection mode consumes webhooks", () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 8).toString("base64");
+    const store = createLocalStore();
+
+    expect(() => store.createScmConnection({
+      workspaceId: "local",
+      name: "Missing webhook secret",
+      provider: "github",
+      mode: "webhook",
+    })).toThrow("webhook secret is required");
+    expect(() => store.createScmConnection({
+      workspaceId: "local",
+      name: "Blank hybrid secret",
+      provider: "github",
+      mode: "hybrid",
+      webhookSecret: "   ",
+    })).toThrow("webhook secret is required");
+
+    const connection = store.createScmConnection({
+      workspaceId: "local",
+      name: "Polling only",
+      provider: "github",
+      mode: "poll",
+      webhookSecret: "",
+    });
+    expect(connection.webhookSecretSet).toBe(false);
+    expect(() => store.updateScmConnection(connection.id, { mode: "webhook" }))
+      .toThrow("webhook secret is required");
+
+    const enabled = store.updateScmConnection(connection.id, {
+      mode: "hybrid",
+      webhookSecret: "new-webhook-secret",
+    });
+    expect(enabled.webhookSecretSet).toBe(true);
+    const preserved = store.updateScmConnection(connection.id, { webhookSecret: "  " });
+    expect(preserved.webhookSecretSet).toBe(true);
+    expect(store.getScmConnectionCredential(connection.id)?.webhookSecret).toBe("new-webhook-secret");
+    expect(() => store.updateScmConnection(connection.id, { clearWebhookSecret: true }))
+      .toThrow("webhook secret is required");
+
+    const cleared = store.updateScmConnection(connection.id, { mode: "poll", clearWebhookSecret: true });
+    expect(cleared.webhookSecretSet).toBe(false);
+    expect(store.getScmConnectionCredential(connection.id)?.webhookSecret).toBeNull();
+  });
+
   it("requires an explicit allowlist for enterprise API hosts", () => {
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString("base64");
     const store = createLocalStore();
@@ -604,6 +649,70 @@ describe("SCM connection and canonical event store", () => {
     expect(body.connections[0]?.id).toBe(connection.id);
     expect(JSON.stringify(body)).not.toContain("ghp_private-token");
     expect(JSON.stringify(body)).not.toContain("webhook-private-secret");
+  });
+
+  it("returns a client error when connection API mutations leave webhook mode without a secret", async () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 8).toString("base64");
+    const store = createLocalStore();
+    const app = createMultiremiApp({ store });
+    const missing = await app.request("/api/workspaces/local/scm/connections", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "No secret", provider: "github", mode: "webhook" }),
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({
+      error: "SCM webhook secret is required when sync mode is webhook or hybrid",
+    });
+
+    const created = await app.request("/api/workspaces/local/scm/connections", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Polling", provider: "github", mode: "poll" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json() as { connection: { id: string } };
+    const transition = await app.request(
+      `/api/workspaces/local/scm/connections/${createdBody.connection.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "hybrid" }),
+      },
+    );
+    expect(transition.status).toBe(400);
+    expect(await transition.json()).toEqual({
+      error: "SCM webhook secret is required when sync mode is webhook or hybrid",
+    });
+
+    const enabled = await app.request(
+      `/api/workspaces/local/scm/connections/${createdBody.connection.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "hybrid", webhookSecret: "api-webhook-secret" }),
+      },
+    );
+    expect(enabled.status).toBe(200);
+    const preserved = await app.request(
+      `/api/workspaces/local/scm/connections/${createdBody.connection.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ webhookSecret: "" }),
+      },
+    );
+    expect(preserved.status).toBe(200);
+    expect((await preserved.json() as { connection: { webhookSecretSet: boolean } }).connection.webhookSecretSet).toBe(true);
+    const cleared = await app.request(
+      `/api/workspaces/local/scm/connections/${createdBody.connection.id}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clearWebhookSecret: true }),
+      },
+    );
+    expect(cleared.status).toBe(400);
   });
 
   it("paginates events without dropping rows that share an observed timestamp", async () => {
