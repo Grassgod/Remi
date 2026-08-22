@@ -25,7 +25,7 @@ import { PreferencesTab } from "./preferences-tab";
 import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
 import { MembersTab } from "./members-tab";
-import { GitHubTab } from "./github-tab";
+import { SourceControlTab } from "./source-control-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { ModelGatewayTab } from "./model-gateway-tab";
 import { LabsTab } from "./labs-tab";
@@ -44,7 +44,7 @@ const ACCOUNT_TAB_ICONS = {
 
 const WORKSPACE_TAB_KEYS = [
   "general",
-  "github",
+  "source_control",
   "integrations",
   "model_gateway",
   "storage_cleanup",
@@ -53,7 +53,7 @@ const WORKSPACE_TAB_KEYS = [
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
-  github: "github",
+  source_control: "source-control",
   integrations: "integrations",
   model_gateway: "model-gateway",
   storage_cleanup: "storage-cleanup",
@@ -62,7 +62,7 @@ const WORKSPACE_TAB_VALUES = {
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
-  github: GitBranch,
+  source_control: GitBranch,
   integrations: Plug,
   model_gateway: Waypoints,
   storage_cleanup: Archive,
@@ -196,7 +196,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="notifications"><NotificationsTab /></TabsContent>
           <TabsContent value="tokens"><TokensTab /></TabsContent>
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
-          <TabsContent value="github"><GitHubTab /></TabsContent>
+          <TabsContent value="source-control"><SourceControlTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="model-gateway"><ModelGatewayTab /></TabsContent>
           <TabsContent value="storage-cleanup"><StorageCleanupTab /></TabsContent>

@@ -459,6 +459,23 @@ describe("Multiremi API — issue endpoints", () => {
 
   it("serves quick-create issue compatibility endpoints", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [
+        {
+          id: "repo_quick_project",
+          name: "quick-project",
+          url: "git@example.test:team/quick-project.git",
+          source: "github",
+        },
+        {
+          id: "repo_archived_project",
+          name: "archived",
+          url: "git@example.test:team/archived.git",
+          source: "github",
+        },
+      ],
+    });
     const agent = store.createAgent({ name: "Quick Codex", provider: "codex" });
     const executor = store.createAgent({ name: "Project executor", provider: "claude" });
     const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });

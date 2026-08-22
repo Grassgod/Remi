@@ -14,7 +14,7 @@ import {
   agentRunCountsKeys,
   agentTasksKeys,
 } from "../../agents/queries";
-import { githubKeys } from "../../github/queries";
+import { scmKeys } from "../../scm/queries";
 import { larkKeys } from "../../lark/queries";
 import { agentPluginKeys } from "../../plugins/queries";
 import { chatKeys } from "../../chat/queries";
@@ -146,18 +146,16 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       const wsId = getCurrentWsId();
       if (wsId) qc.invalidateQueries({ queryKey: autopilotKeys.all(wsId) });
     },
-    github_installation: () => {
-      const wsId = getCurrentWsId();
-      if (wsId) qc.invalidateQueries({ queryKey: githubKeys.installations(wsId) });
-    },
     lark_installation: () => {
       const wsId = getCurrentWsId();
       if (wsId) qc.invalidateQueries({ queryKey: larkKeys.installations(wsId) });
     },
-    pull_request: () => {
-      // PR list is keyed by issue id, not workspace, so we invalidate all
-      // PR queries — the open issue detail page will refetch its own list.
-      qc.invalidateQueries({ queryKey: ["github", "pull-requests"] });
+    change_request: () => {
+      qc.invalidateQueries({ queryKey: scmKeys.changeRequestsAll });
+    },
+    scm: () => {
+      const wsId = getCurrentWsId();
+      if (wsId) qc.invalidateQueries({ queryKey: scmKeys.all(wsId) });
     },
     // Powers the agent presence cache: any task lifecycle change
     // (dispatch / completed / failed / cancelled) refreshes the

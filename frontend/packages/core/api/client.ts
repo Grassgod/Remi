@@ -24,7 +24,6 @@ import { LabelsEndpoints } from "./endpoints/labels";
 import { PinsEndpoints } from "./endpoints/pins";
 import { SquadsEndpoints } from "./endpoints/squads";
 import { AutopilotsEndpoints } from "./endpoints/autopilots";
-import { GitHubEndpoints } from "./endpoints/github";
 import { LarkEndpoints } from "./endpoints/lark";
 import { RepositoriesEndpoints } from "./endpoints/repositories";
 import { PluginsEndpoints } from "./endpoints/plugins";
@@ -79,7 +78,6 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new PinsEndpoints(http),
   (http: HttpClient) => new SquadsEndpoints(http),
   (http: HttpClient) => new AutopilotsEndpoints(http),
-  (http: HttpClient) => new GitHubEndpoints(http),
   (http: HttpClient) => new LarkEndpoints(http),
   (http: HttpClient) => new RepositoriesEndpoints(http),
   (http: HttpClient) => new PluginsEndpoints(http),
@@ -125,7 +123,6 @@ export interface ApiClient extends
     PinsEndpoints,
     SquadsEndpoints,
     AutopilotsEndpoints,
-    GitHubEndpoints,
     LarkEndpoints,
     RepositoriesEndpoints,
     PluginsEndpoints,

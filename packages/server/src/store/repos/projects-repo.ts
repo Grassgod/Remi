@@ -104,8 +104,12 @@ export class ProjectsRepo {
     const hasLocalDirectory = resources.some((resource) =>
       String(resource.resourceType ?? resource.resource_type ?? "").trim() === "local_directory"
     );
+    const hasGitRepository = resources.some((resource) =>
+      String(resource.resourceType ?? resource.resource_type ?? "").trim() === "github_repo"
+    );
     const tx = this.ctx.db.transaction(() => {
       if (hasLocalDirectory) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      else if (hasGitRepository) this.ctx.lockWorkspaceRepositoryTopology(workspaceId);
       const result = this.ctx.db.run(
         `INSERT INTO multiremi_projects (
           id, title, description, instructions, instructions_revision,
@@ -374,11 +378,15 @@ export class ProjectsRepo {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const resourceType = String(input.resourceType ?? input.resource_type ?? "").trim();
-    if (resourceType !== "local_directory") {
+    if (resourceType !== "local_directory" && resourceType !== "github_repo") {
       return this.createProjectResourceForProject(project, input);
     }
     const tx = this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(project.workspaceId);
+      if (resourceType === "local_directory") {
+        this.ctx.lockWorkspaceRuntimeLifecycle(project.workspaceId);
+      } else {
+        this.ctx.lockWorkspaceRepositoryTopology(project.workspaceId);
+      }
       const currentProject = this.getProject(projectId);
       if (!currentProject || currentProject.workspaceId !== project.workspaceId) {
         throw new Error(`Project not found: ${projectId}`);
@@ -399,6 +407,7 @@ export class ProjectsRepo {
     const resourceRef = normalizeProjectResourceRef(resourceType, rawRef);
     this.assertLocalDirectoryDaemonNotRetired(project.workspaceId, resourceType, resourceRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, resourceType, resourceRef, null, "create");
+    this.assertImportedGitRepository(project.workspaceId, resourceType, resourceRef);
     if (resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, project.workspaceId);
     const id = input.id ?? createId("res");
     const now = nowIso();
@@ -433,11 +442,15 @@ export class ProjectsRepo {
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const existing = this.getProjectResource(resourceId);
     if (!existing || existing.projectId !== projectId) throw new Error(`Project resource not found: ${resourceId}`);
-    if (existing.resourceType !== "local_directory") {
+    if (existing.resourceType !== "local_directory" && existing.resourceType !== "github_repo") {
       return this.updateProjectResourceWithinLifecycleLock(project, existing, input);
     }
     const tx = this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(project.workspaceId);
+      if (existing.resourceType === "local_directory") {
+        this.ctx.lockWorkspaceRuntimeLifecycle(project.workspaceId);
+      } else {
+        this.ctx.lockWorkspaceRepositoryTopology(project.workspaceId);
+      }
       const currentProject = this.getProject(projectId);
       if (!currentProject || currentProject.workspaceId !== project.workspaceId) {
         throw new Error(`Project not found: ${projectId}`);
@@ -464,6 +477,7 @@ export class ProjectsRepo {
     const resourceRef = normalizeProjectResourceRef(existing.resourceType, rawRef);
     this.assertLocalDirectoryDaemonNotRetired(project.workspaceId, existing.resourceType, resourceRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, existing.resourceType, resourceRef, resourceId, "update");
+    this.assertImportedGitRepository(project.workspaceId, existing.resourceType, resourceRef);
     if (existing.resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, existing.workspaceId);
     const label = hasAnyField(input, "label") ? cleanProjectResourceLabel(input.label) : existing.label;
     const position = hasAnyField(input, "position")
@@ -971,6 +985,27 @@ export class ProjectsRepo {
     return Number(row?.count ?? 0);
   }
 
+  /** Caller holds the workspace repository-topology row lock. */
+  private assertImportedGitRepository(
+    workspaceId: string,
+    resourceType: string,
+    resourceRef: Record<string, unknown>,
+  ): void {
+    if (resourceType !== "github_repo") return;
+    const url = String(resourceRef.url ?? "").trim();
+    const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
+    const target = canonicalGitRepositoryUrl(url);
+    const imported = workspace.repos.some((value) => {
+      if (!value || typeof value !== "object") return false;
+      const candidate = String((value as Record<string, unknown>).url ?? "").trim();
+      return candidate !== "" && canonicalGitRepositoryUrl(candidate) === target;
+    });
+    if (!imported) {
+      throw new Error("github_repo repository must be imported before it can be added to a project");
+    }
+  }
+
   private assertNoLocalDirectoryDaemonConflict(
     projectId: string,
     resourceType: string,
@@ -1164,6 +1199,27 @@ function toProject(row: Row): MultiremiProject {
 
 function normalizeProjectInstructions(value: string | null | undefined): string {
   return (value ?? "").replace(/\r\n?/g, "\n");
+}
+
+function canonicalGitRepositoryUrl(value: string): string {
+  const url = value.trim();
+  const scp = url.match(/^([^@\s]+)@([^:\s]+):(.+)$/);
+  if (scp) {
+    return `ssh://${scp[1]}@${scp[2]!.toLowerCase()}/${normalizeGitRepositoryPath(scp[3]!)}`;
+  }
+  try {
+    const parsed = new URL(url);
+    const user = parsed.username ? `${parsed.username.toLowerCase()}@` : "";
+    return `${parsed.protocol.toLowerCase()}//${user}${parsed.hostname.toLowerCase()}${
+      parsed.port ? `:${parsed.port}` : ""
+    }/${normalizeGitRepositoryPath(parsed.pathname)}`;
+  } catch {
+    return url.toLowerCase().replace(/\/+$/, "").replace(/\.git$/i, "");
+  }
+}
+
+function normalizeGitRepositoryPath(path: string): string {
+  return path.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
 }
 
 function toProjectResource(row: Row): MultiremiProjectResource {

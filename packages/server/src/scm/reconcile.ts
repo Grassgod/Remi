@@ -41,37 +41,41 @@ export function reconcileObservation(input: ReconcileObservationInput): Reconcil
     fidelity = source === "webhook" ? "exact" : "inferred",
   } = input;
   const contentHash = stableJsonHash(observation.payload);
-  const advanced = store.advanceEntitySnapshot(observationSnapshotInput(binding, observation, contentHash));
-  const previous = advanced.previous;
-  const changed = advanced.applied
-    && (previous?.contentHash !== contentHash || previous?.version !== observation.version);
-  if (!changed || baseline) return { changed, snapshot: advanced.snapshot, events: [] };
+  let changed = false;
+  const written = store.advanceEntitySnapshotWithEvents(
+    observationSnapshotInput(binding, observation, contentHash),
+    (advanced) => {
+      const previous = advanced.previous;
+      changed = advanced.applied
+        && (previous?.contentHash !== contentHash || previous?.version !== observation.version);
+      if (!changed || baseline) return [];
 
-  const candidates = deriveCanonicalCandidates(observation, previous);
-  const events = candidates.map((candidate) => {
-    const logicalKey = buildScmLogicalKey(binding.repositoryId, candidate);
-    return store.recordCanonicalEvent({
-      workspaceId: binding.workspaceId,
-      connectionId: binding.connectionId,
-      repositoryId: binding.repositoryId,
-      type: candidate.type,
-      subjectType: candidate.subjectType,
-      subjectId: candidate.subjectId,
-      logicalKey,
-      fidelity,
-      occurredAt: candidate.occurredAt,
-      observedAt: observation.observedAt,
-      payload: candidate.payload,
-      evidence: {
-        source,
-        providerEventId: input.providerEventId ?? null,
-        dedupeKey: buildEvidenceDedupeKey(source, input.providerEventId, logicalKey, contentHash),
-        payload: input.evidencePayload ?? observation.payload,
-        rawBody: input.rawBody ?? null,
-      },
-    });
-  });
-  return { changed, snapshot: advanced.snapshot, events };
+      return deriveCanonicalCandidates(observation, previous).map((candidate) => {
+        const logicalKey = buildScmLogicalKey(binding.repositoryId, candidate);
+        return {
+          workspaceId: binding.workspaceId,
+          connectionId: binding.connectionId,
+          repositoryId: binding.repositoryId,
+          type: candidate.type,
+          subjectType: candidate.subjectType,
+          subjectId: candidate.subjectId,
+          logicalKey,
+          fidelity,
+          occurredAt: candidate.occurredAt,
+          observedAt: observation.observedAt,
+          payload: candidate.payload,
+          evidence: {
+            source,
+            providerEventId: input.providerEventId ?? null,
+            dedupeKey: buildEvidenceDedupeKey(source, input.providerEventId, logicalKey, contentHash),
+            payload: input.evidencePayload ?? observation.payload,
+            rawBody: input.rawBody ?? null,
+          },
+        };
+      });
+    },
+  );
+  return { changed, snapshot: written.advance.snapshot, events: written.events };
 }
 
 export function observationSnapshotInput(

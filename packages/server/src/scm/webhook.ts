@@ -79,10 +79,7 @@ export class ScmWebhookIngestor {
       if (!binding) continue;
       const logicalKey = buildScmLogicalKey(binding.repositoryId, candidate);
       const providerEventId = candidate.providerEventId ?? parsed.deliveryId;
-      if (candidate.snapshotObservation) {
-        this.store.advanceEntitySnapshot(observationSnapshotInput(binding, candidate.snapshotObservation));
-      }
-      events.push(this.store.recordCanonicalEvent({
+      const eventInput = {
         workspaceId: binding.workspaceId,
         connectionId: binding.connectionId,
         repositoryId: binding.repositoryId,
@@ -103,7 +100,16 @@ export class ScmWebhookIngestor {
           payload: candidate.payload,
           rawBody: input.rawBody,
         },
-      }));
+      } as const;
+      if (candidate.snapshotObservation) {
+        const written = this.store.advanceEntitySnapshotWithEvents(
+          observationSnapshotInput(binding, candidate.snapshotObservation),
+          () => [eventInput],
+        );
+        events.push(...written.events);
+      } else {
+        events.push(this.store.recordCanonicalEvent(eventInput));
+      }
     }
     const ignoredReason = parsed.ignoredReason
       ?? (parsed.candidates.length > 0 && events.length === 0 ? "repository is not bound to this connection" : null);

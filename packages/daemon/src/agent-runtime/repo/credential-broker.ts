@@ -39,6 +39,7 @@ interface GitCredentialResponse {
   cloneUrl: string;
   username: string;
   password: string;
+  /** Git helper cache deadline; it is not the upstream PAT's expiry. */
   expiresAt: string | null;
 }
 
@@ -115,7 +116,8 @@ export function isBrokerCompatibleRepositoryUrl(repositoryUrl: string): boolean 
 
 /**
  * Git credential-helper implementation. Only `get` reaches the Server;
- * `store`/`erase` are intentionally no-ops because credentials are ephemeral.
+ * `store`/`erase` are intentionally no-ops because Multiremi provides the Git
+ * credential on demand and owns its helper cache policy.
  */
 export async function runGitCredentialHelper(
   operation: string,

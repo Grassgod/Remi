@@ -14,7 +14,6 @@ import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos
 import { PlatformOperationConflictError } from "@multiremi/store/repos/platform-operations-repo.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
-import { registerGithubRoutes } from "./routers/github.js";
 import { registerWebhookRoutes } from "./routers/webhooks.js";
 import { registerScmWebhookRoutes } from "@multiremi/scm/router.js";
 import { registerRemiReleaseRoutes } from "./routers/remi-releases.js";
@@ -97,6 +96,10 @@ import {
 } from "./helpers.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
+import {
+  createScmConnectionVerifier,
+  type ScmConnectionVerifier,
+} from "@multiremi/scm/verification.js";
 import { scmIngestionStore } from "@multiremi/scm/store.js";
 import {
   authorizeBrowserWebSocketAuthFrame,
@@ -152,6 +155,7 @@ export interface MultiremiApiOptions {
   sessionArchives?: SessionArchiveService;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
   scmPolling?: ScmPollingScheduler | null;
+  verifyScmConnection?: ScmConnectionVerifier;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -186,6 +190,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       options.resolveAgentPluginGitSource ?? resolveAgentPluginGitSource,
     projectKnowledge,
     sessionArchives,
+    verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
   };
 
   app.use("*", cors());
@@ -324,7 +329,6 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     enabled: realtimeState.enabled,
     transport: "websocket",
   }));
-  registerGithubRoutes(app, deps);
   registerWebhookRoutes(app, deps);
   registerScmWebhookRoutes(app, deps);
   app.get("/api/multiremi/health", (c) => c.json({ ok: true }));

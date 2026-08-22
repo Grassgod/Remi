@@ -1257,7 +1257,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(existsSync(join(checkoutPath, "README.md"))).toBe(true);
       expect(readFileSync(join(checkoutPath, "README.md"), "utf8")).toContain("hello from repo");
       expect(execFileSync("git", ["-C", checkoutPath, "branch", "--show-current"], { encoding: "utf8" }).trim().startsWith("agent/repo-claude/")).toBe(true);
-      expect(existsSync(prepareCommitMsgHookPath(checkoutPath))).toBe(false);
+      expect(existsSync(prepareCommitMsgHookPath(checkoutPath))).toBe(true);
       expect(prompts[0]).toContain("## Available Repositories");
       expect(prompts[0]).toContain("remi repo checkout <url>");
       expect(prompts[0]).toContain(sourceRepo);

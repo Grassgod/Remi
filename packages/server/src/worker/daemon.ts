@@ -2211,7 +2211,6 @@ export class MultiremiDaemon {
       daemonOptions: {
         daemonPort: this.repoServerPort,
         serverUrl: this.options.serverUrl,
-        fallbackToken: this.options.token,
         workspacesRoot: this.options.workspacesRoot,
       },
       workDir,
@@ -2507,10 +2506,6 @@ export class MultiremiDaemon {
   private workspaceCoAuthoredByEnabled(workspaceId: string): boolean {
     const settings = this.workspaceSettings.get(workspaceId);
     if (!settings) return true;
-    const githubEnabled = optionalBoolean(settings.github_enabled)
-      ?? optionalBoolean(settings.githubEnabled)
-      ?? optionalBoolean(settings.enabled);
-    if (githubEnabled === false) return false;
     const coAuthoredByEnabled = optionalBoolean(settings.co_authored_by_enabled)
       ?? optionalBoolean(settings.coAuthoredByEnabled)
       ?? optionalBoolean(settings.coauthor_enabled)
