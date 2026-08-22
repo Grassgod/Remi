@@ -1496,6 +1496,16 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       .toContainEqual(expect.objectContaining({ id: archived.id }));
     expect(store.listIssues({ workspaceId: ws }).map((issue) => issue.id)).toEqual([active.id]);
     expect(store.countIssues({ workspaceId: ws, archivedOnly: true })).toBe(1);
+
+    expect(store.restoreIssue(archived.id)).toMatchObject({
+      status: "done",
+      completedAt: null,
+      archivedAt: null,
+    });
+    runMigrations(db);
+    expect(store.getIssue(archived.id)).toMatchObject({ completedAt: null, archivedAt: null });
+    expect(store.archiveEligibleIssues(new Date("2026-08-22T08:00:00.000Z")).map((issue) => issue.id))
+      .not.toContain(archived.id);
   });
 
   it("keeps a user terminal Issue committed while a worker status write waits on its row lock (PG)", async () => {

@@ -2127,6 +2127,10 @@ function existingTableNames(db: SqlDatabase): Set<string> {
 }
 
 function addColumnIfMissing(db: SqlDatabase, table: string, definition: string): boolean {
+  const columnName = /^"?([A-Za-z_][A-Za-z0-9_]*)"?\s/u.exec(definition.trim())?.[1];
+  if (!columnName) throw new Error(`Invalid column definition for ${table}: ${definition}`);
+  const columns = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === columnName)) return false;
   try {
     db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
     return true;
