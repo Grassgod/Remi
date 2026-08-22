@@ -181,6 +181,9 @@ export interface ScmChangeRequest {
   workspaceId: string;
   connectionId: string;
   repositoryId: string;
+  repositoryName: string | null;
+  repositoryOwner: string | null;
+  repositoryUrl: string | null;
   provider: ScmProvider | "unknown";
   externalId: string;
   number: number | null;

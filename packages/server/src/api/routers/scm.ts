@@ -2,6 +2,7 @@ import type { Context, Hono } from "hono";
 import type {
   CreateScmConnectionInput,
   MultiremiScmCanonicalEventType,
+  MultiremiScmChangeRequestWithRepository,
   UpdateScmConnectionInput,
 } from "@multiremi/contracts/types.js";
 import { ScmCredentialEncryptionError } from "@multiremi/scm/credentials.js";
@@ -24,7 +25,20 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const changeRequests = store.listScmChangeRequestsForIssue(issue.id) ?? [];
+    const bindings = new Map(
+      store.listScmRepositoryBindings({ workspaceId: issue.workspaceId })
+        .map((binding) => [binding.repositoryId, binding] as const),
+    );
+    const changeRequests: MultiremiScmChangeRequestWithRepository[] =
+      (store.listScmChangeRequestsForIssue(issue.id) ?? []).map((changeRequest) => {
+        const binding = bindings.get(changeRequest.repositoryId);
+        return {
+          ...changeRequest,
+          repositoryName: binding?.name ?? null,
+          repositoryOwner: binding?.owner ?? null,
+          repositoryUrl: binding?.repositoryUrl ?? null,
+        };
+      });
     return c.json({ changeRequests, total: changeRequests.length });
   });
 
