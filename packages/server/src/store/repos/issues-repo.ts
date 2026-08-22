@@ -326,6 +326,17 @@ export class IssuesRepo {
     return this.hydrateIssues(issues);
   }
 
+  countIssues(input: ListIssuesInput = {}): number {
+    const unpaginated = { ...input, limit: undefined, offset: undefined };
+    const hasMetadata = Boolean(input.metadata) && Object.keys(input.metadata!).length > 0;
+    if (hasMetadata) return this.listIssues(unpaginated).length;
+    const { where, params } = buildIssueListWhere(unpaginated);
+    const row = this.ctx.db.query(
+      `SELECT COUNT(*) AS total FROM multiremi_issues ${where}`,
+    ).get(...params) as Row | null;
+    return Number(row?.total ?? 0);
+  }
+
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
     const limit = normalizeListLimit(input.limit, 50, 100);
     const offset = normalizeListOffset(input.offset);
@@ -666,14 +677,14 @@ export class IssuesRepo {
     const includeCommentBodies = input.includeCommentBodies !== false;
     const limit = clampSearchLimit(input.limit);
     const offset = Math.max(0, Number(input.offset ?? 0));
-    const rows = this.listIssues().map((issue) => ({
+    const rows = this.listIssues({ includeArchived: true }).map((issue) => ({
       issue,
       matchedCommentSnippet: includeCommentBodies
         ? this.searchIssueCommentSnippet(issue.id, query)
         : null,
     })).filter(({ issue, matchedCommentSnippet }) => {
       if (issue.workspaceId !== workspaceId) return false;
-      if (!includeClosed && CLOSED_ISSUE_STATUSES.has(issue.status)) return false;
+      if (!includeClosed && CLOSED_ISSUE_STATUSES.has(issue.status) && !issue.archivedAt) return false;
       return searchMatch(issue.key, query)
         || searchMatch(issue.title, query)
         || searchMatch(issue.description ?? "", query)
@@ -994,11 +1005,12 @@ export class IssuesRepo {
   }
 
   issueArchiveSweepIntervalMs(): number {
-    return Math.min(
-      ...this.ctx.workspaces().listWorkspaces().map(
-        (workspace) => resolveIssueArchiveSettings(workspace.settings).sweepIntervalMs,
-      ),
+    const intervals = this.ctx.workspaces().listWorkspaces().map(
+      (workspace) => resolveIssueArchiveSettings(workspace.settings).sweepIntervalMs,
     );
+    return intervals.length > 0
+      ? Math.min(...intervals)
+      : resolveIssueArchiveSettings(null).sweepIntervalMs;
   }
 
   private notifyParentOfChildDone(previous: MultiremiIssue, issue: MultiremiIssue): void {

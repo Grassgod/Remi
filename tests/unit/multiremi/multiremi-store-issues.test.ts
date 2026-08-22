@@ -713,17 +713,41 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
         },
       },
     });
+    const slowerWorkspace = store.createWorkspace({
+      name: "Slower issue archive",
+      slug: "slower-issue-archive",
+      settings: {
+        issue_archive: {
+          ttl_ms: 2 * 60 * 60 * 1000,
+          sweep_interval_ms: 2 * 60 * 1000,
+        },
+      },
+    });
+    const parent = store.createIssue({ title: "Archive parent" });
     const oldDone = store.createIssue({ title: "Old done", status: "done" });
-    const recentCancelled = store.createIssue({ title: "Recent cancelled", status: "cancelled" });
+    const recentCancelled = store.createIssue({
+      title: "Recent cancelled",
+      status: "cancelled",
+      parentIssueId: parent.id,
+    });
     const active = store.createIssue({ title: "Still active", status: "in_progress" });
+    const slowerDone = store.createIssue({
+      title: "Slower workspace done",
+      workspaceId: slowerWorkspace.id,
+      status: "done",
+    });
     const now = new Date("2026-08-22T08:00:00.000Z");
     db!.run(
       "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
-      ["2026-08-22T06:59:59.999Z", oldDone.id],
+      ["2026-08-22T07:00:00.000Z", oldDone.id],
     );
     db!.run(
       "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
       ["2026-08-22T07:30:00.000Z", recentCancelled.id],
+    );
+    db!.run(
+      "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
+      ["2026-08-22T06:30:00.000Z", slowerDone.id],
     );
     const pendingSystemEventsBefore = Number((db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_system_events",
@@ -734,10 +758,14 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.archiveEligibleIssues(now).map((issue) => issue.id)).toEqual([oldDone.id]);
     expect(store.getIssue(oldDone.id)?.archivedAt).toBe(now.toISOString());
     expect(store.getIssue(recentCancelled.id)?.archivedAt).toBeNull();
-    expect(store.listIssues().map((issue) => issue.id).sort()).toEqual([active.id, recentCancelled.id].sort());
+    expect(store.getIssue(slowerDone.id)?.archivedAt).toBeNull();
+    expect(store.listIssues({ workspaceId: "local" }).map((issue) => issue.id).sort())
+      .toEqual([active.id, parent.id, recentCancelled.id].sort());
     expect(store.listIssues({ archivedOnly: true }).map((issue) => issue.id)).toEqual([oldDone.id]);
-    expect(store.listIssues({ include_archived: true }).map((issue) => issue.id).sort())
-      .toEqual([active.id, oldDone.id, recentCancelled.id].sort());
+    expect(store.countIssues({ archivedOnly: true })).toBe(1);
+    expect(store.listIssues({ workspaceId: "local", include_archived: true }).map((issue) => issue.id).sort())
+      .toEqual([active.id, oldDone.id, parent.id, recentCancelled.id].sort());
+    expect(store.searchIssues({ q: "Old done" }).issues.map((issue) => issue.id)).toEqual([oldDone.id]);
     expect(Number((db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_system_events",
     ).get() as { count: number }).count)).toBe(pendingSystemEventsBefore);
@@ -748,6 +776,8 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
 
     store.createIssueComment(oldDone.id, { body: "Historical note" });
     expect(store.getIssue(oldDone.id)?.archivedAt).toBe(now.toISOString());
+    expect(store.listChildIssues(parent.id).map((issue) => issue.id)).toEqual([recentCancelled.id]);
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 1, done: 1 });
     expect(store.restoreIssue(oldDone.id)).toMatchObject({ completedAt: null, archivedAt: null, status: "done" });
     expect(store.listIssues().map((issue) => issue.id)).toContain(oldDone.id);
 

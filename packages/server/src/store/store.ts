@@ -1721,6 +1721,10 @@ runMigrations(this.db);
     return this.issues.listIssues(input);
   }
 
+  countIssues(input: ListIssuesInput = {}): number {
+    return this.issues.countIssues(input);
+  }
+
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
     return this.issues.listGroupedIssues(input);
   }

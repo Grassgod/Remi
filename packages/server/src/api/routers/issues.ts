@@ -252,7 +252,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         latestTaskId: tasks[0]?.id ?? null,
       };
     });
-    return { issues, total: issues.length };
+    return { issues, total: store.countIssues(query) };
   };
 
   const issueArchiveSettingsResponse = (workspaceId: string) => {
@@ -321,15 +321,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const query = issueListQuery(store, c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
-    const { issues } = listIssuesResponse(query);
-    return c.json({ issues });
+    return c.json(listIssuesResponse(query));
   });
   app.get("/api/issues", (c) => {
     const query = issueListQuery(store, c, "compat");
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
     const issues = store.listIssues(query).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
-    return c.json({ issues, total: issues.length });
+    return c.json({ issues, total: store.countIssues(query) });
   });
   app.get("/api/multiremi/issues/grouped", (c) => {
     const query = issueListQuery(store, c);

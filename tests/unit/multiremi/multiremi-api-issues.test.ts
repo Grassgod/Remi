@@ -41,6 +41,12 @@ describe("Multiremi API — issue endpoints", () => {
       completed_at: expect.any(String),
       archived_at: expect.any(String),
     });
+    expect(archivedBody.total).toBe(1);
+
+    const archivedCount = await app.request(
+      "/api/issues?workspace_id=local&archived_only=true&limit=1",
+    );
+    expect(await archivedCount.json()).toMatchObject({ total: 1 });
 
     const restored = await app.request(`/api/issues/${archived.id}/restore`, { method: "POST" });
     expect(await restored.json()).toMatchObject({

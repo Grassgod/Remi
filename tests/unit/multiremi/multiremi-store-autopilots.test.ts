@@ -13,6 +13,41 @@ import { createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.j
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — autopilots, schedules, and webhooks", () => {
+  it("does not create status_changed events when the issue archive sweep runs", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Archive observer", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Done observer",
+      assigneeId: agent.id,
+      executionMode: "trigger_issue",
+    });
+    store.createAutopilotTrigger(autopilot.id, {
+      kind: "system_event",
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+      },
+    });
+    const issue = store.createIssue({ title: "Already done", status: "done" });
+    db!.run(
+      "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
+      ["2026-08-18T00:00:00.000Z", issue.id],
+    );
+    const eventsBefore = Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_system_events WHERE resource_id = ?",
+    ).get(issue.id) as { count: number }).count);
+
+    const scheduler = new MultiremiScheduler({ store, pollIntervalMs: 60_000 });
+    expect(scheduler.runIssueArchiveSweepOnce(new Date("2026-08-22T08:00:00.000Z")))
+      .toEqual([expect.objectContaining({ id: issue.id })]);
+    expect(Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_system_events WHERE resource_id = ?",
+    ).get(issue.id) as { count: number }).count)).toBe(eventsBefore);
+    expect(scheduler.tickSystemEvents()).toEqual([]);
+  });
+
   it("syncs issue and autopilot run state when tasks finish", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });

@@ -1302,6 +1302,29 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getTask(run.taskId!)?.issueSessionId).toBe(run.issueSessionId);
   });
 
+  it("archives eligible terminal issues and counts archived lists on Postgres", () => {
+    const ws = freshWorkspace();
+    store.updateWorkspace(ws, {
+      settings: {
+        issue_archive: {
+          ttl_ms: 60 * 60 * 1000,
+          sweep_interval_ms: 60 * 1000,
+        },
+      },
+    });
+    const archived = store.createIssue({ title: "Archive PG", workspaceId: ws, status: "done" });
+    const active = store.createIssue({ title: "Active PG", workspaceId: ws });
+    db.run(
+      "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
+      ["2026-08-22T06:00:00.000Z", archived.id],
+    );
+
+    expect(store.archiveEligibleIssues(new Date("2026-08-22T08:00:00.000Z")))
+      .toContainEqual(expect.objectContaining({ id: archived.id }));
+    expect(store.listIssues({ workspaceId: ws }).map((issue) => issue.id)).toEqual([active.id]);
+    expect(store.countIssues({ workspaceId: ws, archivedOnly: true })).toBe(1);
+  });
+
   it("keeps a user terminal Issue committed while a worker status write waits on its row lock (PG)", async () => {
     const ws = freshWorkspace();
     const runtime = store.registerRuntime({ name: "terminal-race-runtime", provider: "codex", workspaceId: ws });
