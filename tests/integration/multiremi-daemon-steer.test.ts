@@ -123,6 +123,73 @@ describe("Bun Multiremi daemon steering", () => {
     }
   });
 
+  it("a steer accepted just before natural turn end is injected, not stranded", async () => {
+    const { store, root } = testBed("multiremi-daemon-steer-late-");
+    const agent = store.createAgent({ name: "Late Steer Agent", provider: "claude", cwd: root });
+    const task = store.createTask({ agentId: agent.id, prompt: "Answer briefly" });
+    const daemonToken = await store.createAccessToken({ name: "Late steer daemon", type: "daemon", workspaceId: "local" });
+    const runtimeId = daemonRuntimeIdForTest("daemon-steer-late", "claude");
+    store.registerRuntime({ id: runtimeId, name: "late-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-late", hostname: "127.0.0.1", port: 0 });
+
+    const prompts: string[] = [];
+    let steerId: string | null = null;
+    const response: AgentResponse = {
+      text: "",
+      sessionId: "sess-late",
+      requestId: "req-late",
+      inputTokens: 1,
+      outputTokens: 1,
+      totalTokens: 2,
+      model: "claude-late",
+    };
+    const providerFactory: MultiremiDaemonProviderFactory = () => ({
+      async *sendStream(message) {
+        prompts.push(message);
+        if (prompts.length === 1) {
+          yield chunk("old answer. ");
+          // Steer lands while the turn is finishing — and the turn returns
+          // immediately, before any feed poll can observe it.
+          steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" }).id;
+          return;
+        }
+        yield chunk("中文结论");
+      },
+      getLastResponse: () => response,
+    });
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        daemonId: "daemon-steer-late",
+        runtimeName: "late-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot: join(root, "workspaces"),
+        repoCacheRoot: join(root, ".repo-cache"),
+        // Interval far beyond the test runtime: only the natural-end
+        // authoritative check can save this steer.
+        steerPollIntervalMs: 600_000,
+        providerFactory,
+      });
+      await daemon.start();
+
+      const completed = store.getTask(task.id)!;
+      expect(completed.status).toBe("completed");
+      expect(completed.result).toBe("old answer. 中文结论");
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain("改用中文输出");
+      expect(steerId).toBeTruthy();
+      expect(store.getTaskSteerMessage(steerId!)?.consumedAt).toBeTruthy();
+      expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
+    } finally {
+      server.stop();
+    }
+  });
+
   it("force answer wraps up within the grace window even if the agent keeps going", async () => {
     const { store, root } = testBed("multiremi-daemon-force-answer-");
     const agent = store.createAgent({ name: "Force Agent", provider: "claude", cwd: root });

@@ -100,6 +100,16 @@ interface TaskTerminalFollowUps {
 
 class AgentPluginReadinessChangedError extends Error {}
 
+/** Steer submitted for a task that already reached a terminal state — API contract: 409. */
+export class TaskSteerConflictError extends Error {}
+
+/**
+ * completeTask refused because unconsumed steer messages exist. The daemon
+ * must fetch and inject them instead of completing — otherwise a steer that
+ * was accepted before the run ended would be silently stranded.
+ */
+export class TaskSteerPendingError extends Error {}
+
 function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
   const rawVersion = runtime.metadata.cli_version ?? runtime.metadata.cliVersion;
   if (typeof rawVersion !== "string" || !rawVersion.trim()) return true;
@@ -1314,7 +1324,7 @@ export class TasksRepo {
       const task = this.getTask(input.taskId);
       if (!task) throw new Error(`Task not found: ${input.taskId}`);
       if (["completed", "failed", "cancelled"].includes(task.status)) {
-        throw new Error(`Task is already ${task.status}: steer messages can only target a live task`);
+        throw new TaskSteerConflictError(`Task is already ${task.status}: steer messages can only target a live task`);
       }
       const now = nowIso();
       this.ctx.db.run(
@@ -1518,6 +1528,16 @@ export class TasksRepo {
       if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
       this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
+      // Steer barrier: an accepted-but-unconsumed steer wins over completion.
+      // Same transaction as the status flip, so either the steer insert saw a
+      // live task and this refuses, or completion committed first and the
+      // steer API returned 409 — no window where both succeed.
+      const pendingSteer = this.ctx.db.query(
+        "SELECT COUNT(*) AS n FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL",
+      ).get(taskId) as { n: number } | null;
+      if (pendingSteer && Number(pendingSteer.n) > 0) {
+        throw new TaskSteerPendingError(`Task ${taskId} has ${pendingSteer.n} unconsumed steer message(s); inject them before completing`);
+      }
       const now = nowIso();
       const storedResult = toJson(taskCompletionResultPayload(input));
       const result = this.ctx.db.run(

@@ -17,6 +17,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { CreateTaskInput } from "@multiremi/contracts/types.js";
+import { TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
@@ -112,17 +113,26 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     const content = cleanString(body?.content)
       ?? (forceAnswer ? "Please stop exploring and deliver your best conclusion based on the work so far." : null);
     if (!content) return c.json({ error: "content is required" }, 400);
-    if (["completed", "failed", "cancelled"].includes(task.status)) {
-      return c.json({ error: `task is already ${task.status}: steer messages can only target a live task` }, 409);
+    // Re-read after body parsing: the task may have finished while the body
+    // streamed in, and the pre-parse snapshot would let a doomed insert reach
+    // the store. The store's own terminal check backstops the remaining race.
+    const current = store.getTask(task.id);
+    if (!current || ["completed", "failed", "cancelled"].includes(current.status)) {
+      return c.json({ error: `task is already ${current?.status ?? "gone"}: steer messages can only target a live task` }, 409);
     }
-    const message = store.createTaskSteerMessage({
-      taskId: task.id,
-      kind: forceAnswer ? "force_answer" : "steer",
-      content,
-      authorType: currentTaskAccessToken(c) ? "agent" : "user",
-      authorId: authenticatedRequestUserId(c) ?? null,
-    });
-    return c.json({ message }, 201);
+    try {
+      const message = store.createTaskSteerMessage({
+        taskId: task.id,
+        kind: forceAnswer ? "force_answer" : "steer",
+        content,
+        authorType: currentTaskAccessToken(c) ? "agent" : "user",
+        authorId: authenticatedRequestUserId(c) ?? null,
+      });
+      return c.json({ message }, 201);
+    } catch (err) {
+      if (err instanceof TaskSteerConflictError) return c.json({ error: err.message }, 409);
+      throw err;
+    }
   };
   const listTaskSteerRoute = (c: any) => {
     const task = taskFromParam(store, c, "id");

@@ -19,6 +19,7 @@ import type { AgentResponse, Provider } from "@shared/contracts/provider-types.j
 import {
   isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
+  MultiremiDaemonHttpError,
   type MultiremiDaemonHeartbeatConfigAck,
   type MultiremiDaemonGcStatus,
   type MultiremiDaemonRegisterResponse,
@@ -129,6 +130,7 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
   MultiremiTaskHumanRequest,
+  MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
   MultiremiSshMeshHeartbeatAck,
   RegisterRuntimeInput,
@@ -365,6 +367,10 @@ interface RunSummary {
   sessionId: string | null;
   workDir: string | null;
   usage: TaskUsageEntry[];
+  /** True when the run loop already finalized the task server-side (progress,
+   *  usage and completeTask) — done inside runAgent so a steer racing
+   *  completion can still be injected while the provider session is open. */
+  completed: boolean;
 }
 
 interface PreparedIssueWorkspace {
@@ -1765,17 +1771,15 @@ export class MultiremiDaemon {
       await this.client.startTask(task.id);
       await this.client.reportProgress(task.id, "Agent execution started", 1, 3);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv);
-      const poisonedReason = classifyPoisonedOutput(summary.output);
-      if (poisonedReason) {
+      if (!summary.completed) {
+        // The run loop only leaves a task unfinalized when the output was
+        // classified as poisoned (see runAgent's finalize path).
+        const poisonedReason = classifyPoisonedOutput(summary.output) ?? "agent_fallback_message";
         await this.client.reportTaskUsage(task.id, summary.usage);
         await this.client.failTask(task.id, summary.output, summary.sessionId, summary.workDir, poisonedReason);
         log.warn(`Failed task ${task.id} with poisoned output: ${poisonedReason}`);
         return;
       }
-      await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
-      await this.client.reportTaskUsage(task.id, summary.usage);
-      await this.client.completeTask(task.id, summary.output, summary.sessionId, summary.workDir);
-      log.info(`Completed task ${task.id}`);
     } catch (err) {
       const error = timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
       if (!timedOut && abort.signal.aborted && await this.wasTaskCancelledByServer(task.id)) {
@@ -2279,6 +2283,46 @@ export class MultiremiDaemon {
       signal.throwIfAborted();
       steerFeed.start();
       let prompt = promptArtifact.prompt;
+
+      // Every steer batch flows through here exactly once (injected into the
+      // next turn, or — after the force-answer grace elapsed — recorded and
+      // consumed without injection so completion can proceed).
+      const recordedSteerIds = new Set<string>();
+      const recordSteerBatch = async (messages: MultiremiTaskSteerMessage[], injected: boolean): Promise<void> => {
+        for (const message of messages) recordedSteerIds.add(message.id);
+        await this.client.consumeTaskSteerMessages(task.id, messages.map((m) => m.id)).catch((err) => {
+          log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        for (const message of messages) {
+          await this.reportHumanRequestMessage(task.id, nextSeq(), "steer", message.content, {
+            steer_id: message.id,
+            steer_kind: message.kind,
+            author_type: message.authorType,
+            author_id: message.authorId,
+            injected,
+          });
+        }
+      };
+      const injectSteerBatch = async (messages: MultiremiTaskSteerMessage[]): Promise<void> => {
+        if (messages.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
+          forceAnswerDeadline = Date.now() + Math.max(0, this.options.forceAnswerGraceMs);
+        }
+        prompt = buildSteerInjectionPrompt(messages);
+        await recordSteerBatch(messages, true);
+        log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
+      };
+      // Authoritative server read; a swallowed error here is safe because the
+      // completeTask steer barrier still refuses to strand a pending steer.
+      const fetchPendingSteer = async (): Promise<MultiremiTaskSteerMessage[]> => {
+        try {
+          const pending = await this.client.listPendingTaskSteerMessages(task.id);
+          return pending.filter((m) => !recordedSteerIds.has(m.id));
+        } catch (err) {
+          log.warn(`Pending-steer check failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+          return [];
+        }
+      };
+
       while (true) {
         const turnAbort = new AbortController();
         const onTaskAbort = () => turnAbort.abort();
@@ -2319,41 +2363,58 @@ export class MultiremiDaemon {
         // ACP process (e.g. the previous one died between turns).
         if (finalSessionId) config.sessionId = finalSessionId;
         if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
+        const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
+        if (turnError && !turnAbort.signal.aborted) throw turnError;
         if (forceAnswerExpired) {
           log.warn(`Task ${task.id} force-answer grace elapsed; delivering accumulated output`);
-          break;
-        }
-        const steered = steerFeed.take();
-        if (turnError && !turnAbort.signal.aborted) throw turnError;
-        if (!steered.length) {
+          // Steers that arrived too late to act on are still recorded/consumed
+          // so the audit trail is complete and completion is not blocked.
+          if (steered.length) await recordSteerBatch(steered, false);
+        } else {
+          if (steered.length) {
+            await injectSteerBatch(steered);
+            continue;
+          }
           if (turnError) throw turnError;
-          break;
+          // The turn ended naturally. A steer accepted by the server but not
+          // yet seen by the 2.5s poll must not be stranded: check once more
+          // before trying to finish.
+          const pending = await fetchPendingSteer();
+          if (pending.length) {
+            await injectSteerBatch(pending);
+            continue;
+          }
         }
-        if (steered.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
-          forceAnswerDeadline = Date.now() + Math.max(0, this.options.forceAnswerGraceMs);
+
+        // Finalize while the provider session is still open, so a steer that
+        // races completion (completeTask steer barrier → 409 steer_pending)
+        // can still be injected as another turn instead of failing the run.
+        const candidate = output.trim() || last?.text || "Task completed.";
+        if (classifyPoisonedOutput(candidate)) {
+          await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+          return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };
         }
-        prompt = buildSteerInjectionPrompt(steered);
-        await this.client.consumeTaskSteerMessages(task.id, steered.map((m) => m.id)).catch((err) => {
-          log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-        });
-        for (const message of steered) {
-          await this.reportHumanRequestMessage(task.id, nextSeq(), "steer", message.content, {
-            steer_id: message.id,
-            steer_kind: message.kind,
-            author_type: message.authorType,
-            author_id: message.authorId,
-          });
+        await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+        await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
+        await this.client.reportTaskUsage(task.id, usage);
+        try {
+          await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
+        } catch (err) {
+          if (!isSteerPendingConflict(err)) throw err;
+          const late = await fetchPendingSteer();
+          if (!forceAnswerExpired && late.length) {
+            await injectSteerBatch(late);
+            continue;
+          }
+          // Force-answer wrap-up (or an inconsistent conflict): record what's
+          // there and complete once more; a second conflict fails the run
+          // loudly rather than looping forever.
+          if (late.length) await recordSteerBatch(late, false);
+          await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
         }
-        log.info(`Injected ${steered.length} steer message(s) into task ${task.id}`);
+        log.info(`Completed task ${task.id}`);
+        return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: true };
       }
-      await this.client.pinTaskSession(task.id, finalSessionId, workDir);
-      const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
-      return {
-        output: output.trim() || last?.text || "Task completed.",
-        sessionId: finalSessionId,
-        workDir,
-        usage,
-      };
     } finally {
       steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, workDir, preparedWorkspace.repos).catch((err) => {
@@ -2853,4 +2914,9 @@ async function withTimeout<T>(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** completeTask refused because an unconsumed steer won the race (server steer barrier). */
+function isSteerPendingConflict(err: unknown): boolean {
+  return err instanceof MultiremiDaemonHttpError && err.status === 409 && err.code === "steer_pending";
 }

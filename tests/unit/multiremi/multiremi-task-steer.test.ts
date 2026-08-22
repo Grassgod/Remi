@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { buildSteerInjectionPrompt, mergeTaskUsageEntries, TaskSteerFeed } from "@multiremi/worker/steer.js";
 import type { MultiremiTaskSteerMessage } from "@multiremi/contracts/types.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -57,6 +58,24 @@ describe("task steer messages (store)", () => {
       .toThrow(/already completed/);
     expect(() => store.createTaskSteerMessage({ taskId: "tsk_missing", kind: "steer", content: "x" }))
       .toThrow(/not found/);
+  });
+
+  it("steer barrier: completeTask refuses while unconsumed steers exist, and steer-after-complete conflicts", () => {
+    const store = createStore();
+    const task = createRunningTask(store);
+
+    // Steer committed first → completion must not strand it.
+    const message = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "change direction" });
+    expect(() => store.completeTask(task.id, { output: "old answer" })).toThrow(TaskSteerPendingError);
+    expect(store.getTaskStatus(task.id)).toBe("running");
+
+    // Once the daemon consumed it, completion goes through.
+    store.consumeTaskSteerMessages(task.id, [message.id]);
+    expect(store.completeTask(task.id, { output: "steered answer" }).status).toBe("completed");
+
+    // Completion committed first → the steer insert must conflict (API maps this to 409).
+    expect(() => store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "too late" }))
+      .toThrow(/already completed/);
   });
 
   it("appends an auditable session event for issue-session tasks", () => {
@@ -124,6 +143,8 @@ describe("task steer API", () => {
     expect(listed.status).toBe(200);
     expect((await listed.json()).messages).toHaveLength(2);
 
+    // The steer barrier blocks completion until the daemon consumed them.
+    store.consumeTaskSteerMessages(task.id, store.listPendingTaskSteerMessages(task.id).map((m) => m.id));
     store.completeTask(task.id, { output: "done" });
     const late = await app.request(`/api/tasks/${task.id}/steer`, {
       method: "POST",
@@ -132,6 +153,65 @@ describe("task steer API", () => {
     });
     expect(late.status).toBe(409);
     expect((await late.json()).error).toMatch(/already completed/);
+  });
+
+  it("returns 409 when the task completes while the steer body is still streaming in", async () => {
+    const store = createStore();
+    const task = createRunningTask(store);
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    // The route caches the task before reading the body; completing the task
+    // from inside the body stream reproduces the parse-window race exactly.
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        store.completeTask(task.id, { output: "finished first" });
+        controller.enqueue(encoder.encode(JSON.stringify({ content: "raced steer" })));
+        controller.close();
+      },
+    });
+    const raced = await app.request(`/api/tasks/${task.id}/steer`, {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
+      body,
+      // @ts-expect-error Bun supports half-duplex streaming request bodies
+      duplex: "half",
+    });
+    expect(raced.status).toBe(409);
+    expect((await raced.json()).error).toMatch(/already completed/);
+    expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
+  });
+
+  it("daemon complete returns 409 steer_pending while unconsumed steers exist", async () => {
+    const store = createStore();
+    const task = createRunningTask(store);
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const auth = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
+
+    const message = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "pending" });
+    const refused = await app.request(`/api/daemon/tasks/${task.id}/complete`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ output: "old answer" }),
+    });
+    expect(refused.status).toBe(409);
+    const refusedBody = await refused.json();
+    expect(refusedBody.code).toBe("steer_pending");
+    expect(store.getTaskStatus(task.id)).toBe("running");
+
+    const consume = await app.request(`/api/daemon/tasks/${task.id}/steer/consume`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ ids: [message.id] }),
+    });
+    expect(consume.status).toBe(200);
+    const completed = await app.request(`/api/daemon/tasks/${task.id}/complete`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ output: "steered answer" }),
+    });
+    expect(completed.status).toBe(200);
+    expect(store.getTaskStatus(task.id)).toBe("completed");
   });
 
   it("serves pending steers to the daemon and marks them consumed", async () => {

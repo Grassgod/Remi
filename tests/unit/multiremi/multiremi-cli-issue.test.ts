@@ -53,6 +53,57 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
     }
   });
 
+  test("issue task steer posts steer/force-answer payloads and steers lists them", async () => {
+    const requests: Array<{ method: string; path: string; body?: any }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const entry: { method: string; path: string; body?: any } = { method: request.method, path: url.pathname };
+        if (request.method === "POST") entry.body = await request.json();
+        requests.push(entry);
+        if (request.method === "GET") {
+          return Response.json({ messages: [{ id: "steer_1", task_id: "tsk_1", kind: "steer", content: "改用中文", consumed_at: null }] });
+        }
+        return new Response(JSON.stringify({ message: { id: "steer_1", task_id: "tsk_1", ...entry.body } }), { status: 201 });
+      },
+    });
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      console.log = (value?: unknown) => { logs.push(String(value)); };
+      const serverUrl = `http://127.0.0.1:${server.port}`;
+
+      await runMultiremi(["issue", "task", "steer", "tsk_1", "--server", serverUrl, "--token", "tok_cli", "--content", "改用中文输出", "--output", "json"], { programName: "multiremi" });
+      await runMultiremi(["issue", "task", "steer", "tsk_1", "--server", serverUrl, "--token", "tok_cli", "--force-answer", "--output", "json"], { programName: "multiremi" });
+      await runMultiremi(["issue", "task", "steer", "tsk_1", "--server", serverUrl, "--token", "tok_cli", "--force-answer", "--content", "先给结论", "--output", "json"], { programName: "multiremi" });
+      await runMultiremi(["issue", "task", "steers", "tsk_1", "--server", serverUrl, "--token", "tok_cli", "--output", "json"], { programName: "multiremi" });
+
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "POST /api/tasks/tsk_1/steer",
+        "POST /api/tasks/tsk_1/steer",
+        "POST /api/tasks/tsk_1/steer",
+        "GET /api/tasks/tsk_1/steer",
+      ]);
+      expect(requests[0].body).toEqual({ kind: "steer", content: "改用中文输出" });
+      // --force-answer without content lets the server fill its default directive.
+      expect(requests[1].body).toEqual({ kind: "force_answer" });
+      expect(requests[2].body).toEqual({ kind: "force_answer", content: "先给结论" });
+      expect(JSON.parse(logs[0]).message.kind).toBe("steer");
+      expect(JSON.parse(logs[3]).messages[0].id).toBe("steer_1");
+
+      // Plain steer without content must fail before any request is sent.
+      await expect(
+        runMultiremi(["issue", "task", "steer", "tsk_1", "--server", serverUrl, "--token", "tok_cli"], { programName: "multiremi" }),
+      ).rejects.toThrow(/--content/);
+      expect(requests).toHaveLength(4);
+    } finally {
+      console.log = originalLog;
+      server.stop(true);
+    }
+  });
+
   test("issue read commands default to Go-style table output", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
