@@ -2143,6 +2143,7 @@ export interface MultiremiProject {
   title: string;
   description: string | null;
   instructions: string;
+  deltaInstructions: string;
   instructionsRevision: number;
   instructionsUpdatedAt: string | null;
   instructionsUpdatedBy: string | null;
@@ -2263,6 +2264,8 @@ export interface CreateProjectInput {
   title: string;
   description?: string | null;
   instructions?: string;
+  deltaInstructions?: string;
+  delta_instructions?: string;
   icon?: string | null;
   workspaceId?: string | null;
   workspace_id?: string | null;
@@ -2283,6 +2286,8 @@ export interface UpdateProjectInput {
   title?: string;
   description?: string | null;
   instructions?: string;
+  deltaInstructions?: string;
+  delta_instructions?: string;
   expectedInstructionsRevision?: number;
   expected_instructions_revision?: number;
   icon?: string | null;
@@ -2694,6 +2699,23 @@ export interface MultiremiWorkspace {
   created_at: string;
   updatedAt: string;
   updated_at: string;
+}
+
+export interface MultiremiPromptSettings {
+  bootstrapPrompt: string;
+  deltaPrompt: string;
+  revision: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface UpdateMultiremiPromptSettingsInput {
+  bootstrapPrompt?: string;
+  bootstrap_prompt?: string;
+  deltaPrompt?: string;
+  delta_prompt?: string;
+  expectedRevision?: number;
+  expected_revision?: number;
 }
 
 export type MultiremiWorkspaceInvitationStatus = "pending" | "accepted" | "declined" | "revoked" | "expired";

@@ -93,7 +93,7 @@ describe("ProjectInstructionsSection", () => {
 
     expect(
       screen.getByText(
-        "Only new or rebuilt Agent sessions receive changes. Current sessions are not updated.",
+        "Workspace instructions remain active. These project instructions are appended and do not replace them.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -101,17 +101,17 @@ describe("ProjectInstructionsSection", () => {
     ).toBeInTheDocument();
 
     fireEvent.change(
-      screen.getByRole("textbox", { name: "Project instructions editor" }),
+      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
       { target: { value: "Use **small** commits." } },
     );
     expect(onSave).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {
-      expect(onSave).toHaveBeenCalledWith("Use **small** commits.", 3);
+      expect(onSave).toHaveBeenCalledWith("Use **small** commits.", "", 3);
     });
     expect(toastSuccess).toHaveBeenCalledWith(
-      "Saved. Only new or rebuilt Agent sessions receive changes. Current sessions are not updated.",
+      "Project prompts saved.",
     );
   });
 
@@ -119,7 +119,7 @@ describe("ProjectInstructionsSection", () => {
     const { onSave } = renderSection();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const editor = screen.getByRole("textbox", {
-      name: "Project instructions editor",
+      name: "Project Bootstrap Prompt",
     });
     fireEvent.change(editor, { target: { value: "x".repeat(4001) } });
 
@@ -130,7 +130,7 @@ describe("ProjectInstructionsSection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(
-      screen.getByRole("textbox", { name: "Project instructions editor" }),
+      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
     ).toHaveValue("**Test first.**");
   });
 
@@ -145,7 +145,7 @@ describe("ProjectInstructionsSection", () => {
     renderSection({ onSave });
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(
-      screen.getByRole("textbox", { name: "Project instructions editor" }),
+      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
       { target: { value: "Keep this local draft." } },
     );
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -156,7 +156,7 @@ describe("ProjectInstructionsSection", () => {
       );
     });
     expect(
-      screen.getByRole("textbox", { name: "Project instructions editor" }),
+      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
     ).toHaveValue("Keep this local draft.");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
@@ -178,7 +178,7 @@ describe("ProjectInstructionsSection", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(
-      screen.getByRole("textbox", { name: "Project instructions editor" }),
+      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
       { target: { value: "Local draft" } },
     );
 
@@ -196,7 +196,7 @@ describe("ProjectInstructionsSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(onSave).toHaveBeenCalledWith("Local draft", 4);
+      expect(onSave).toHaveBeenCalledWith("Local draft", "", 4);
     });
   });
 

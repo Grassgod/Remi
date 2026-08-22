@@ -42,17 +42,24 @@ describe("ProjectsRepo", () => {
     const empty = repo.createProject({ title: "Empty instructions" }, { instructionsUpdatedBy: "usr_ignored" });
     expect(empty).toMatchObject({
       instructions: "",
+      deltaInstructions: "",
       instructionsRevision: 0,
       instructionsUpdatedAt: null,
       instructionsUpdatedBy: null,
     });
 
     const project = repo.createProject(
-      { title: "Directed", description: "Human-readable summary", instructions: "First line\r\nSecond line" },
+      {
+        title: "Directed",
+        description: "Human-readable summary",
+        instructions: "First line\r\nSecond line",
+        deltaInstructions: "Check updates.\r\nStay focused.",
+      },
       { instructionsUpdatedBy: "usr_creator" },
     );
     expect(project.description).toBe("Human-readable summary");
     expect(project.instructions).toBe("First line\nSecond line");
+    expect(project.deltaInstructions).toBe("Check updates.\nStay focused.");
     expect(project.instructionsRevision).toBe(1);
     expect(project.instructionsUpdatedAt).toBeString();
     expect(project.instructionsUpdatedBy).toBe("usr_creator");
@@ -69,10 +76,11 @@ describe("ProjectsRepo", () => {
 
     const updated = repo.updateProject(
       project.id,
-      { instructions: "Replacement", expected_instructions_revision: 1 },
+      { instructions: "Replacement", delta_instructions: "New delta", expected_instructions_revision: 1 },
       { instructionsUpdatedBy: "usr_editor" },
     );
     expect(updated.instructions).toBe("Replacement");
+    expect(updated.deltaInstructions).toBe("New delta");
     expect(updated.instructionsRevision).toBe(2);
     expect(updated.instructionsUpdatedAt).toBeString();
     expect(updated.instructionsUpdatedBy).toBe("usr_editor");

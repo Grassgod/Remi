@@ -119,6 +119,9 @@ export interface AgentTaskProject {
   description: string | null;
   /** Project-level rules injected only when bootstrapping a provider session. */
   instructions?: string;
+  /** Project-level rules injected on subsequent provider-session turns. */
+  deltaInstructions?: string;
+  delta_instructions?: string;
 }
 
 /** Project resource entry (github_repo / local_directory / ...). */
@@ -256,6 +259,10 @@ export interface AgentTask {
   // Claim-context fields (read via stringField/arrayField/unknownField).
   workspaceContext?: string | null;
   workspace_context?: string | null;
+  workspaceBootstrapPrompt?: string | null;
+  workspace_bootstrap_prompt?: string | null;
+  workspaceDeltaPrompt?: string | null;
+  workspace_delta_prompt?: string | null;
   /** Workspace-level env (env/injector.ts): below agent customEnv, above machine env. */
   workspaceEnv?: Record<string, string>;
   workspace_env?: Record<string, string>;

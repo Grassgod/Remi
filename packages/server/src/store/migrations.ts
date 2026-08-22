@@ -1830,6 +1830,7 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_sync ON multiremi_project_docs(workspace_id, sync_status, updated_at)");
   addColumnIfMissing(db, "multiremi_projects", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_projects", "instructions TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, "multiremi_projects", "delta_instructions TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(db, "multiremi_projects", "instructions_revision INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_projects", "instructions_updated_at TEXT");
   addColumnIfMissing(db, "multiremi_projects", "instructions_updated_by TEXT");
