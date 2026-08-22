@@ -5,6 +5,7 @@ import type { GitRemoteInspector } from "../helpers/repositories.js";
 import type { AgentPluginGitSourceResolver } from "@multiremi/agent-plugins/git-import.js";
 import type { ProjectKnowledgeServiceContract } from "@multiremi/project-knowledge/service.js";
 import type { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import type { ScmConnectionVerifier } from "@multiremi/scm/verification.js";
 
 /**
  * The values `createMultiremiApp` closes over. Domain routers receive them
@@ -22,4 +23,5 @@ export interface RouterDeps {
   resolveAgentPluginGitSource: AgentPluginGitSourceResolver;
   projectKnowledge: ProjectKnowledgeServiceContract;
   sessionArchives: SessionArchiveService;
+  verifyScmConnection: ScmConnectionVerifier;
 }

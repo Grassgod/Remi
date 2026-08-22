@@ -91,7 +91,7 @@ describe("Multiremi Git credential broker", () => {
           repositoryUrl: "git@github.com:owner/repo.git",
           cloneUrl: "https://github.com/owner/repo.git",
           username: "x-access-token",
-          password: "short-lived-secret",
+          password: "git-access-token",
           expiresAt: "2030-01-01T00:00:00.000Z",
         });
       }),
@@ -108,7 +108,7 @@ describe("Multiremi Git credential broker", () => {
       path: "owner/repo.git",
     });
     expect(output).toContain("username=x-access-token\n");
-    expect(output).toContain("password=short-lived-secret\n");
+    expect(output).toContain("password=git-access-token\n");
     expect(output).toContain("password_expiry_utc=");
   });
 

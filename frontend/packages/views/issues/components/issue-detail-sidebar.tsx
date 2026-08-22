@@ -37,7 +37,7 @@ import type { SidebarSectionsState } from "../hooks/use-sidebar-sections";
 import { IssueSessionActions } from "./issue-session-bar";
 import { IssueKeyResultsSection } from "./issue-key-results-section";
 import { ExecutionLogSection } from "./execution-log-section";
-import { PullRequestList } from "./pull-request-list";
+import { ChangeRequestList } from "./change-request-list";
 import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
 import { IssueSessionArchivesSection } from "./issue-session-archives-section";
 
@@ -53,8 +53,8 @@ interface IssueDetailSidebarProps {
   optionalProps: OptionalPropsState;
   onUpdateField: (updates: Partial<UpdateIssueRequest>) => void;
   parentIssue: Issue | null;
-  /** Workspace-level toggle for the pull-requests section. */
-  prSidebarEnabled: boolean;
+  /** Workspace-level toggle for the code changes section. */
+  changeSidebarEnabled: boolean;
   getActorName: (type: string, id: string) => string;
   agents: Agent[];
   issueSessions: IssueSession[];
@@ -64,7 +64,7 @@ interface IssueDetailSidebarProps {
 }
 
 /**
- * Right-hand rail of the issue detail: properties, parent, pull requests,
+ * Right-hand rail of the issue detail: properties, parent, code changes,
  * details, session actions, key results, execution log, token usage and the
  * metadata dialog. Fold state is owned by `IssueDetail` (see
  * `useSidebarSections`) so it survives the mobile sheet unmounting.
@@ -76,7 +76,7 @@ export function IssueDetailSidebar({
   optionalProps,
   onUpdateField,
   parentIssue,
-  prSidebarEnabled,
+  changeSidebarEnabled,
   getActorName,
   agents,
   issueSessions,
@@ -88,7 +88,7 @@ export function IssueDetailSidebar({
   const paths = useWorkspacePaths();
   const propertiesOpen = sections.isOpen("properties");
   const parentIssueOpen = sections.isOpen("parentIssue");
-  const pullRequestsOpen = sections.isOpen("pullRequests");
+  const codeChangesOpen = sections.isOpen("codeChanges");
   const detailsOpen = sections.isOpen("details");
   const tokenUsageOpen = sections.isOpen("tokenUsage");
   const metadataOpen = sections.isOpen("metadata");
@@ -277,20 +277,17 @@ export function IssueDetailSidebar({
         </div>
       )}
 
-      {/* Pull requests — hidden when the workspace disables the PR sidebar
-          (or the GitHub master switch is off). Backend data is kept either
-          way so re-enabling restores the section instantly. */}
-      {prSidebarEnabled && (
+      {changeSidebarEnabled && (
         <div>
           <button
             type="button"
-            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${pullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-            onClick={() => sections.toggle("pullRequests")}
+            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${codeChangesOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => sections.toggle("codeChanges")}
           >
-            {t(($) => $.detail.section_pull_requests)}
-            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
+            {t(($) => $.detail.section_code_changes)}
+            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${codeChangesOpen ? "rotate-90" : ""}`} />
           </button>
-          {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={issueId} /></div>}
+          {codeChangesOpen && <div className="pl-2"><ChangeRequestList issueId={issueId} /></div>}
         </div>
       )}
 

@@ -47,6 +47,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
+import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
 import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
@@ -176,18 +177,22 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!credential?.accessToken) {
       return c.json({ error: "repository credential is not configured", code: "scm_credential_missing" }, 409);
     }
-    if (/[\r\n]/u.test(credential.accessToken)) {
+    const password = scmGitCredentialPassword(connection.provider, credential.accessToken);
+    if (!password || /[\r\n]/u.test(password)) {
       return c.json({ error: "repository credential is invalid", code: "scm_credential_invalid" }, 500);
     }
-    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    // The stored PAT lifetime is independent of this timestamp. It only bounds
+    // how long Git may cache the credential returned to its helper process.
+    const helperCacheExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
     c.header("Cache-Control", "no-store");
     return c.json({
       repositoryId: binding.repositoryId,
       repositoryUrl: binding.repositoryUrl,
       cloneUrl,
       username: connection.provider === "github" ? "x-access-token" : "oauth2",
-      password: credential.accessToken,
-      expiresAt,
+      password,
+      // Keep the wire key for Git credential-helper compatibility.
+      expiresAt: helperCacheExpiresAt,
     });
   });
 
@@ -418,11 +423,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
     const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
-    const ownerId = cleanString(runtime?.ownerId);
-    if (ownerId) {
-      const token = await store.createTaskAccessToken(task, ownerId);
-      response.auth_token = token.token;
-    }
+    // Every claim gets a task capability, including ownerless runtimes left by
+    // older releases. `local` matches the legacy owner semantics used by the
+    // runtime claim predicate, while the task/agent/workspace bindings enforce
+    // the actual authorization boundary.
+    const ownerId = cleanString(runtime?.ownerId) ?? "local";
+    const token = await store.createTaskAccessToken(task, ownerId);
+    response.auth_token = token.token;
     return c.json({ task: response });
   });
   app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {

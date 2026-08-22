@@ -41,6 +41,13 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
 
   it("serves project resource endpoints", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_example", name: "repo", url: "git@github.com:example/repo.git", source: "github" },
+        { id: "repo_example_updated", name: "repo-updated", url: "git@github.com:example/repo-updated.git", source: "github" },
+      ],
+    });
     const app = createMultiremiApp({ store });
     const project = store.createProject({ title: "Resources" });
     const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorId?: string | null; actorType?: string }> = [];
@@ -534,6 +541,13 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
 
   it("serves original project, squad, and autopilot compatibility endpoints", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_example", name: "repo", url: "https://github.com/example/repo", source: "github" },
+        { id: "repo_example_updated", name: "repo-updated", url: "https://github.com/example/repo-updated", source: "github" },
+      ],
+    });
     const agent = store.createAgent({ name: "Original Codex", provider: "codex" });
     const app = createMultiremiApp({ store });
     const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorId?: string | null; actorType?: string }> = [];

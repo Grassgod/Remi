@@ -232,6 +232,22 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     });
   });
 
+  it("invalidates SCM queries for connection and repository binding events", () => {
+    vi.useFakeTimers();
+    const mock = createRecordingWs();
+    renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    mock.emit("scm:connection_updated", {});
+    mock.emit("scm:repository_bound", {});
+    vi.advanceTimersByTime(100);
+
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["scm", "ws-1"],
+    });
+  });
+
   it("invalidates plugin readiness when Agent bindings or task lifecycle changes", () => {
     vi.useFakeTimers();
     const mock = createRecordingWs();

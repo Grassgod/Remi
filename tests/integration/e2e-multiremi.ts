@@ -93,7 +93,7 @@ async function main() {
       "/api/multiremi/runtimes", "/api/multiremi/members", "/api/multiremi/projects",
       "/api/multiremi/squads", "/api/multiremi/autopilots", "/api/multiremi/skills",
       "/api/multiremi/tokens", "/api/multiremi/notification-preferences",
-      "/api/multiremi/github/settings", "/api/multiremi/chats", "/api/multiremi/inbox",
+      "/api/multiremi/chats", "/api/multiremi/inbox",
       "/api/multiremi/labels", "/api/multiremi/pins", "/api/dashboard/usage/daily",
       "/api/dashboard/usage/by-agent", "/api/dashboard/runtime/daily",
     ];

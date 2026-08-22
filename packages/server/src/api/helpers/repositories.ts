@@ -99,10 +99,17 @@ export async function importWorkspaceRepository(
     imported_at: now,
     updated_at: now,
   };
-  const updated = store.updateWorkspace(workspaceId, {
-    repos: [...repositories, repository],
+  const updated = store.mutateWorkspaceRepositories(workspaceId, (currentRaw) => {
+    const current = normalizeWorkspaceRepositories(currentRaw);
+    if (current.some((repo) => canonicalGitRemoteKey(repo.url) === key)) {
+      throw new WorkspaceRepositoryError("repository is already imported", 409);
+    }
+    return {
+      repositories: [...current, repository],
+      result: repository,
+    };
   });
-  return { repository, workspace: updated };
+  return { repository: updated.result, workspace: updated.workspace };
 }
 
 export async function inspectWorkspaceRepository(
@@ -128,28 +135,48 @@ export async function backfillWorkspaceRepositoryDefaultBranches(
 ): Promise<WorkspaceRepositoryData[]> {
   const repositories = listWorkspaceRepositories(store, workspaceId);
   const missing = repositories.filter((repository) => !repository.default_branch);
-  if (missing.length === 0) return repositories;
+  if (missing.length === 0) {
+    store.reconcileScmRepositoryBindings(workspaceId);
+    return repositories;
+  }
 
   const resolved = await Promise.all(missing.map(async (repository) => {
     try {
       const metadata = await inspectRemote(repository.url);
-      return [repository.id, metadata.default_branch] as const;
+      return [repository.id, {
+        repositoryUrl: repository.url,
+        defaultBranch: metadata.default_branch,
+      }] as const;
     } catch {
       return [repository.id, null] as const;
     }
   }));
   const branches = new Map(resolved);
-  if (![...branches.values()].some(Boolean)) return repositories;
+  if (![...branches.values()].some(Boolean)) {
+    store.reconcileScmRepositoryBindings(workspaceId);
+    return repositories;
+  }
 
-  const now = nowIso();
-  const updatedRepositories = repositories.map((repository) => {
-    const defaultBranch = branches.get(repository.id);
-    return defaultBranch
-      ? { ...repository, default_branch: defaultBranch, updated_at: now }
-      : repository;
+  const updated = store.mutateWorkspaceRepositories(workspaceId, (currentRaw) => {
+    const now = nowIso();
+    const updatedRepositories = normalizeWorkspaceRepositories(currentRaw).map((repository) => {
+      const resolvedBranch = branches.get(repository.id);
+      if (
+        repository.default_branch
+        || !resolvedBranch
+        || canonicalGitRemoteKey(repository.url) !== canonicalGitRemoteKey(resolvedBranch.repositoryUrl)
+      ) {
+        return repository;
+      }
+      return {
+        ...repository,
+        default_branch: resolvedBranch.defaultBranch,
+        updated_at: now,
+      };
+    });
+    return { repositories: updatedRepositories, result: updatedRepositories };
   });
-  store.updateWorkspace(workspaceId, { repos: updatedRepositories });
-  return updatedRepositories;
+  return updated.result;
 }
 
 export async function updateWorkspaceRepository(
@@ -169,13 +196,10 @@ export async function updateWorkspaceRepository(
     throw new WorkspaceRepositoryError("repository update is empty", 400);
   }
 
-  const updatedRepository: WorkspaceRepositoryData = {
-    ...repository,
-    updated_at: nowIso(),
-  };
+  let defaultBranch: string | null | undefined;
 
   if (hasDefaultBranch) {
-    const defaultBranch = cleanOptionalString(input.default_branch);
+    defaultBranch = cleanOptionalString(input.default_branch);
     if (!defaultBranch) {
       throw new WorkspaceRepositoryError("default branch is required", 400);
     }
@@ -183,26 +207,47 @@ export async function updateWorkspaceRepository(
     if (!metadata.branches.includes(defaultBranch)) {
       throw new WorkspaceRepositoryError("default branch does not exist in repository", 400);
     }
-    updatedRepository.default_branch = defaultBranch;
   }
 
+  let description: string | null | undefined;
   if (hasDescription) {
-    const description = cleanOptionalString(input.description);
+    description = cleanOptionalString(input.description);
     if (description && description.length > 200) {
       throw new WorkspaceRepositoryError(
         "repository description must be 200 characters or fewer",
         400,
       );
     }
-    updatedRepository.description = description;
   }
 
-  const updated = store.updateWorkspace(workspaceId, {
-    repos: repositories.map((candidate) =>
-      candidate.id === repositoryId ? updatedRepository : candidate
-    ),
+  const inspectedRepositoryUrl = repository.url;
+  const updated = store.mutateWorkspaceRepositories(workspaceId, (currentRaw) => {
+    const current = normalizeWorkspaceRepositories(currentRaw);
+    const latest = current.find((candidate) => candidate.id === repositoryId);
+    if (!latest) throw new WorkspaceRepositoryError("repository not found", 404);
+    if (
+      hasDefaultBranch
+      && canonicalGitRemoteKey(latest.url) !== canonicalGitRemoteKey(inspectedRepositoryUrl)
+    ) {
+      throw new WorkspaceRepositoryError(
+        "repository changed while its default branch was being inspected; retry the update",
+        409,
+      );
+    }
+    const updatedRepository: WorkspaceRepositoryData = {
+      ...latest,
+      ...(hasDefaultBranch ? { default_branch: defaultBranch! } : {}),
+      ...(hasDescription ? { description: description ?? null } : {}),
+      updated_at: nowIso(),
+    };
+    return {
+      repositories: current.map((candidate) =>
+        candidate.id === repositoryId ? updatedRepository : candidate
+      ),
+      result: updatedRepository,
+    };
   });
-  return { repository: updatedRepository, workspace: updated };
+  return { repository: updated.result, workspace: updated.workspace };
 }
 
 export async function inspectGitRemoteRepository(
@@ -274,30 +319,33 @@ export function removeWorkspaceRepository(
     ? store.ensureLocalWorkspace()
     : store.getWorkspace(workspaceId);
   if (!workspace) throw new WorkspaceRepositoryError("workspace not found", 404);
-  const repositories = normalizeWorkspaceRepositories(workspace.repos);
-  const repository = repositories.find((repo) => repo.id === repositoryId);
-  if (!repository) throw new WorkspaceRepositoryError("repository not found", 404);
+  const updated = store.mutateWorkspaceRepositories(workspaceId, (currentRaw) => {
+    const repositories = normalizeWorkspaceRepositories(currentRaw);
+    const repository = repositories.find((repo) => repo.id === repositoryId);
+    if (!repository) throw new WorkspaceRepositoryError("repository not found", 404);
 
-  const projectsUsingRepository = store.listProjects(workspaceId).filter((project) =>
-    store.listProjectResources(project.id).some((resource) => {
-      if (resource.resourceType !== "github_repo") return false;
-      const url = resource.resourceRef.url;
-      return typeof url === "string"
-        && canonicalGitRemoteKey(url) === canonicalGitRemoteKey(repository.url);
-    })
-  );
-  if (projectsUsingRepository.length > 0) {
-    const suffix = projectsUsingRepository.length === 1 ? "project" : "projects";
-    throw new WorkspaceRepositoryError(
-      `repository is used by ${projectsUsingRepository.length} ${suffix}`,
-      409,
+    const projectsUsingRepository = store.listProjects(workspaceId).filter((project) =>
+      store.listProjectResources(project.id).some((resource) => {
+        if (resource.resourceType !== "github_repo") return false;
+        const url = resource.resourceRef.url;
+        return typeof url === "string"
+          && canonicalGitRemoteKey(url) === canonicalGitRemoteKey(repository.url);
+      })
     );
-  }
+    if (projectsUsingRepository.length > 0) {
+      const suffix = projectsUsingRepository.length === 1 ? "project" : "projects";
+      throw new WorkspaceRepositoryError(
+        `repository is used by ${projectsUsingRepository.length} ${suffix}`,
+        409,
+      );
+    }
 
-  const updated = store.updateWorkspace(workspaceId, {
-    repos: repositories.filter((repo) => repo.id !== repositoryId),
+    return {
+      repositories: repositories.filter((repo) => repo.id !== repositoryId),
+      result: repository,
+    };
   });
-  return { repository, workspace: updated };
+  return { repository: updated.result, workspace: updated.workspace };
 }
 
 export function validateImportedProjectResources(

@@ -8,6 +8,8 @@ export const scmKeys = {
   connection: (workspaceId: string, connectionId: string) =>
     ["scm", workspaceId, "connections", connectionId] as const,
   events: (workspaceId: string) => ["scm", workspaceId, "events"] as const,
+  changeRequestsAll: ["scm", "change-requests"] as const,
+  changeRequests: (issueId: string) => [...scmKeys.changeRequestsAll, issueId] as const,
 };
 
 export function scmCapabilitiesOptions() {
@@ -15,6 +17,14 @@ export function scmCapabilitiesOptions() {
     queryKey: scmKeys.capabilities,
     queryFn: () => api.getScmCapabilities(),
     staleTime: 5 * 60_000,
+  });
+}
+
+export function issueChangeRequestsOptions(issueId: string) {
+  return queryOptions({
+    queryKey: scmKeys.changeRequests(issueId),
+    queryFn: () => api.listIssueChangeRequests(issueId),
+    enabled: Boolean(issueId),
   });
 }
 

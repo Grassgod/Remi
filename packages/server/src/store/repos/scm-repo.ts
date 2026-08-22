@@ -4,6 +4,10 @@ import { cleanOptionalString, nullableString, parseJson, toJson } from "@multire
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
 import { assertScmRepositoryMatchesConnection } from "@multiremi/scm/repository-url.js";
 import type {
+  ScmSnapshotEventFactory,
+  ScmSnapshotEventWriteResult,
+} from "@multiremi/scm/types.js";
+import type {
   AdvanceScmEntitySnapshotResult,
   ClaimScmSyncStreamInput,
   CreateScmConnectionInput,
@@ -13,16 +17,21 @@ import type {
   MultiremiScmCanonicalEventType,
   MultiremiScmConnection,
   MultiremiScmConnectionCredential,
+  MultiremiScmChangeRequest,
   MultiremiScmEntitySnapshot,
   MultiremiScmEntityType,
   MultiremiScmEventEvidence,
   MultiremiScmEventDelivery,
   MultiremiScmEventSource,
+  MultiremiScmIssueLink,
   MultiremiScmProvider,
+  MultiremiScmRepositoryAssignmentOrigin,
   MultiremiScmRepositoryBinding,
+  MultiremiScmRepositoryScope,
   MultiremiScmSyncCursor,
   MultiremiScmSyncMode,
   MultiremiScmSyncStream,
+  MultiremiScmVerificationResult,
   RecordScmCanonicalEventInput,
   ReleaseScmSyncStreamInput,
   UpdateScmConnectionInput,
@@ -42,6 +51,12 @@ export interface RecordScmCanonicalEventResult {
   event: MultiremiScmCanonicalEvent;
   created: boolean;
   evidenceCreated: boolean;
+}
+
+interface LockedSnapshotAdvanceResult {
+  advance: AdvanceScmEntitySnapshotResult;
+  projection: { changeRequestId: string; issueIds: string[] } | null;
+  workspaceId: string;
 }
 
 export class ScmRepo {
@@ -96,10 +111,6 @@ export class ScmRepo {
 
   createConnection(input: CreateScmConnectionInput): ScmConnectionWithRepositories {
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
-    const workspace = workspaceId === "local"
-      ? this.ctx.workspaces().getWorkspace("local")
-      : this.ctx.workspaces().getWorkspace(workspaceId);
-    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
     const provider = normalizeProvider(input.provider);
     const mode = normalizeMode(input.mode ?? "poll");
     const name = requiredString(input.name, "SCM connection name");
@@ -112,14 +123,27 @@ export class ScmRepo {
     assertWebhookSecretForMode(mode, Boolean(webhookSecret));
     const now = nowIso();
     const repositoryIds = uniqueStrings(input.repositoryIds ?? input.repository_ids ?? []);
+    const requestedScope = input.repositoryScope ?? input.repository_scope;
+    let repositoryScope: MultiremiScmRepositoryScope = "selected";
 
     this.ctx.db.transaction(() => {
+      const workspace = this.lockWorkspace(workspaceId);
+      const existingAtOrigin = this.listConnections({ workspaceId, provider })
+        .filter((connection) => connection.baseUrl === baseUrl);
+      repositoryScope = requestedScope === undefined
+        ? (existingAtOrigin.length === 0 ? "all" : "selected")
+        : normalizeRepositoryScope(requestedScope);
+      if (repositoryScope === "all" && existingAtOrigin.some((connection) => connection.isDefault)) {
+        throw new Error("SCM default connection already exists for this provider and repository origin");
+      }
       this.ctx.db.run(
         `INSERT INTO multiremi_scm_connections (
           id, workspace_id, name, provider, mode, base_url, api_base_url, enabled,
-          poll_interval_seconds, access_token_encrypted, access_token_hint,
-          webhook_secret_encrypted, webhook_secret_hint, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          poll_interval_seconds, repository_scope, is_default,
+          access_token_encrypted, access_token_hint, webhook_secret_encrypted, webhook_secret_hint,
+          verification_status, verified_repository_count, verified_repository_total,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unverified', 0, 0, ?, ?)`,
         [
           id,
           workspaceId,
@@ -130,6 +154,8 @@ export class ScmRepo {
           apiBaseUrl,
           input.enabled === false ? 0 : 1,
           pollIntervalSeconds,
+          repositoryScope,
+          repositoryScope === "all" ? 1 : 0,
           accessToken ? encryptScmCredential(accessToken, { workspaceId, connectionId: id, field: "access_token" }) : null,
           secretHint(accessToken),
           webhookSecret ? encryptScmCredential(webhookSecret, { workspaceId, connectionId: id, field: "webhook_secret" }) : null,
@@ -137,6 +163,9 @@ export class ScmRepo {
           now,
           now,
         ],
+      );
+      this.lockConnections(
+        this.listConnections({ workspaceId }).map((connection) => connection.id),
       );
       for (const repositoryId of repositoryIds) {
         const repository = findWorkspaceRepository(workspace.repos, repositoryId);
@@ -149,7 +178,12 @@ export class ScmRepo {
           repositorySource: repository.source,
           name: repository.name,
           defaultBranch: repository.defaultBranch,
+          assignmentOrigin: "explicit",
+          transfer: true,
         });
+      }
+      if (repositoryScope === "all") {
+        this.reconcileDefaultBindingsLocked(id, workspace.repos);
       }
     })();
     return this.getConnectionWithRepositories(id)!;
@@ -158,6 +192,12 @@ export class ScmRepo {
   updateConnection(id: string, input: UpdateScmConnectionInput): ScmConnectionWithRepositories {
     const current = this.getConnection(id);
     if (!current) throw new Error(`SCM connection not found: ${id}`);
+    const replaceRepositoryIds = input.repositoryIds !== undefined || input.repository_ids !== undefined;
+    const repositoryIdsInput = input.repositoryIds ?? input.repository_ids;
+    if (replaceRepositoryIds && !Array.isArray(repositoryIdsInput)) {
+      throw new Error("SCM repositoryIds must be an array");
+    }
+    const repositoryIds = uniqueStrings(repositoryIdsInput ?? []);
     const replaceAccessToken = input.accessToken !== undefined || input.access_token !== undefined;
     const clearAccessToken = Boolean(input.clearAccessToken ?? input.clear_access_token);
     const webhookSecretInput = input.webhookSecret ?? input.webhook_secret;
@@ -172,52 +212,143 @@ export class ScmRepo {
     const webhookSecret = replaceWebhookSecret
       ? requiredSecret(webhookSecretInput, "webhook secret")
       : null;
-    const nextMode = input.mode === undefined ? current.mode : normalizeMode(input.mode);
-    assertWebhookSecretForMode(nextMode, replaceWebhookSecret || (!clearWebhookSecret && current.webhookSecretSet));
-    const baseUrl = input.baseUrl !== undefined || input.base_url !== undefined
-      ? normalizeBaseUrl(input.baseUrl ?? input.base_url, current.provider)
-      : current.baseUrl;
-    const apiBaseUrl = input.apiBaseUrl !== undefined || input.api_base_url !== undefined
-      ? normalizeApiBaseUrl(input.apiBaseUrl ?? input.api_base_url, current.provider, baseUrl)
-      : current.apiBaseUrl;
-    for (const binding of this.listRepositoryBindings({ connectionId: id })) {
-      assertScmRepositoryMatchesConnection(binding.repositoryUrl, baseUrl);
-    }
-    const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_scm_connections SET
-        name = ?, mode = ?, base_url = ?, api_base_url = ?, enabled = ?, poll_interval_seconds = ?,
-        access_token_encrypted = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE access_token_encrypted END,
-        access_token_hint = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE access_token_hint END,
-        webhook_secret_encrypted = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE webhook_secret_encrypted END,
-        webhook_secret_hint = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE webhook_secret_hint END,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        input.name === undefined ? current.name : requiredString(input.name, "SCM connection name"),
+    this.ctx.db.transaction(() => {
+      // Repository-list writes lock the workspace before touching bindings and
+      // connections. Keep this order identical so Postgres cannot deadlock a
+      // connection edit against an import/update/delete.
+      const workspace = this.lockWorkspace(current.workspaceId);
+      const lockedConnections = this.lockConnections(
+        this.listConnections({ workspaceId: current.workspaceId }).map((connection) => connection.id),
+      );
+      const lockedCurrent = lockedConnections.get(id);
+      if (!lockedCurrent) throw new Error(`SCM connection not found: ${id}`);
+      if (lockedCurrent.workspaceId !== current.workspaceId) {
+        throw new Error("SCM connection belongs to another workspace");
+      }
+      const nextMode = input.mode === undefined ? lockedCurrent.mode : normalizeMode(input.mode);
+      assertWebhookSecretForMode(
         nextMode,
-        baseUrl,
-        apiBaseUrl,
-        input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
-        input.pollIntervalSeconds === undefined && input.poll_interval_seconds === undefined
-          ? current.pollIntervalSeconds
-          : normalizePollInterval(input.pollIntervalSeconds ?? input.poll_interval_seconds),
-        replaceAccessToken ? 1 : 0,
-        accessToken ? encryptScmCredential(accessToken, { workspaceId: current.workspaceId, connectionId: id, field: "access_token" }) : null,
-        clearAccessToken ? 1 : 0,
-        replaceAccessToken ? 1 : 0,
-        secretHint(accessToken),
-        clearAccessToken ? 1 : 0,
-        replaceWebhookSecret ? 1 : 0,
-        webhookSecret ? encryptScmCredential(webhookSecret, { workspaceId: current.workspaceId, connectionId: id, field: "webhook_secret" }) : null,
-        clearWebhookSecret ? 1 : 0,
-        replaceWebhookSecret ? 1 : 0,
-        secretHint(webhookSecret),
-        clearWebhookSecret ? 1 : 0,
-        now,
-        id,
-      ],
-    );
+        replaceWebhookSecret || (!clearWebhookSecret && lockedCurrent.webhookSecretSet),
+      );
+      const baseUrl = input.baseUrl !== undefined || input.base_url !== undefined
+        ? normalizeBaseUrl(input.baseUrl ?? input.base_url, lockedCurrent.provider)
+        : lockedCurrent.baseUrl;
+      const apiBaseUrl = input.apiBaseUrl !== undefined || input.api_base_url !== undefined
+        ? normalizeApiBaseUrl(input.apiBaseUrl ?? input.api_base_url, lockedCurrent.provider, baseUrl)
+        : lockedCurrent.apiBaseUrl;
+      const repositoryScope = input.repositoryScope === undefined && input.repository_scope === undefined
+        ? lockedCurrent.repositoryScope
+        : normalizeRepositoryScope(input.repositoryScope ?? input.repository_scope);
+      if (repositoryScope === "all" && replaceRepositoryIds) {
+        throw new Error("SCM repositoryIds can only be replaced for selected repository scope");
+      }
+      const resetVerification = replaceAccessToken
+        || clearAccessToken
+        || baseUrl !== lockedCurrent.baseUrl
+        || apiBaseUrl !== lockedCurrent.apiBaseUrl
+        || repositoryScope !== lockedCurrent.repositoryScope;
+      const now = nowIso();
+      const desiredRepositories = repositoryIds.map((repositoryId) => {
+        const repository = findWorkspaceRepository(workspace.repos, repositoryId);
+        if (!repository) throw new Error(`Repository not found in workspace: ${repositoryId}`);
+        if (repository.source !== "unknown" && repository.source !== lockedCurrent.provider) {
+          throw new Error(`Repository source ${repository.source} does not match SCM connection provider ${lockedCurrent.provider}`);
+        }
+        assertScmRepositoryMatchesConnection(repository.url, baseUrl);
+        return repository;
+      });
+      const desiredRepositoryIds = new Set(repositoryIds);
+      for (const binding of this.listRepositoryBindings({ connectionId: id })) {
+        if (replaceRepositoryIds && !desiredRepositoryIds.has(binding.repositoryId)) continue;
+        assertScmRepositoryMatchesConnection(binding.repositoryUrl, baseUrl);
+      }
+
+      if (repositoryScope === "all") {
+        const previousDefault = this.listConnections({ workspaceId: lockedCurrent.workspaceId, provider: lockedCurrent.provider })
+          .find((connection) => connection.id !== id && connection.baseUrl === baseUrl && connection.isDefault);
+        if (previousDefault) this.demoteAndTransferDefaultBindingsLocked(previousDefault.id, id, now);
+      } else if (lockedCurrent.isDefault) {
+        this.ctx.db.run(
+          `UPDATE multiremi_scm_repository_bindings
+           SET assignment_origin = 'explicit', updated_at = ?
+           WHERE connection_id = ? AND assignment_origin = 'default'`,
+          [now, id],
+        );
+      }
+
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_connections SET
+          name = ?, mode = ?, base_url = ?, api_base_url = ?, enabled = ?, poll_interval_seconds = ?,
+          repository_scope = ?, is_default = ?,
+          access_token_encrypted = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE access_token_encrypted END,
+          access_token_hint = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE access_token_hint END,
+          webhook_secret_encrypted = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE webhook_secret_encrypted END,
+          webhook_secret_hint = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN NULL ELSE webhook_secret_hint END,
+          verification_status = CASE WHEN ? = 1 THEN 'unverified' ELSE verification_status END,
+          verified_at = CASE WHEN ? = 1 THEN NULL ELSE verified_at END,
+          verification_identity = CASE WHEN ? = 1 THEN NULL ELSE verification_identity END,
+          verified_repository_count = CASE WHEN ? = 1 THEN 0 ELSE verified_repository_count END,
+          verified_repository_total = CASE WHEN ? = 1 THEN 0 ELSE verified_repository_total END,
+          verification_error_code = CASE WHEN ? = 1 THEN NULL ELSE verification_error_code END,
+          verification_error = CASE WHEN ? = 1 THEN NULL ELSE verification_error END,
+          verification_generation = verification_generation + CASE WHEN ? = 1 THEN 1 ELSE 0 END,
+          verification_run_id = CASE WHEN ? = 1 THEN NULL ELSE verification_run_id END,
+          updated_at = ?
+         WHERE id = ?`,
+        [
+          input.name === undefined ? lockedCurrent.name : requiredString(input.name, "SCM connection name"),
+          nextMode,
+          baseUrl,
+          apiBaseUrl,
+          input.enabled === undefined ? (lockedCurrent.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
+          input.pollIntervalSeconds === undefined && input.poll_interval_seconds === undefined
+            ? lockedCurrent.pollIntervalSeconds
+            : normalizePollInterval(input.pollIntervalSeconds ?? input.poll_interval_seconds),
+          repositoryScope,
+          repositoryScope === "all" ? 1 : 0,
+          replaceAccessToken ? 1 : 0,
+          accessToken ? encryptScmCredential(accessToken, { workspaceId: lockedCurrent.workspaceId, connectionId: id, field: "access_token" }) : null,
+          clearAccessToken ? 1 : 0,
+          replaceAccessToken ? 1 : 0,
+          secretHint(accessToken),
+          clearAccessToken ? 1 : 0,
+          replaceWebhookSecret ? 1 : 0,
+          webhookSecret ? encryptScmCredential(webhookSecret, { workspaceId: lockedCurrent.workspaceId, connectionId: id, field: "webhook_secret" }) : null,
+          clearWebhookSecret ? 1 : 0,
+          replaceWebhookSecret ? 1 : 0,
+          secretHint(webhookSecret),
+          clearWebhookSecret ? 1 : 0,
+          ...Array.from({ length: 9 }, () => resetVerification ? 1 : 0),
+          now,
+          id,
+        ],
+      );
+      if (repositoryScope === "all") {
+        this.reconcileDefaultBindingsLocked(id, workspace.repos);
+      } else if (replaceRepositoryIds) {
+        for (const repository of desiredRepositories) {
+          this.upsertRepositoryBindingLocked({
+            workspaceId: lockedCurrent.workspaceId,
+            connectionId: id,
+            repositoryId: repository.id,
+            repositoryUrl: repository.url,
+            repositorySource: repository.source,
+            name: repository.name,
+            defaultBranch: repository.defaultBranch,
+            assignmentOrigin: "explicit",
+            transfer: true,
+          });
+        }
+        for (const binding of this.listRepositoryBindings({ connectionId: id })) {
+          if (desiredRepositoryIds.has(binding.repositoryId)) continue;
+          this.deleteRepositorySyncStateLocked(id, binding.repositoryId);
+          this.ctx.db.run(
+            "DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ? AND repository_id = ?",
+            [id, binding.repositoryId],
+          );
+        }
+      }
+    })();
     return this.getConnectionWithRepositories(id)!;
   }
 
@@ -233,6 +364,13 @@ export class ScmRepo {
       if (Number(eventCount?.count ?? 0) > 0) {
         throw new Error("SCM connection has event history; disable it instead of deleting it");
       }
+      this.ctx.db.run(
+        `DELETE FROM multiremi_scm_issue_links WHERE change_request_id IN (
+          SELECT id FROM multiremi_scm_change_requests WHERE connection_id = ?
+        )`,
+        [id],
+      );
+      this.ctx.db.run("DELETE FROM multiremi_scm_change_requests WHERE connection_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ?", [id]);
@@ -280,7 +418,7 @@ export class ScmRepo {
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     return (this.ctx.db.query(
-      `SELECT * FROM multiremi_scm_repository_bindings ${where} ORDER BY created_at ASC, id ASC`,
+      `SELECT * FROM multiremi_scm_repository_bindings ${where} ORDER BY created_at ASC, repository_id ASC, id ASC`,
     ).all(...args) as Row[]).map(toRepositoryBinding);
   }
 
@@ -298,77 +436,245 @@ export class ScmRepo {
   }
 
   upsertRepositoryBinding(input: UpsertScmRepositoryBindingInput): MultiremiScmRepositoryBinding {
-    return this.ctx.db.transaction(() => this.upsertRepositoryBindingLocked(input))();
+    return this.ctx.db.transaction(() => {
+      const workspace = this.lockWorkspace(input.workspaceId);
+      const repository = findWorkspaceRepository(workspace.repos, input.repositoryId);
+      if (!repository) throw new Error(`Repository not found in workspace: ${input.repositoryId}`);
+      const connection = this.getConnection(input.connectionId);
+      if (!connection) throw new Error(`SCM connection not found: ${input.connectionId}`);
+      if (connection.workspaceId !== input.workspaceId) {
+        throw new Error("SCM connection belongs to another workspace");
+      }
+      this.lockConnections(
+        this.listConnections({ workspaceId: input.workspaceId }).map((connection) => connection.id),
+      );
+      return this.upsertRepositoryBindingLocked({
+        ...input,
+        repositoryUrl: repository.url,
+        repositorySource: repository.source,
+        name: repository.name,
+        defaultBranch: repository.defaultBranch,
+      });
+    })();
   }
 
   private upsertRepositoryBindingLocked(input: UpsertScmRepositoryBindingInput): MultiremiScmRepositoryBinding {
-      const connection = this.lockConnection(input.connectionId);
-      if (connection.workspaceId !== input.workspaceId) throw new Error("SCM connection belongs to another workspace");
-      const repositorySource = normalizeRepositorySource(input.repositorySource ?? input.repository_source);
-      if (repositorySource !== "unknown" && repositorySource !== connection.provider) {
-        throw new Error(`Repository source ${repositorySource} does not match SCM connection provider ${connection.provider}`);
+    const connection = this.lockConnection(input.connectionId);
+    if (connection.workspaceId !== input.workspaceId) throw new Error("SCM connection belongs to another workspace");
+    const repositorySource = normalizeRepositorySource(input.repositorySource ?? input.repository_source);
+    if (repositorySource !== "unknown" && repositorySource !== connection.provider) {
+      throw new Error(`Repository source ${repositorySource} does not match SCM connection provider ${connection.provider}`);
+    }
+    const repositoryId = requiredString(input.repositoryId, "repository ID");
+    const repositoryUrl = requiredString(input.repositoryUrl, "repository URL");
+    assertScmRepositoryMatchesConnection(repositoryUrl, connection.baseUrl);
+    const assignmentOrigin = normalizeAssignmentOrigin(input.assignmentOrigin ?? input.assignment_origin);
+    const existingRow = this.ctx.db.query(
+      `UPDATE multiremi_scm_repository_bindings SET updated_at = updated_at
+       WHERE workspace_id = ? AND repository_id = ? RETURNING *`,
+    ).get(input.workspaceId, repositoryId) as Row | null;
+    const existing = existingRow ? toRepositoryBinding(existingRow) : null;
+    if (existing && existing.connectionId !== input.connectionId) {
+      if (assignmentOrigin === "default") return existing;
+      if (input.transfer !== true) {
+        throw new Error("Repository is already bound to another SCM connection; set transfer=true to move it atomically");
       }
-      const repositoryUrl = requiredString(input.repositoryUrl, "repository URL");
-      assertScmRepositoryMatchesConnection(repositoryUrl, connection.baseUrl);
-      const existing = this.ctx.db.query(
-        "SELECT connection_id FROM multiremi_scm_repository_bindings WHERE workspace_id = ? AND repository_id = ?",
-      ).get(input.workspaceId, input.repositoryId) as Row | null;
-      if (existing && String(existing.connection_id) !== input.connectionId) {
-        throw new Error("Repository is already bound to another SCM connection; unbind it before moving providers");
-      }
-      const coordinates = repositoryCoordinatesFromUrl(repositoryUrl);
-      const id = createId("srb");
-      const now = nowIso();
-      this.ctx.db.run(
+      this.transferRepositorySyncStateLocked(existing.connectionId, input.connectionId, repositoryId);
+    }
+    const coordinates = repositoryCoordinatesFromUrl(repositoryUrl);
+    const externalId = cleanOptionalString(input.externalId);
+    const owner = cleanOptionalString(input.owner) ?? coordinates.owner;
+    const name = requiredString(input.name, "repository name");
+    const defaultBranch = cleanOptionalString(input.defaultBranch);
+    const enabled = input.enabled !== false;
+    const verificationChanged = !existing
+      || existing.connectionId !== input.connectionId
+      || existing.repositoryUrl !== repositoryUrl
+      || existing.externalId !== externalId
+      || existing.owner !== owner
+      || existing.name !== name
+      || existing.enabled !== enabled;
+    const bindingId = existing?.id ?? createId("srb");
+    const now = nowIso();
+    const effectiveOrigin = assignmentOrigin === "explicit" || existing?.assignmentOrigin === "explicit"
+      ? "explicit"
+      : "default";
+    this.ctx.db.run(
       `INSERT INTO multiremi_scm_repository_bindings (
         id, workspace_id, connection_id, repository_id, repository_url, external_id,
-        owner, name, default_branch, enabled, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        owner, name, default_branch, enabled, assignment_origin, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(workspace_id, repository_id) DO UPDATE SET
+        connection_id = excluded.connection_id,
         repository_url = excluded.repository_url,
         external_id = excluded.external_id,
         owner = excluded.owner,
         name = excluded.name,
         default_branch = excluded.default_branch,
         enabled = excluded.enabled,
+        assignment_origin = excluded.assignment_origin,
         updated_at = excluded.updated_at`,
       [
-        id,
+        bindingId,
         input.workspaceId,
         input.connectionId,
-        requiredString(input.repositoryId, "repository ID"),
+        repositoryId,
         repositoryUrl,
-        cleanOptionalString(input.externalId),
-        cleanOptionalString(input.owner) ?? coordinates.owner,
-        requiredString(input.name, "repository name"),
-        cleanOptionalString(input.defaultBranch),
-        input.enabled === false ? 0 : 1,
+        externalId,
+        owner,
+        name,
+        defaultBranch,
+        enabled ? 1 : 0,
+        effectiveOrigin,
+        existing?.createdAt ?? now,
         now,
-        now,
-        ],
+      ],
+    );
+    if (verificationChanged) this.invalidateConnectionVerificationLocked(input.connectionId);
+    return this.getRepositoryBinding(input.connectionId, repositoryId)!;
+  }
+
+  reconcileRepositoryBindings(workspaceId: string): MultiremiScmRepositoryBinding[] {
+    return this.ctx.db.transaction(() => {
+      const workspace = this.lockWorkspace(workspaceId);
+      return this.reconcileRepositoryBindingsWithinTransaction(workspaceId, workspace.repos);
+    })();
+  }
+
+  /** Caller already owns the transaction that wrote the workspace repository list. */
+  reconcileRepositoryBindingsWithinTransaction(
+    workspaceId: string,
+    repositories: unknown[],
+  ): MultiremiScmRepositoryBinding[] {
+    const connections = new Map(
+      this.listConnections({ workspaceId })
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((connection) => {
+          const locked = this.lockConnection(connection.id);
+          return [locked.id, locked] as const;
+        }),
+    );
+    for (const binding of this.listRepositoryBindings({ workspaceId })) {
+      const repository = findWorkspaceRepository(repositories, binding.repositoryId);
+      if (!repository) {
+        this.deleteRepositorySyncStateLocked(binding.connectionId, binding.repositoryId);
+        this.ctx.db.run(
+          "DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ? AND repository_id = ?",
+          [binding.connectionId, binding.repositoryId],
+        );
+        continue;
+      }
+      const connection = connections.get(binding.connectionId);
+      if (!connection) throw new Error(`SCM connection not found: ${binding.connectionId}`);
+      if (repository.source !== "unknown" && repository.source !== connection.provider) {
+        throw new Error(`Repository source ${repository.source} does not match SCM connection provider ${connection.provider}`);
+      }
+      assertScmRepositoryMatchesConnection(repository.url, connection.baseUrl);
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_repository_bindings
+         SET repository_url = ?, name = ?, default_branch = ?, updated_at = ?
+         WHERE connection_id = ? AND repository_id = ?`,
+        [repository.url, repository.name, repository.defaultBranch, nowIso(), binding.connectionId, binding.repositoryId],
       );
-      return this.getRepositoryBinding(input.connectionId, input.repositoryId)!;
+      if (binding.repositoryUrl !== repository.url || binding.name !== repository.name) {
+        this.invalidateConnectionVerificationLocked(binding.connectionId);
+      }
+    }
+    for (const connection of connections.values()) {
+      if (connection.isDefault && connection.repositoryScope === "all") {
+        this.reconcileDefaultBindingsLocked(connection.id, repositories);
+      }
+    }
+    return this.listRepositoryBindings({ workspaceId });
+  }
+
+  deleteRepositoryBindingsForWorkspaceRepository(workspaceId: string, repositoryId: string): number {
+    return this.ctx.db.transaction(() => {
+      this.lockWorkspace(workspaceId);
+      this.lockConnections(
+        this.listConnections({ workspaceId }).map((connection) => connection.id),
+      );
+      const bindings = this.listRepositoryBindings({ workspaceId })
+        .filter((binding) => binding.repositoryId === repositoryId);
+      for (const binding of bindings) {
+        this.deleteRepositorySyncStateLocked(binding.connectionId, repositoryId);
+      }
+      return this.ctx.db.run(
+        "DELETE FROM multiremi_scm_repository_bindings WHERE workspace_id = ? AND repository_id = ?",
+        [workspaceId, repositoryId],
+      ).changes;
+    })();
+  }
+
+  markConnectionVerificationStarted(id: string): { connection: MultiremiScmConnection; runId: string } {
+    const runId = createId("scv");
+    const row = this.ctx.db.query(
+      `UPDATE multiremi_scm_connections
+       SET verification_status = 'verifying', verified_at = NULL, verification_identity = NULL,
+           verified_repository_count = 0, verified_repository_total = 0,
+           verification_error_code = NULL, verification_error = NULL,
+           verification_generation = verification_generation + 1,
+           verification_run_id = ?, updated_at = ?
+       WHERE id = ? RETURNING *`,
+    ).get(runId, nowIso(), id) as Row | null;
+    if (!row) throw new Error(`SCM connection not found: ${id}`);
+    return { connection: toScmConnection(row), runId };
+  }
+
+  recordConnectionVerification(
+    id: string,
+    result: MultiremiScmVerificationResult,
+    runId: string,
+  ): MultiremiScmConnection {
+    const repositoryTotal = normalizeVerificationCount(result.repositoryTotal, "verification repository total");
+    const repositoryCount = normalizeVerificationCount(result.repositoryCount, "verified repository count");
+    if (repositoryCount > repositoryTotal) throw new Error("verified repository count cannot exceed repository total");
+    const status = normalizeVerificationStatus(result.status);
+    if (status === "unverified" || status === "verifying") {
+      throw new Error("completed SCM verification must have a terminal status");
+    }
+    const args: unknown[] = [
+      status,
+      normalizeIsoTimestamp(result.verifiedAt, "SCM verification time"),
+      cleanOptionalString(result.identity),
+      repositoryCount,
+      repositoryTotal,
+      cleanOptionalString(result.errorCode),
+      cleanVerificationError(result.error),
+      nowIso(),
+      id,
+      requiredString(runId, "SCM verification run ID"),
+    ];
+    const row = this.ctx.db.query(
+      `UPDATE multiremi_scm_connections SET
+        verification_status = ?, verified_at = ?, verification_identity = ?,
+        verified_repository_count = ?, verified_repository_total = ?,
+        verification_error_code = ?, verification_error = ?,
+        verification_run_id = NULL, updated_at = ?
+       WHERE id = ? AND verification_run_id = ? RETURNING *`,
+    ).get(...args) as Row | null;
+    if (!row) {
+      if (!this.getConnection(id)) throw new Error(`SCM connection not found: ${id}`);
+      throw new Error("SCM connection changed while credentials were being verified; retry verification");
+    }
+    return toScmConnection(row);
   }
 
   deleteRepositoryBinding(connectionId: string, repositoryId: string): boolean {
+    const current = this.getConnection(connectionId);
+    if (!current) return false;
     return this.ctx.db.transaction(() => {
-      const connection = this.ctx.db.query(
-        "UPDATE multiremi_scm_connections SET updated_at = updated_at WHERE id = ? RETURNING id",
-      ).get(connectionId) as Row | null;
-      if (!connection) return false;
+      this.lockWorkspace(current.workspaceId);
+      const connections = this.lockConnections(
+        this.listConnections({ workspaceId: current.workspaceId }).map((connection) => connection.id),
+      );
+      if (!connections.has(connectionId)) return false;
       const binding = this.ctx.db.query(
         `UPDATE multiremi_scm_repository_bindings SET updated_at = updated_at
          WHERE connection_id = ? AND repository_id = ? RETURNING id`,
       ).get(connectionId, repositoryId) as Row | null;
       if (!binding) return false;
-      this.ctx.db.run(
-        "DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ? AND repository_id = ?",
-        [connectionId, repositoryId],
-      );
-      this.ctx.db.run(
-        "DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ? AND repository_id = ?",
-        [connectionId, repositoryId],
-      );
+      this.deleteRepositorySyncStateLocked(connectionId, repositoryId);
       return this.ctx.db.run(
         "DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ? AND repository_id = ?",
         [connectionId, repositoryId],
@@ -524,147 +830,263 @@ export class ScmRepo {
   }
 
   advanceEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult {
+    const written = this.ctx.db.transaction(() => this.advanceEntitySnapshotLocked(input))();
+    this.emitSnapshotProjection(written);
+    return written.advance;
+  }
+
+  advanceEntitySnapshotWithEvents(
+    input: UpsertScmEntitySnapshotInput,
+    createEvents: ScmSnapshotEventFactory,
+  ): ScmSnapshotEventWriteResult {
+    const written = this.ctx.db.transaction(() => {
+      const snapshot = this.advanceEntitySnapshotLocked(input);
+      const events = createEvents(snapshot.advance).map((event) => this.recordCanonicalEventLocked(event));
+      return { snapshot, events };
+    })();
+    this.emitSnapshotProjection(written.snapshot);
+    for (const result of written.events) this.processPendingMergeEffects(result.event);
+    return { advance: written.snapshot.advance, events: written.events };
+  }
+
+  private advanceEntitySnapshotLocked(input: UpsertScmEntitySnapshotInput): LockedSnapshotAdvanceResult {
     const now = nowIso();
     const observedAt = normalizeIsoTimestamp(input.observedAt ?? now, "snapshot observation time");
     const revisionAt = normalizeIsoTimestamp(input.revisionAt ?? observedAt, "snapshot revision time");
     const contentHash = requiredString(input.contentHash, "snapshot content hash");
     const revision = requiredString(input.revision ?? cleanOptionalString(input.version) ?? contentHash, "snapshot revision");
-    return this.ctx.db.transaction(() => {
-      this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
-      const values = [
-        input.connectionId,
-        input.repositoryId,
-        input.entityType,
-        requiredString(input.externalId, "external entity ID"),
-        cleanOptionalString(input.version),
-        revisionAt,
-        revision,
-        contentHash,
-        toJson(input.payload),
-        observedAt,
-        now,
-        now,
-      ];
-      const inserted = this.ctx.db.query(
-        `INSERT INTO multiremi_scm_entity_snapshots (
-          connection_id, repository_id, entity_type, external_id, version, revision_at,
-          revision, content_hash, payload, observed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(connection_id, repository_id, entity_type, external_id) DO NOTHING
-        RETURNING *`,
-      ).get(...values) as Row | null;
-      if (inserted) return { applied: true, previous: null, snapshot: toEntitySnapshot(inserted) };
-
-      // A no-op UPDATE is portable across SQLite/Postgres and holds the entity
-      // row lock until this transaction commits. The returned row is therefore
-      // the exact predecessor used to derive a state transition.
-      const locked = this.ctx.db.query(
-        `UPDATE multiremi_scm_entity_snapshots SET updated_at = updated_at
-         WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
-         RETURNING *`,
-      ).get(input.connectionId, input.repositoryId, input.entityType, input.externalId) as Row | null;
-      if (!locked) throw new Error("SCM snapshot compare-and-set could not lock the current row");
-      const previous = toEntitySnapshot(locked);
-      if (
-        revisionAt < previous.revisionAt
-        || (revisionAt === previous.revisionAt && revision <= previous.revision)
-      ) {
-        return { applied: false, previous, snapshot: previous };
+    let projected: { changeRequestId: string; issueIds: string[] } | null = null;
+    const { connection, binding } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
+    const values = [
+      input.connectionId,
+      input.repositoryId,
+      input.entityType,
+      requiredString(input.externalId, "external entity ID"),
+      cleanOptionalString(input.version),
+      revisionAt,
+      revision,
+      contentHash,
+      toJson(input.payload),
+      observedAt,
+      now,
+      now,
+    ];
+    const inserted = this.ctx.db.query(
+      `INSERT INTO multiremi_scm_entity_snapshots (
+        connection_id, repository_id, entity_type, external_id, version, revision_at,
+        revision, content_hash, payload, observed_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(connection_id, repository_id, entity_type, external_id) DO NOTHING
+      RETURNING *`,
+    ).get(...values) as Row | null;
+    if (inserted) {
+      if (input.entityType === "change_request") {
+        projected = this.upsertChangeRequestProjectionLocked(connection, binding, input.externalId, input.payload, now);
       }
-      const updated = this.ctx.db.query(
-        `UPDATE multiremi_scm_entity_snapshots SET
-          version = ?, revision_at = ?, revision = ?, content_hash = ?, payload = ?,
-          observed_at = ?, updated_at = ?
-         WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
-         RETURNING *`,
-      ).get(
-        cleanOptionalString(input.version),
-        revisionAt,
-        revision,
-        contentHash,
-        toJson(input.payload),
-        observedAt,
-        now,
-        input.connectionId,
-        input.repositoryId,
-        input.entityType,
-        input.externalId,
-      ) as Row | null;
-      if (!updated) throw new Error("SCM snapshot compare-and-set lost its locked row");
-      return { applied: true, previous, snapshot: toEntitySnapshot(updated) };
+      return {
+        advance: { applied: true, previous: null, snapshot: toEntitySnapshot(inserted) },
+        projection: projected,
+        workspaceId: connection.workspaceId,
+      };
+    }
+
+    // A no-op UPDATE is portable across SQLite/Postgres and holds the entity
+    // row lock until this transaction commits. The returned row is therefore
+    // the exact predecessor used to derive a state transition.
+    const locked = this.ctx.db.query(
+      `UPDATE multiremi_scm_entity_snapshots SET updated_at = updated_at
+       WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
+       RETURNING *`,
+    ).get(input.connectionId, input.repositoryId, input.entityType, input.externalId) as Row | null;
+    if (!locked) throw new Error("SCM snapshot compare-and-set could not lock the current row");
+    const previous = toEntitySnapshot(locked);
+    if (
+      revisionAt < previous.revisionAt
+      || (revisionAt === previous.revisionAt && revision <= previous.revision)
+    ) {
+      return {
+        advance: { applied: false, previous, snapshot: previous },
+        projection: null,
+        workspaceId: connection.workspaceId,
+      };
+    }
+    const updated = this.ctx.db.query(
+      `UPDATE multiremi_scm_entity_snapshots SET
+        version = ?, revision_at = ?, revision = ?, content_hash = ?, payload = ?,
+        observed_at = ?, updated_at = ?
+       WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
+       RETURNING *`,
+    ).get(
+      cleanOptionalString(input.version),
+      revisionAt,
+      revision,
+      contentHash,
+      toJson(input.payload),
+      observedAt,
+      now,
+      input.connectionId,
+      input.repositoryId,
+      input.entityType,
+      input.externalId,
+    ) as Row | null;
+    if (!updated) throw new Error("SCM snapshot compare-and-set lost its locked row");
+    if (input.entityType === "change_request") {
+      projected = this.upsertChangeRequestProjectionLocked(connection, binding, input.externalId, input.payload, now);
+    }
+    return {
+      advance: { applied: true, previous, snapshot: toEntitySnapshot(updated) },
+      projection: projected,
+      workspaceId: connection.workspaceId,
+    };
+  }
+
+  private emitSnapshotProjection(result: LockedSnapshotAdvanceResult): void {
+    if (result.projection) this.emitChangeRequestUpdated(result.workspaceId, result.projection);
+  }
+
+  getChangeRequest(id: string): MultiremiScmChangeRequest | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_scm_change_requests WHERE id = ?").get(id) as Row | null;
+    return row ? toChangeRequest(row) : null;
+  }
+
+  listChangeRequestsForIssue(issueId: string): MultiremiScmChangeRequest[] | null {
+    const issue = this.ctx.issues().getIssue(issueId);
+    if (!issue) return null;
+    return (this.ctx.db.query(
+      `SELECT cr.* FROM multiremi_scm_change_requests cr
+       JOIN multiremi_scm_issue_links l ON l.change_request_id = cr.id
+       WHERE l.issue_id = ? AND l.active = 1 AND cr.workspace_id = ?
+       ORDER BY COALESCE(cr.provider_updated_at, cr.updated_at) DESC, cr.id ASC`,
+    ).all(issueId, issue.workspaceId) as Row[]).map(toChangeRequest);
+  }
+
+  linkChangeRequestToIssue(issueId: string, changeRequestId: string): {
+    changeRequest: MultiremiScmChangeRequest;
+    link: MultiremiScmIssueLink;
+  } {
+    const result = this.ctx.db.transaction(() => {
+      const issue = this.ctx.issues().getIssue(issueId);
+      if (!issue) throw new Error(`Issue not found: ${issueId}`);
+      const changeRequest = this.getChangeRequest(changeRequestId);
+      if (!changeRequest) throw new Error(`SCM change request not found: ${changeRequestId}`);
+      if (changeRequest.workspaceId !== issue.workspaceId) throw new Error("SCM change request belongs to another workspace");
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_scm_issue_links (
+          id, workspace_id, change_request_id, issue_id, source, active,
+          linked_at, unlinked_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'manual', 1, ?, NULL, ?, ?)
+        ON CONFLICT(change_request_id, issue_id) DO UPDATE SET
+          source = 'manual', active = 1, linked_at = excluded.linked_at,
+          unlinked_at = NULL, updated_at = excluded.updated_at`,
+        [createId("sil"), issue.workspaceId, changeRequestId, issueId, now, now, now],
+      );
+      const linkRow = this.ctx.db.query(
+        "SELECT * FROM multiremi_scm_issue_links WHERE change_request_id = ? AND issue_id = ?",
+      ).get(changeRequestId, issueId) as Row;
+      return { changeRequest, link: toIssueLink(linkRow) };
     })();
+    this.emitChangeRequestUpdated(result.changeRequest.workspaceId, {
+      changeRequestId: result.changeRequest.id,
+      issueIds: this.activeIssueIds(result.changeRequest.id),
+    });
+    return result;
+  }
+
+  unlinkChangeRequestFromIssue(issueId: string, changeRequestId: string): boolean {
+    const changeRequest = this.getChangeRequest(changeRequestId);
+    if (!changeRequest) return false;
+    const issue = this.ctx.issues().getIssue(issueId);
+    if (!issue || issue.workspaceId !== changeRequest.workspaceId) return false;
+    const changed = this.ctx.db.transaction(() => this.ctx.db.run(
+      `UPDATE multiremi_scm_issue_links SET
+         source = 'manual', active = 0, unlinked_at = ?, updated_at = ?
+       WHERE change_request_id = ? AND issue_id = ? AND active = 1`,
+      [nowIso(), nowIso(), changeRequestId, issueId],
+    ).changes > 0)();
+    if (changed) {
+      this.emitChangeRequestUpdated(changeRequest.workspaceId, {
+        changeRequestId,
+        issueIds: this.activeIssueIds(changeRequestId),
+      });
+    }
+    return changed;
   }
 
   recordCanonicalEvent(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {
+    const result = this.ctx.db.transaction(() => this.recordCanonicalEventLocked(input))();
+    this.processPendingMergeEffects(result.event);
+    return result;
+  }
+
+  private recordCanonicalEventLocked(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {
     const logicalKey = requiredString(input.logicalKey, "SCM logical event key");
     const evidenceDedupeKey = requiredString(input.evidence.dedupeKey, "SCM evidence dedupe key");
     const observedAt = input.observedAt ?? nowIso();
     const eventId = createId("sce");
     const evidenceId = createId("scv");
-    let created = false;
-    let evidenceCreated = false;
-
-    const event = this.ctx.db.transaction(() => {
-      const { connection } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
-      if (connection.workspaceId !== input.workspaceId) throw new Error("SCM connection belongs to another workspace");
-      const inserted = this.ctx.db.run(
-        `INSERT OR IGNORE INTO multiremi_scm_events (
-          id, workspace_id, connection_id, repository_id, provider, type, subject_type,
-          subject_id, logical_key, primary_source, fidelity, occurred_at, observed_at,
-          payload, status, attempt_count, available_at, lease_until, last_error, processed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, ?)`,
-        [
-          eventId,
-          input.workspaceId,
-          input.connectionId,
-          input.repositoryId,
-          connection.provider,
-          input.type,
-          requiredString(input.subjectType, "SCM event subject type"),
-          requiredString(input.subjectId, "SCM event subject ID"),
-          logicalKey,
-          input.evidence.source,
-          input.fidelity,
-          input.occurredAt ?? null,
-          observedAt,
-          toJson(input.payload),
-          observedAt,
-          observedAt,
-        ],
+    const { connection } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
+    if (connection.workspaceId !== input.workspaceId) throw new Error("SCM connection belongs to another workspace");
+    const inserted = this.ctx.db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_events (
+        id, workspace_id, connection_id, repository_id, provider, type, subject_type,
+        subject_id, logical_key, primary_source, fidelity, occurred_at, observed_at,
+        payload, status, attempt_count, available_at, lease_until, last_error, processed_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, ?)`,
+      [
+        eventId,
+        input.workspaceId,
+        input.connectionId,
+        input.repositoryId,
+        connection.provider,
+        input.type,
+        requiredString(input.subjectType, "SCM event subject type"),
+        requiredString(input.subjectId, "SCM event subject ID"),
+        logicalKey,
+        input.evidence.source,
+        input.fidelity,
+        input.occurredAt ?? null,
+        observedAt,
+        toJson(input.payload),
+        observedAt,
+        observedAt,
+      ],
+    );
+    const created = inserted.changes > 0;
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_scm_events WHERE connection_id = ? AND logical_key = ?",
+    ).get(input.connectionId, logicalKey) as Row;
+    const canonical = toCanonicalEvent(row);
+    if (!created && input.fidelity === "exact" && canonical.fidelity === "inferred") {
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_events
+         SET fidelity = 'exact', occurred_at = COALESCE(?, occurred_at), payload = ?
+         WHERE id = ?`,
+        [input.occurredAt ?? null, toJson(input.payload), canonical.id],
       );
-      created = inserted.changes > 0;
-      const row = this.ctx.db.query(
-        "SELECT * FROM multiremi_scm_events WHERE connection_id = ? AND logical_key = ?",
-      ).get(input.connectionId, logicalKey) as Row;
-      const canonical = toCanonicalEvent(row);
-      if (!created && input.fidelity === "exact" && canonical.fidelity === "inferred") {
-        this.ctx.db.run(
-          `UPDATE multiremi_scm_events
-           SET fidelity = 'exact', occurred_at = COALESCE(?, occurred_at), payload = ?
-           WHERE id = ?`,
-          [input.occurredAt ?? null, toJson(input.payload), canonical.id],
-        );
-      }
-      const evidenceInsert = this.ctx.db.run(
-        `INSERT OR IGNORE INTO multiremi_scm_event_evidence (
-          id, event_id, source, provider_event_id, dedupe_key, payload, raw_body, observed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          evidenceId,
-          canonical.id,
-          input.evidence.source,
-          cleanOptionalString(input.evidence.providerEventId),
-          evidenceDedupeKey,
-          input.evidence.payload == null ? null : toJson(input.evidence.payload),
-          input.evidence.rawBody ?? null,
-          observedAt,
-          nowIso(),
-        ],
-      );
-      evidenceCreated = evidenceInsert.changes > 0;
-      if (created) this.ensureEventDeliveriesInitialized(canonical, observedAt);
-      return this.getCanonicalEvent(canonical.id)!;
-    })();
+    }
+    const evidenceInsert = this.ctx.db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_event_evidence (
+        id, event_id, source, provider_event_id, dedupe_key, payload, raw_body, observed_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        evidenceId,
+        canonical.id,
+        input.evidence.source,
+        cleanOptionalString(input.evidence.providerEventId),
+        evidenceDedupeKey,
+        input.evidence.payload == null ? null : toJson(input.evidence.payload),
+        input.evidence.rawBody ?? null,
+        observedAt,
+        nowIso(),
+      ],
+    );
+    const evidenceCreated = evidenceInsert.changes > 0;
+    if (created) {
+      this.ensureEventDeliveriesInitialized(canonical, observedAt);
+      this.scheduleLinkedIssueMergeEffectsLocked(canonical);
+    }
+    const event = this.getCanonicalEvent(canonical.id)!;
     return { event, created, evidenceCreated };
   }
 
@@ -764,6 +1186,7 @@ export class ScmRepo {
   dispatchPendingEvents(now: Date = new Date(), limit = 25): MultiremiAutopilotRun[] {
     const runs: MultiremiAutopilotRun[] = [];
     for (const event of this.claimPendingEvents(now, limit)) {
+      this.processPendingMergeEffects(event);
       this.ctx.db.transaction(() => this.ensureEventDeliveriesInitialized(event, now.toISOString()))();
       let deliveries = this.listEventDeliveries(event.id);
 
@@ -835,13 +1258,22 @@ export class ScmRepo {
       }
 
       deliveries = this.listEventDeliveries(event.id);
-      const hasPending = deliveries.some((delivery) => delivery.status === "pending" || delivery.status === "processing");
+      const pendingEffect = this.ctx.db.query(
+        `SELECT last_error FROM multiremi_scm_effects
+         WHERE event_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+      ).get(event.id) as Row | null;
+      const hasPending = Boolean(pendingEffect)
+        || deliveries.some((delivery) => delivery.status === "pending" || delivery.status === "processing");
       const hasFailed = deliveries.some((delivery) => delivery.status === "failed");
       if (hasPending) {
         this.ctx.db.run(
           `UPDATE multiremi_scm_events SET status = 'pending', available_at = ?, lease_until = NULL,
            last_error = ? WHERE id = ? AND status = 'processing'`,
-          [new Date(now.getTime() + retryDelayMs(event.attemptCount)).toISOString(), "one or more deliveries are pending", event.id],
+          [
+            new Date(now.getTime() + retryDelayMs(event.attemptCount)).toISOString(),
+            pendingEffect?.last_error ?? "one or more deliveries are pending",
+            event.id,
+          ],
         );
       } else {
         this.ctx.db.run(
@@ -933,6 +1365,319 @@ export class ScmRepo {
       : null;
   }
 
+  private reconcileDefaultBindingsLocked(connectionId: string, repositories: unknown[]): void {
+    const connection = this.lockConnection(connectionId);
+    if (!connection.isDefault || connection.repositoryScope !== "all" || !Array.isArray(repositories)) return;
+    for (const value of repositories) {
+      if (!value || typeof value !== "object") continue;
+      const repositoryId = cleanOptionalString((value as Record<string, unknown>).id);
+      if (!repositoryId) continue;
+      const repository = findWorkspaceRepository(repositories, repositoryId);
+      if (!repository || !repositoryMatchesConnection(repository, connection)) continue;
+      const existingRow = this.ctx.db.query(
+        "SELECT connection_id FROM multiremi_scm_repository_bindings WHERE workspace_id = ? AND repository_id = ?",
+      ).get(connection.workspaceId, repositoryId) as Row | null;
+      if (existingRow) {
+        if (String(existingRow.connection_id) === connectionId) {
+          const current = this.getRepositoryBinding(connectionId, repositoryId);
+          this.ctx.db.run(
+            `UPDATE multiremi_scm_repository_bindings
+             SET repository_url = ?, name = ?, default_branch = ?, updated_at = ?
+             WHERE workspace_id = ? AND repository_id = ?`,
+            [repository.url, repository.name, repository.defaultBranch, nowIso(), connection.workspaceId, repositoryId],
+          );
+          if (current && (current.repositoryUrl !== repository.url || current.name !== repository.name)) {
+            this.invalidateConnectionVerificationLocked(connectionId);
+          }
+        }
+        continue;
+      }
+      this.upsertRepositoryBindingLocked({
+        workspaceId: connection.workspaceId,
+        connectionId,
+        repositoryId,
+        repositoryUrl: repository.url,
+        repositorySource: repository.source,
+        name: repository.name,
+        defaultBranch: repository.defaultBranch,
+        assignmentOrigin: "default",
+      });
+    }
+  }
+
+  private demoteAndTransferDefaultBindingsLocked(previousId: string, nextId: string, now: string): void {
+    this.lockConnection(previousId);
+    const bindings = this.listRepositoryBindings({ connectionId: previousId })
+      .filter((binding) => binding.assignmentOrigin === "default");
+    for (const binding of bindings) {
+      this.transferRepositorySyncStateLocked(previousId, nextId, binding.repositoryId);
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_repository_bindings
+         SET connection_id = ?, updated_at = ?
+         WHERE connection_id = ? AND repository_id = ? AND assignment_origin = 'default'`,
+        [nextId, now, previousId, binding.repositoryId],
+      );
+    }
+    this.ctx.db.run(
+      `UPDATE multiremi_scm_connections
+       SET repository_scope = 'selected', is_default = 0, updated_at = ?
+       WHERE id = ?`,
+      [now, previousId],
+    );
+  }
+
+  private deleteRepositorySyncStateLocked(connectionId: string, repositoryId: string): void {
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_issue_links WHERE change_request_id IN (
+        SELECT id FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?
+      )`,
+      [connectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?",
+      [connectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ? AND repository_id = ?",
+      [connectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ? AND repository_id = ?",
+      [connectionId, repositoryId],
+    );
+    this.invalidateConnectionVerificationLocked(connectionId);
+  }
+
+  private transferRepositorySyncStateLocked(
+    previousConnectionId: string,
+    nextConnectionId: string,
+    repositoryId: string,
+  ): void {
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ? AND repository_id = ?",
+      [previousConnectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ? AND repository_id = ?",
+      [previousConnectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      `UPDATE multiremi_scm_change_requests
+       SET connection_id = ?, updated_at = ?
+       WHERE connection_id = ? AND repository_id = ?`,
+      [nextConnectionId, nowIso(), previousConnectionId, repositoryId],
+    );
+    this.invalidateConnectionVerificationLocked(previousConnectionId);
+    this.invalidateConnectionVerificationLocked(nextConnectionId);
+  }
+
+  private invalidateConnectionVerificationLocked(connectionId: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_scm_connections SET
+         verification_status = 'unverified', verified_at = NULL, verification_identity = NULL,
+         verified_repository_count = 0, verified_repository_total = 0,
+         verification_error_code = NULL, verification_error = NULL,
+         verification_generation = verification_generation + 1,
+         verification_run_id = NULL, updated_at = ?
+       WHERE id = ?`,
+      [nowIso(), connectionId],
+    );
+  }
+
+  private upsertChangeRequestProjectionLocked(
+    connection: MultiremiScmConnection,
+    binding: MultiremiScmRepositoryBinding,
+    externalId: string,
+    payload: Record<string, unknown>,
+    now: string,
+  ): { changeRequestId: string; issueIds: string[] } {
+    const number = finiteInteger(payload.number);
+    const draft = payload.draft === true;
+    const state = normalizeChangeRequestState(payload.state, draft);
+    const existingByNumber = number == null ? null : this.ctx.db.query(
+      `SELECT id FROM multiremi_scm_change_requests
+       WHERE connection_id = ? AND repository_id = ? AND number = ?
+       ORDER BY updated_at DESC LIMIT 1`,
+    ).get(connection.id, binding.repositoryId, number) as Row | null;
+    const projectionId = existingByNumber ? String(existingByNumber.id) : createId("scr");
+    if (!existingByNumber) this.ctx.db.run(
+      `INSERT INTO multiremi_scm_change_requests (
+        id, workspace_id, connection_id, repository_id, provider, external_id,
+        number, title, body, state, draft, url, source_branch, target_branch,
+        head_sha, base_sha, author, provider_created_at, provider_updated_at,
+        closed_at, merged_at, merge_sha, mergeable_state, checks_conclusion,
+        checks_passed, checks_failed, checks_pending, additions, deletions,
+        changed_files, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(connection_id, repository_id, external_id) DO UPDATE SET
+        number = excluded.number,
+        title = excluded.title,
+        body = excluded.body,
+        state = excluded.state,
+        draft = excluded.draft,
+        url = excluded.url,
+        source_branch = excluded.source_branch,
+        target_branch = excluded.target_branch,
+        head_sha = excluded.head_sha,
+        base_sha = excluded.base_sha,
+        author = excluded.author,
+        provider_created_at = excluded.provider_created_at,
+        provider_updated_at = excluded.provider_updated_at,
+        closed_at = excluded.closed_at,
+        merged_at = excluded.merged_at,
+        merge_sha = excluded.merge_sha,
+        mergeable_state = excluded.mergeable_state,
+        checks_conclusion = excluded.checks_conclusion,
+        checks_passed = excluded.checks_passed,
+        checks_failed = excluded.checks_failed,
+        checks_pending = excluded.checks_pending,
+        additions = excluded.additions,
+        deletions = excluded.deletions,
+        changed_files = excluded.changed_files,
+        updated_at = excluded.updated_at`,
+      [
+        projectionId, connection.workspaceId, connection.id, binding.repositoryId, connection.provider,
+        requiredString(externalId, "external change request ID"), number,
+        stringField(payload.title), nullableField(payload.body), state, draft ? 1 : 0,
+        nullableField(payload.url), nullableField(payload.source_branch), nullableField(payload.target_branch),
+        nullableField(payload.head_sha), nullableField(payload.base_sha), nullableField(payload.author),
+        nullableField(payload.created_at), nullableField(payload.updated_at), nullableField(payload.closed_at),
+        nullableField(payload.merged_at), nullableField(payload.merge_sha), nullableField(payload.mergeable_state),
+        nullableField(payload.checks_conclusion ?? payload.check_status), nonNegativeInteger(payload.checks_passed),
+        nonNegativeInteger(payload.checks_failed), nonNegativeInteger(payload.checks_pending),
+        nonNegativeInteger(payload.additions), nonNegativeInteger(payload.deletions),
+        nonNegativeInteger(payload.changed_files), now, now,
+      ],
+    );
+    if (existingByNumber) {
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_change_requests SET
+          external_id = ?, title = ?, body = ?, state = ?, draft = ?, url = ?,
+          source_branch = ?, target_branch = ?, head_sha = ?, base_sha = ?, author = ?,
+          provider_created_at = ?, provider_updated_at = ?, closed_at = ?, merged_at = ?,
+          merge_sha = ?, mergeable_state = ?, checks_conclusion = ?, checks_passed = ?,
+          checks_failed = ?, checks_pending = ?, additions = ?, deletions = ?, changed_files = ?,
+          updated_at = ? WHERE id = ?`,
+        [
+          externalId, stringField(payload.title), nullableField(payload.body), state, draft ? 1 : 0,
+          nullableField(payload.url), nullableField(payload.source_branch), nullableField(payload.target_branch),
+          nullableField(payload.head_sha), nullableField(payload.base_sha), nullableField(payload.author),
+          nullableField(payload.created_at), nullableField(payload.updated_at), nullableField(payload.closed_at),
+          nullableField(payload.merged_at), nullableField(payload.merge_sha), nullableField(payload.mergeable_state),
+          nullableField(payload.checks_conclusion ?? payload.check_status), nonNegativeInteger(payload.checks_passed),
+          nonNegativeInteger(payload.checks_failed), nonNegativeInteger(payload.checks_pending),
+          nonNegativeInteger(payload.additions), nonNegativeInteger(payload.deletions),
+          nonNegativeInteger(payload.changed_files), now, projectionId,
+        ],
+      );
+    }
+    const row = this.ctx.db.query(
+      `SELECT * FROM multiremi_scm_change_requests
+       WHERE connection_id = ? AND repository_id = ?
+         AND (external_id = ? OR (? IS NOT NULL AND number = ?))
+       ORDER BY updated_at DESC LIMIT 1`,
+    ).get(connection.id, binding.repositoryId, externalId, number, number) as Row | null;
+    if (!row) throw new Error("SCM change request projection could not be read after upsert");
+    const changeRequest = toChangeRequest(row);
+    if (this.ctx.workspaces().getWorkspace(connection.workspaceId)?.settings.scm_auto_link_enabled !== false) {
+      const haystack = [changeRequest.title, changeRequest.sourceBranch ?? "", changeRequest.body ?? ""].join("\n");
+      for (const issue of this.ctx.issues().listIssues({ workspaceId: connection.workspaceId })) {
+        if (!issue.key || !new RegExp(`\\b${escapeRegExp(issue.key)}\\b`, "i").test(haystack)) continue;
+        this.ctx.db.run(
+          `INSERT INTO multiremi_scm_issue_links (
+            id, workspace_id, change_request_id, issue_id, source, active,
+            linked_at, unlinked_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'auto', 1, ?, NULL, ?, ?)
+          ON CONFLICT(change_request_id, issue_id) DO NOTHING`,
+          [createId("sil"), connection.workspaceId, changeRequest.id, issue.id, now, now, now],
+        );
+      }
+    }
+    return { changeRequestId: changeRequest.id, issueIds: this.activeIssueIds(changeRequest.id) };
+  }
+
+  private scheduleLinkedIssueMergeEffectsLocked(event: MultiremiScmCanonicalEvent): void {
+    if (event.type !== "change.merged" || event.subjectType !== "change_request") return;
+    const workspace = this.ctx.workspaces().getWorkspace(event.workspaceId);
+    if (workspace?.settings.scm_complete_issue_on_merge_enabled !== true) return;
+    const rows = this.ctx.db.query(
+      `SELECT i.id FROM multiremi_scm_change_requests cr
+       JOIN multiremi_scm_issue_links l ON l.change_request_id = cr.id AND l.active = 1
+       JOIN multiremi_issues i ON i.id = l.issue_id
+       WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?
+         AND i.workspace_id = ? AND i.status <> 'done'`,
+    ).all(event.connectionId, event.repositoryId, event.subjectId, event.workspaceId) as Row[];
+    for (const row of rows) {
+      const issueId = String(row.id);
+      this.ctx.db.run(
+        `INSERT OR IGNORE INTO multiremi_scm_effects (
+          id, event_id, issue_id, effect_type, status, applied_at, last_error, created_at
+        ) VALUES (?, ?, ?, 'complete_issue_on_merge', 'pending', NULL, NULL, ?)`,
+        [createId("sfx"), event.id, issueId, nowIso()],
+      );
+    }
+  }
+
+  private processPendingMergeEffects(event: MultiremiScmCanonicalEvent): void {
+    // The pending row is committed with the canonical event. Retrying after a
+    // crash is safe: updateIssue emits status automation only on a real change.
+    const rows = this.ctx.db.query(
+      `SELECT id, issue_id FROM multiremi_scm_effects
+       WHERE event_id = ? AND effect_type = 'complete_issue_on_merge' AND status = 'pending'
+       ORDER BY created_at ASC, id ASC`,
+    ).all(event.id) as Row[];
+    for (const row of rows) {
+      const effectId = String(row.id);
+      const issueId = String(row.issue_id);
+      try {
+        const current = this.ctx.issues().getIssue(issueId);
+        const updated = current && current.status !== "done"
+          ? this.ctx.issues().updateIssue(issueId, { status: "done" })
+          : null;
+        this.ctx.db.run(
+          "UPDATE multiremi_scm_effects SET status = 'applied', applied_at = ?, last_error = NULL WHERE id = ? AND status = 'pending'",
+          [nowIso(), effectId],
+        );
+        if (updated) {
+          this.ctx.emitWorkspaceEvent({
+            type: "issue:updated",
+            workspaceId: updated.workspaceId,
+            actorType: "system",
+            actorId: null,
+            payload: { issue: updated },
+          });
+        }
+      } catch (error) {
+        this.ctx.db.run(
+          "UPDATE multiremi_scm_effects SET last_error = ? WHERE id = ? AND status = 'pending'",
+          [(error instanceof Error ? error.message : String(error)).slice(0, 1_000), effectId],
+        );
+      }
+    }
+  }
+
+  private activeIssueIds(changeRequestId: string): string[] {
+    return (this.ctx.db.query(
+      "SELECT issue_id FROM multiremi_scm_issue_links WHERE change_request_id = ? AND active = 1 ORDER BY issue_id ASC",
+    ).all(changeRequestId) as Row[]).map((row) => String(row.issue_id));
+  }
+
+  private emitChangeRequestUpdated(
+    workspaceId: string,
+    input: { changeRequestId: string; issueIds: string[] },
+  ): void {
+    this.ctx.emitWorkspaceEvent({
+      type: "change_request:updated",
+      workspaceId,
+      actorType: "system",
+      actorId: null,
+      payload: {
+        change_request_id: input.changeRequestId,
+        issue_ids: input.issueIds,
+      },
+    });
+  }
+
   private lockConnectionAndBinding(
     connectionId: string,
     repositoryId: string,
@@ -946,12 +1691,33 @@ export class ScmRepo {
     return { connection, binding: toRepositoryBinding(bindingRow) };
   }
 
+  private lockWorkspace(workspaceId: string) {
+    const row = this.ctx.db.query(
+      "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ? RETURNING id",
+    ).get(workspaceId) as Row | null;
+    if (!row) throw new Error(`Workspace not found: ${workspaceId}`);
+    const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
+    return workspace;
+  }
+
   private lockConnection(connectionId: string): MultiremiScmConnection {
     const row = this.ctx.db.query(
       "UPDATE multiremi_scm_connections SET updated_at = updated_at WHERE id = ? RETURNING *",
     ).get(connectionId) as Row | null;
     if (!row) throw new Error(`SCM connection not found: ${connectionId}`);
     return toScmConnection(row);
+  }
+
+  private lockConnections(connectionIds: string[]): Map<string, MultiremiScmConnection> {
+    return new Map(
+      [...new Set(connectionIds)]
+        .sort((left, right) => left.localeCompare(right))
+        .map((connectionId) => {
+          const connection = this.lockConnection(connectionId);
+          return [connection.id, connection] as const;
+        }),
+    );
   }
 }
 
@@ -966,10 +1732,19 @@ function toScmConnection(row: Row): MultiremiScmConnection {
     apiBaseUrl: String(row.api_base_url ?? ""),
     enabled: Boolean(Number(row.enabled ?? 1)),
     pollIntervalSeconds: Number(row.poll_interval_seconds ?? 60),
+    repositoryScope: normalizeRepositoryScope(row.repository_scope ?? "selected"),
+    isDefault: Boolean(Number(row.is_default ?? 0)),
     accessTokenSet: Boolean(nullableString(row.access_token_encrypted)),
     accessTokenHint: nullableString(row.access_token_hint),
     webhookSecretSet: Boolean(nullableString(row.webhook_secret_encrypted)),
     webhookSecretHint: nullableString(row.webhook_secret_hint),
+    verificationStatus: normalizeVerificationStatus(row.verification_status ?? "unverified"),
+    verifiedAt: nullableString(row.verified_at),
+    verificationIdentity: nullableString(row.verification_identity),
+    verifiedRepositoryCount: Number(row.verified_repository_count ?? 0),
+    verifiedRepositoryTotal: Number(row.verified_repository_total ?? 0),
+    verificationErrorCode: nullableString(row.verification_error_code),
+    verificationError: nullableString(row.verification_error),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -987,6 +1762,7 @@ function toRepositoryBinding(row: Row): MultiremiScmRepositoryBinding {
     name: String(row.name ?? ""),
     defaultBranch: nullableString(row.default_branch),
     enabled: Boolean(Number(row.enabled ?? 1)),
+    assignmentOrigin: normalizeAssignmentOrigin(row.assignment_origin ?? "explicit"),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -1022,6 +1798,58 @@ function toEntitySnapshot(row: Row): MultiremiScmEntitySnapshot {
     contentHash: String(row.content_hash),
     payload: parseJson(String(row.payload ?? "{}"), {}),
     observedAt: String(row.observed_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toChangeRequest(row: Row): MultiremiScmChangeRequest {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    connectionId: String(row.connection_id),
+    repositoryId: String(row.repository_id),
+    provider: normalizeProvider(row.provider),
+    externalId: String(row.external_id),
+    number: row.number == null ? null : Number(row.number),
+    title: String(row.title ?? ""),
+    body: nullableString(row.body),
+    state: normalizeChangeRequestState(row.state, Boolean(Number(row.draft ?? 0))),
+    draft: Boolean(Number(row.draft ?? 0)),
+    url: nullableString(row.url),
+    sourceBranch: nullableString(row.source_branch),
+    targetBranch: nullableString(row.target_branch),
+    headSha: nullableString(row.head_sha),
+    baseSha: nullableString(row.base_sha),
+    author: nullableString(row.author),
+    providerCreatedAt: nullableString(row.provider_created_at),
+    providerUpdatedAt: nullableString(row.provider_updated_at),
+    closedAt: nullableString(row.closed_at),
+    mergedAt: nullableString(row.merged_at),
+    mergeSha: nullableString(row.merge_sha),
+    mergeableState: nullableString(row.mergeable_state),
+    checksConclusion: nullableString(row.checks_conclusion),
+    checksPassed: nonNegativeInteger(row.checks_passed),
+    checksFailed: nonNegativeInteger(row.checks_failed),
+    checksPending: nonNegativeInteger(row.checks_pending),
+    additions: nonNegativeInteger(row.additions),
+    deletions: nonNegativeInteger(row.deletions),
+    changedFiles: nonNegativeInteger(row.changed_files),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toIssueLink(row: Row): MultiremiScmIssueLink {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    changeRequestId: String(row.change_request_id),
+    issueId: String(row.issue_id),
+    source: row.source === "manual" || row.source === "legacy" ? row.source : "auto",
+    active: Boolean(Number(row.active ?? 1)),
+    linkedAt: String(row.linked_at),
+    unlinkedAt: nullableString(row.unlinked_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -1131,6 +1959,30 @@ function normalizeMode(value: unknown): MultiremiScmSyncMode {
   throw new Error("SCM sync mode must be poll, webhook, or hybrid");
 }
 
+function normalizeRepositoryScope(value: unknown): MultiremiScmRepositoryScope {
+  if (value === "all" || value === "selected") return value;
+  throw new Error("SCM repository scope must be all or selected");
+}
+
+function normalizeAssignmentOrigin(value: unknown): MultiremiScmRepositoryAssignmentOrigin {
+  if (value == null || value === "explicit") return "explicit";
+  if (value === "default") return "default";
+  throw new Error("SCM repository assignment origin must be default or explicit");
+}
+
+function normalizeVerificationStatus(value: unknown): MultiremiScmConnection["verificationStatus"] {
+  if (
+    value === "unverified"
+    || value === "verifying"
+    || value === "valid"
+    || value === "partial"
+    || value === "invalid"
+    || value === "rate_limited"
+    || value === "unreachable"
+  ) return value;
+  throw new Error("Invalid SCM verification status");
+}
+
 function normalizeRepositorySource(value: unknown): MultiremiScmProvider | "unknown" {
   if (value == null || value === "unknown") return "unknown";
   if (value === "github" || value === "codebase") return value;
@@ -1165,8 +2017,19 @@ function normalizePollInterval(value: unknown): number {
   return seconds;
 }
 
+function normalizeVerificationCount(value: unknown, label: string): number {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 0) throw new Error(`${label} must be a non-negative integer`);
+  return count;
+}
+
 function normalizeBaseUrl(value: unknown, provider: MultiremiScmProvider): string {
-  return normalizeHttpUrl(value, provider === "github" ? "https://github.com" : "https://code.byted.org", "base URL");
+  const normalized = normalizeHttpUrl(
+    value,
+    provider === "github" ? "https://github.com" : "https://code.byted.org",
+    "base URL",
+  );
+  return new URL(normalized).origin;
 }
 
 function normalizeApiBaseUrl(value: unknown, provider: MultiremiScmProvider, baseUrl: string): string {
@@ -1244,6 +2107,34 @@ function requiredString(value: unknown, label: string): string {
   return clean;
 }
 
+function stringField(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function nullableField(value: unknown): string | null {
+  return cleanOptionalString(value);
+}
+
+function finiteInteger(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) : null;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return Math.max(0, finiteInteger(value) ?? 0);
+}
+
+function normalizeChangeRequestState(value: unknown, draft: boolean): MultiremiScmChangeRequest["state"] {
+  if (value === "merged" || value === "closed") return value;
+  if (draft || value === "draft") return "draft";
+  return "open";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 function optionalSecret(value: unknown, label: string): string | null {
   if (value == null) return null;
   return requiredSecret(value, label);
@@ -1267,6 +2158,11 @@ function requiredSecret(value: unknown, label: string): string {
 
 function secretHint(value: string | null): string | null {
   return value ? value.slice(-4) : null;
+}
+
+function cleanVerificationError(value: unknown): string | null {
+  const error = cleanOptionalString(value);
+  return error ? error.slice(0, 500) : null;
 }
 
 function uniqueStrings(values: unknown[]): string[] {
@@ -1300,6 +2196,19 @@ function findWorkspaceRepository(repos: unknown, id: string): {
     };
   }
   return null;
+}
+
+function repositoryMatchesConnection(
+  repository: ReturnType<typeof findWorkspaceRepository> & {},
+  connection: MultiremiScmConnection,
+): boolean {
+  if (repository.source !== "unknown" && repository.source !== connection.provider) return false;
+  try {
+    assertScmRepositoryMatchesConnection(repository.url, connection.baseUrl);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function repositoryNameFromUrl(value: string): string {

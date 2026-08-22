@@ -380,6 +380,14 @@ export class StoreContext {
     );
   }
 
+  /** Serialize repository topology and project repository-resource mutations. */
+  lockWorkspaceRepositoryTopology(workspaceId: string): void {
+    this.db.run(
+      "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+      [workspaceId],
+    );
+  }
+
   /** Caller holds the workspace lifecycle lock and is inside a transaction. */
   lockIssueArchiveLifecycle(issueId: string): void {
     this.db.run(

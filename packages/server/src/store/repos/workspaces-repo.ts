@@ -473,36 +473,46 @@ export class WorkspacesRepo {
   }
 
   updateWorkspace(id: string, input: Partial<CreateWorkspaceInput>): MultiremiWorkspace {
-    const current = this.getWorkspace(id);
-    if (!current) throw new Error(`Workspace not found: ${id}`);
-    const nextName = input.name === undefined ? current.name : String(input.name ?? "").trim();
-    if (!nextName) throw new Error("name is required");
-    const nextSlug = input.slug === undefined ? current.slug : normalizeWorkspaceSlug(input.slug);
-    const issuePrefix = input.issuePrefix ?? input.issue_prefix ?? current.issuePrefix;
-    const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_workspaces SET
-        name = ?,
-        slug = ?,
-        description = ?,
-        context = ?,
-        settings = ?,
-        repos = ?,
-        issue_prefix = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        nextName,
-        nextSlug,
-        input.description === undefined ? current.description : input.description,
-        input.context === undefined ? current.context : input.context,
-        input.settings === undefined ? toJson(current.settings) : toJson(input.settings),
-        input.repos === undefined ? toJson(current.repos) : toJson(input.repos),
-        String(issuePrefix ?? "MUL").trim().toUpperCase() || "MUL",
-        now,
-        id,
-      ],
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+    if (input.name !== undefined) {
+      const name = String(input.name ?? "").trim();
+      if (!name) throw new Error("name is required");
+      assignments.push("name = ?");
+      values.push(name);
+    }
+    if (input.slug !== undefined) {
+      assignments.push("slug = ?");
+      values.push(normalizeWorkspaceSlug(input.slug));
+    }
+    if (input.description !== undefined) {
+      assignments.push("description = ?");
+      values.push(input.description);
+    }
+    if (input.context !== undefined) {
+      assignments.push("context = ?");
+      values.push(input.context);
+    }
+    if (input.settings !== undefined) {
+      assignments.push("settings = ?");
+      values.push(toJson(input.settings));
+    }
+    if (input.repos !== undefined) {
+      assignments.push("repos = ?");
+      values.push(toJson(input.repos));
+    }
+    if (input.issuePrefix !== undefined || input.issue_prefix !== undefined) {
+      const issuePrefix = input.issuePrefix ?? input.issue_prefix;
+      assignments.push("issue_prefix = ?");
+      values.push(String(issuePrefix ?? "MUL").trim().toUpperCase() || "MUL");
+    }
+    assignments.push("updated_at = ?");
+    values.push(nowIso(), id);
+    const result = this.ctx.db.run(
+      `UPDATE multiremi_workspaces SET ${assignments.join(", ")} WHERE id = ?`,
+      values,
     );
+    if (result.changes === 0) throw new Error(`Workspace not found: ${id}`);
     return this.getWorkspace(id)!;
   }
 
@@ -512,6 +522,7 @@ export class WorkspacesRepo {
       if (!this.getWorkspace(id)) return false;
       this.ctx.lockWorkspaceRuntimeLifecycle(id);
       this.assertWorkspaceDaemonTrustRevoked(id);
+      this.deleteWorkspaceScmState(id);
       const result = this.ctx.db.run("DELETE FROM multiremi_workspaces WHERE id = ?", [id]);
       if (result.changes === 0) return false;
       this.ctx.db.run("DELETE FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ?", [id]);
@@ -524,6 +535,63 @@ export class WorkspacesRepo {
       ]);
       return true;
     })();
+  }
+
+  private deleteWorkspaceScmState(workspaceId: string): void {
+    const connectionIds = "SELECT id FROM multiremi_scm_connections WHERE workspace_id = ?";
+    const eventIds = `SELECT id FROM multiremi_scm_events
+      WHERE workspace_id = ? OR connection_id IN (${connectionIds})`;
+    const changeRequestIds = `SELECT id FROM multiremi_scm_change_requests
+      WHERE workspace_id = ? OR connection_id IN (${connectionIds})`;
+    const now = nowIso();
+
+    // Updating first takes the same connection-row lock used by polling claims.
+    // Once this transaction commits, stale pollers cannot acquire another lease.
+    this.ctx.db.run(
+      "UPDATE multiremi_scm_connections SET enabled = 0, updated_at = ? WHERE workspace_id = ?",
+      [now, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_event_deliveries WHERE event_id IN (${eventIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_event_evidence WHERE event_id IN (${eventIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_effects WHERE event_id IN (${eventIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_events
+       WHERE workspace_id = ? OR connection_id IN (${connectionIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_issue_links
+       WHERE workspace_id = ? OR change_request_id IN (${changeRequestIds})`,
+      [workspaceId, workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_change_requests
+       WHERE workspace_id = ? OR connection_id IN (${connectionIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_sync_cursors WHERE connection_id IN (${connectionIds})`,
+      [workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id IN (${connectionIds})`,
+      [workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_repository_bindings
+       WHERE workspace_id = ? OR connection_id IN (${connectionIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run("DELETE FROM multiremi_scm_connections WHERE workspace_id = ?", [workspaceId]);
   }
 
   private assertWorkspaceDaemonTrustRevoked(workspaceId: string): void {

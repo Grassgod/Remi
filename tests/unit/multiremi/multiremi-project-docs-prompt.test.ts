@@ -6,6 +6,15 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 function createProjectTask(store: MultiremiStore) {
+  store.ensureLocalWorkspace();
+  store.updateWorkspace("local", {
+    repos: [{
+      id: "repo_knowledge_prompt",
+      name: "knowledge",
+      url: "https://github.com/example/knowledge",
+      source: "github",
+    }],
+  });
   const agent = store.createAgent({
     name: "Codex",
     provider: "codex",

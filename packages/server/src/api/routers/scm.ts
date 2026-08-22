@@ -19,6 +19,38 @@ import type { RouterDeps } from "./deps.js";
 export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
+  app.get("/api/issues/:id/change-requests", (c) => {
+    const issue = store.getIssue(c.req.param("id"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const changeRequests = store.listScmChangeRequestsForIssue(issue.id) ?? [];
+    return c.json({ changeRequests, total: changeRequests.length });
+  });
+
+  app.put("/api/issues/:issueId/change-requests/:changeRequestId", (c) => {
+    const issue = store.getIssue(c.req.param("issueId"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    try {
+      return c.json(store.linkScmChangeRequestToIssue(issue.id, c.req.param("changeRequestId")));
+    } catch (error) {
+      return scmErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/issues/:issueId/change-requests/:changeRequestId", (c) => {
+    const issue = store.getIssue(c.req.param("issueId"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    if (!store.unlinkScmChangeRequestFromIssue(issue.id, c.req.param("changeRequestId"))) {
+      return c.json({ error: "SCM change request link not found" }, 404);
+    }
+    return c.body(null, 204);
+  });
+
   app.get("/api/workspaces/:workspaceId/scm/connections", (c) => {
     const workspaceId = c.req.param("workspaceId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
@@ -78,6 +110,44 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
 
+  app.post("/api/workspaces/:workspaceId/scm/connections/:connectionId/verify", async (c) => {
+    const loaded = loadConnection(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    try {
+      const started = store.markScmConnectionVerificationStarted(loaded.connection.id);
+      const credential = store.getScmConnectionCredential(loaded.connection.id);
+      if (!credential) return c.json({ error: "SCM connection not found" }, 404);
+      const bindings = store.listScmRepositoryBindings({ connectionId: loaded.connection.id, enabled: true });
+      let result;
+      try {
+        result = await deps.verifyScmConnection({
+          connection: started.connection,
+          credential,
+          bindings,
+        });
+      } catch {
+        result = {
+          status: "unreachable" as const,
+          verifiedAt: new Date().toISOString(),
+          identity: null,
+          repositoryCount: 0,
+          repositoryTotal: bindings.length,
+          errorCode: "verification_failed",
+          error: "验证请求失败，请稍后重试",
+        };
+      }
+      const connection = store.recordScmConnectionVerification(
+        loaded.connection.id,
+        result,
+        started.runId,
+      );
+      publishWorkspaceEvent(c, store, "scm:connection_verified", loaded.connection.workspaceId, { connection });
+      return c.json({ connection });
+    } catch (error) {
+      return scmErrorResponse(c, error);
+    }
+  });
+
   app.put("/api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId", async (c) => {
     const loaded = loadConnection(c, deps, true);
     if (loaded instanceof Response) return loaded;
@@ -86,6 +156,7 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
       external_id?: string | null;
       owner?: string | null;
       enabled?: boolean;
+      transfer?: boolean;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -103,6 +174,8 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
         externalId: body.externalId ?? body.external_id,
         owner: body.owner,
         enabled: body.enabled,
+        assignmentOrigin: "explicit",
+        transfer: body.transfer,
       });
       publishWorkspaceEvent(c, store, "scm:repository_bound", loaded.connection.workspaceId, { binding });
       return c.json({ connection: store.getScmConnectionWithRepositories(loaded.connection.id) });
@@ -187,7 +260,9 @@ function scmErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof ScmCredentialEncryptionError) {
     return c.json({ error: message, code: error.code }, 503);
   }
-  if (/already exists|UNIQUE constraint|duplicate key/iu.test(message)) return c.json({ error: message }, 409);
+  if (/already exists|already bound|changed while|UNIQUE constraint|duplicate key/iu.test(message)) {
+    return c.json({ error: message }, 409);
+  }
   if (/not found/iu.test(message)) return c.json({ error: message }, 404);
   if (/event history/iu.test(message)) return c.json({ error: message }, 409);
   return c.json({ error: message }, 400);

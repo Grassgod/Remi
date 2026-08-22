@@ -115,6 +115,15 @@ export interface ScmRecordResult {
   evidenceCreated: boolean;
 }
 
+export interface ScmSnapshotEventWriteResult {
+  advance: AdvanceScmEntitySnapshotResult;
+  events: ScmRecordResult[];
+}
+
+export type ScmSnapshotEventFactory = (
+  advance: AdvanceScmEntitySnapshotResult,
+) => RecordScmCanonicalEventInput[];
+
 /** Structural store contract shared by the poller and webhook ingestor. */
 export interface ScmIngestionStore {
   listConnections(input?: {
@@ -146,6 +155,10 @@ export interface ScmIngestionStore {
   ): MultiremiScmEntitySnapshot | null;
   upsertEntitySnapshot(input: UpsertScmEntitySnapshotInput): MultiremiScmEntitySnapshot;
   advanceEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult;
+  advanceEntitySnapshotWithEvents(
+    input: UpsertScmEntitySnapshotInput,
+    createEvents: ScmSnapshotEventFactory,
+  ): ScmSnapshotEventWriteResult;
   recordCanonicalEvent(input: RecordScmCanonicalEventInput): ScmRecordResult;
 }
 

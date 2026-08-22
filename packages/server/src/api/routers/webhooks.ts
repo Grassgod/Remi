@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import { handleGitHubWebhook, headersToRecord, readJson, readPublicWebhookBody, webhookClientIpKey, webhookSignatureStatus } from "../helpers.js";
+import { headersToRecord, readPublicWebhookBody, webhookClientIpKey, webhookSignatureStatus } from "../helpers.js";
 import { isObjectRecord, publicWebhookDeliveryResponse } from "../wire/index.js";
 import type { RunAutopilotInput } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
@@ -7,7 +7,6 @@ import type { RouterDeps } from "./deps.js";
 export function registerWebhookRoutes(app: Hono, deps: RouterDeps): void {
   const { store, webhookRateLimiter, webhookIpRateLimiter } = deps;
 
-  app.post("/api/webhooks/github", async (c) => c.json(handleGitHubWebhook(store, await readJson(c)), 202));
   app.post("/api/webhooks/autopilots/:token", async (c) => {
     if (!webhookIpRateLimiter.allow(webhookClientIpKey(c.req.raw))) {
       return c.json({ error: "rate limit exceeded" }, 429);
