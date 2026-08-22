@@ -83,7 +83,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
   }
   if (action === "update") {
     const issueId = positional[1]?.trim();
-    if (!issueId) throw new Error("usage: multiremi issue update <issue-id> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--assignee <id|name|email> --assignee-type <type>] [--project <id>] [--parent <id>]");
+    if (!issueId) throw new Error("usage: multiremi issue update <issue-id> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--assignee <id|name|email> --assignee-type <type>] [--project <id>] [--parent <id>] [--start-date <date>] [--due-date <date>]");
     await issueUpdate(issueId, options);
     return;
   }
@@ -354,7 +354,7 @@ export async function issueComment(positional: string[], options: CliOptions): P
     return;
   }
   if (action === "add") {
-    if (!issueId) throw new Error("usage: multiremi issue comment add <issue-id> [--parent <comment-id>] (--content <text>|--content-file <path>|--content-stdin)");
+    if (!issueId) throw new Error("usage: multiremi issue comment add <issue-id> [--parent <comment-id>] [--attachment <path>]... (--content <text>|--content-file <path>|--content-stdin)");
     const body = await readCommentBody(options);
     if (!body.trim()) throw new Error("comment body is required");
     const attachmentIds: string[] = [];
@@ -449,7 +449,7 @@ export async function issueMetadata(positional: string[], options: CliOptions): 
 
 export async function issueCreate(options: CliOptions): Promise<void> {
   const title = rawStringOption(options, "title");
-  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>]");
+  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>] [--project <id>] [--parent <id>] [--assignee <id|name|email> --assignee-type <type>] [--start-date <date>] [--due-date <date>] [--attachment <path>]... [--allow-duplicate]");
   const attachments = readAttachmentFiles(options);
   const body: Record<string, unknown> = { title };
   const description = await readOptionalTextBody(options, "description");
