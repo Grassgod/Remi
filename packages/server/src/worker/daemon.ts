@@ -2211,7 +2211,6 @@ export class MultiremiDaemon {
       daemonOptions: {
         daemonPort: this.repoServerPort,
         serverUrl: this.options.serverUrl,
-        fallbackToken: this.options.token,
         workspacesRoot: this.options.workspacesRoot,
       },
       workDir,

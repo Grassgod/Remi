@@ -181,7 +181,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!password || /[\r\n]/u.test(password)) {
       return c.json({ error: "repository credential is invalid", code: "scm_credential_invalid" }, 500);
     }
-    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    // The stored PAT lifetime is independent of this timestamp. It only bounds
+    // how long Git may cache the credential returned to its helper process.
+    const helperCacheExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
     c.header("Cache-Control", "no-store");
     return c.json({
       repositoryId: binding.repositoryId,
@@ -189,7 +191,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       cloneUrl,
       username: connection.provider === "github" ? "x-access-token" : "oauth2",
       password,
-      expiresAt,
+      // Keep the wire key for Git credential-helper compatibility.
+      expiresAt: helperCacheExpiresAt,
     });
   });
 
@@ -420,11 +423,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
     const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
-    const ownerId = cleanString(runtime?.ownerId);
-    if (ownerId) {
-      const token = await store.createTaskAccessToken(task, ownerId);
-      response.auth_token = token.token;
-    }
+    // Every claim gets a task capability, including ownerless runtimes left by
+    // older releases. `local` matches the legacy owner semantics used by the
+    // runtime claim predicate, while the task/agent/workspace bindings enforce
+    // the actual authorization boundary.
+    const ownerId = cleanString(runtime?.ownerId) ?? "local";
+    const token = await store.createTaskAccessToken(task, ownerId);
+    response.auth_token = token.token;
     return c.json({ task: response });
   });
   app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {

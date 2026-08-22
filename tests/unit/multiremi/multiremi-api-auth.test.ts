@@ -61,6 +61,57 @@ describe("Multiremi API — authentication and token scoping", () => {
     expect(await store.verifyAccessToken(login.token)).toBeNull();
   });
 
+  it("mints a task-scoped token for an ownerless legacy runtime claim", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_ownerless_legacy",
+      name: "Legacy Codex",
+      provider: "codex",
+      ownerId: null,
+    });
+    const agent = store.createAgent({
+      name: "Legacy task agent",
+      provider: "codex",
+      workspaceId: "local",
+      runtimeId: runtime.id,
+    });
+    const issue = store.createIssue({
+      title: "Legacy task token",
+      workspaceId: "local",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "legacy claim" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    expect(claim.status).toBe(200);
+    const body = await claim.json();
+    expect(body.task.auth_token).toStartWith("mat_");
+    expect(await store.verifyAccessToken(body.task.auth_token)).toMatchObject({
+      type: "task",
+      purpose: "task",
+      userId: "local",
+      workspaceId: "local",
+      taskId: task.id,
+      agentId: agent.id,
+    });
+
+    const daemonControlPlane = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${body.task.auth_token}`,
+      },
+      body: JSON.stringify({ runtime_id: runtime.id }),
+    });
+    expect(daemonControlPlane.status).toBe(403);
+    expect(await daemonControlPlane.json()).toEqual({ error: "forbidden for task token" });
+  });
+
   it("protects APIs with bearer auth and scopes daemon tokens to daemon routes", async () => {
     const store = createStore();
     store.createWorkspaceMember({

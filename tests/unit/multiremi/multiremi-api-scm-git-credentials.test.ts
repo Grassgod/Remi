@@ -40,7 +40,7 @@ describe("Multiremi API — JIT Git credentials", () => {
       name: "GitHub",
       provider: "github",
       mode: "poll",
-      accessToken: "github-short-lived-token",
+      accessToken: "github-access-token",
       repositoryIds: ["repo_private", "repo_other"],
     });
 
@@ -90,12 +90,12 @@ describe("Multiremi API — JIT Git credentials", () => {
       repositoryUrl,
       cloneUrl: "https://github.com/example/private.git",
       username: "x-access-token",
-      password: "github-short-lived-token",
+      password: "github-access-token",
     });
 
     const taskResponse = await requestCredential(taskCredential.token, repositoryUrl);
     expect(taskResponse.status).toBe(200);
-    expect((await taskResponse.json()).password).toBe("github-short-lived-token");
+    expect((await taskResponse.json()).password).toBe("github-access-token");
     expect((await requestCredential(taskCredential.token, otherRepositoryUrl)).status).toBe(404);
     expect((await requestCredential(taskCredential.token, repositoryUrl, "another-workspace")).status).toBe(403);
     expect((await requestCredential(pat.token, repositoryUrl)).status).toBe(403);

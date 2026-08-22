@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
@@ -108,16 +108,12 @@ const DEFAULT_GIT_SSH_COMMAND = [
 ].join(" ");
 const RESERVED_ISSUE_WORKSPACE_DIRECTORIES = new Set(["wiki", ".multiremi"]);
 const MULTIREMI_HOOK_MARKER = "# multiremi:prepare-commit-msg:co-authored-by";
+const MULTIREMI_CHAINED_HOOK_MARKER = "# multiremi:chained-hook-suffix=";
 const LEGACY_DAEMON_HOOK_SIGNATURES = [
   "# multimira:prepare-commit-msg:co-authored-by",
   "# Installed by the Multimira daemon.",
 ];
-const DAEMON_INSTALLED_HOOK_SIGNATURES = [
-  MULTIREMI_HOOK_MARKER,
-  "# Installed by the Multiremi daemon.",
-  ...LEGACY_DAEMON_HOOK_SIGNATURES,
-];
-const PREPARE_COMMIT_MSG_HOOK = `#!/bin/sh
+const PREPARE_COMMIT_MSG_HOOK_BODY = `#!/bin/sh
 # multiremi:prepare-commit-msg:co-authored-by
 # Multiremi: attribute commits to Remi.
 # Installed by the Multiremi daemon. Do not edit - it will be overwritten.
@@ -335,6 +331,8 @@ export class MultiremiRepoCache {
         throw new Error(`worktree ${worktreePath} is on ${currentBranch}, expected ${requestedBranch}; refusing to switch a persistent workspace`);
       }
       const baseRef = resolveBaseRef(barePath, params.ref);
+      excludeAgentFiles(worktreePath);
+      applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
       return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
     }
 
@@ -968,16 +966,35 @@ function applyCoAuthoredByHook(worktreePath: string, enabled: boolean): void {
 function installCoAuthoredByHook(worktreePath: string): void {
   const hookPath = prepareCommitMsgHookPath(worktreePath);
   mkdirSync(dirname(hookPath), { recursive: true });
-  writeFileSync(hookPath, PREPARE_COMMIT_MSG_HOOK, { mode: 0o755 });
-  chmodSync(hookPath, 0o755);
+  let chainedHookSuffix: string | null = null;
+  if (existsSync(hookPath)) {
+    const existing = readFileSync(hookPath, "utf8");
+    if (existing.includes(MULTIREMI_HOOK_MARKER)) {
+      chainedHookSuffix = parseChainedHookSuffix(existing);
+    } else if (!isLegacyDaemonInstalledHook(existing)) {
+      chainedHookSuffix = preserveUserHook(hookPath, existing);
+    }
+  }
+  writeManagedHookAtomically(hookPath, prepareCommitMsgHook(chainedHookSuffix));
 }
 
 function removeCoAuthoredByHook(worktreePath: string): void {
   const hookPath = prepareCommitMsgHookPath(worktreePath);
   if (!existsSync(hookPath)) return;
   const content = readFileSync(hookPath, "utf8");
-  if (!isDaemonInstalledHook(content)) return;
-  rmSync(hookPath, { force: true });
+  if (content.includes(MULTIREMI_HOOK_MARKER)) {
+    const chainedHookSuffix = parseChainedHookSuffix(content);
+    if (chainedHookSuffix) {
+      const chainedHookPath = `${hookPath}${chainedHookSuffix}`;
+      if (existsSync(chainedHookPath)) {
+        renameSync(chainedHookPath, hookPath);
+        return;
+      }
+    }
+    rmSync(hookPath, { force: true });
+    return;
+  }
+  if (isLegacyDaemonInstalledHook(content)) rmSync(hookPath, { force: true });
 }
 
 function prepareCommitMsgHookPath(worktreePath: string): string {
@@ -986,6 +1003,45 @@ function prepareCommitMsgHookPath(worktreePath: string): string {
   return join(resolvedCommonDir, "hooks", "prepare-commit-msg");
 }
 
-function isDaemonInstalledHook(content: string): boolean {
-  return DAEMON_INSTALLED_HOOK_SIGNATURES.some((signature) => content.includes(signature));
+function prepareCommitMsgHook(chainedHookSuffix: string | null): string {
+  if (!chainedHookSuffix) return PREPARE_COMMIT_MSG_HOOK_BODY;
+  return PREPARE_COMMIT_MSG_HOOK_BODY.replace(
+    "\nCOMMIT_MSG_FILE=",
+    `\n${MULTIREMI_CHAINED_HOOK_MARKER}${chainedHookSuffix}\nCHAINED_HOOK="\${0}${chainedHookSuffix}"\nif [ -x "$CHAINED_HOOK" ]; then\n  "$CHAINED_HOOK" "$@" || exit $?\nfi\n\nCOMMIT_MSG_FILE=`,
+  );
+}
+
+function preserveUserHook(hookPath: string, content: string): string {
+  const digest = createHash("sha256").update(content).digest("hex").slice(0, 12);
+  let suffix = `.multiremi-user-${digest}`;
+  let index = 1;
+  while (existsSync(`${hookPath}${suffix}`)) {
+    suffix = `.multiremi-user-${digest}-${index}`;
+    index += 1;
+  }
+  const chainedHookPath = `${hookPath}${suffix}`;
+  copyFileSync(hookPath, chainedHookPath);
+  chmodSync(chainedHookPath, statSync(hookPath).mode & 0o777);
+  return suffix;
+}
+
+function writeManagedHookAtomically(hookPath: string, content: string): void {
+  const temporaryPath = `${hookPath}.multiremi-tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temporaryPath, content, { mode: 0o755 });
+    chmodSync(temporaryPath, 0o755);
+    renameSync(temporaryPath, hookPath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+function parseChainedHookSuffix(content: string): string | null {
+  const line = content.split(/\r?\n/).find((value) => value.startsWith(MULTIREMI_CHAINED_HOOK_MARKER));
+  const suffix = line?.slice(MULTIREMI_CHAINED_HOOK_MARKER.length).trim() ?? "";
+  return /^\.multiremi-user-[a-f0-9]{12}(?:-\d+)?$/.test(suffix) ? suffix : null;
+}
+
+function isLegacyDaemonInstalledHook(content: string): boolean {
+  return LEGACY_DAEMON_HOOK_SIGNATURES.some((signature) => content.includes(signature));
 }
