@@ -6,11 +6,12 @@ services:
   api:
     image: ${REMI_API_IMAGE:?set REMI_API_IMAGE}
     restart: unless-stopped
-    user: ${REMI_RUNTIME_UID:-1000}:${REMI_RUNTIME_GID:-1000}
     env_file:
       - ${REMI_API_ENV_FILE:?set REMI_API_ENV_FILE}
     environment:
       HOME: /srv/multiremi
+      REMI_RUNTIME_UID: ${REMI_RUNTIME_UID:-1000}
+      REMI_RUNTIME_GID: ${REMI_RUNTIME_GID:-1000}
       MULTIREMI_HOST: 0.0.0.0
       MULTIREMI_PORT: 6120
       MULTIREMI_OPENVIKING_URL: http://openviking:1933

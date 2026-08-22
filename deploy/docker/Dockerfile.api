@@ -4,13 +4,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates openssh-client \
+  && apt-get install -y --no-install-recommends ca-certificates gosu openssh-client passwd \
   && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts \
-  && rm -rf /root/.bun/install/cache
+  && rm -rf /root/.bun/install/cache \
+  && chmod 0755 /app/deploy/docker/api-entrypoint.sh
 
-USER bun
 EXPOSE 6120
+ENTRYPOINT ["/app/deploy/docker/api-entrypoint.sh"]
 CMD ["bun", "run", "apps/server/main.ts", "serve"]
