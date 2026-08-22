@@ -34,6 +34,7 @@
   "scripts": {
     "start": "bun run apps/remi/main.ts serve",
     "serve": "bun run apps/remi/main.ts serve",
+    "platform-updater": "bun run apps/platform-updater/main.ts",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
     "lock:clean": "bun run scripts/clean-lockfile.ts",
     "test": "bun test",

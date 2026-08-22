@@ -11,6 +11,7 @@ import {
   DaemonRetiredError,
 } from "@multiremi/store/repos/daemon-retirement-repo.js";
 import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
+import { PlatformOperationConflictError } from "@multiremi/store/repos/platform-operations-repo.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
 import { registerGithubRoutes } from "./routers/github.js";
@@ -47,6 +48,7 @@ import { registerCommentRoutes } from "./routers/comments.js";
 import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
+import { registerPlatformRoutes } from "./routers/platform.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -138,6 +140,7 @@ export interface MultiremiApiOptions {
   /** Undefined reads the opt-in env config; null explicitly disables it. */
   controlPlaneSshMesh?: ControlPlaneSshMeshLifecycle | null;
   authToken?: string | null;
+  platformUpdaterToken?: string | null;
   shareSecret?: string | null;
   hostname?: string;
   realtimeState?: MultiremiRealtimeState;
@@ -155,6 +158,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const platformUpdaterToken = options.platformUpdaterToken
+    ?? process.env.MULTIREMI_PLATFORM_UPDATER_TOKEN
+    ?? "";
   const shareSecret = options.shareSecret?.trim()
     || process.env.MULTIREMI_SHARE_SECRET?.trim()
     || authToken
@@ -170,6 +176,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     store,
     scheduler,
     authToken,
+    platformUpdaterToken,
     shareSecret,
     webhookRateLimiter,
     webhookIpRateLimiter,
@@ -269,6 +276,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   app.onError((err, c) => {
     if (err instanceof RuntimeRegistrationIdentityConflictError) {
+      return c.json({ error: err.message, code: err.code }, 409);
+    }
+    if (err instanceof PlatformOperationConflictError) {
       return c.json({ error: err.message, code: err.code }, 409);
     }
     if (err instanceof DaemonIdentityOwnerConflictError) {
@@ -436,6 +446,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   registerRuntimeRoutes(app, deps);
   registerDaemonRetirementRoutes(app, deps);
+  registerPlatformRoutes(app, deps);
 
   registerDashboardRoutes(app, deps);
 

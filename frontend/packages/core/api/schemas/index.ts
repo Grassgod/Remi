@@ -21,3 +21,4 @@ export * from "./repositories";
 export * from "./workspaces";
 export * from "./tokens";
 export * from "./issue-shares";
+export * from "./platform";

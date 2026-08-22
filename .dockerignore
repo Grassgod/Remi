@@ -1,0 +1,14 @@
+.git
+.github
+.next
+node_modules
+**/node_modules
+**/.next
+**/coverage
+**/dist
+.env
+.env.*
+!.env.example
+uploads
+data
+tmp

@@ -5,6 +5,7 @@ import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
+import { PlatformOperationsRepo } from "@multiremi/store/repos/platform-operations-repo.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
 import { AgentPluginsRepo } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { GitHubRepo } from "@multiremi/store/repos/github-repo.js";
@@ -268,6 +269,13 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/types.js";
 import type {
+  CreatePlatformOperationInput,
+  MultiremiPlatformOperation,
+  MultiremiPlatformRelease,
+  MultiremiPlatformService,
+  ReportPlatformOperationInput,
+} from "@multiremi/contracts/types.js";
+import type {
   ClaimScmSyncStreamInput,
   CreateScmConnectionInput,
   MultiremiScmCanonicalEvent,
@@ -300,6 +308,7 @@ export class MultiremiStore {
   private accessTokens: AccessTokensRepo;
   private issueShares: IssueSharesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
+  private platformOperations: PlatformOperationsRepo;
   private agents: AgentsSkillsRepo;
   private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
@@ -327,6 +336,7 @@ export class MultiremiStore {
     this.accessTokens = new AccessTokensRepo(this.db);
     this.issueShares = new IssueSharesRepo(this.db);
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
+    this.platformOperations = new PlatformOperationsRepo(this.db);
     this.agents = new AgentsSkillsRepo(this.ctx);
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
@@ -397,6 +407,54 @@ export class MultiremiStore {
 
   migrate(): void {
 runMigrations(this.db);
+  }
+
+  getPlatformState() {
+    return this.platformOperations.getState();
+  }
+
+  setPlatformAutoUpdateStable(enabled: boolean) {
+    return this.platformOperations.setAutoUpdateStable(enabled);
+  }
+
+  heartbeatPlatformUpdater(input: {
+    driver: "systemd_release" | "docker_compose";
+    currentRelease?: MultiremiPlatformRelease | null;
+    latestRelease?: MultiremiPlatformRelease | null;
+    recentReleases?: MultiremiPlatformRelease[];
+    services?: MultiremiPlatformService[];
+  }) {
+    return this.platformOperations.heartbeat(input);
+  }
+
+  createPlatformOperation(
+    input: CreatePlatformOperationInput,
+    requestedBy: string,
+  ): MultiremiPlatformOperation {
+    return this.platformOperations.create(input, requestedBy);
+  }
+
+  getPlatformOperation(id: string): MultiremiPlatformOperation | null {
+    return this.platformOperations.get(id);
+  }
+
+  getActivePlatformOperation(): MultiremiPlatformOperation | null {
+    return this.platformOperations.active();
+  }
+
+  listPlatformOperations(limit?: number): MultiremiPlatformOperation[] {
+    return this.platformOperations.list(limit);
+  }
+
+  claimPlatformOperation(): MultiremiPlatformOperation | null {
+    return this.platformOperations.claim();
+  }
+
+  reportPlatformOperation(
+    id: string,
+    input: ReportPlatformOperationInput,
+  ): MultiremiPlatformOperation | null {
+    return this.platformOperations.report(id, input);
   }
 
   getSessionArchive(id: string): MultiremiSessionArchive | null {

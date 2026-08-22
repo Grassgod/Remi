@@ -1,0 +1,20 @@
+[Unit]
+Description=Multiremi Platform Updater
+After=network-online.target remi-platform-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=multiremi
+Group=multiremi
+EnvironmentFile=/etc/multiremi/platform-updater.env
+ExecStart=/usr/local/bin/bun run /opt/multiremi-platform/updater/current/apps/platform-updater/main.ts
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/multiremi-platform /var/lib/multiremi-platform-updater
+
+[Install]
+WantedBy=multi-user.target

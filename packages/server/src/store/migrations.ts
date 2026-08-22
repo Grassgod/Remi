@@ -1461,6 +1461,45 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_task ON multiremi_task_human_requests(task_id, status);
+
+    CREATE TABLE IF NOT EXISTS multiremi_platform_state (
+      id TEXT PRIMARY KEY,
+      driver TEXT NOT NULL DEFAULT 'systemd_release',
+      current_release TEXT,
+      latest_release TEXT,
+      recent_releases TEXT NOT NULL DEFAULT '[]',
+      services TEXT NOT NULL DEFAULT '[]',
+      auto_update_stable INTEGER NOT NULL DEFAULT 0,
+      updater_heartbeat_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_platform_operations (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      driver TEXT NOT NULL,
+      active_slot INTEGER,
+      target_version TEXT,
+      target_ref TEXT,
+      target_manifest TEXT NOT NULL DEFAULT '{}',
+      progress TEXT NOT NULL DEFAULT '{}',
+      requested_by TEXT NOT NULL,
+      output TEXT,
+      error TEXT,
+      previous_release TEXT,
+      result_release TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_platform_operations_active
+      ON multiremi_platform_operations(active_slot);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_platform_operations_created
+      ON multiremi_platform_operations(created_at);
   `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS multiremi_issue_workspaces (

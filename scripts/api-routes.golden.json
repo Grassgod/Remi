@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 568,
+    "routeCount": 575,
     "routeCountByPrefix": {
-      "native": 193,
-      "compat": 362,
+      "native": 197,
+      "compat": 365,
       "root": 13
     },
-    "getRoutes": 249,
-    "getRoutesWithBody": 246,
+    "getRoutes": 251,
+    "getRoutesWithBody": 248,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 319,
+    "mutationRoutes": 324,
     "mutationRoutesCovered": 277,
     "flows": [
       "agents-compat",
@@ -270,6 +270,8 @@
     "GET /api/multiremi/models",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
+    "GET /api/multiremi/platform/operations",
+    "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
     "GET /api/multiremi/projects/:id/resources",
@@ -384,6 +386,7 @@
     "PATCH /api/multiremi/issues/:id",
     "PATCH /api/multiremi/labels/:id",
     "PATCH /api/multiremi/members/:id",
+    "PATCH /api/multiremi/platform/settings",
     "PATCH /api/multiremi/projects/:id",
     "PATCH /api/multiremi/projects/:id/resources/:resourceId",
     "PATCH /api/multiremi/runtimes/:id",
@@ -536,6 +539,7 @@
     "POST /api/multiremi/labels",
     "POST /api/multiremi/members",
     "POST /api/multiremi/pins",
+    "POST /api/multiremi/platform/operations",
     "POST /api/multiremi/projects",
     "POST /api/multiremi/projects/:id/resources",
     "POST /api/multiremi/projects/:id/restore",
@@ -555,6 +559,9 @@
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
+    "POST /api/platform-updater/heartbeat",
+    "POST /api/platform-updater/operations/:id/report",
+    "POST /api/platform-updater/operations/claim",
     "POST /api/project-knowledge/migration/backfill",
     "POST /api/project-knowledge/migration/retry-failed",
     "POST /api/project-knowledge/migration/verify",
@@ -835,6 +842,8 @@
     "GET /api/multiremi/models",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
+    "GET /api/multiremi/platform/operations",
+    "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
     "GET /api/multiremi/projects/:id/resources",
@@ -12289,6 +12298,34 @@
       "body": {
         "pins": [],
         "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/platform/operations",
+      "route": "GET /api/multiremi/platform/operations",
+      "path": "/api/multiremi/platform/operations",
+      "status": 200,
+      "body": {
+        "operations": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/platform/status",
+      "route": "GET /api/multiremi/platform/status",
+      "path": "/api/multiremi/platform/status",
+      "status": 200,
+      "body": {
+        "canManage": true,
+        "driver": "systemd_release",
+        "currentRelease": null,
+        "latestRelease": null,
+        "updateAvailable": false,
+        "autoUpdateStable": false,
+        "updaterStatus": "offline",
+        "updaterHeartbeatAt": null,
+        "services": [],
+        "activeOperation": null,
+        "recentReleases": []
       }
     },
     {

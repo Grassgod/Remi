@@ -1,0 +1,72 @@
+name: multiremi-platform
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-multiremi}
+      POSTGRES_USER: ${POSTGRES_USER:-multiremi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  openviking:
+    image: ${OPENVIKING_IMAGE:?set OPENVIKING_IMAGE to an immutable digest}
+    restart: unless-stopped
+    volumes:
+      - ${OPENVIKING_STATE_DIR:?set OPENVIKING_STATE_DIR}:/app/.openviking
+      - ${OPENVIKING_WORKSPACE_DIR:?set OPENVIKING_WORKSPACE_DIR}:/app/.openviking/workspace
+      - ${OPENVIKING_CONFIG_FILE:?set OPENVIKING_CONFIG_FILE}:/app/.openviking/ov.conf:ro
+      - ${OPENVIKING_SECRET_FILE:?set OPENVIKING_SECRET_FILE}:/app/.openviking/ovcli.conf:ro
+    healthcheck:
+      test: ["CMD", "openviking-entrypoint", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  api:
+    image: ${REMI_API_IMAGE:?set REMI_API_IMAGE to an immutable digest}
+    restart: unless-stopped
+    env_file:
+      - ${REMI_API_ENV_FILE:?set REMI_API_ENV_FILE}
+    environment:
+      MULTIREMI_HOST: 0.0.0.0
+      MULTIREMI_PORT: 6120
+      MULTIREMI_DATABASE_URL: postgresql://${POSTGRES_USER:-multiremi}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-multiremi}
+      OPENVIKING_URL: http://openviking:1933
+    depends_on:
+      postgres:
+        condition: service_healthy
+      openviking:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:6120/readyz');process.exit(r.ok?0:1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - 127.0.0.1:6120:6120
+
+  web:
+    image: ${REMI_WEB_IMAGE:?set REMI_WEB_IMAGE to an immutable digest}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - ${REMI_WEB_BIND:-0.0.0.0}:3000:3000
+
+volumes:
+  postgres-data:

@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - ".github/workflows/platform-release.yml"
       - ".github/workflows/release-build-check.yml"
       - "apps/**"
       - "bin/**"
       - "bun.lock"
       - "bunfig.toml"
+      - "deploy/**"
       - "frontend/**"
       - "package.json"
       - "packages/**"
@@ -18,11 +20,13 @@ on:
       - main
     paths:
       - ".github/workflows/release.yml"
+      - ".github/workflows/platform-release.yml"
       - ".github/workflows/release-build-check.yml"
       - "apps/**"
       - "bin/**"
       - "bun.lock"
       - "bunfig.toml"
+      - "deploy/**"
       - "frontend/**"
       - "package.json"
       - "packages/**"
@@ -82,3 +86,23 @@ jobs:
       # is the first gate that catches it).
       - name: Architecture guard tests
         run: bun test tests/arch/
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build platform API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.api
+          push: false
+          cache-from: type=gha,scope=platform-api-check
+          cache-to: type=gha,scope=platform-api-check,mode=max
+
+      - name: Build platform Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.web
+          push: false
+          cache-from: type=gha,scope=platform-web-check
+          cache-to: type=gha,scope=platform-web-check,mode=max

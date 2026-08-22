@@ -3395,6 +3395,100 @@ export interface MultiremiAgentActivityBucket {
   failed_count?: number;
 }
 
+// ─── Platform lifecycle ─────────────────────────────────────────────────────
+
+export type MultiremiPlatformDeploymentDriver = "systemd_release" | "docker_compose";
+
+export type MultiremiPlatformOperationKind =
+  | "check_updates"
+  | "restart"
+  | "update"
+  | "rollback";
+
+export type MultiremiPlatformOperationStatus =
+  | "queued"
+  | "preparing"
+  | "pulling"
+  | "switching"
+  | "restarting"
+  | "verifying"
+  | "succeeded"
+  | "failed"
+  | "rolling_back"
+  | "rolled_back";
+
+export type MultiremiPlatformServiceId = "api" | "web" | "postgres" | "openviking";
+export type MultiremiPlatformServiceStatus = "ready" | "degraded" | "stopped" | "unknown";
+
+export interface MultiremiPlatformService {
+  id: MultiremiPlatformServiceId;
+  name: string;
+  status: MultiremiPlatformServiceStatus;
+  detail: string | null;
+  version: string | null;
+  checkedAt: string | null;
+}
+
+export interface MultiremiPlatformRelease {
+  version: string;
+  ref: string;
+  publishedAt: string | null;
+  releaseUrl: string | null;
+  manifestUrl: string | null;
+  apiImage: string | null;
+  webImage: string | null;
+}
+
+export interface MultiremiPlatformOperation {
+  id: string;
+  kind: MultiremiPlatformOperationKind;
+  status: MultiremiPlatformOperationStatus;
+  driver: MultiremiPlatformDeploymentDriver;
+  targetVersion: string | null;
+  targetRef: string | null;
+  targetManifest: Record<string, unknown>;
+  progress: Record<string, unknown>;
+  requestedBy: string;
+  output: string | null;
+  error: string | null;
+  previousRelease: MultiremiPlatformRelease | null;
+  resultRelease: MultiremiPlatformRelease | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface MultiremiPlatformStatus {
+  canManage: boolean;
+  driver: MultiremiPlatformDeploymentDriver;
+  currentRelease: MultiremiPlatformRelease | null;
+  latestRelease: MultiremiPlatformRelease | null;
+  updateAvailable: boolean;
+  autoUpdateStable: boolean;
+  updaterStatus: "ready" | "stale" | "offline";
+  updaterHeartbeatAt: string | null;
+  services: MultiremiPlatformService[];
+  activeOperation: MultiremiPlatformOperation | null;
+  recentReleases: MultiremiPlatformRelease[];
+}
+
+export interface CreatePlatformOperationInput {
+  kind: MultiremiPlatformOperationKind;
+  targetVersion?: string | null;
+  targetRef?: string | null;
+  targetManifest?: Record<string, unknown>;
+}
+
+export interface ReportPlatformOperationInput {
+  status: MultiremiPlatformOperationStatus;
+  progress?: Record<string, unknown>;
+  output?: string | null;
+  error?: string | null;
+  previousRelease?: MultiremiPlatformRelease | null;
+  resultRelease?: MultiremiPlatformRelease | null;
+}
+
 export interface MultiremiAnalyticsEvent {
   id: string;
   name: MultiremiAnalyticsEventName;

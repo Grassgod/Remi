@@ -24,6 +24,7 @@
   "page": {
     "title": "설정",
     "my_account": "내 계정",
+    "system": "시스템",
     "workspace_fallback": "워크스페이스",
     "tabs": {
       "profile": "프로필",
@@ -37,7 +38,8 @@
       "model_gateway": "모델 게이트웨이",
       "storage_cleanup": "저장소 및 정리",
       "labs": "실험실",
-      "members": "멤버"
+      "members": "멤버",
+      "platform": "버전 및 서비스"
     }
   },
   "account": {
@@ -474,6 +476,53 @@
       "interval_min": "검사 간격은 최소 1분이어야 합니다.",
       "interval_gt_ttl": "검사 간격은 작업 공간 보존 기간을 초과할 수 없습니다."
     }
+  },
+  "platform": {
+    "title": "버전 및 서비스",
+    "subtitle": "플랫폼 릴리스와 서비스 상태입니다.",
+    "current_version": "현재 버전",
+    "unknown_version": "알 수 없음",
+    "check_updates": "업데이트 확인",
+    "update_available": "업데이트 가능",
+    "latest_version": "{{version}} 사용 가능",
+    "up_to_date": "최신 버전입니다",
+    "view_release": "릴리스 보기",
+    "update_now": "지금 업데이트",
+    "restart": "서비스 재시작",
+    "auto_update": "안정 버전 자동 설치",
+    "auto_update_hint": "GitHub 정식 릴리스 후 호스트 Updater가 실행합니다.",
+    "rollback": "버전 롤백",
+    "rollback_action": "롤백",
+    "no_rollback": "이전 릴리스가 없습니다.",
+    "services": "서비스",
+    "updater_status": "호스트 Updater: {{status}}",
+    "updater_ready": "정상",
+    "updater_stale": "지연",
+    "updater_offline": "오프라인",
+    "service_ready": "정상",
+    "service_degraded": "성능 저하",
+    "service_stopped": "중지됨",
+    "service_unknown": "알 수 없음",
+    "driver_systemd": "systemd release driver",
+    "driver_compose": "Docker Compose driver",
+    "reconnecting": "API를 재시작 중입니다. 작업을 유지한 채 다시 연결합니다…",
+    "operation_queued": "플랫폼 작업이 대기열에 추가되었습니다",
+    "operation_failed": "플랫폼 작업 실패",
+    "load_failed": "버전 및 서비스 상태를 불러올 수 없습니다.",
+    "status_preparing": "준비 중",
+    "status_pulling": "릴리스 다운로드 중",
+    "status_switching": "릴리스 전환 중",
+    "status_restarting": "서비스 재시작 중",
+    "status_verifying": "상태 확인 중",
+    "status_rolling_back": "이전 릴리스 복원 중",
+    "confirm_restart_title": "서비스를 재시작할까요?",
+    "confirm_restart_desc": "API와 Web 서비스를 잠시 사용할 수 없습니다.",
+    "confirm_update_title": "{{version}}을 설치할까요?",
+    "confirm_update_desc": "{{version}}을 활성화하고 서비스를 재시작합니다. 실패하면 이전 버전으로 자동 복원합니다.",
+    "confirm_rollback_title": "버전을 롤백할까요?",
+    "confirm_rollback_desc": "{{version}}으로 전환하고 서비스를 재시작합니다.",
+    "cancel": "취소",
+    "confirm": "확인"
   },
   "modelGateway": {
     "description": "모든 에이전트 작업에 적용되는 워크스페이스 게이트웨이 정책입니다. daemon은 격리된 Provider Home에 비밀 없는 설정을 다시 만들고 Token은 자식 프로세스 환경에만 주입합니다.",

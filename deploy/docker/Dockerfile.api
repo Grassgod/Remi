@@ -1,0 +1,12 @@
+FROM oven/bun:1.3.14 AS runtime
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY . .
+RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts \
+  && rm -rf /root/.bun/install/cache
+
+USER bun
+EXPOSE 6120
+CMD ["bun", "run", "apps/server/main.ts", "serve"]
