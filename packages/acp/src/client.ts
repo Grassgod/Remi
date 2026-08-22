@@ -52,6 +52,13 @@ export interface AcpClientOptions {
   onElicitationRequest?: (params: ElicitationCreateParams) => Promise<ElicitationResult>;
   /** Handler for session update notifications. */
   onSessionUpdate?: (notification: SessionNotification) => void;
+  /**
+   * Fires when the agent process dies without stop() being called — including
+   * with zero in-flight requests, where rejecting `_pending` alone reaches no
+   * consumer (MUL-63: a between-turns death left the pool entry live and every
+   * later prompt/cancel wedged). Owners use this to evict the dead session.
+   */
+  onProcessExit?: (reason: string) => void;
   /** Logger. */
   log?: (...args: unknown[]) => void;
 }
@@ -170,6 +177,14 @@ export class AcpClient {
       pending.reject(err);
     }
     this._pending.clear();
+
+    // Always notify — with 0 in-flight requests the rejections above reach
+    // nobody, and without this the death would be silent.
+    try {
+      this._options.onProcessExit?.(reason);
+    } catch (notifyErr) {
+      this._log("onProcessExit handler failed:", notifyErr);
+    }
   }
 
   async stop(): Promise<void> {

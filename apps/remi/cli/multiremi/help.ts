@@ -54,6 +54,11 @@ Commands:
   issue run-messages <task-id>
   issue rerun <id>       Enqueue a fresh issue task
   issue cancel-task <task-id>
+  issue task steer <task-id> (--content <text>|--content-file <path>|--content-stdin)
+                         Inject new instructions into a running task (run keeps going)
+  issue task steer <task-id> --force-answer [--content ...]
+                         Ask the running task to stop exploring and deliver its conclusion now
+  issue task steers <task-id> List steer messages for a task
   issue metadata list <id> List issue metadata
   issue metadata get <id> --key <k>
   issue metadata set <id> --key <k> --value <v> [--type string|number|bool]

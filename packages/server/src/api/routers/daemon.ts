@@ -702,6 +702,23 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status });
   });
+  app.get("/api/daemon/tasks/:taskId/steer", (c) => {
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (identityDenied) return identityDenied;
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    return c.json({ messages: store.listPendingTaskSteerMessages(taskId) });
+  });
+  app.post("/api/daemon/tasks/:taskId/steer/consume", async (c) => {
+    const body = await readJsonStrict<{ ids?: string[] }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (identityDenied) return identityDenied;
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id)) : [];
+    return c.json({ consumed: store.consumeTaskSteerMessages(taskId, ids) });
+  });
   app.get("/api/daemon/issues/:issueId/gc-check", (c) => {
     const issue = issueFromParam(store, c, "issueId");
     if (!issue) return c.json({ error: "issue not found" }, 404);

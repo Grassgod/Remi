@@ -27,6 +27,13 @@ import {
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import {
+  buildSteerInjectionPrompt,
+  DEFAULT_FORCE_ANSWER_GRACE_MS,
+  DEFAULT_STEER_POLL_MS,
+  mergeTaskUsageEntries,
+  TaskSteerFeed,
+} from "./steer.js";
+import {
   browseRuntimeDirectory,
   listRuntimeLocalSkills,
   loadRuntimeLocalSkillBundle,
@@ -298,6 +305,10 @@ export interface MultiremiDaemonOptions {
   approvalMode?: "auto" | "ask";
   /** How long an "ask"-mode prompt waits for a human before expiring (default 30 min). */
   humanRequestTimeoutMs?: number;
+  /** How often a running task polls for unconsumed steer messages (default 2.5s). */
+  steerPollIntervalMs?: number;
+  /** How long a force-answer run may keep going before the daemon wraps it up with the output so far (default 3 min). */
+  forceAnswerGraceMs?: number;
   daemonPort?: number;
   workspacesRoot?: string;
   repoCacheRoot?: string;
@@ -531,6 +542,8 @@ export class MultiremiDaemon {
       taskTimeoutMs: options.taskTimeoutMs ?? parseInt(process.env.MULTIREMI_TASK_TIMEOUT_MS ?? "0", 10),
       approvalMode: options.approvalMode ?? (process.env.MULTIREMI_APPROVAL_MODE === "ask" ? "ask" : "auto"),
       humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 30 * 60 * 1000),
+      steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
+      forceAnswerGraceMs: options.forceAnswerGraceMs ?? numberEnv(process.env.MULTIREMI_FORCE_ANSWER_GRACE_MS, DEFAULT_FORCE_ANSWER_GRACE_MS),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
       repoCacheRoot: options.repoCacheRoot ?? process.env.MULTIREMI_REPO_CACHE_ROOT ?? join(workspacesRoot, ".repos"),
@@ -2245,6 +2258,17 @@ export class MultiremiDaemon {
     let usage: TaskUsageEntry[] = [];
     const toMessages = createEventMapper(createAdapter(config.agentType));
 
+    // Steer channel: the feed polls for mid-run user directives; each batch
+    // soft-interrupts the streaming turn (ACP session/cancel) and is injected
+    // as the next prompt on the same provider session, so the transcript and
+    // all completed work survive. `force_answer` additionally arms a grace
+    // deadline after which the run wraps up with the output produced so far.
+    const steerFeed = new TaskSteerFeed(this.client, task.id, this.options.steerPollIntervalMs, (err) => {
+      log.warn(`Steer poll failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    let forceAnswerDeadline: number | null = null;
+    let forceAnswerExpired = false;
+
     try {
       const session = new AgentSession(provider as any, config);
       const promptArtifact = buildTaskPromptArtifact(task, {
@@ -2253,20 +2277,77 @@ export class MultiremiDaemon {
       });
       await this.client.reportTaskPrompt(task.id, promptArtifact);
       signal.throwIfAborted();
-      for await (const event of session.run(promptArtifact.prompt)) {
-        // One event may yield several messages (e.g. a completed tool_call →
-        // tool_use + tool_result). Each gets its own seq so none collides.
-        const emitted = toMessages(event).map((m) => ({ ...m, seq: nextSeq() }));
-        for (const message of emitted) {
-          // Assistant text becomes the task result / issue activity body.
-          if (message.type === "text" && message.content) output += message.content;
+      steerFeed.start();
+      let prompt = promptArtifact.prompt;
+      while (true) {
+        const turnAbort = new AbortController();
+        const onTaskAbort = () => turnAbort.abort();
+        signal.addEventListener("abort", onTaskAbort, { once: true });
+        if (signal.aborted) turnAbort.abort();
+        config.signal = turnAbort.signal;
+        let graceTimer: ReturnType<typeof setTimeout> | null = null;
+        if (forceAnswerDeadline != null) {
+          graceTimer = setTimeout(() => {
+            forceAnswerExpired = true;
+            turnAbort.abort();
+          }, Math.max(0, forceAnswerDeadline - Date.now()));
         }
-        if (emitted.length) await this.client.reportTaskMessages(task.id, emitted);
+        steerFeed.setInterrupt(() => turnAbort.abort());
+        let turnError: unknown = null;
+        try {
+          for await (const event of session.run(prompt)) {
+            // One event may yield several messages (e.g. a completed tool_call →
+            // tool_use + tool_result). Each gets its own seq so none collides.
+            const emitted = toMessages(event).map((m) => ({ ...m, seq: nextSeq() }));
+            for (const message of emitted) {
+              // Assistant text becomes the task result / issue activity body.
+              if (message.type === "text" && message.content) output += message.content;
+            }
+            if (emitted.length) await this.client.reportTaskMessages(task.id, emitted);
+          }
+        } catch (err) {
+          turnError = err;
+        } finally {
+          steerFeed.setInterrupt(null);
+          signal.removeEventListener("abort", onTaskAbort);
+          if (graceTimer) clearTimeout(graceTimer);
+        }
+        const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
+        finalSessionId = last?.sessionId ?? finalSessionId;
+        usage = mergeTaskUsageEntries(usage, responseToUsage(agent.provider, last, config.model));
+        // Resume by provider session id if the follow-up turn needs a fresh
+        // ACP process (e.g. the previous one died between turns).
+        if (finalSessionId) config.sessionId = finalSessionId;
+        if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
+        if (forceAnswerExpired) {
+          log.warn(`Task ${task.id} force-answer grace elapsed; delivering accumulated output`);
+          break;
+        }
+        const steered = steerFeed.take();
+        if (turnError && !turnAbort.signal.aborted) throw turnError;
+        if (!steered.length) {
+          if (turnError) throw turnError;
+          break;
+        }
+        if (steered.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
+          forceAnswerDeadline = Date.now() + Math.max(0, this.options.forceAnswerGraceMs);
+        }
+        prompt = buildSteerInjectionPrompt(steered);
+        await this.client.consumeTaskSteerMessages(task.id, steered.map((m) => m.id)).catch((err) => {
+          log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+        for (const message of steered) {
+          await this.reportHumanRequestMessage(task.id, nextSeq(), "steer", message.content, {
+            steer_id: message.id,
+            steer_kind: message.kind,
+            author_type: message.authorType,
+            author_id: message.authorId,
+          });
+        }
+        log.info(`Injected ${steered.length} steer message(s) into task ${task.id}`);
       }
-      const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
-      finalSessionId = last?.sessionId ?? finalSessionId;
-      usage = responseToUsage(agent.provider, last, config.model);
       await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+      const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
       return {
         output: output.trim() || last?.text || "Task completed.",
         sessionId: finalSessionId,
@@ -2274,6 +2355,7 @@ export class MultiremiDaemon {
         usage,
       };
     } finally {
+      steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, workDir, preparedWorkspace.repos).catch((err) => {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       });

@@ -380,6 +380,8 @@ export class AcpProvider implements Provider {
   private _elicitationHandlers = new Map<string, ElicitationHandler>();
   private _sessionToChatId = new Map<string, string>();
   private _lastResponse: AgentResponse | null = null;
+  /** Active-stream wakeups keyed by chatId, fired when the entry's ACP process dies. */
+  private _deathListeners = new Map<string, (reason: string) => void>();
 
   constructor(options: AcpProviderOptions = {}) {
     this._options = options;
@@ -506,6 +508,15 @@ export class AcpProvider implements Provider {
       resolveWaiting?.();
     };
 
+    // Belt-and-braces against a mid-turn process death: the prompt request's
+    // rejection normally wakes the loop, but if the death races request
+    // bookkeeping this guarantees the stream still terminates.
+    this._deathListeners.set(chatId, (reason) => {
+      promptDone = true;
+      promptError ??= new Error(`ACP agent died unexpectedly (${reason})`);
+      resolveWaiting?.();
+    });
+
     const originalOnUpdate = entry.client["_options"].onSessionUpdate;
     entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
@@ -552,7 +563,8 @@ export class AcpProvider implements Provider {
         if (promptDone) break;
 
         if (options?.signal?.aborted) {
-          await entry.client.cancel(entry.acpSessionId);
+          // A dead process makes cancel a no-op; the abort must still win.
+          await entry.client.cancel(entry.acpSessionId).catch(() => {});
           throw new Error("Cancelled");
         }
 
@@ -563,6 +575,7 @@ export class AcpProvider implements Provider {
         resolveWaiting = null;
       }
     } finally {
+      this._deathListeners.delete(chatId);
       entry.client["_options"].onSessionUpdate = originalOnUpdate;
       this._activeStreaming.delete(chatId);
       entry.lastUsed = Date.now();
@@ -718,6 +731,7 @@ export class AcpProvider implements Provider {
       onPermissionRequest: (params) => this._handlePermission(params),
       onElicitationRequest: (params) => this._handleElicitation(params),
       onSessionUpdate: () => {},
+      onProcessExit: (reason) => this._handleClientDeath(client, reason),
       log: (...args) => {
         if (process.env.REMI_DEBUG) console.error(...args);
       },
@@ -779,6 +793,23 @@ export class AcpProvider implements Provider {
     entry.models = result.models;
     entry.appliedModel = currentConfigValue(result.configOptions, MODEL_OPTION_CATEGORY);
     entry.appliedEffort = currentConfigValue(result.configOptions, EFFORT_OPTION_CATEGORY);
+  }
+
+  /**
+   * The pooled agent process died without stop(). Evict the entry immediately
+   * so the next turn resumes on a fresh process instead of writing into a dead
+   * pipe, and wake any stream currently iterating this chat — with zero
+   * in-flight JSON-RPC requests, the client's own rejection path has no
+   * consumer (the MUL-63 wedge: dead run, cancel inert, task pending forever).
+   */
+  private _handleClientDeath(client: AcpClient, reason: string): void {
+    for (const [chatId, entry] of this._pool) {
+      if (entry.client !== client) continue;
+      this._pool.delete(chatId);
+      this._sessionToChatId.delete(entry.acpSessionId);
+      console.error(`[AcpProvider] ${this._adapter.agentType} agent for ${chatId} died (${reason}); session evicted`);
+      this._deathListeners.get(chatId)?.(reason);
+    }
   }
 
   private async _discardEntry(chatId: string, entry: PoolEntry): Promise<void> {

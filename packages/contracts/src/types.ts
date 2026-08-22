@@ -1029,6 +1029,36 @@ export interface CreateTaskHumanRequestInput {
   payload: Record<string, unknown>;
 }
 
+export type MultiremiTaskSteerKind = "steer" | "force_answer";
+
+/** Mid-run user intervention: a directive injected into an executing task's
+ *  provider session without cancelling the run. `force_answer` asks the agent
+ *  to stop exploring and deliver its best conclusion now. */
+export interface MultiremiTaskSteerMessage {
+  id: string;
+  taskId: string;
+  task_id?: string;
+  authorType: string;
+  author_type?: string;
+  authorId: string | null;
+  author_id?: string | null;
+  kind: MultiremiTaskSteerKind;
+  content: string;
+  createdAt: string;
+  created_at?: string;
+  consumedAt: string | null;
+  consumed_at?: string | null;
+}
+
+export interface CreateTaskSteerMessageInput {
+  id?: string;
+  taskId: string;
+  kind: MultiremiTaskSteerKind;
+  content: string;
+  authorType?: string;
+  authorId?: string | null;
+}
+
 export interface MultiremiTask {
   id: string;
   taskKind: "direct" | "quick_create";

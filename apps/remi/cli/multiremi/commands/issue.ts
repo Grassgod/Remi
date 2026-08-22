@@ -162,6 +162,10 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     printJson(await multiremiApiRequest("POST", `/api/tasks/${encodeURIComponent(taskId)}/cancel`, {}, options));
     return;
   }
+  if (action === "task") {
+    await issueTask(positional.slice(1), options);
+    return;
+  }
   if (action === "search") {
     const queryText = positional[1]?.trim();
     if (!queryText) throw new Error("usage: multiremi issue search <query> [--limit <n>] [--include-closed]");
@@ -172,7 +176,41 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     printIssueSearch(await multiremiApiRequest("GET", `/api/issues/search?${params.toString()}`, undefined, options), options);
     return;
   }
-  throw new Error("usage: multiremi issue list|get|create|update|assign|status|delete|search|runs|run-messages|rerun|cancel-task|comment|session|archive|subscriber|metadata ...");
+  throw new Error("usage: multiremi issue list|get|create|update|assign|status|delete|search|runs|run-messages|rerun|cancel-task|task|comment|session|archive|subscriber|metadata ...");
+}
+
+/**
+ * Mid-run task intervention. `steer` records a directive the daemon injects
+ * into the live provider session (the run keeps going); `--force-answer` asks
+ * the agent to stop exploring and deliver its conclusion now.
+ */
+export async function issueTask(positional: string[], options: CliOptions): Promise<void> {
+  const action = positional[0] ?? "";
+  if (action === "steer") {
+    const taskId = positional[1]?.trim();
+    if (!taskId) {
+      throw new Error("usage: multiremi issue task steer <task-id> [--force-answer] (--content <text>|--content-file <path>|--content-stdin)");
+    }
+    const forceAnswer = Boolean(options.forceAnswer ?? options["force-answer"]);
+    let content: string | null = null;
+    try {
+      content = await readContentBody(options, "steer content");
+    } catch (err) {
+      // --force-answer works without content; the server injects its default wrap-up directive.
+      if (!forceAnswer) throw err;
+    }
+    const body: Record<string, unknown> = { kind: forceAnswer ? "force_answer" : "steer" };
+    if (content?.trim()) body.content = content;
+    printJson(await multiremiApiRequest("POST", `/api/tasks/${encodeURIComponent(taskId)}/steer`, body, options));
+    return;
+  }
+  if (action === "steers") {
+    const taskId = positional[1]?.trim();
+    if (!taskId) throw new Error("usage: multiremi issue task steers <task-id> [--output json]");
+    printJson(await multiremiApiRequest("GET", `/api/tasks/${encodeURIComponent(taskId)}/steer`, undefined, options));
+    return;
+  }
+  throw new Error("usage: multiremi issue task steer|steers <task-id> ...");
 }
 
 export async function issueArchive(positional: string[], options: CliOptions): Promise<void> {
