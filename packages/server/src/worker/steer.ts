@@ -64,6 +64,20 @@ export class TaskSteerFeed {
     return this.queue.splice(0);
   }
 
+  /**
+   * Mark ids handled outside the feed (the run loop's authoritative fetch
+   * observed and processed them directly). Pins them in `seen` and drops any
+   * queued copies, so a poll that was already in flight when the ids were
+   * handled cannot re-enqueue them — a stale duplicate in the queue would
+   * fire the next turn's interrupt and cancel it for nothing.
+   */
+  markHandled(ids: Iterable<string>): void {
+    const handled = new Set(ids);
+    if (!handled.size) return;
+    for (const id of handled) this.seen.add(id);
+    if (this.queue.length) this.queue = this.queue.filter((m) => !handled.has(m.id));
+  }
+
   get hasPending(): boolean {
     return this.queue.length > 0;
   }

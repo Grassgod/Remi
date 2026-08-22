@@ -190,6 +190,104 @@ describe("Bun Multiremi daemon steering", () => {
     }
   });
 
+  it("a delayed feed poll returning an already-handled steer does not cancel the next turn", async () => {
+    const { store, root } = testBed("multiremi-daemon-steer-duppoll-");
+    const agent = store.createAgent({ name: "Dup Poll Agent", provider: "claude", cwd: root });
+    const task = store.createTask({ agentId: agent.id, prompt: "Answer in English" });
+    const daemonToken = await store.createAccessToken({ name: "Dup poll daemon", type: "daemon", workspaceId: "local" });
+    const runtimeId = daemonRuntimeIdForTest("daemon-steer-duppoll", "claude");
+    store.registerRuntime({ id: runtimeId, name: "duppoll-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-dup", hostname: "127.0.0.1", port: 0 });
+
+    // Proxy that snapshots upstream responses immediately but delays delivery
+    // of the second pending-steer GET (the feed poll that observed the steer
+    // before the authoritative final fetch consumed it) until mid-turn-2.
+    let steerGets = 0;
+    const proxy = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const upstream = await fetch(`http://127.0.0.1:${server.port}${url.pathname}${url.search}`, {
+          method: request.method,
+          headers: request.headers,
+          body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+        });
+        const body = await upstream.arrayBuffer();
+        if (request.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/steer$/.test(url.pathname)) {
+          steerGets += 1;
+          if (steerGets === 2) await Bun.sleep(900);
+        }
+        return new Response(body, { status: upstream.status, headers: { "Content-Type": upstream.headers.get("Content-Type") ?? "application/json" } });
+      },
+    });
+
+    const prompts: string[] = [];
+    const response: AgentResponse = {
+      text: "",
+      sessionId: "sess-dup",
+      requestId: "req-dup",
+      inputTokens: 1,
+      outputTokens: 1,
+      totalTokens: 2,
+      model: "claude-dup",
+    };
+    const providerFactory: MultiremiDaemonProviderFactory = () => ({
+      async *sendStream(message, options) {
+        prompts.push(message);
+        if (prompts.length === 1) {
+          yield chunk("english draft. ");
+          store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" });
+          // Stay in the turn long enough for the 250ms feed tick to issue the
+          // GET the proxy will hold, then end naturally — the authoritative
+          // final fetch handles the steer first.
+          await Bun.sleep(450);
+          return;
+        }
+        yield chunk("中文结论");
+        // Keep turn 2 running while the stale poll response lands. Like the
+        // real ACP provider, an abort cancels the turn — a duplicate-triggered
+        // interrupt here is exactly the bug this test guards against.
+        const deadline = Date.now() + 900;
+        while (Date.now() < deadline) {
+          if (options?.signal?.aborted) throw new Error("Cancelled");
+          await Bun.sleep(20);
+        }
+      },
+      getLastResponse: () => response,
+    });
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${proxy.port}`,
+        token: daemonToken.token,
+        daemonId: "daemon-steer-duppoll",
+        runtimeName: "duppoll-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot: join(root, "workspaces"),
+        repoCacheRoot: join(root, ".repo-cache"),
+        steerPollIntervalMs: 250,
+        providerFactory,
+      });
+      await daemon.start();
+
+      const completed = store.getTask(task.id)!;
+      expect(completed.status).toBe("completed");
+      expect(completed.result).toBe("english draft. 中文结论");
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain("改用中文输出");
+      expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
+      // The held poll really did observe the steer before consumption.
+      expect(steerGets).toBeGreaterThanOrEqual(2);
+    } finally {
+      proxy.stop(true);
+      server.stop();
+    }
+  });
+
   it("force answer wraps up within the grace window even if the agent keeps going", async () => {
     const { store, root } = testBed("multiremi-daemon-force-answer-");
     const agent = store.createAgent({ name: "Force Agent", provider: "claude", cwd: root });

@@ -1320,12 +1320,21 @@ export class TasksRepo {
     if (!content) throw new Error("steer content must not be empty");
     const kind: MultiremiTaskSteerKind = input.kind === "force_answer" ? "force_answer" : "steer";
     const id = input.id ?? createId("steer");
+    const initial = this.getTask(input.taskId);
+    if (!initial) throw new Error(`Task not found: ${input.taskId}`);
     return this.ctx.db.transaction(() => {
+      // Serialize against completeTask/cancelTask on their workspace→session
+      // lock order. On Postgres two connections could otherwise each observe
+      // "running" / "no pending steer" and commit both the steer insert and
+      // the completion — the steer barrier is only a real barrier when both
+      // sides contend on the same lock.
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const task = this.getTask(input.taskId);
-      if (!task) throw new Error(`Task not found: ${input.taskId}`);
+      if (!task || task.workspaceId !== initial.workspaceId) throw new Error(`Task not found: ${input.taskId}`);
       if (["completed", "failed", "cancelled"].includes(task.status)) {
         throw new TaskSteerConflictError(`Task is already ${task.status}: steer messages can only target a live task`);
       }
+      this.lockTaskIssueSessionsWithinWorkspaceLock([task]);
       const now = nowIso();
       this.ctx.db.run(
         `INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, author_id, kind, content, created_at)

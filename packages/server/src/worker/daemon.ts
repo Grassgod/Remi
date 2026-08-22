@@ -2290,6 +2290,10 @@ export class MultiremiDaemon {
       const recordedSteerIds = new Set<string>();
       const recordSteerBatch = async (messages: MultiremiTaskSteerMessage[], injected: boolean): Promise<void> => {
         for (const message of messages) recordedSteerIds.add(message.id);
+        // Immunize the feed against its own in-flight poll: a GET that was
+        // already on the wire when these ids were handled must not re-enqueue
+        // them, or the stale duplicate would trip the next turn's interrupt.
+        steerFeed.markHandled(messages.map((m) => m.id));
         await this.client.consumeTaskSteerMessages(task.id, messages.map((m) => m.id)).catch((err) => {
           log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
         });
@@ -2401,15 +2405,22 @@ export class MultiremiDaemon {
           await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
         } catch (err) {
           if (!isSteerPendingConflict(err)) throw err;
-          const late = await fetchPendingSteer();
-          if (!forceAnswerExpired && late.length) {
-            await injectSteerBatch(late);
+          const pendingNow = await this.client.listPendingTaskSteerMessages(task.id).catch(() => [] as MultiremiTaskSteerMessage[]);
+          // Already-recorded ids still pending mean an earlier consume call
+          // failed (e.g. transient network) — retry it so the barrier lifts,
+          // instead of letting an ignorable consume error become a terminal
+          // completion conflict.
+          const stale = pendingNow.filter((m) => recordedSteerIds.has(m.id));
+          if (stale.length) await this.client.consumeTaskSteerMessages(task.id, stale.map((m) => m.id));
+          const fresh = pendingNow.filter((m) => !recordedSteerIds.has(m.id));
+          if (!forceAnswerExpired && fresh.length) {
+            await injectSteerBatch(fresh);
             continue;
           }
           // Force-answer wrap-up (or an inconsistent conflict): record what's
           // there and complete once more; a second conflict fails the run
           // loudly rather than looping forever.
-          if (late.length) await recordSteerBatch(late, false);
+          if (fresh.length) await recordSteerBatch(fresh, false);
           await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
         }
         log.info(`Completed task ${task.id}`);

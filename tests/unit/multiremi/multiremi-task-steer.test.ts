@@ -283,6 +283,43 @@ describe("steer worker helpers", () => {
     ]);
   });
 
+  it("markHandled immunizes the feed against an in-flight poll returning the same steer", async () => {
+    // First poll (fired by start()) is held open while the authoritative
+    // path handles the same steer directly — the late response must neither
+    // enqueue the duplicate nor fire the interrupt.
+    const resolvers: Array<(msgs: MultiremiTaskSteerMessage[]) => void> = [];
+    const feed = new TaskSteerFeed(
+      { listPendingTaskSteerMessages: () => new Promise<MultiremiTaskSteerMessage[]>((res) => { resolvers.push(res); }) },
+      "tsk_feed",
+      600_000,
+    );
+    feed.start();
+    expect(resolvers).toHaveLength(1);
+    feed.markHandled(["s1"]);
+    let interrupted = 0;
+    feed.setInterrupt(() => { interrupted += 1; });
+    resolvers[0]!([steerMessage({ id: "s1", content: "already handled" })]);
+    await Bun.sleep(10);
+    expect(feed.hasPending).toBe(false);
+    expect(interrupted).toBe(0);
+    feed.stop();
+  });
+
+  it("markHandled drops already-queued duplicates so setInterrupt does not fire on stale ids", async () => {
+    let batch: MultiremiTaskSteerMessage[] = [steerMessage({ id: "s1", content: "queued first" })];
+    const feed = new TaskSteerFeed({ listPendingTaskSteerMessages: async () => batch }, "tsk_feed", 600_000);
+    feed.start();
+    await Bun.sleep(10);
+    expect(feed.hasPending).toBe(true);
+
+    feed.markHandled(["s1"]);
+    expect(feed.hasPending).toBe(false);
+    let interrupted = 0;
+    feed.setInterrupt(() => { interrupted += 1; });
+    expect(interrupted).toBe(0);
+    feed.stop();
+  });
+
   it("feed interrupts a streaming turn when a steer arrives and drains in order", async () => {
     let batch: MultiremiTaskSteerMessage[] = [];
     const feed = new TaskSteerFeed(
