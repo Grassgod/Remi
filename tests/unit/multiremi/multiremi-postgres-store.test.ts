@@ -211,10 +211,16 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       runtimeId: qaRuntime.id,
       workspaceId,
     });
+    const squad = store.createSquad({
+      name: `PG delegation squad ${wsCounter}`,
+      leaderId: leader.id,
+      memberIds: [qa.id],
+      workspaceId,
+    });
     const issue = store.createIssue({
       title: `PG delegation ${wsCounter}`,
-      assigneeType: "agent",
-      assigneeId: leader.id,
+      assigneeType: "squad",
+      assigneeId: squad.id,
       workspaceId,
     });
     const leaderTask = store.createTask({
@@ -241,11 +247,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       authorType: "agent",
       authorId: qa.id,
       taskId: childTask.id,
-      body: `[@Leader](mention://agent/${leader.id}) Intermediate PG report.`,
+      body: "Intermediate PG report.",
     });
-    const explicitReturn = store.listTasksForIssue(issue.id).find((task) => (
-      task.agentId === leader.id && task.delegationId === childTask.delegationId
-    ))!;
+    const explicitReturn = store.ensureDelegationWakeup({
+      sourceTaskId: childTask.id,
+      requiredEventSeq: 1_000_000,
+      triggerCommentId: report.id,
+    }).task!;
     return { workspaceId, leader, qa, issue, childTask, report, explicitReturn };
   };
 

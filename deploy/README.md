@@ -4,6 +4,24 @@ The API records lifecycle operations. A host-owned `remi-platform-updater`
 service executes them through one deployment driver. The API container never
 receives the Docker socket and cannot invoke `systemctl`.
 
+## Release pipeline
+
+Push a formal SemVer tag only after the tag commit's `Release build check` run
+on `main` succeeds. The tag-triggered `Release` workflow publishes the daemon
+CLI GitHub Release first, then calls the reusable `Platform release` workflow
+to publish the API/Web images and attach the platform manifest and systemd
+archive to the same release.
+
+```bash
+git tag v0.2.45
+git push origin v0.2.45
+```
+
+`Platform release` keeps a manual dispatch entry for recovery. Images carry
+both the version tag and a `sha-<commit>` tag. A retry reuses an existing image
+only when both tags resolve to the same digest; a conflicting or incomplete
+tag pair fails closed.
+
 ## Host updater
 
 1. Install the repository at a stable updater path.

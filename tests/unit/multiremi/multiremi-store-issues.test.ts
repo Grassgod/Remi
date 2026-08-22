@@ -320,7 +320,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const issue = store.createIssue({ title: "Mention routing" });
 
     store.createIssueComment(issue.id, {
-      body: `Please inspect this [@Review Bot](mention://agent/${reviewer.id}) and @Frontend Squad`,
+      body: `Please inspect this [@Review Bot](mention://agent/${reviewer.id}) and [@Frontend Squad](mention://squad/${squad.id})`,
     });
 
     const tasks = store.listTasks();
@@ -328,6 +328,19 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.getIssue(issue.id)?.assigneeId).toBeNull();
     expect(store.getIssue(issue.id)?.status).toBe("todo");
     expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(2);
+  });
+
+  it("treats plain agent and squad @names as display text", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });
+    store.createAgent({ name: "Review Bot", provider: "codex" });
+    store.createSquad({ name: "Frontend Squad", leaderId: leader.id });
+    const issue = store.createIssue({ title: "Plain mentions" });
+
+    store.createIssueComment(issue.id, { body: "Please ask @Review Bot and @Frontend Squad to inspect this." });
+
+    expect(store.listTasks()).toHaveLength(0);
+    expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(0);
   });
 
   it("routes un-mentioned human comments to the issue's assigned agent or squad leader", () => {
