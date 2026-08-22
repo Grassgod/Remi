@@ -562,6 +562,8 @@ export function runMigrations(db: SqlDatabase): void {
       metadata TEXT NOT NULL DEFAULT '{}',
       lifecycle_state TEXT NOT NULL DEFAULT 'active',
       created_by TEXT,
+      completed_at TEXT,
+      archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(parent_issue_id) REFERENCES multiremi_issues(id) ON DELETE SET NULL
@@ -1750,6 +1752,8 @@ export function runMigrations(db: SqlDatabase): void {
   // purge snapshot or resurrect archive bytes after the control-plane row is
   // removed.
   addColumnIfMissing(db, "multiremi_issues", "lifecycle_state TEXT NOT NULL DEFAULT 'active'");
+  const issueCompletedAtAdded = addColumnIfMissing(db, "multiremi_issues", "completed_at TEXT");
+  addColumnIfMissing(db, "multiremi_issues", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_source_revision TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_sha256 TEXT");
@@ -1882,6 +1886,7 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_sync ON multiremi_project_docs(workspace_id, sync_status, updated_at)");
   addColumnIfMissing(db, "multiremi_projects", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_projects", "instructions TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, "multiremi_projects", "delta_instructions TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(db, "multiremi_projects", "instructions_revision INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_projects", "instructions_updated_at TEXT");
   addColumnIfMissing(db, "multiremi_projects", "instructions_updated_by TEXT");
@@ -1910,11 +1915,17 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_session ON multiremi_issue_comments(issue_session_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_parent ON multiremi_issues(parent_issue_id, position, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_scheduled ON multiremi_issues(workspace_id, start_date, due_date)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_archive ON multiremi_issues(workspace_id, archived_at, status)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_parent ON multiremi_issue_comments(parent_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_session ON multiremi_attachments(chat_session_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_message ON multiremi_attachments(chat_message_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_resolved ON multiremi_issue_comments(issue_id, resolved_at)");
   db.run("UPDATE multiremi_issues SET status = 'todo' WHERE status = 'open'");
+  if (issueCompletedAtAdded) {
+    db.run(
+      "UPDATE multiremi_issues SET completed_at = updated_at WHERE completed_at IS NULL AND status IN ('done', 'cancelled')",
+    );
+  }
   // Pool scheduling: agents are logical workers and never bind to a machine.
   // Runs every startup so legacy pins converge back into the pool.
   db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");
@@ -2173,6 +2184,10 @@ function existingTableNames(db: SqlDatabase): Set<string> {
 }
 
 function addColumnIfMissing(db: SqlDatabase, table: string, definition: string): boolean {
+  const columnName = /^"?([A-Za-z_][A-Za-z0-9_]*)"?\s/u.exec(definition.trim())?.[1];
+  if (!columnName) throw new Error(`Invalid column definition for ${table}: ${definition}`);
+  const columns = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === columnName)) return false;
   try {
     db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
     return true;

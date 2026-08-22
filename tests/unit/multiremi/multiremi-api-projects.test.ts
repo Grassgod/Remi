@@ -229,6 +229,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
         title: "Directed project",
         description: "Visible summary",
         instructions: "Use Bun.\r\nRun focused tests.",
+        deltaInstructions: "Review new comments.\r\nKeep context compact.",
         instructionsRevision: 99,
         instructionsUpdatedBy: "usr_spoofed",
       }),
@@ -238,6 +239,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(createdBody.project).toMatchObject({
       description: "Visible summary",
       instructions: "Use Bun.\nRun focused tests.",
+      deltaInstructions: "Review new comments.\nKeep context compact.",
       instructionsRevision: 1,
       instructionsUpdatedBy: userId,
     });
@@ -247,6 +249,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(compatibilityDetail.status).toBe(200);
     expect(await compatibilityDetail.json()).toMatchObject({
       instructions: "Use Bun.\nRun focused tests.",
+      delta_instructions: "Review new comments.\nKeep context compact.",
       instructions_revision: 1,
       instructions_updated_at: createdBody.project.instructionsUpdatedAt,
       instructions_updated_by: userId,
@@ -306,6 +309,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       headers,
       body: JSON.stringify({
         instructions: "Prefer focused tests.",
+        deltaInstructions: "Read only the latest delta.",
         expectedInstructionsRevision: 1,
         instructionsUpdatedBy: "usr_spoofed_update",
         instructions_updated_by: "usr_spoofed_update",
@@ -315,6 +319,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     const nativeUpdatedBody = await nativeUpdated.json();
     expect(nativeUpdatedBody.project).toMatchObject({
       instructions: "Prefer focused tests.",
+      deltaInstructions: "Read only the latest delta.",
       instructionsRevision: 2,
       instructionsUpdatedBy: userId,
     });

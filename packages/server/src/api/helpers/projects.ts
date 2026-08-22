@@ -15,18 +15,22 @@ import { issueSubscriberCaller } from "./issues.js";
 
 export const MAX_PROJECT_INSTRUCTIONS_LENGTH = 4_000;
 
-export function validateProjectInstructions(c: Context, value: unknown): Response | null {
+export function validateProjectInstructions(c: Context, value: unknown, field = "instructions"): Response | null {
   if (value === undefined) return null;
-  if (typeof value !== "string") return c.json({ error: "instructions must be a string" }, 400);
+  if (typeof value !== "string") return c.json({ error: `${field} must be a string` }, 400);
   if (Array.from(value).length > MAX_PROJECT_INSTRUCTIONS_LENGTH) {
-    return c.json({ error: `instructions must be ${MAX_PROJECT_INSTRUCTIONS_LENGTH} characters or fewer` }, 400);
+    return c.json({ error: `${field} must be ${MAX_PROJECT_INSTRUCTIONS_LENGTH} characters or fewer` }, 400);
   }
   return null;
 }
 
 export function validateProjectInstructionsUpdate(c: Context, input: UpdateProjectInput): Response | null {
   const instructionsError = validateProjectInstructions(c, input.instructions);
-  if (instructionsError || input.instructions === undefined) return instructionsError;
+  if (instructionsError) return instructionsError;
+  const deltaInstructions = input.deltaInstructions ?? input.delta_instructions;
+  const deltaError = validateProjectInstructions(c, deltaInstructions, "delta_instructions");
+  if (deltaError) return deltaError;
+  if (input.instructions === undefined && deltaInstructions === undefined) return null;
   if (
     input.expectedInstructionsRevision !== undefined
     && input.expected_instructions_revision !== undefined

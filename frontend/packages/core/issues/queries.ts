@@ -23,6 +23,11 @@ export const issueKeys = {
   /** FULL KEY for queryOptions — includes sort. */
   listSorted: (wsId: string, sort?: IssueSortParam) =>
     [...issueKeys.list(wsId), sort ?? {}] as const,
+  archivedAll: (wsId: string) => [...issueKeys.all(wsId), "archived"] as const,
+  archivedCount: (wsId: string) => [...issueKeys.archivedAll(wsId), "count"] as const,
+  archivedListAll: (wsId: string) => [...issueKeys.archivedAll(wsId), "list"] as const,
+  archivedListSorted: (wsId: string, sort?: IssueSortParam) =>
+    [...issueKeys.archivedListAll(wsId), sort ?? {}] as const,
   assigneeGroupsAll: (wsId: string) =>
     [...issueKeys.all(wsId), "assignee-groups"] as const,
   assigneeGroups: (wsId: string, filter: AssigneeGroupedIssuesFilter) =>
@@ -110,6 +115,8 @@ export type AssigneeGroupedIssuesFilter = Omit<
 
 /** Page size per status column. */
 export const ISSUE_PAGE_SIZE = 50;
+
+export const ARCHIVED_ISSUE_PAGE_SIZE = 50;
 
 /** Statuses the issues/my-issues pages paginate. Cancelled is intentionally excluded — it has never been surfaced in the list/board views. */
 export const PAGINATED_STATUSES: readonly IssueStatus[] = BOARD_STATUSES;
@@ -250,6 +257,26 @@ export function issueListOptions(wsId: string, sort?: IssueSortParam) {
     queryKey: issueKeys.listSorted(wsId, sort),
     queryFn: () => fetchFirstPages({}, sort),
     select: flattenIssueBuckets,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function archivedIssueCountOptions(wsId: string) {
+  return queryOptions({
+    queryKey: issueKeys.archivedCount(wsId),
+    queryFn: async () => (await api.listIssues({ archived_only: true, limit: 1, offset: 0 })).total,
+  });
+}
+
+export function archivedIssueListOptions(wsId: string, sort?: IssueSortParam) {
+  return queryOptions({
+    queryKey: issueKeys.archivedListSorted(wsId, sort),
+    queryFn: () => api.listIssues({
+      archived_only: true,
+      limit: ARCHIVED_ISSUE_PAGE_SIZE,
+      offset: 0,
+      ...sort,
+    }),
     placeholderData: keepPreviousData,
   });
 }

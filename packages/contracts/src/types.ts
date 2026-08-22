@@ -1310,6 +1310,12 @@ export type MultiremiAssigneeType = "agent" | "member" | "squad";
 
 export type MultiremiIssueKind = "execution" | "intake";
 
+export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_TTL_MS = 72 * 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MAX_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MIN_SWEEP_INTERVAL_MS = 60 * 1000;
+
 export interface MultiremiIssue {
   id: string;
   key: string;
@@ -1333,6 +1339,8 @@ export interface MultiremiIssue {
   metadata: Record<string, string | number | boolean>;
   labels: MultiremiLabel[];
   createdBy: string | null;
+  completedAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1721,6 +1729,10 @@ export interface ListIssuesInput {
   metadata?: Record<string, string | number | boolean> | null;
   includeNoAssignee?: boolean;
   includeNoProject?: boolean;
+  includeArchived?: boolean;
+  include_archived?: boolean;
+  archivedOnly?: boolean;
+  archived_only?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -2151,6 +2163,7 @@ export interface MultiremiProject {
   title: string;
   description: string | null;
   instructions: string;
+  deltaInstructions: string;
   instructionsRevision: number;
   instructionsUpdatedAt: string | null;
   instructionsUpdatedBy: string | null;
@@ -2370,6 +2383,8 @@ export interface CreateProjectInput {
   title: string;
   description?: string | null;
   instructions?: string;
+  deltaInstructions?: string;
+  delta_instructions?: string;
   icon?: string | null;
   workspaceId?: string | null;
   workspace_id?: string | null;
@@ -2390,6 +2405,8 @@ export interface UpdateProjectInput {
   title?: string;
   description?: string | null;
   instructions?: string;
+  deltaInstructions?: string;
+  delta_instructions?: string;
   expectedInstructionsRevision?: number;
   expected_instructions_revision?: number;
   icon?: string | null;
@@ -2801,6 +2818,23 @@ export interface MultiremiWorkspace {
   created_at: string;
   updatedAt: string;
   updated_at: string;
+}
+
+export interface MultiremiPromptSettings {
+  bootstrapPrompt: string;
+  deltaPrompt: string;
+  revision: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface UpdateMultiremiPromptSettingsInput {
+  bootstrapPrompt?: string;
+  bootstrap_prompt?: string;
+  deltaPrompt?: string;
+  delta_prompt?: string;
+  expectedRevision?: number;
+  expected_revision?: number;
 }
 
 export type MultiremiWorkspaceInvitationStatus = "pending" | "accepted" | "declined" | "revoked" | "expired";

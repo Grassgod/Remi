@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 577,
+    "routeCount": 583,
     "routeCountByPrefix": {
-      "native": 191,
-      "compat": 373,
+      "native": 192,
+      "compat": 378,
       "root": 13
     },
-    "getRoutes": 250,
-    "getRoutesWithBody": 247,
+    "getRoutes": 252,
+    "getRoutesWithBody": 249,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 327,
+    "mutationRoutes": 331,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -347,9 +347,11 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki",
@@ -474,6 +476,7 @@
     "POST /api/issues/:id/labels",
     "POST /api/issues/:id/reactions",
     "POST /api/issues/:id/rerun",
+    "POST /api/issues/:id/restore",
     "POST /api/issues/:id/sessions",
     "POST /api/issues/:id/sessions/:sessionId/messages",
     "POST /api/issues/:id/sessions/:sessionId/participants",
@@ -530,6 +533,7 @@
     "POST /api/multiremi/issues/:id/dependencies",
     "POST /api/multiremi/issues/:id/labels",
     "POST /api/multiremi/issues/:id/reactions",
+    "POST /api/multiremi/issues/:id/restore",
     "POST /api/multiremi/issues/:id/subscribers",
     "POST /api/multiremi/issues/batch-delete",
     "POST /api/multiremi/issues/batch-update",
@@ -634,6 +638,8 @@
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
+    "PUT /api/workspaces/:id/issue-archive",
+    "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
     "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
@@ -919,9 +925,11 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki",
@@ -3676,6 +3684,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -3751,6 +3761,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -3786,6 +3797,7 @@
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "auth_token": "mat_b038d9ca1bef6a33b05d4c6943764dce2875d196"
         }
@@ -3862,6 +3874,7 @@
               "url": "https://example.invalid/native.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
           "auth_token": "mat_a6fb5d92bb4ab5920d4959679498a484831d3e7f"
@@ -3950,6 +3963,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -4005,6 +4020,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -4040,6 +4056,7 @@
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "autopilot_id": "apl_snapshot",
           "autopilot_source": "manual",
@@ -4131,6 +4148,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -4186,6 +4205,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -4221,6 +4241,7 @@
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "autopilot_id": "apl_snapshot",
           "autopilot_source": "webhook",
@@ -4672,6 +4693,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -4747,6 +4770,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -4782,6 +4806,7 @@
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "auth_token": "mat_ca16787f03d2122eca4a5b30b038d9ca1bef6a33"
         }
@@ -7044,6 +7069,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -7118,6 +7145,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7143,6 +7172,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7168,6 +7199,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7193,6 +7226,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -7229,6 +7264,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7263,6 +7300,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {
@@ -7427,6 +7466,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -7519,6 +7560,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {
@@ -7545,6 +7588,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {}
@@ -8282,6 +8327,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8327,6 +8374,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8361,6 +8410,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -8387,6 +8438,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -8413,6 +8466,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8449,6 +8504,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8474,6 +8531,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8499,6 +8558,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8524,6 +8585,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -8552,6 +8615,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -10631,6 +10696,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -10709,6 +10776,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
@@ -10738,6 +10807,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -10767,6 +10838,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -10807,6 +10880,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 2,
@@ -10836,13 +10911,16 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
             "latestTaskStatus": null,
             "latestTaskId": null
           }
-        ]
+        ],
+        "total": 5
       }
     },
     {
@@ -10885,6 +10963,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
           "tasks": [
@@ -11049,6 +11129,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -11099,6 +11181,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -11125,6 +11209,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -11156,6 +11242,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11206,6 +11294,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11232,6 +11322,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11438,6 +11530,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11558,6 +11652,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11584,6 +11680,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11903,6 +12001,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11948,6 +12048,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11982,6 +12084,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -12008,6 +12112,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -12034,6 +12140,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -12073,6 +12181,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -12100,6 +12210,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -12127,6 +12239,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -12165,6 +12279,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title",
@@ -12193,6 +12309,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -12412,6 +12530,7 @@
           "title": "Snapshot Project",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -13426,6 +13545,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -13435,6 +13556,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "instructions": "",
+            "deltaInstructions": "",
             "instructionsRevision": 0,
             "instructionsUpdatedAt": null,
             "instructionsUpdatedBy": null,
@@ -13716,6 +13838,7 @@
         "resource_count": 1,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -14704,6 +14827,18 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/issue-archive",
+      "route": "GET /api/workspaces/:id/issue-archive",
+      "path": "/api/workspaces/local/issue-archive",
+      "status": 200,
+      "body": {
+        "config": {
+          "ttl_ms": 0,
+          "sweep_interval_ms": 0
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/lark/install/:sessionId/status",
       "route": "GET /api/workspaces/:id/lark/install/:sessionId/status",
       "path": "/api/workspaces/local/lark/install/lark_snapshot_session/status",
@@ -14761,6 +14896,19 @@
           "avatar_url": null
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/prompts",
+      "route": "GET /api/workspaces/:id/prompts",
+      "path": "/api/workspaces/local/prompts",
+      "status": 200,
+      "body": {
+        "bootstrapPrompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
+        "deltaPrompt": "",
+        "revision": 0,
+        "updatedAt": null,
+        "updatedBy": null
+      }
     },
     {
       "key": "get-sweep GET /api/workspaces/:id/relay-config",
@@ -15158,6 +15306,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -15216,6 +15366,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -15275,6 +15427,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15335,6 +15489,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15494,6 +15650,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -15520,6 +15678,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {}
@@ -15683,6 +15843,8 @@
             },
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -15709,6 +15871,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -15999,6 +16163,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -16029,6 +16195,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -16059,6 +16227,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -16091,6 +16261,8 @@
           "position": 0,
           "start_date": null,
           "due_date": null,
+          "completed_at": null,
+          "archived_at": null,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "metadata": {}
@@ -16177,6 +16349,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -16223,6 +16397,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -16268,6 +16444,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -16366,6 +16544,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -16952,6 +17132,7 @@
         "resource_count": 0,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -16981,6 +17162,7 @@
         "resource_count": 0,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -17050,6 +17232,7 @@
           "title": "Native project",
           "description": null,
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -17081,6 +17264,7 @@
           "title": "Native project patched",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -17163,6 +17347,7 @@
           "title": "Native project patched",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,

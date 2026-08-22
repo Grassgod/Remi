@@ -118,6 +118,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const invalidInstructions = validateProjectInstructions(c, body.instructions);
     if (invalidInstructions) return invalidInstructions;
+    const invalidDeltaInstructions = validateProjectInstructions(
+      c,
+      body.deltaInstructions ?? body.delta_instructions,
+      "delta_instructions",
+    );
+    if (invalidDeltaInstructions) return invalidDeltaInstructions;
     const projectInput = projectCreateCompatibilityInput(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
     if (denied) return denied;
@@ -143,6 +149,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const invalidInstructions = validateProjectInstructions(c, body.instructions);
     if (invalidInstructions) return invalidInstructions;
+    const invalidDeltaInstructions = validateProjectInstructions(
+      c,
+      body.deltaInstructions ?? body.delta_instructions,
+      "delta_instructions",
+    );
+    if (invalidDeltaInstructions) return invalidDeltaInstructions;
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
     const repositoryError = validateImportedProjectResources(

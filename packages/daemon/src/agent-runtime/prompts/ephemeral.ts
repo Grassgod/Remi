@@ -42,6 +42,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   sections.push(currentTaskRequest(task));
 
   appendClaimContextSections(sections, task, mode);
+  appendWorkspacePromptSection(sections, task, mode);
   appendSessionContextSections(sections, task, mode);
 
   if (task.issue) {
@@ -67,27 +68,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
 
-  if (mode === "bootstrap" && task.project) {
-    const gitResources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
-    const projectInstructions = task.project.instructions?.trim();
-    sections.push("");
-    sections.push("## Project Context");
-    sections.push(`This issue belongs to project: ${task.project.title}`);
-    if (task.project.description) sections.push(task.project.description);
-    if (gitResources.length) {
-      sections.push("");
-      sections.push("Project resources:");
-      for (const resource of gitResources) {
-        sections.push(formatProjectResource(resource));
-      }
-    }
-    if (projectInstructions) {
-      sections.push("");
-      sections.push("## Project Instructions");
-      sections.push(projectInstructions);
-    }
-    appendProjectKnowledgeSections(sections, task.project.id);
-  }
+  appendProjectPromptSections(sections, task, mode);
 
   if (mode === "bootstrap" && task.repos.length) {
     const checkouts = opts.repoCheckouts ?? [];
@@ -145,6 +126,48 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     prompt,
     sha256: createHash("sha256").update(prompt).digest("hex"),
   };
+}
+
+function appendWorkspacePromptSection(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
+  const prompt = mode === "bootstrap"
+    ? stringField(task, "workspaceBootstrapPrompt", "workspace_bootstrap_prompt")
+    : stringField(task, "workspaceDeltaPrompt", "workspace_delta_prompt");
+  if (!prompt) return;
+  sections.push("");
+  sections.push(mode === "bootstrap" ? "## Workspace Bootstrap Instructions" : "## Workspace Delta Instructions");
+  sections.push(prompt);
+}
+
+function appendProjectPromptSections(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
+  if (!task.project) return;
+  if (mode === "delta") {
+    const deltaInstructions = task.project.deltaInstructions?.trim()
+      || task.project.delta_instructions?.trim();
+    if (deltaInstructions) {
+      sections.push("");
+      sections.push("## Project Delta Instructions");
+      sections.push(deltaInstructions);
+    }
+    return;
+  }
+
+  const gitResources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
+  const projectInstructions = task.project.instructions?.trim();
+  sections.push("");
+  sections.push("## Project Context");
+  sections.push(`This issue belongs to project: ${task.project.title}`);
+  if (task.project.description) sections.push(task.project.description);
+  if (gitResources.length) {
+    sections.push("");
+    sections.push("Project resources:");
+    for (const resource of gitResources) sections.push(formatProjectResource(resource));
+  }
+  if (projectInstructions) {
+    sections.push("");
+    sections.push("## Project Instructions");
+    sections.push(projectInstructions);
+  }
+  appendProjectKnowledgeSections(sections, task.project.id);
 }
 
 function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[]): void {

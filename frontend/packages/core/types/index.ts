@@ -70,7 +70,17 @@ export type {
   IssueUsageSummary,
   TaskPromptArtifact,
 } from "./agent";
-export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
+export type {
+  Workspace,
+  WorkspaceRepo,
+  WorkspacePromptSettings,
+  UpdateWorkspacePromptSettingsRequest,
+  Member,
+  MemberRole,
+  User,
+  MemberWithUser,
+  Invitation,
+} from "./workspace";
 export type {
   WorkspaceRepository,
   WorkspaceRepositorySource,
