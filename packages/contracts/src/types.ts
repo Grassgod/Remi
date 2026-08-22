@@ -3469,7 +3469,12 @@ export type MultiremiPlatformOperationStatus =
   | "rolling_back"
   | "rolled_back";
 
-export type MultiremiPlatformServiceId = "api" | "web" | "postgres" | "openviking";
+export type MultiremiPlatformServiceId =
+  | "api"
+  | "web"
+  | "ssh-mesh-control-plane"
+  | "postgres"
+  | "openviking";
 export type MultiremiPlatformServiceStatus = "ready" | "degraded" | "stopped" | "unknown";
 
 export interface MultiremiPlatformService {

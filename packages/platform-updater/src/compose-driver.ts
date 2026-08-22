@@ -46,7 +46,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     if (operation.kind === "check_updates") return (await this.inspect()).currentRelease;
     if (operation.kind === "restart") {
       await report({ status: "restarting", progress: { message: "Restarting platform services" } });
-      await this.mustCompose(["restart", "api", "web"]);
+      await this.mustCompose(["restart", "api", "web", "ssh-mesh-control-plane"]);
       await this.verify();
       return (await this.inspect()).currentRelease;
     }
@@ -71,7 +71,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
       await this.writeImageEnv(originalEnv, manifest.apiImage, manifest.webImage);
       await this.mustCompose(["pull", "api", "web"]);
       await report({ status: "switching", previousRelease: previous, progress: { message: "Applying image digests" } });
-      await this.mustCompose(["up", "-d", "--no-deps", "api", "web"]);
+      await this.mustCompose(["up", "-d", "--no-deps", "api", "web", "ssh-mesh-control-plane"]);
       await report({ status: "verifying", previousRelease: previous, progress: { message: "Verifying services" } });
       await this.verify();
       const release = toRelease(manifest);
@@ -81,7 +81,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
       if (previous?.apiImage && previous.webImage) {
         await report({ status: "rolling_back", previousRelease: previous, error: errorMessage(error) });
         await this.writeImageEnv(originalEnv, previous.apiImage, previous.webImage);
-        await this.mustCompose(["up", "-d", "--no-deps", "api", "web"]);
+        await this.mustCompose(["up", "-d", "--no-deps", "api", "web", "ssh-mesh-control-plane"]);
         await this.verify();
       }
       throw error;
@@ -130,7 +130,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     const rows = result.stdout.split("\n").filter(Boolean).flatMap((line) => {
       try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
     });
-    return Promise.all((["api", "web", "postgres", "openviking"] as const).map(async (id) => {
+    return Promise.all((["api", "web", "ssh-mesh-control-plane", "postgres", "openviking"] as const).map(async (id) => {
       const row = rows.find((item) => item.Service === id);
       if (!row && (id === "postgres" || id === "openviking")) {
         return this.inspectExternalDependency(id);
@@ -214,8 +214,11 @@ function safeFile(value: string): string {
   return value;
 }
 
-function serviceName(id: "api" | "web" | "postgres" | "openviking"): string {
-  return id === "api" ? "API" : id === "web" ? "Web" : id === "postgres" ? "PostgreSQL" : "OpenViking";
+function serviceName(id: "api" | "web" | "ssh-mesh-control-plane" | "postgres" | "openviking"): string {
+  if (id === "api") return "API";
+  if (id === "web") return "Web";
+  if (id === "ssh-mesh-control-plane") return "SSH Mesh Control Plane";
+  return id === "postgres" ? "PostgreSQL" : "OpenViking";
 }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

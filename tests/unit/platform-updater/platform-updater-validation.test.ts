@@ -61,6 +61,7 @@ describe("platform updater release validation", () => {
             stdout: [
               JSON.stringify({ Service: "api", State: "running", Status: "Up", Image: "api:test" }),
               JSON.stringify({ Service: "web", State: "running", Status: "Up", Image: "web:test" }),
+              JSON.stringify({ Service: "ssh-mesh-control-plane", State: "running", Status: "Up", Image: "api:test" }),
             ].join("\n"),
             stderr: "",
           };
@@ -87,6 +88,7 @@ describe("platform updater release validation", () => {
     expect(inspection.services.map((service) => [service.id, service.status])).toEqual([
       ["api", "ready"],
       ["web", "ready"],
+      ["ssh-mesh-control-plane", "ready"],
       ["postgres", "ready"],
       ["openviking", "ready"],
     ]);
