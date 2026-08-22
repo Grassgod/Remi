@@ -515,7 +515,7 @@ describe("Multiremi repo cache", () => {
     writeFileSync(join(result.path, "agent.txt"), "agent change\n");
     git(result.path, ["add", "agent.txt"]);
     git(result.path, ["commit", "-m", "agent change"]);
-    expect(git(result.path, ["log", "-1", "--format=%B"])).toContain("Co-authored-by: multiremi-agent <github@multiremi.ai>");
+    expect(git(result.path, ["log", "-1", "--format=%B"])).toContain("Co-authored-by: Remi <remi@openremi.fun>");
 
     await cache.createWorktree({
       workspaceId: "local",

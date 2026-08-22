@@ -119,7 +119,7 @@ const DAEMON_INSTALLED_HOOK_SIGNATURES = [
 ];
 const PREPARE_COMMIT_MSG_HOOK = `#!/bin/sh
 # multiremi:prepare-commit-msg:co-authored-by
-# Multiremi: add Co-authored-by trailer for the Multiremi Agent.
+# Multiremi: attribute commits to Remi.
 # Installed by the Multiremi daemon. Do not edit - it will be overwritten.
 
 COMMIT_MSG_FILE="$1"
@@ -130,7 +130,7 @@ case "$COMMIT_SOURCE" in
   merge|squash) exit 0 ;;
 esac
 
-TRAILER="Co-authored-by: multiremi-agent <github@multiremi.ai>"
+TRAILER="Co-authored-by: Remi <remi@openremi.fun>"
 
 # Don't add if already present.
 if grep -qF "$TRAILER" "$COMMIT_MSG_FILE"; then
