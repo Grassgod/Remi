@@ -3,6 +3,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ipaddr from "ipaddr.js";
+import { scmGitCredentialArguments } from "./scm-git-environment.js";
 
 const MAX_ARTIFACT_FILES = 2_000;
 const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024;
@@ -35,6 +36,10 @@ export class AgentPluginGitImportError extends Error {
 
 export interface ResolveAgentPluginGitSourceInput {
   sourceUrl: string;
+  /** Server-owned request scope. Browser payloads never populate this field directly. */
+  workspaceId?: string;
+  /** Process-only Git configuration injected by the server credential resolver. */
+  gitEnvironment?: Record<string, string>;
   sourceRef?: string | null;
   sourceSubdir?: string | null;
   provider?: "claude" | "codex" | null;
@@ -98,6 +103,7 @@ interface GitRemoteMetadata {
 }
 
 interface GitCommandOptions {
+  env?: Record<string, string>;
   input?: Uint8Array;
   maxOutputBytes?: number;
   timeoutMs?: number;
@@ -125,20 +131,23 @@ export async function resolveAgentPluginGitSource(
   const selectedProvider = normalizeProvider(input.provider);
   const selectedManifestPath = normalizeManifestPath(input.manifestPath);
   const deadlineAt = Date.now() + GIT_OPERATION_TIMEOUT_MS;
-  const remote = await inspectGitRemote(sourceUrl, requestedRef === null, deadlineAt);
+  const gitEnvironment = input.gitEnvironment;
+  const remote = await inspectGitRemote(sourceUrl, requestedRef === null, deadlineAt, gitEnvironment);
   const sourceRef = requestedRef ?? remote.defaultBranch;
-  await assertRequestedRefAvailable(sourceUrl, sourceRef, remote.branches, deadlineAt);
+  await assertRequestedRefAvailable(sourceUrl, sourceRef, remote.branches, deadlineAt, gitEnvironment);
   const tempRoot = await mkdtemp(join(tmpdir(), "multiremi-agent-plugin-git-"));
   const bareRepo = join(tempRoot, "source.git");
 
   try {
     await runGit(["init", "--bare", bareRepo], {
+      env: gitEnvironment,
       errorCode: "plugin_git_init_failed",
       errorMessage: "unable to initialize the temporary Plugin repository",
       errorStatus: 503,
       deadlineAt,
     });
     await runGit([`--git-dir=${bareRepo}`, "remote", "add", "origin", sourceUrl], {
+      env: gitEnvironment,
       errorCode: "plugin_git_init_failed",
       errorMessage: "unable to configure the temporary Plugin repository",
       errorStatus: 503,
@@ -155,6 +164,7 @@ export async function resolveAgentPluginGitSource(
         remoteFetchRef(sourceRef, remote.branches),
       ],
       {
+        env: gitEnvironment,
         errorCode: "plugin_git_fetch_failed",
         errorMessage: `unable to fetch Plugin source ref ${JSON.stringify(sourceRef)}`,
         errorStatus: 502,
@@ -164,6 +174,7 @@ export async function resolveAgentPluginGitSource(
     const revisionOutput = await runGit(
       [`--git-dir=${bareRepo}`, "rev-parse", "--verify", "FETCH_HEAD^{commit}"],
       {
+        env: gitEnvironment,
         errorCode: "plugin_git_ref_invalid",
         errorMessage: "the fetched Plugin source does not resolve to a commit",
         deadlineAt,
@@ -182,6 +193,7 @@ export async function resolveAgentPluginGitSource(
       sourceRevision,
       sourceSubdir,
       deadlineAt,
+      gitEnvironment,
     ))
       .filter((candidate) => !selectedProvider || candidate.provider === selectedProvider)
       .filter((candidate) => !selectedManifestPath || candidate.manifestPath === selectedManifestPath)
@@ -210,6 +222,7 @@ export async function resolveAgentPluginGitSource(
         bareRepo,
         discovered.map((candidate) => candidate.objectId),
         deadlineAt,
+        gitEnvironment,
       );
     }
 
@@ -223,6 +236,7 @@ export async function resolveAgentPluginGitSource(
           discoveredManifest,
           input.includeFiles === true,
           deadlineAt,
+          gitEnvironment,
         ));
       } catch (error) {
         if (input.includeFiles === true || !(error instanceof AgentPluginGitImportError)) {
@@ -254,10 +268,12 @@ async function inspectGitRemote(
   sourceUrl: string,
   requireDefaultBranch: boolean,
   deadlineAt: number,
+  gitEnvironment?: Record<string, string>,
 ): Promise<GitRemoteMetadata> {
   const output = await runGit(
     ["ls-remote", "--symref", sourceUrl, "HEAD", "refs/heads/*"],
     {
+      env: gitEnvironment,
       maxOutputBytes: 8 * 1024 * 1024,
       errorCode: "plugin_git_remote_unavailable",
       errorMessage: "unable to read Plugin repository metadata; check the clone URL and server credentials",
@@ -294,12 +310,14 @@ async function assertRequestedRefAvailable(
   sourceRef: string,
   branches: string[],
   deadlineAt: number,
+  gitEnvironment?: Record<string, string>,
 ): Promise<void> {
   if (FULL_GIT_OBJECT_ID.test(sourceRef) || branches.includes(sourceRef)) return;
   const patterns = sourceRef.startsWith("refs/")
     ? [sourceRef]
     : [sourceRef, `refs/heads/${sourceRef}`, `refs/tags/${sourceRef}`];
   const output = await runGit(["ls-remote", "--refs", sourceUrl, ...patterns], {
+    env: gitEnvironment,
     maxOutputBytes: 1024 * 1024,
     errorCode: "plugin_git_remote_unavailable",
     errorMessage: "unable to verify the Plugin repository ref",
@@ -319,6 +337,7 @@ async function discoverManifestEntries(
   revision: string,
   sourceSubdir: string | null,
   deadlineAt: number,
+  gitEnvironment?: Record<string, string>,
 ): Promise<Array<GitTreeEntry & { provider: "claude" | "codex"; pluginSubdir: string; manifestPath: string }>> {
   const args = [
     `--git-dir=${bareRepo}`,
@@ -330,6 +349,7 @@ async function discoverManifestEntries(
   ];
   if (sourceSubdir) args.push("--", `:(literal)${sourceSubdir}`);
   const output = await runGit(args, {
+    env: gitEnvironment,
     maxOutputBytes: 8 * 1024 * 1024,
     errorCode: "plugin_git_tree_invalid",
     errorMessage: "unable to inspect Plugin manifests in the fetched revision",
@@ -373,6 +393,7 @@ async function resolveCandidate(
   },
   includeFiles: boolean,
   deadlineAt: number,
+  gitEnvironment?: Record<string, string>,
 ): Promise<ResolvedAgentPluginGitCandidate> {
   if (discovered.mode !== "100644" && discovered.mode !== "100755") {
     throw unsafeFile(discovered.path);
@@ -383,6 +404,7 @@ async function resolveCandidate(
     discovered.pluginSubdir,
     false,
     deadlineAt,
+    gitEnvironment,
   );
   if (entries.length > MAX_ARTIFACT_FILES) {
     throw new AgentPluginGitImportError(
@@ -413,6 +435,7 @@ async function resolveCandidate(
       bareRepo,
       inspectedEntries.map((entry) => entry.objectId),
       deadlineAt,
+      gitEnvironment,
     );
     const sizedEntries = await listPluginEntries(
       bareRepo,
@@ -420,6 +443,7 @@ async function resolveCandidate(
       discovered.pluginSubdir,
       true,
       deadlineAt,
+      gitEnvironment,
     );
     if (
       sizedEntries.length !== entries.length
@@ -456,6 +480,7 @@ async function resolveCandidate(
     [manifestEntry.objectId],
     (manifestEntry.size ?? MAX_ARTIFACT_BYTES) + 1024,
     deadlineAt,
+    gitEnvironment,
   );
   let manifestValue: unknown;
   try {
@@ -493,6 +518,7 @@ async function resolveCandidate(
         + artifactEntries.length * 128
         + 1024,
       deadlineAt,
+      gitEnvironment,
     );
     files = artifactEntries.map((entry, index) => {
       const bytes = contents[index]!;
@@ -532,6 +558,7 @@ async function listPluginEntries(
   pluginSubdir: string,
   includeSizes: boolean,
   deadlineAt: number,
+  gitEnvironment?: Record<string, string>,
 ): Promise<GitTreeEntry[]> {
   const args = [
     `--git-dir=${bareRepo}`,
@@ -544,6 +571,7 @@ async function listPluginEntries(
   if (includeSizes) args.splice(4, 0, "-l");
   if (pluginSubdir) args.push("--", `:(literal)${pluginSubdir}`);
   const output = await runGit(args, {
+    env: gitEnvironment,
     maxOutputBytes: 8 * 1024 * 1024,
     errorCode: "plugin_git_tree_invalid",
     errorMessage: "unable to inspect files in the fetched Plugin revision",
@@ -556,6 +584,7 @@ async function prefetchGitObjects(
   bareRepo: string,
   objectIds: string[],
   deadlineAt: number,
+  gitEnvironment?: Record<string, string>,
 ): Promise<void> {
   const uniqueObjectIds = [...new Set(objectIds)];
   if (uniqueObjectIds.length === 0) return;
@@ -580,6 +609,7 @@ async function prefetchGitObjects(
       "--stdin",
     ],
     {
+      env: gitEnvironment,
       input: Buffer.from(`${uniqueObjectIds.join("\n")}\n`, "utf8"),
       maxOutputBytes: 1024 * 1024,
       errorCode: "plugin_git_fetch_failed",
@@ -595,12 +625,14 @@ async function catFileObjects(
   objectIds: string[],
   outputLimit: number,
   deadlineAt: number,
+  gitEnvironment?: Record<string, string>,
 ): Promise<Uint8Array[]> {
   if (objectIds.length === 0) return [];
   const input = Buffer.from(`${objectIds.join("\n")}\n`, "utf8");
   const output = await runGit(
     [`--git-dir=${bareRepo}`, "cat-file", "--batch"],
     {
+      env: gitEnvironment,
       input,
       maxOutputBytes: Math.min(MAX_GIT_OUTPUT_BYTES, Math.max(1024, outputLimit)),
       errorCode: "plugin_git_object_invalid",
@@ -854,12 +886,19 @@ async function runGit(args: string[], options: GitCommandOptions = {}): Promise<
   if (remainingBudget <= 0) throw gitTimeoutError();
   const env = {
     ...process.env,
+    ...options.env,
     GIT_TERMINAL_PROMPT: "0",
     GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes -o ConnectTimeout=10",
   };
   const proc = (() => {
     try {
-      return Bun.spawn(["git", "-c", "http.followRedirects=false", ...args], {
+      return Bun.spawn([
+        "git",
+        ...scmGitCredentialArguments(options.env ?? {}),
+        "-c",
+        "http.followRedirects=false",
+        ...args,
+      ], {
         env,
         stdin: "pipe",
         stdout: "pipe",

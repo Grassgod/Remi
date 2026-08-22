@@ -4,7 +4,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates gosu openssh-client passwd \
+  && apt-get install -y --no-install-recommends ca-certificates git gosu openssh-client passwd \
+  && git --version \
   && rm -rf /var/lib/apt/lists/*
 
 COPY . .

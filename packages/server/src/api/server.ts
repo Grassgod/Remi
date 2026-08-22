@@ -64,6 +64,7 @@ import {
   resolveAgentPluginGitSource,
   type AgentPluginGitSourceResolver,
 } from "@multiremi/agent-plugins/git-import.js";
+import { createScmAuthenticatedAgentPluginGitSourceResolver } from "@multiremi/agent-plugins/scm-git-auth.js";
 import {
   createControlPlaneSshMeshFromEnv,
   type ControlPlaneSshMeshLifecycle,
@@ -194,7 +195,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     inspectGitRemoteRepository:
       options.inspectGitRemoteRepository ?? inspectGitRemoteRepository,
     resolveAgentPluginGitSource:
-      options.resolveAgentPluginGitSource ?? resolveAgentPluginGitSource,
+      options.resolveAgentPluginGitSource
+        ?? createScmAuthenticatedAgentPluginGitSourceResolver(store, resolveAgentPluginGitSource),
     projectKnowledge,
     sessionArchives,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),

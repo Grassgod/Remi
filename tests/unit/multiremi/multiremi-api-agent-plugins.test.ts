@@ -114,11 +114,13 @@ describe("Multiremi API — agent plugins", () => {
       });
     expect(resolverCalls).toEqual([
       {
+        workspaceId: "local",
         sourceUrl: "https://example.com/plugins.git",
         sourceRef: undefined,
         sourceSubdir: undefined,
       },
       {
+        workspaceId: "local",
         sourceUrl: "https://example.com/plugins.git",
         sourceRef: "main",
         sourceSubdir: "plugins/review",
@@ -248,6 +250,7 @@ describe("Multiremi API — agent plugins", () => {
     });
     expect(response.status).toBe(201);
     expect(resolverCalls).toEqual([{
+      workspaceId: "local",
       sourceUrl: "https://example.com/plugins.git",
       sourceRef: "release",
       sourceSubdir: "plugins/review",

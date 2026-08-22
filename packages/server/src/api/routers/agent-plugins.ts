@@ -61,6 +61,7 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     try {
       const resolved = await deps.resolveAgentPluginGitSource({
+        workspaceId,
         sourceUrl: requiredString(body.sourceUrl ?? body.source_url, "source_url"),
         sourceRef: body.sourceRef ?? body.source_ref,
         sourceSubdir: body.sourceSubdir ?? body.source_subdir,
@@ -443,6 +444,7 @@ async function gitImportInput(
     input.manifestPath ?? input.manifest_path ?? "",
   ).trim() || null;
   const resolved = await deps.resolveAgentPluginGitSource({
+    workspaceId,
     sourceUrl: requiredString(
       input.sourceUrl ?? input.source_url ?? target?.sourceUrl,
       "source_url",
