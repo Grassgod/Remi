@@ -153,6 +153,10 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
     change_request: () => {
       qc.invalidateQueries({ queryKey: scmKeys.changeRequestsAll });
     },
+    scm: () => {
+      const wsId = getCurrentWsId();
+      if (wsId) qc.invalidateQueries({ queryKey: scmKeys.all(wsId) });
+    },
     // Powers the agent presence cache: any task lifecycle change
     // (dispatch / completed / failed / cancelled) refreshes the
     // workspace-wide agent-task-snapshot query so per-agent presence

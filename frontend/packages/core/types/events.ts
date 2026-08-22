@@ -90,6 +90,7 @@ export type WSEventType =
   | "pin:created"
   | "pin:deleted"
   | "pin:reordered"
+  | `scm:${string}`
   | "invitation:created"
   | "invitation:accepted"
   | "invitation:declined"

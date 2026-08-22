@@ -115,6 +115,9 @@ describe("ScmConnectionsSection", () => {
     connectionsRef.current = [];
     repositoriesRef.current = [repository];
     createScmConnection.mockResolvedValue({ connection: connection() });
+    updateScmConnection.mockResolvedValue({ connection: connection() });
+    bindScmRepository.mockResolvedValue({ connection: connection() });
+    unbindScmRepository.mockResolvedValue(undefined);
     verifyScmConnection.mockResolvedValue({
       connection: connection({ verificationStatus: "valid" }),
     });
@@ -155,7 +158,7 @@ describe("ScmConnectionsSection", () => {
     expect(toastSuccess).toHaveBeenCalledWith("连接已保存并完成验证");
   });
 
-  it("binds selected repositories with explicit ownership transfer", async () => {
+  it("creates a selected repository scope atomically", async () => {
     const user = await openCreateDialogAfterRender();
     await user.click(screen.getByRole("radio", { name: /仅指定仓库/ }));
     await user.click(screen.getByRole("checkbox"));
@@ -165,15 +168,86 @@ describe("ScmConnectionsSection", () => {
     );
     await user.click(screen.getByRole("button", { name: "保存并验证" }));
 
-    await waitFor(() => expect(bindScmRepository).toHaveBeenCalledWith(
+    await waitFor(() => expect(createScmConnection).toHaveBeenCalledWith(
+      "workspace-1",
+      expect.objectContaining({
+        repositoryScope: "selected",
+        repositoryIds: ["repository-1"],
+      }),
+    ));
+    expect(bindScmRepository).not.toHaveBeenCalled();
+  });
+
+  it.each(["Webhook", "混合"])(
+    "requires a webhook secret in %s mode",
+    async (modeLabel) => {
+      const user = await openCreateDialogAfterRender();
+      await user.type(
+        screen.getByPlaceholderText("输入可读取仓库事件和 Git 内容的 Token"),
+        "github-token",
+      );
+
+      const modeSelect = screen.getByRole("combobox");
+      await user.click(modeSelect);
+      await user.click(await screen.findByRole("option", { name: modeLabel }));
+
+      const saveButton = screen.getByRole("button", { name: "保存并验证" });
+      expect(saveButton).toBeDisabled();
+      await user.type(
+        screen.getByPlaceholderText("用于验证平台发送的请求"),
+        "webhook-secret",
+      );
+      expect(saveButton).toBeEnabled();
+    },
+  );
+
+  it("replaces selected repository bindings atomically when editing", async () => {
+    const secondRepository: WorkspaceRepository = {
+      ...repository,
+      id: "repository-2",
+      name: "Remi Docs",
+      url: "git@github.com:Grassgod/remi-docs.git",
+    };
+    const currentConnection = connection({
+      repositoryScope: "selected",
+      repositories: [{
+        id: "binding-1",
+        workspaceId: "workspace-1",
+        connectionId: "connection-1",
+        repositoryId: repository.id,
+        repositoryUrl: repository.url,
+        externalId: null,
+        owner: null,
+        name: repository.name,
+        defaultBranch: "main",
+        enabled: true,
+        createdAt: "2026-08-22T00:00:00.000Z",
+        updatedAt: "2026-08-22T00:00:00.000Z",
+      }],
+    });
+    connectionsRef.current = [currentConnection];
+    repositoriesRef.current = [repository, secondRepository];
+    render(<ScmConnectionsSection workspaceId="workspace-1" canManage />, {
+      wrapper: I18nWrapper,
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("编辑连接"));
+    const repositoryCheckboxes = screen.getAllByRole("checkbox");
+    await user.click(repositoryCheckboxes[0]!);
+    await user.click(repositoryCheckboxes[1]!);
+    await user.click(screen.getByRole("button", { name: "保存并验证" }));
+
+    await waitFor(() => expect(verifyScmConnection).toHaveBeenCalled());
+    expect(updateScmConnection).toHaveBeenCalledWith(
       "workspace-1",
       "connection-1",
-      "repository-1",
-      { transfer: true },
-    ));
-    expect(createScmConnection).toHaveBeenCalledWith("workspace-1",
-      expect.objectContaining({ repositoryScope: "selected" }),
+      expect.objectContaining({
+        repositoryScope: "selected",
+        repositoryIds: ["repository-2"],
+      }),
     );
+    expect(bindScmRepository).not.toHaveBeenCalled();
+    expect(unbindScmRepository).not.toHaveBeenCalled();
   });
 
   it("never reports an invalid token as successfully verified", async () => {

@@ -132,6 +132,7 @@ export interface UpdateScmConnectionRequest {
   pollIntervalSeconds?: number;
   enabled?: boolean;
   repositoryScope?: ScmRepositoryScope;
+  repositoryIds?: string[];
 }
 
 export interface UpdateScmRepositoryBindingRequest {

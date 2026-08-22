@@ -230,7 +230,7 @@
       "repositories": "指定仓库",
       "no_repositories": "没有与该平台匹配的仓库，请先在「代码仓库」页面导入。",
       "enabled": "启用连接",
-      "enabled_hint": "关闭后暂停采集和凭证签发，但保留配置与历史事件。",
+      "enabled_hint": "关闭后暂停事件采集和向运行时提供 Git 凭证，但保留配置与历史事件。",
       "modes": { "poll": "主动拉取", "webhook": "Webhook", "hybrid": "混合" },
       "disabled": "已停用",
       "repository_count": "{{count}} 个仓库",

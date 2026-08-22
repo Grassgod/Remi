@@ -230,7 +230,7 @@
       "repositories": "指定したリポジトリ",
       "no_repositories": "このプロバイダーに対応するリポジトリがありません。先にリポジトリ画面からインポートしてください。",
       "enabled": "接続を有効化",
-      "enabled_hint": "無効にすると設定と履歴を保持したまま収集と認証情報発行を停止します。",
+      "enabled_hint": "無効にすると設定と履歴を保持したまま、イベント収集とランタイムへの Git 認証情報の提供を停止します。",
       "modes": { "poll": "ポーリング", "webhook": "Webhook", "hybrid": "ハイブリッド" },
       "disabled": "無効",
       "repository_count": "{{count}} リポジトリ",

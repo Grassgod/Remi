@@ -230,7 +230,7 @@
       "repositories": "지정한 저장소",
       "no_repositories": "이 공급자와 호환되는 저장소가 없습니다. 먼저 저장소 페이지에서 가져오세요.",
       "enabled": "연결 활성화",
-      "enabled_hint": "끄면 설정과 기록을 유지한 채 수집 및 자격 증명 발급을 중지합니다.",
+      "enabled_hint": "끄면 설정과 기록을 유지한 채 이벤트 수집 및 런타임에 Git 자격 증명 제공을 중지합니다.",
       "modes": { "poll": "폴링", "webhook": "Webhook", "hybrid": "혼합" },
       "disabled": "비활성",
       "repository_count": "저장소 {{count}}개",

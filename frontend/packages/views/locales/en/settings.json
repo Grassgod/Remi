@@ -230,7 +230,7 @@
       "repositories": "Selected repositories",
       "no_repositories": "No compatible repositories. Import one from the Repositories page first.",
       "enabled": "Enable connection",
-      "enabled_hint": "Turning this off pauses ingestion and credential issuance while preserving settings and event history.",
+      "enabled_hint": "Turning this off pauses event ingestion and Git credential delivery to runtimes while preserving settings and event history.",
       "modes": { "poll": "Polling", "webhook": "Webhook", "hybrid": "Hybrid" },
       "disabled": "Disabled",
       "repository_count": "{{count}} repositories",

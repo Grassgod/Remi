@@ -158,9 +158,14 @@ export function ScmConnectionsSection({
   }, [editing]);
 
   const hasToken = Boolean(draft.accessToken.trim() || existingConnection?.accessTokenSet);
+  const hasWebhookSecret =
+    draft.mode === "poll"
+    || Boolean(draft.webhookSecret.trim() || existingConnection?.webhookSecretSet);
   const hasRepositoryScope =
     draft.repositoryScope === "all" || draft.repositoryIds.length > 0;
-  const canSave = Boolean(draft.name.trim() && hasToken && hasRepositoryScope);
+  const canSave = Boolean(
+    draft.name.trim() && hasToken && hasWebhookSecret && hasRepositoryScope,
+  );
 
   const handleSave = async () => {
     if (!editing || saving || !canSave) return;
@@ -180,16 +185,11 @@ export function ScmConnectionsSection({
           pollIntervalSeconds,
           enabled: draft.enabled,
           repositoryScope: draft.repositoryScope,
+          ...(draft.repositoryScope === "selected"
+            ? { repositoryIds: draft.repositoryIds }
+            : {}),
         };
         connection = (await api.createScmConnection(workspaceId, input)).connection;
-        if (connection && draft.repositoryScope === "selected") {
-          const connectionId = connection.id;
-          await Promise.all(
-            draft.repositoryIds.map((repositoryId) =>
-              api.bindScmRepository(workspaceId, connectionId, repositoryId, { transfer: true }),
-            ),
-          );
-        }
       } else {
         const input: UpdateScmConnectionRequest = {
           name: draft.name.trim(),
@@ -199,29 +199,13 @@ export function ScmConnectionsSection({
           pollIntervalSeconds,
           enabled: draft.enabled,
           repositoryScope: draft.repositoryScope,
+          ...(draft.repositoryScope === "selected"
+            ? { repositoryIds: draft.repositoryIds }
+            : {}),
           ...(draft.accessToken.trim() ? { accessToken: draft.accessToken.trim() } : {}),
           ...(draft.webhookSecret.trim() ? { webhookSecret: draft.webhookSecret.trim() } : {}),
         };
         connection = (await api.updateScmConnection(workspaceId, editing.id, input)).connection;
-
-        if (draft.repositoryScope === "selected") {
-          const previousIds = new Set(
-            editing.repositories.map((repository) => repository.repositoryId),
-          );
-          const nextIds = new Set(draft.repositoryIds);
-          await Promise.all([
-            ...draft.repositoryIds
-              .filter((repositoryId) => !previousIds.has(repositoryId))
-              .map((repositoryId) =>
-                api.bindScmRepository(workspaceId, editing.id, repositoryId, { transfer: true }),
-              ),
-            ...editing.repositories
-              .filter((repository) => !nextIds.has(repository.repositoryId))
-              .map((repository) =>
-                api.unbindScmRepository(workspaceId, editing.id, repository.repositoryId),
-              ),
-          ]);
-        }
       }
 
       if (!connection) throw new Error(t(($) => $.source_control.scm.toast_save_failed));
