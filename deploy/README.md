@@ -39,12 +39,15 @@ data-service networks; it never creates, replaces, or deletes data containers.
 1. Back up PostgreSQL, OpenViking, uploads, session archives, and SSH Mesh state.
 2. Create an API env file outside Git. Change the database hostname to the
    existing network alias (`postgres` by default). Do not copy secrets into the
-   Compose env file.
+   Compose env file. Create a separate control-plane env file whose database
+   URL uses the host-published PostgreSQL address (`127.0.0.1` by default).
 3. Create a persistent service home owned by the runtime user and bind it with
    `REMI_HOME_DIR`. Bind the existing uploads, session archives, and SSH Mesh
    directories beneath it with `REMI_UPLOAD_DIR`, `REMI_SESSION_ARCHIVE_ROOT`,
    and `REMI_SSH_MESH_ROOT`. Set `REMI_RUNTIME_UID` and `REMI_RUNTIME_GID` to
-   their owner. SSH Mesh rejects a root-owned service home.
+   their owner. SSH Mesh rejects a root-owned service home. Bind the host
+   account's `.ssh` directory with `REMI_SSH_HOME_DIR` and set its login name in
+   `REMI_SSH_USER`.
 4. Start on the staging ports (`16120` and `13000`) with
    `REMI_BACKGROUND_JOBS=0` and `REMI_SSH_MESH_CONTROL_PLANE=0`. Verify API,
    Web, login, database-backed counts, OpenViking readiness, attachments, and
@@ -53,6 +56,12 @@ data-service networks; it never creates, replaces, or deletes data containers.
    `REMI_SSH_MESH_CONTROL_PLANE=1`, start the app stack, verify SSH Mesh
    ownership, then switch the reverse proxy to the new ports. Keep the host
    units installed but stopped for rollback.
+
+The API container never owns the SSH Mesh control-plane lease. Compose runs a
+dedicated `ssh-mesh-control-plane` sidecar with host networking so it observes
+the host sshd, network addresses, and host keys without starting a Runtime or
+task worker. The sidecar mounts `/etc/ssh` read-only and writes only the managed
+blocks in the configured host account's `.ssh` directory.
 
 The updater may use this Compose file after cutover. Set
 `MULTIREMI_PLATFORM_POSTGRES_CONTAINER` and
