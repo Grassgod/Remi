@@ -35,6 +35,14 @@ export function useDeleteScmConnection(workspaceId: string) {
   });
 }
 
+export function useVerifyScmConnection(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (connectionId: string) => api.verifyScmConnection(workspaceId, connectionId),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: scmKeys.all(workspaceId) }),
+  });
+}
+
 export function useBindScmRepository(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({

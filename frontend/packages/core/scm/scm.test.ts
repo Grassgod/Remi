@@ -12,10 +12,19 @@ const connection = {
   apiBaseUrl: "https://api.github.com",
   enabled: true,
   pollIntervalSeconds: 60,
+  repositoryScope: "all",
+  isDefault: true,
   accessTokenSet: true,
   accessTokenHint: "ghp_…abcd",
   webhookSecretSet: true,
   webhookSecretHint: "••••abcd",
+  verificationStatus: "valid",
+  verifiedAt: "2026-08-21T00:00:00.000Z",
+  verificationIdentity: "grassgod",
+  verifiedRepositoryCount: 3,
+  verifiedRepositoryTotal: 3,
+  verificationErrorCode: null,
+  verificationError: null,
   createdAt: "2026-08-21T00:00:00.000Z",
   updatedAt: "2026-08-21T00:00:00.000Z",
   repositories: [],
@@ -98,6 +107,7 @@ describe("SCM API", () => {
       provider: "github",
       mode: "poll",
       accessToken: "secret-token",
+      repositoryScope: "selected",
       repositoryIds: ["repo_1"],
     });
 
@@ -109,7 +119,102 @@ describe("SCM API", () => {
       provider: "github",
       mode: "poll",
       accessToken: "secret-token",
+      repositoryScope: "selected",
       repositoryIds: ["repo_1"],
+    });
+  });
+
+  it("defaults new verification fields for older connection payloads", async () => {
+    const legacyConnection = { ...connection } as Record<string, unknown>;
+    for (const field of [
+      "repositoryScope",
+      "isDefault",
+      "verificationStatus",
+      "verifiedAt",
+      "verificationIdentity",
+      "verifiedRepositoryCount",
+      "verifiedRepositoryTotal",
+      "verificationErrorCode",
+      "verificationError",
+    ]) {
+      delete legacyConnection[field];
+    }
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ connections: [legacyConnection] }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )));
+
+    const client = new ApiClient("https://multiremi.example");
+    const result = await client.listScmConnections("ws_1");
+
+    expect(result.connections[0]).toMatchObject({
+      repositoryScope: "selected",
+      isDefault: false,
+      verificationStatus: "unverified",
+      verificationIdentity: null,
+      verifiedRepositoryCount: 0,
+      verifiedRepositoryTotal: 0,
+    });
+  });
+
+  it("verifies a connection through the canonical SCM endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ connection }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://multiremi.example");
+    const result = await client.verifyScmConnection("ws_1", "scm_1");
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      "https://multiremi.example/api/workspaces/ws_1/scm/connections/scm_1/verify",
+    );
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({ method: "POST" });
+    expect(result.connection?.verificationStatus).toBe("valid");
+  });
+
+  it("keeps nullable references and provider-specific check conclusions", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      changeRequests: [{
+        id: "change_1",
+        workspaceId: "ws_1",
+        connectionId: "scm_1",
+        repositoryId: "repo_1",
+        provider: "codebase",
+        externalId: "mr_7",
+        number: null,
+        title: "Update wiki",
+        state: "open",
+        url: null,
+        checksConclusion: "neutral_with_warnings",
+      }],
+      total: 1,
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    const client = new ApiClient("https://multiremi.example");
+    const result = await client.listIssueChangeRequests("issue_1");
+
+    expect(result.changeRequests[0]).toMatchObject({
+      provider: "codebase",
+      externalId: "mr_7",
+      number: null,
+      url: null,
+      checksConclusion: "neutral_with_warnings",
+      checksPassed: 0,
+    });
+  });
+
+  it("falls back to an empty change request envelope for malformed data", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ changeRequests: null, total: "invalid" }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )));
+
+    const client = new ApiClient("https://multiremi.example");
+    await expect(client.listIssueChangeRequests("issue_1")).resolves.toEqual({
+      changeRequests: [],
+      total: 0,
     });
   });
 

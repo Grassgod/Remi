@@ -4,7 +4,7 @@ import { LarkTab } from "./lark-tab";
 import { useT } from "../../i18n";
 
 // Integrations is the umbrella tab for third-party platform connections.
-// GitHub has its own top-level tab (see github-tab.tsx); everything else
+// Source control has its own top-level tab; everything else
 // — currently just Lark, with Slack/Linear etc. to follow — lives in
 // here under its own section heading so additional integrations slot in
 // without changing the IA. IntegrationsTab is just the host; each

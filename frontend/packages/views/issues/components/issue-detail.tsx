@@ -9,7 +9,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { useQuery } from "@tanstack/react-query";
-import { useGitHubSettings } from "@multiremi/core/github";
+import { useScmSettings } from "@multiremi/core/scm";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useActorName } from "@multiremi/core/workspace/hooks";
@@ -123,7 +123,7 @@ export function IssueDetail({
     ? mobileSessionSidebarOpen
     : sessionSidebarOpen;
   const sections = useSidebarSections();
-  const githubSettings = useGitHubSettings();
+  const scmSettings = useScmSettings();
 
   // Virtuoso's `customScrollParent` wants the HTMLElement, not a ref. A plain
   // `useRef.current` does not trigger a re-render when it populates, so the
@@ -279,7 +279,7 @@ export function IssueDetail({
       optionalProps={optionalProps}
       onUpdateField={actions.updateField}
       parentIssue={parentIssue}
-      prSidebarEnabled={githubSettings.prSidebar}
+      changeSidebarEnabled={scmSettings.changeSidebar}
       getActorName={getActorName}
       agents={agents}
       issueSessions={sessions.list}

@@ -8,7 +8,7 @@ describe("useSidebarSections", () => {
 
     expect(result.current.isOpen("properties")).toBe(true);
     expect(result.current.isOpen("parentIssue")).toBe(true);
-    expect(result.current.isOpen("pullRequests")).toBe(true);
+    expect(result.current.isOpen("codeChanges")).toBe(true);
     expect(result.current.isOpen("details")).toBe(true);
     expect(result.current.isOpen("tokenUsage")).toBe(true);
     expect(result.current.isOpen("metadata")).toBe(false);

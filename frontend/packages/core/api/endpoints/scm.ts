@@ -2,6 +2,7 @@ import type {
   CreateScmConnectionRequest,
   ListScmConnectionsResponse,
   ListScmEventsResponse,
+  ListIssueChangeRequestsResponse,
   ScmCapabilitiesResponse,
   ScmConnectionResponse,
   UpdateScmConnectionRequest,
@@ -16,8 +17,10 @@ import {
   EMPTY_SCM_CONNECTION_RESPONSE,
   ListScmConnectionsResponseSchema,
   ListScmEventsResponseSchema,
+  ListIssueChangeRequestsResponseSchema,
   ScmCapabilitiesResponseSchema,
   ScmConnectionResponseSchema,
+  EMPTY_LIST_ISSUE_CHANGE_REQUESTS_RESPONSE,
 } from "../schemas/scm";
 
 export class ScmEndpoints {
@@ -88,6 +91,31 @@ export class ScmEndpoints {
     await this.http.fetch(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/scm/connections/${encodeURIComponent(connectionId)}`,
       { method: "DELETE" },
+    );
+  }
+
+  async verifyScmConnection(
+    workspaceId: string,
+    connectionId: string,
+  ): Promise<ScmConnectionResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/scm/connections/${encodeURIComponent(connectionId)}/verify`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, ScmConnectionResponseSchema, EMPTY_SCM_CONNECTION_RESPONSE, {
+      endpoint: "POST /api/workspaces/:id/scm/connections/:connectionId/verify",
+    });
+  }
+
+  async listIssueChangeRequests(issueId: string): Promise<ListIssueChangeRequestsResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/issues/${encodeURIComponent(issueId)}/change-requests`,
+    );
+    return parseWithFallback(
+      raw,
+      ListIssueChangeRequestsResponseSchema,
+      EMPTY_LIST_ISSUE_CHANGE_REQUESTS_RESPONSE,
+      { endpoint: "GET /api/issues/:id/change-requests" },
     );
   }
 
