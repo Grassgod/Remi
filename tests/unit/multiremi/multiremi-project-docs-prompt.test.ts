@@ -6,6 +6,15 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 function createProjectTask(store: MultiremiStore) {
+  store.ensureLocalWorkspace();
+  store.updateWorkspace("local", {
+    repos: [{
+      id: "repo_knowledge_prompt",
+      name: "knowledge",
+      url: "https://github.com/example/knowledge",
+      source: "github",
+    }],
+  });
   const agent = store.createAgent({
     name: "Codex",
     provider: "codex",
@@ -247,6 +256,41 @@ describe("bootstrap and delta task prompts", () => {
 
     expect(prompt).toContain("already checked out into the working directory");
     expect(prompt).toContain("at `./knowledge` on branch `agent/codex/REMI-1`");
+  });
+
+  it("injects bounded repository failure diagnostics into the agent prompt", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const prompt = buildTaskPrompt(task, {
+      repoWarnings: [
+        {
+          repoUrl: "git@github.com:example/stale.git",
+          kind: "stale_cache",
+          message: "git fetch timed out\nafter retries",
+        },
+        {
+          repoUrl: "git@github.com:example/missing.git",
+          kind: "unavailable",
+          message: `clone failed ${"x".repeat(600)}`,
+        },
+      ],
+    });
+
+    expect(prompt).toContain("## Repository Availability Warnings");
+    expect(prompt).toContain("may use stale cached data");
+    expect(prompt).toContain("Do not assume it contains the latest remote changes");
+    expect(prompt).toContain("checkout is unavailable");
+    expect(prompt).toContain("Do not claim that you inspected its source code");
+    expect(prompt).toContain("git fetch timed out after retries");
+    expect(prompt).not.toContain("\nafter retries");
+    expect(prompt).not.toContain("x".repeat(501));
+  });
+
+  it("does not add a repository warning section to healthy prompts", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+
+    expect(buildTaskPrompt(task)).not.toContain("Repository Availability Warnings");
   });
 
   it("keeps a checkout command for repositories the daemon did not materialize", () => {

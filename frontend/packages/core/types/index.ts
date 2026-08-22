@@ -136,15 +136,6 @@ export type {
 } from "./project-doc";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
-  GitHubInstallation,
-  GitHubMergeableState,
-  GitHubPullRequest,
-  GitHubPullRequestChecksConclusion,
-  GitHubPullRequestState,
-  ListGitHubInstallationsResponse,
-  GitHubConnectResponse,
-} from "./github";
-export type {
   LarkInstallation,
   ListLarkInstallationsResponse,
   BeginLarkInstallResponse,
@@ -165,6 +156,8 @@ export type {
   AutopilotRunSource,
   AutopilotSystemEventCondition,
   AutopilotSystemEventConfig,
+  AutopilotScmEventConfig,
+  AutopilotEventConfig,
   WebhookEventFilter,
   CreateAutopilotRequest,
   UpdateAutopilotRequest,
@@ -178,6 +171,30 @@ export type {
   WebhookSignatureStatus,
   ListWebhookDeliveriesResponse,
 } from "./autopilot";
+export type {
+  ScmProvider,
+  ScmConnectionMode,
+  ScmRepositoryScope,
+  ScmVerificationStatus,
+  ScmSyncStream,
+  ScmStreamCapability,
+  ScmProviderCapabilities,
+  ScmCapabilitiesResponse,
+  CanonicalScmEventType,
+  ScmRepositoryBinding,
+  ScmConnection,
+  ListScmConnectionsResponse,
+  ScmConnectionResponse,
+  CreateScmConnectionRequest,
+  UpdateScmConnectionRequest,
+  UpdateScmRepositoryBindingRequest,
+  CanonicalScmEvent,
+  ListScmEventsResponse,
+  ScmChangeRequestState,
+  ScmChangeRequestChecksConclusion,
+  ScmChangeRequest,
+  ListIssueChangeRequestsResponse,
+} from "./scm";
 export type {
   Squad,
   SquadMember,

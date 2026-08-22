@@ -12,8 +12,11 @@ import {
   Plug,
   Waypoints,
   Archive,
+  GitBranch,
+  ServerCog,
 } from "lucide-react";
-import { GitHubMark } from "./github-mark";
+import { useQuery } from "@tanstack/react-query";
+import { platformStatusOptions } from "@multiremi/core/platform-lifecycle";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multiremi/ui/components/ui/tabs";
 import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { useNavigation } from "../../navigation";
@@ -22,12 +25,13 @@ import { PreferencesTab } from "./preferences-tab";
 import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
 import { MembersTab } from "./members-tab";
-import { GitHubTab } from "./github-tab";
+import { SourceControlTab } from "./source-control-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { ModelGatewayTab } from "./model-gateway-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { StorageCleanupTab } from "./storage-cleanup-tab";
+import { PlatformTab } from "./platform-tab";
 import { useT } from "../../i18n";
 
 const ACCOUNT_TAB_KEYS = ["profile", "preferences", "notifications", "tokens"] as const;
@@ -40,7 +44,7 @@ const ACCOUNT_TAB_ICONS = {
 
 const WORKSPACE_TAB_KEYS = [
   "general",
-  "github",
+  "source_control",
   "integrations",
   "model_gateway",
   "storage_cleanup",
@@ -49,7 +53,7 @@ const WORKSPACE_TAB_KEYS = [
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
-  github: "github",
+  source_control: "source-control",
   integrations: "integrations",
   model_gateway: "model-gateway",
   storage_cleanup: "storage-cleanup",
@@ -58,7 +62,7 @@ const WORKSPACE_TAB_VALUES = {
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
-  github: GitHubMark,
+  source_control: GitBranch,
   integrations: Plug,
   model_gateway: Waypoints,
   storage_cleanup: Archive,
@@ -94,6 +98,8 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const { t } = useT("settings");
   const workspaceName = useCurrentWorkspace()?.name;
   const navigation = useNavigation();
+  const platformStatus = useQuery(platformStatusOptions());
+  const showPlatformTab = platformStatus.isSuccess && platformStatus.data.canManage;
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
   // the default. Whitelisting also blocks junk like ?tab=<script> from
@@ -103,9 +109,10 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
       new Set<string>([
         ...ACCOUNT_TAB_KEYS,
         ...Object.values(WORKSPACE_TAB_VALUES),
+        ...(showPlatformTab ? ["platform"] : []),
         ...(extraAccountTabs?.map((tab) => tab.value) ?? []),
       ]),
-    [extraAccountTabs],
+    [extraAccountTabs, showPlatformTab],
   );
 
   const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
@@ -167,6 +174,17 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
               </TabsTrigger>
             );
           })}
+          {showPlatformTab && (
+            <>
+              <span className="px-2 pb-1 pt-4 text-xs font-medium text-muted-foreground">
+                {t(($) => $.page.system)}
+              </span>
+              <TabsTrigger value="platform">
+                <ServerCog className="h-4 w-4" />
+                {t(($) => $.page.tabs.platform)}
+              </TabsTrigger>
+            </>
+          )}
         </TabsList>
       </div>
 
@@ -178,12 +196,13 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="notifications"><NotificationsTab /></TabsContent>
           <TabsContent value="tokens"><TokensTab /></TabsContent>
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
-          <TabsContent value="github"><GitHubTab /></TabsContent>
+          <TabsContent value="source-control"><SourceControlTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="model-gateway"><ModelGatewayTab /></TabsContent>
           <TabsContent value="storage-cleanup"><StorageCleanupTab /></TabsContent>
           <TabsContent value="labs"><LabsTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
+          {showPlatformTab && <TabsContent value="platform"><PlatformTab /></TabsContent>}
           {extraAccountTabs?.map((tab) => (
             <TabsContent key={tab.value} value={tab.value}>{tab.content}</TabsContent>
           ))}

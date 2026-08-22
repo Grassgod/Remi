@@ -1,4 +1,5 @@
 import type { IssueStatus } from "./issue";
+import type { CanonicalScmEventType } from "./scm";
 
 export type AutopilotStatus = "active" | "paused" | "archived";
 
@@ -14,7 +15,12 @@ export type AutopilotWorkspacePolicy = "reuse_issue";
 // Path A). Older servers omit this field — callers should default to "agent".
 export type AutopilotAssigneeType = "agent" | "squad";
 
-export type AutopilotTriggerKind = "schedule" | "webhook" | "system_event" | "api";
+export type AutopilotTriggerKind =
+  | "schedule"
+  | "webhook"
+  | "system_event"
+  | "scm_event"
+  | "api";
 
 // `skipped` is emitted by the backend pre-flight admission check
 // (assignee runtime offline at dispatch time, MUL-1899). The frontend MUST
@@ -27,7 +33,13 @@ export type AutopilotRunStatus =
   | "failed"
   | "skipped";
 
-export type AutopilotRunSource = "schedule" | "manual" | "webhook" | "system_event" | "api";
+export type AutopilotRunSource =
+  | "schedule"
+  | "manual"
+  | "webhook"
+  | "system_event"
+  | "scm_event"
+  | "api";
 
 export interface AutopilotSystemEventCondition {
   field: "status";
@@ -41,6 +53,18 @@ export interface AutopilotSystemEventConfig {
   conditions: AutopilotSystemEventCondition[];
   project_id?: string | null;
 }
+
+export interface AutopilotScmEventConfig {
+  resource: "scm";
+  events: CanonicalScmEventType[];
+  connectionId?: string | null;
+  repositoryIds?: string[];
+  branch?: string | null;
+}
+
+export type AutopilotEventConfig =
+  | AutopilotSystemEventConfig
+  | AutopilotScmEventConfig;
 
 export interface Autopilot {
   id: string;
@@ -88,7 +112,7 @@ export interface AutopilotTrigger {
   // event_filters is only present for webhook triggers. Null/empty means
   // "accept all events".
   event_filters?: WebhookEventFilter[] | null;
-  event_config: AutopilotSystemEventConfig | null;
+  event_config: AutopilotEventConfig | null;
   last_fired_at: string | null;
   created_at: string;
   updated_at: string;
@@ -147,7 +171,7 @@ export interface CreateAutopilotTriggerRequest {
   label?: string;
   // event_filters is only meaningful for webhook triggers.
   event_filters?: WebhookEventFilter[];
-  event_config?: AutopilotSystemEventConfig;
+  event_config?: AutopilotEventConfig;
 }
 
 export interface UpdateAutopilotTriggerRequest {
@@ -157,7 +181,7 @@ export interface UpdateAutopilotTriggerRequest {
   label?: string;
   // event_filters is only meaningful for webhook triggers.
   event_filters?: WebhookEventFilter[] | null;
-  event_config?: AutopilotSystemEventConfig | null;
+  event_config?: AutopilotEventConfig | null;
 }
 
 export interface ListAutopilotsResponse {

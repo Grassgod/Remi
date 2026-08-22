@@ -10,9 +10,8 @@ export function resolveRemoteApiUrl(env: RuntimeEnv): string {
   const port =
     env.BACKEND_PORT?.trim() ||
     env.API_PORT?.trim() ||
-    env.SERVER_PORT?.trim() ||
-    env.PORT?.trim();
+    env.SERVER_PORT?.trim();
   if (port) return `http://localhost:${port}`;
 
-  return "http://localhost:8080";
+  return "http://localhost:6120";
 }

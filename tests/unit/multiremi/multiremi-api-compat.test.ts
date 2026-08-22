@@ -499,13 +499,9 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(await deleteOnlyOwner.json()).toEqual({ error: "insufficient permissions" });
 
     const githubConnect = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/github/connect`);
-    expect(await githubConnect.json()).toEqual({ configured: false });
+    expect(githubConnect.status).toBe(404);
     const githubInstallations = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/github/installations`);
-    expect(await githubInstallations.json()).toEqual({
-      installations: [],
-      configured: false,
-      can_manage: true,
-    });
+    expect(githubInstallations.status).toBe(404);
 
     const deletedMember = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/members/${encodeURIComponent(membersBody[0].id)}`, {
       method: "DELETE",
@@ -573,8 +569,8 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(googleLoginBody.user.name).toBe("Google User");
     const realtimeHealth = await app.request("/health/realtime");
     expect(await realtimeHealth.json()).toMatchObject({ enabled: true, connections: 0, transport: "websocket" });
-    expect((await (await app.request("/api/github/setup")).json()).configured).toBe(false);
-    expect((await app.request("/api/webhooks/github", { method: "POST" })).status).toBe(202);
+    expect((await app.request("/api/github/setup")).status).toBe(404);
+    expect((await app.request("/api/webhooks/github", { method: "POST" })).status).toBe(404);
     expect((await app.request("/api/webhooks/autopilots/missing", { method: "POST" })).status).toBe(404);
     const wsFallback = await app.request("/api/daemon/ws");
     expect(wsFallback.status).toBe(426);

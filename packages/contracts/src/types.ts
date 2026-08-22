@@ -2420,11 +2420,11 @@ export type MultiremiAutopilotWorkspacePolicy = "reuse_issue";
 
 export type MultiremiAutopilotAssigneeType = "agent" | "squad";
 
-export type MultiremiAutopilotTriggerKind = "schedule" | "webhook" | "api" | "system_event";
+export type MultiremiAutopilotTriggerKind = "schedule" | "webhook" | "api" | "system_event" | "scm_event";
 
 export type MultiremiAutopilotRunStatus = "issue_created" | "running" | "completed" | "failed" | "skipped";
 
-export type MultiremiAutopilotRunSource = "manual" | "schedule" | "webhook" | "api" | "system_event";
+export type MultiremiAutopilotRunSource = "manual" | "schedule" | "webhook" | "api" | "system_event" | "scm_event";
 
 export type MultiremiIssueStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done" | "blocked" | "cancelled";
 
@@ -2441,6 +2441,20 @@ export interface MultiremiAutopilotSystemEventConfig {
   projectId?: string | null;
   project_id?: string | null;
 }
+
+export interface MultiremiAutopilotScmEventConfig {
+  resource: "scm";
+  events: MultiremiScmCanonicalEventType[];
+  connectionId?: string | null;
+  connection_id?: string | null;
+  repositoryIds?: string[];
+  repository_ids?: string[];
+  branch?: string | null;
+}
+
+export type MultiremiAutopilotEventConfig =
+  | MultiremiAutopilotSystemEventConfig
+  | MultiremiAutopilotScmEventConfig;
 
 export type MultiremiSystemEventStatus = "pending" | "processing" | "processed" | "failed";
 
@@ -2514,8 +2528,8 @@ export interface MultiremiAutopilotTrigger {
   provider: MultiremiWebhookProvider | null;
   label: string | null;
   eventFilters: MultiremiWebhookEventFilter[] | null;
-  eventConfig: MultiremiAutopilotSystemEventConfig | null;
-  event_config?: MultiremiAutopilotSystemEventConfig | null;
+  eventConfig: MultiremiAutopilotEventConfig | null;
+  event_config?: MultiremiAutopilotEventConfig | null;
   signingSecretSet: boolean;
   signingSecretHint: string | null;
   lastFiredAt: string | null;
@@ -2584,8 +2598,8 @@ export interface CreateAutopilotTriggerInput {
   enabled?: boolean;
   eventFilters?: MultiremiWebhookEventFilter[] | null;
   event_filters?: MultiremiWebhookEventFilter[] | null;
-  eventConfig?: MultiremiAutopilotSystemEventConfig | null;
-  event_config?: MultiremiAutopilotSystemEventConfig | null;
+  eventConfig?: MultiremiAutopilotEventConfig | null;
+  event_config?: MultiremiAutopilotEventConfig | null;
 }
 
 export interface UpdateAutopilotTriggerInput {
@@ -2596,8 +2610,8 @@ export interface UpdateAutopilotTriggerInput {
   label?: string | null;
   eventFilters?: MultiremiWebhookEventFilter[] | null;
   event_filters?: MultiremiWebhookEventFilter[] | null;
-  eventConfig?: MultiremiAutopilotSystemEventConfig | null;
-  event_config?: MultiremiAutopilotSystemEventConfig | null;
+  eventConfig?: MultiremiAutopilotEventConfig | null;
+  event_config?: MultiremiAutopilotEventConfig | null;
 }
 
 export interface UpdateAutopilotInput {
@@ -2919,9 +2933,402 @@ export interface SendChatMessageResult {
   task: MultiremiTask;
 }
 
+// ─── Source control connections & normalized events ─────────────────────────────────────────────
+
+export type MultiremiScmProvider = "github" | "codebase";
+
+export type MultiremiScmSyncMode = "poll" | "webhook" | "hybrid";
+
+export type MultiremiScmSyncStream =
+  | "default_branch"
+  | "change_requests"
+  | "comments"
+  | "reviews"
+  | "pipelines";
+
+export type MultiremiScmEntityType =
+  | "repository"
+  | "change_request"
+  | "comment"
+  | "review"
+  | "pipeline"
+  | "ref";
+
+export type MultiremiScmCanonicalEventType =
+  | "change.opened"
+  | "change.updated"
+  | "change.closed"
+  | "change.reopened"
+  | "change.merged"
+  | "comment.created"
+  | "comment.updated"
+  | "comment.deleted"
+  | "review.submitted"
+  | "review.dismissed"
+  | "pipeline.started"
+  | "pipeline.completed"
+  | "default_branch.updated"
+  | "push.observed";
+
+export type MultiremiScmEventSource = "poll" | "webhook";
+
+export type MultiremiScmEventFidelity = "exact" | "inferred";
+
+export type MultiremiScmEventStatus = "pending" | "processing" | "processed" | "failed";
+
+export type MultiremiScmEventDeliveryStatus = "pending" | "processing" | "delivered" | "failed" | "skipped";
+
+export type MultiremiScmRepositoryScope = "all" | "selected";
+
+export type MultiremiScmRepositoryAssignmentOrigin = "default" | "explicit";
+
+export type MultiremiScmVerificationStatus =
+  | "unverified"
+  | "verifying"
+  | "valid"
+  | "partial"
+  | "invalid"
+  | "rate_limited"
+  | "unreachable";
+
+export interface MultiremiScmConnection {
+  id: string;
+  workspaceId: string;
+  name: string;
+  provider: MultiremiScmProvider;
+  mode: MultiremiScmSyncMode;
+  baseUrl: string;
+  apiBaseUrl: string;
+  enabled: boolean;
+  pollIntervalSeconds: number;
+  repositoryScope: MultiremiScmRepositoryScope;
+  isDefault: boolean;
+  accessTokenSet: boolean;
+  accessTokenHint: string | null;
+  webhookSecretSet: boolean;
+  webhookSecretHint: string | null;
+  verificationStatus: MultiremiScmVerificationStatus;
+  verifiedAt: string | null;
+  verificationIdentity: string | null;
+  verifiedRepositoryCount: number;
+  verifiedRepositoryTotal: number;
+  verificationErrorCode: string | null;
+  verificationError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Server-only secret view. It must never be serialized by a browser API. */
+export interface MultiremiScmConnectionCredential {
+  accessToken: string | null;
+  webhookSecret: string | null;
+}
+
+export interface CreateScmConnectionInput {
+  id?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  name: string;
+  provider: MultiremiScmProvider;
+  mode?: MultiremiScmSyncMode;
+  baseUrl?: string | null;
+  base_url?: string | null;
+  apiBaseUrl?: string | null;
+  api_base_url?: string | null;
+  accessToken?: string | null;
+  access_token?: string | null;
+  webhookSecret?: string | null;
+  webhook_secret?: string | null;
+  pollIntervalSeconds?: number;
+  poll_interval_seconds?: number;
+  enabled?: boolean;
+  repositoryScope?: MultiremiScmRepositoryScope;
+  repository_scope?: MultiremiScmRepositoryScope;
+  repositoryIds?: string[];
+  repository_ids?: string[];
+}
+
+export interface UpdateScmConnectionInput {
+  name?: string;
+  mode?: MultiremiScmSyncMode;
+  baseUrl?: string | null;
+  base_url?: string | null;
+  apiBaseUrl?: string | null;
+  api_base_url?: string | null;
+  accessToken?: string | null;
+  access_token?: string | null;
+  clearAccessToken?: boolean;
+  clear_access_token?: boolean;
+  webhookSecret?: string | null;
+  webhook_secret?: string | null;
+  clearWebhookSecret?: boolean;
+  clear_webhook_secret?: boolean;
+  pollIntervalSeconds?: number;
+  poll_interval_seconds?: number;
+  enabled?: boolean;
+  repositoryScope?: MultiremiScmRepositoryScope;
+  repository_scope?: MultiremiScmRepositoryScope;
+  /** When present for selected scope, atomically replaces the complete binding set. */
+  repositoryIds?: string[];
+  repository_ids?: string[];
+}
+
+export interface MultiremiScmRepositoryBinding {
+  id: string;
+  workspaceId: string;
+  connectionId: string;
+  repositoryId: string;
+  repositoryUrl: string;
+  externalId: string | null;
+  owner: string | null;
+  name: string;
+  defaultBranch: string | null;
+  enabled: boolean;
+  assignmentOrigin: MultiremiScmRepositoryAssignmentOrigin;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertScmRepositoryBindingInput {
+  workspaceId: string;
+  connectionId: string;
+  repositoryId: string;
+  repositoryUrl: string;
+  repositorySource?: MultiremiScmProvider | "unknown" | null;
+  repository_source?: MultiremiScmProvider | "unknown" | null;
+  externalId?: string | null;
+  owner?: string | null;
+  name: string;
+  defaultBranch?: string | null;
+  enabled?: boolean;
+  assignmentOrigin?: MultiremiScmRepositoryAssignmentOrigin;
+  assignment_origin?: MultiremiScmRepositoryAssignmentOrigin;
+  transfer?: boolean;
+}
+
+export interface MultiremiScmVerificationResult {
+  status: MultiremiScmVerificationStatus;
+  verifiedAt: string;
+  identity: string | null;
+  repositoryCount: number;
+  repositoryTotal: number;
+  errorCode: string | null;
+  error: string | null;
+}
+
+export interface MultiremiScmSyncCursor {
+  connectionId: string;
+  repositoryId: string;
+  stream: MultiremiScmSyncStream;
+  cursor: Record<string, unknown> | null;
+  watermark: string | null;
+  baselineCompletedAt: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseUntil: string | null;
+  leaseToken: string | null;
+  updatedAt: string;
+}
+
+export interface UpsertScmSyncCursorInput {
+  connectionId: string;
+  repositoryId: string;
+  stream: MultiremiScmSyncStream;
+  cursor?: Record<string, unknown> | null;
+  watermark?: string | null;
+  baselineCompletedAt?: string | null;
+  lastStartedAt?: string | null;
+  lastCompletedAt?: string | null;
+  lastError?: string | null;
+}
+
+export interface ClaimScmSyncStreamInput {
+  connectionId: string;
+  repositoryId: string;
+  stream: MultiremiScmSyncStream;
+  owner: string;
+  now?: string;
+  leaseMs?: number;
+}
+
+export interface UpdateClaimedScmSyncCursorInput extends UpsertScmSyncCursorInput {
+  leaseToken: string;
+  leaseUntil?: string;
+}
+
+export interface ReleaseScmSyncStreamInput {
+  connectionId: string;
+  repositoryId: string;
+  stream: MultiremiScmSyncStream;
+  leaseToken: string;
+}
+
+export interface MultiremiScmEntitySnapshot {
+  connectionId: string;
+  repositoryId: string;
+  entityType: MultiremiScmEntityType;
+  externalId: string;
+  version: string | null;
+  /** Provider-derived timestamp used to reject stale hybrid observations. */
+  revisionAt: string;
+  /** Provider version (or a stable content fallback) used as a deterministic tie-breaker. */
+  revision: string;
+  contentHash: string;
+  payload: Record<string, unknown>;
+  observedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertScmEntitySnapshotInput {
+  connectionId: string;
+  repositoryId: string;
+  entityType: MultiremiScmEntityType;
+  externalId: string;
+  version?: string | null;
+  revisionAt?: string;
+  revision?: string;
+  contentHash: string;
+  payload: Record<string, unknown>;
+  observedAt?: string;
+}
+
+export interface AdvanceScmEntitySnapshotResult {
+  applied: boolean;
+  previous: MultiremiScmEntitySnapshot | null;
+  snapshot: MultiremiScmEntitySnapshot;
+}
+
+export type MultiremiScmChangeRequestState = "open" | "closed" | "merged" | "draft";
+
+/** Provider-neutral current-state projection used by issue surfaces. */
+export interface MultiremiScmChangeRequest {
+  id: string;
+  workspaceId: string;
+  connectionId: string;
+  repositoryId: string;
+  provider: MultiremiScmProvider;
+  externalId: string;
+  number: number | null;
+  title: string;
+  body: string | null;
+  state: MultiremiScmChangeRequestState;
+  draft: boolean;
+  url: string | null;
+  sourceBranch: string | null;
+  targetBranch: string | null;
+  headSha: string | null;
+  baseSha: string | null;
+  author: string | null;
+  providerCreatedAt: string | null;
+  providerUpdatedAt: string | null;
+  closedAt: string | null;
+  mergedAt: string | null;
+  mergeSha: string | null;
+  mergeableState: string | null;
+  checksConclusion: string | null;
+  checksPassed: number;
+  checksFailed: number;
+  checksPending: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MultiremiScmIssueLinkSource = "auto" | "manual" | "legacy";
+
+export interface MultiremiScmIssueLink {
+  id: string;
+  workspaceId: string;
+  changeRequestId: string;
+  issueId: string;
+  source: MultiremiScmIssueLinkSource;
+  active: boolean;
+  linkedAt: string;
+  unlinkedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiScmCanonicalEvent {
+  id: string;
+  workspaceId: string;
+  connectionId: string;
+  repositoryId: string;
+  provider: MultiremiScmProvider;
+  type: MultiremiScmCanonicalEventType;
+  subjectType: string;
+  subjectId: string;
+  logicalKey: string;
+  primarySource: MultiremiScmEventSource;
+  fidelity: MultiremiScmEventFidelity;
+  occurredAt: string | null;
+  observedAt: string;
+  payload: Record<string, unknown>;
+  status: MultiremiScmEventStatus;
+  attemptCount: number;
+  availableAt: string;
+  leaseUntil: string | null;
+  lastError: string | null;
+  processedAt: string | null;
+  createdAt: string;
+}
+
+export interface MultiremiScmEventEvidence {
+  id: string;
+  eventId: string;
+  source: MultiremiScmEventSource;
+  providerEventId: string | null;
+  dedupeKey: string;
+  payload: Record<string, unknown> | null;
+  rawBody: string | null;
+  observedAt: string;
+  createdAt: string;
+}
+
+export interface RecordScmCanonicalEventInput {
+  workspaceId: string;
+  connectionId: string;
+  repositoryId: string;
+  type: MultiremiScmCanonicalEventType;
+  subjectType: string;
+  subjectId: string;
+  logicalKey: string;
+  fidelity: MultiremiScmEventFidelity;
+  occurredAt?: string | null;
+  observedAt?: string;
+  payload: Record<string, unknown>;
+  evidence: {
+    source: MultiremiScmEventSource;
+    providerEventId?: string | null;
+    dedupeKey: string;
+    payload?: Record<string, unknown> | null;
+    rawBody?: string | null;
+  };
+}
+
+export interface MultiremiScmEventDelivery {
+  id: string;
+  eventId: string;
+  triggerId: string;
+  autopilotRunId: string | null;
+  status: MultiremiScmEventDeliveryStatus;
+  attemptCount: number;
+  availableAt: string;
+  leaseUntil: string | null;
+  lastError: string | null;
+  deliveredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Webhooks ────────────────────────────────────────────────────────────────────────────────────
 
-export type MultiremiWebhookProvider = "generic" | "github";
+export type MultiremiWebhookProvider = "generic" | "github" | "codebase";
 
 export type MultiremiWebhookSignatureStatus = "not_required" | "valid" | "invalid" | "missing";
 
@@ -2964,50 +3371,6 @@ export interface MultiremiWebhookDeliveryResult {
   duplicate: boolean;
   delivery: MultiremiWebhookDelivery;
   run: MultiremiAutopilotRun | null;
-}
-
-// ─── GitHub integration ──────────────────────────────────────────────────────────────────────────
-
-export type MultiremiGitHubPullRequestState = "open" | "closed" | "merged" | "draft";
-
-export type MultiremiGitHubChecksConclusion = "passed" | "failed" | "pending" | null;
-
-export interface MultiremiGitHubSettings {
-  workspaceId: string;
-  enabled: boolean;
-  prSidebar: boolean;
-  coAuthor: boolean;
-  autoLinkPRs: boolean;
-  updatedAt: string | null;
-}
-
-export interface MultiremiGitHubPullRequest {
-  id: string;
-  workspaceId: string;
-  issueId: string | null;
-  repoOwner: string;
-  repoName: string;
-  number: number;
-  title: string;
-  state: MultiremiGitHubPullRequestState;
-  htmlUrl: string;
-  branch: string | null;
-  authorLogin: string | null;
-  authorAvatarUrl: string | null;
-  mergedAt: string | null;
-  closedAt: string | null;
-  prCreatedAt: string;
-  prUpdatedAt: string;
-  mergeableState: string | null;
-  checksConclusion: MultiremiGitHubChecksConclusion;
-  checksPassed: number;
-  checksFailed: number;
-  checksPending: number;
-  additions: number;
-  deletions: number;
-  changedFiles: number;
-  createdAt: string;
-  updatedAt: string;
 }
 
 // ─── Usage, analytics & metrics ──────────────────────────────────────────────────────────────────
@@ -3094,6 +3457,105 @@ export interface MultiremiAgentActivityBucket {
   task_count?: number;
   failedCount: number;
   failed_count?: number;
+}
+
+// ─── Platform lifecycle ─────────────────────────────────────────────────────
+
+export type MultiremiPlatformDeploymentDriver = "systemd_release" | "docker_compose";
+
+export type MultiremiPlatformOperationKind =
+  | "check_updates"
+  | "restart"
+  | "update"
+  | "rollback";
+
+export type MultiremiPlatformOperationStatus =
+  | "queued"
+  | "preparing"
+  | "pulling"
+  | "switching"
+  | "restarting"
+  | "verifying"
+  | "succeeded"
+  | "failed"
+  | "rolling_back"
+  | "rolled_back";
+
+export type MultiremiPlatformServiceId =
+  | "api"
+  | "web"
+  | "ssh-mesh-control-plane"
+  | "postgres"
+  | "openviking";
+export type MultiremiPlatformServiceStatus = "ready" | "degraded" | "stopped" | "unknown";
+
+export interface MultiremiPlatformService {
+  id: MultiremiPlatformServiceId;
+  name: string;
+  status: MultiremiPlatformServiceStatus;
+  detail: string | null;
+  version: string | null;
+  checkedAt: string | null;
+}
+
+export interface MultiremiPlatformRelease {
+  version: string;
+  ref: string;
+  publishedAt: string | null;
+  releaseUrl: string | null;
+  manifestUrl: string | null;
+  apiImage: string | null;
+  webImage: string | null;
+}
+
+export interface MultiremiPlatformOperation {
+  id: string;
+  kind: MultiremiPlatformOperationKind;
+  status: MultiremiPlatformOperationStatus;
+  driver: MultiremiPlatformDeploymentDriver;
+  targetVersion: string | null;
+  targetRef: string | null;
+  targetManifest: Record<string, unknown>;
+  progress: Record<string, unknown>;
+  requestedBy: string;
+  output: string | null;
+  error: string | null;
+  previousRelease: MultiremiPlatformRelease | null;
+  resultRelease: MultiremiPlatformRelease | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface MultiremiPlatformStatus {
+  canManage: boolean;
+  driver: MultiremiPlatformDeploymentDriver;
+  currentRelease: MultiremiPlatformRelease | null;
+  latestRelease: MultiremiPlatformRelease | null;
+  updateAvailable: boolean;
+  autoUpdateStable: boolean;
+  updaterStatus: "ready" | "stale" | "offline";
+  updaterHeartbeatAt: string | null;
+  services: MultiremiPlatformService[];
+  activeOperation: MultiremiPlatformOperation | null;
+  recentReleases: MultiremiPlatformRelease[];
+}
+
+export interface CreatePlatformOperationInput {
+  kind: MultiremiPlatformOperationKind;
+  targetVersion?: string | null;
+  targetRef?: string | null;
+  targetManifest?: Record<string, unknown>;
+}
+
+export interface ReportPlatformOperationInput {
+  status: MultiremiPlatformOperationStatus;
+  progress?: Record<string, unknown>;
+  output?: string | null;
+  error?: string | null;
+  previousRelease?: MultiremiPlatformRelease | null;
+  resultRelease?: MultiremiPlatformRelease | null;
 }
 
 export interface MultiremiAnalyticsEvent {

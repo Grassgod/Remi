@@ -22,11 +22,11 @@ afterEach(() => {
 });
 
 describe("intake workspace", () => {
-  it("materializes project-scoped knowledge and links immutable repo snapshots", () => {
+  it("materializes project-scoped knowledge and links immutable repo snapshots", async () => {
     const source = createRepo();
     const sameNameSource = createRepo();
     const cache = new MultiremiRepoCache(tempDir("intake-cache-"));
-    cache.sync("local", [{ url: source }, { url: sameNameSource }]);
+    await cache.sync("local", [{ url: source }, { url: sameNameSource }]);
     const workDir = tempDir("intake-workspace-");
     const snapshotsRoot = tempDir("intake-snapshots-");
     const task = {
@@ -45,7 +45,7 @@ describe("intake workspace", () => {
       }],
     } as unknown as AgentTask;
 
-    const prepared = prepareIntakeWorkspace(workDir, task, cache, { snapshotsRoot });
+    const prepared = await prepareIntakeWorkspace(workDir, task, cache, { snapshotsRoot });
 
     const projectRoot = join(workDir, "projects", "Remi");
     const repoLink = join(projectRoot, "repos", "repo");

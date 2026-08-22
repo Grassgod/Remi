@@ -22,11 +22,11 @@ describe("resolveRemoteApiUrl", () => {
     ).toBe("http://localhost:19000");
   });
 
-  it("derives localhost backend URL from PORT when no API URL is set", () => {
-    expect(resolveRemoteApiUrl({ PORT: "19080" })).toBe("http://localhost:19080");
+  it("does not mistake the web PORT for the backend port", () => {
+    expect(resolveRemoteApiUrl({ PORT: "19080" })).toBe("http://localhost:6120");
   });
 
-  it("supports explicit backend port aliases before PORT", () => {
+  it("supports explicit backend port aliases", () => {
     expect(resolveRemoteApiUrl({ BACKEND_PORT: "28080", PORT: "19080" })).toBe(
       "http://localhost:28080",
     );
@@ -71,12 +71,12 @@ describe("resolveRemoteApiUrl", () => {
         SERVER_PORT: "  ",
         PORT: "19080",
       }),
-    ).toBe("http://localhost:19080");
+    ).toBe("http://localhost:6120");
 
-    expect(resolveRemoteApiUrl({ PORT: "  " })).toBe("http://localhost:8080");
+    expect(resolveRemoteApiUrl({ PORT: "  " })).toBe("http://localhost:6120");
   });
 
-  it("falls back to the historical backend port when no env is configured", () => {
-    expect(resolveRemoteApiUrl({})).toBe("http://localhost:8080");
+  it("falls back to the Multiremi platform backend port", () => {
+    expect(resolveRemoteApiUrl({})).toBe("http://localhost:6120");
   });
 });

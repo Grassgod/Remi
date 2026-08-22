@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 export type SidebarSectionKey =
   | "properties"
   | "parentIssue"
-  | "pullRequests"
+  | "codeChanges"
   | "details"
   | "tokenUsage"
   | "metadata";
@@ -13,7 +13,7 @@ export type SidebarSectionKey =
 const DEFAULT_OPEN: Record<SidebarSectionKey, boolean> = {
   properties: true,
   parentIssue: true,
-  pullRequests: true,
+  codeChanges: true,
   details: true,
   tokenUsage: true,
   // Metadata is a dialog, not an inline fold — closed until asked for.

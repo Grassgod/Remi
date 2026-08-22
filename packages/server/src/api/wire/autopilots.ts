@@ -224,8 +224,8 @@ export function autopilotRunCompatibilityResponse(
 
 export function validateAutopilotTriggerCompatibilityInput(input: CreateAutopilotTriggerInput): string | null {
   if (!input.kind) return "kind is required";
-  if (input.kind !== "schedule" && input.kind !== "webhook" && input.kind !== "system_event") {
-    return "kind must be schedule, webhook, or system_event";
+  if (input.kind !== "schedule" && input.kind !== "webhook" && input.kind !== "system_event" && input.kind !== "scm_event") {
+    return "kind must be schedule, webhook, system_event, or scm_event";
   }
   const cronExpression = cleanString(input.cron_expression);
   if (input.kind === "schedule" && !cronExpression) return "cron_expression is required for schedule triggers";
@@ -233,7 +233,7 @@ export function validateAutopilotTriggerCompatibilityInput(input: CreateAutopilo
   const provider = cleanString(input.provider);
   if (provider) {
     if (input.kind !== "webhook") return "provider is only valid for webhook triggers";
-    if (!isAllowedWebhookProvider(provider)) return "provider must be generic or github";
+    if (!isAllowedWebhookProvider(provider)) return "provider must be generic, github, or codebase";
   }
   const eventFilters = input.event_filters;
   if (input.kind !== "webhook" && Array.isArray(eventFilters) && eventFilters.length > 0) {
@@ -241,7 +241,8 @@ export function validateAutopilotTriggerCompatibilityInput(input: CreateAutopilo
   }
   const eventConfig = input.event_config;
   if (input.kind === "system_event") return validateSystemEventConfig(eventConfig);
-  if (eventConfig != null) return "event_config is only valid for system_event triggers";
+  if (input.kind === "scm_event") return validateScmEventConfig(eventConfig);
+  if (eventConfig != null) return "event_config is only valid for system_event or scm_event triggers";
   return null;
 }
 
@@ -256,8 +257,10 @@ export function validateAutopilotTriggerUpdateCompatibilityInput(trigger: Multir
   const eventConfig = input.event_config;
   if (trigger.kind === "system_event") {
     if (eventConfig !== undefined) return validateSystemEventConfig(eventConfig);
+  } else if (trigger.kind === "scm_event") {
+    if (eventConfig !== undefined) return validateScmEventConfig(eventConfig);
   } else if (eventConfig != null) {
-    return "event_config is only valid for system_event triggers";
+    return "event_config is only valid for system_event or scm_event triggers";
   }
   return null;
 }
@@ -363,6 +366,55 @@ function validateSystemEventConfig(value: unknown): string | null {
   return null;
 }
 
+const SCM_EVENT_TYPES = new Set([
+  "change.opened",
+  "change.updated",
+  "change.closed",
+  "change.reopened",
+  "change.merged",
+  "comment.created",
+  "comment.updated",
+  "comment.deleted",
+  "review.submitted",
+  "review.dismissed",
+  "pipeline.started",
+  "pipeline.completed",
+  "default_branch.updated",
+  "push.observed",
+]);
+
+function validateScmEventConfig(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "event_config is required for scm_event triggers";
+  const config = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    "resource",
+    "events",
+    "connection_id",
+    "connectionId",
+    "repository_ids",
+    "repositoryIds",
+    "branch",
+  ]);
+  if (Object.keys(config).some((key) => !allowedKeys.has(key))) return "event_config contains unsupported fields";
+  if (config.resource !== "scm") return "event_config.resource must be scm";
+  if (!Array.isArray(config.events) || config.events.length === 0) return "event_config.events must be a non-empty array";
+  if (config.events.some((event) => typeof event !== "string" || !SCM_EVENT_TYPES.has(event))) {
+    return "event_config.events contains an unsupported SCM event";
+  }
+  const connectionId = config.connectionId ?? config.connection_id;
+  if (connectionId != null && (typeof connectionId !== "string" || !connectionId.trim())) {
+    return "event_config.connection_id must be a non-empty string or null";
+  }
+  const repositoryIds = config.repositoryIds ?? config.repository_ids;
+  if (repositoryIds != null && (!Array.isArray(repositoryIds) || repositoryIds.some((id) => typeof id !== "string" || !id.trim()))) {
+    return "event_config.repository_ids must be an array of non-empty strings";
+  }
+  if (config.branch != null && (typeof config.branch !== "string" || !config.branch.trim())) {
+    return "event_config.branch must be a non-empty string or null";
+  }
+  return null;
+}
+
 function isAutopilotExecutionMode(value: string): value is NonNullable<UpdateAutopilotInput["executionMode"]> {
   return value === "create_issue" || value === "trigger_issue" || value === "run_only";
 }
@@ -384,7 +436,7 @@ function isAutopilotStatus(value: string): value is NonNullable<UpdateAutopilotI
 }
 
 function isAllowedWebhookProvider(value: string): value is MultiremiWebhookProvider {
-  return value === "generic" || value === "github";
+  return value === "generic" || value === "github" || value === "codebase";
 }
 
 function validateIssueTitleTemplateCompatibility(template: string | null | undefined): string | null {

@@ -12,6 +12,7 @@ import {
   Copy,
   FilePlus2,
   FolderKanban,
+  GitPullRequest,
   Maximize2,
   MessagesSquare,
   Minimize2,
@@ -62,6 +63,7 @@ import type {
   AutopilotAssigneeType,
   AutopilotExecutionMode,
   AutopilotSessionPolicy,
+  AutopilotScmEventConfig,
   AutopilotSystemEventConfig,
   AutopilotTrigger,
   AutopilotWorkspacePolicy,
@@ -88,6 +90,11 @@ import {
   serializeSystemEventConfig,
   SystemEventConfigSection,
 } from "./system-event-config";
+import {
+  getDefaultScmEventConfig,
+  ScmEventConfigSection,
+  serializeScmEventConfig,
+} from "./scm-event-config";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -340,6 +347,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
     const first = props.triggers[0];
     if (first?.kind === "webhook") return "webhook";
     if (first?.kind === "system_event") return "system_event";
+    if (first?.kind === "scm_event") return "scm_event";
     return "schedule";
   })();
   const [triggerKind, setTriggerKind] =
@@ -371,11 +379,17 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
     !isCreate && props.triggers[0]?.event_filters ? props.triggers[0].event_filters : [];
   const [eventFilters, setEventFilters] = useState<WebhookEventFilter[]>(initialEventFilters);
   const initialSystemEventConfig: AutopilotSystemEventConfig =
-    !isCreate && props.triggers[0]?.event_config
+    !isCreate && props.triggers[0]?.event_config?.resource === "issue"
       ? props.triggers[0].event_config
       : getDefaultSystemEventConfig();
   const [systemEventConfig, setSystemEventConfig] =
     useState<AutopilotSystemEventConfig>(initialSystemEventConfig);
+  const initialScmEventConfig: AutopilotScmEventConfig =
+    !isCreate && props.triggers[0]?.event_config?.resource === "scm"
+      ? props.triggers[0].event_config
+      : getDefaultScmEventConfig();
+  const [scmEventConfig, setScmEventConfig] =
+    useState<AutopilotScmEventConfig>(initialScmEventConfig);
 
   const initialCronRef = useRef(toCronExpression(initialCfg));
   const initialTimezoneRef = useRef(initialCfg.timezone);
@@ -383,6 +397,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   const initialSystemEventConfigRef = useRef(
     serializeSystemEventConfig(initialSystemEventConfig),
   );
+  const initialScmEventConfigRef = useRef(serializeScmEventConfig(initialScmEventConfig));
   const scheduleDirty =
     toCronExpression(triggerConfig) !== initialCronRef.current ||
     triggerConfig.timezone !== initialTimezoneRef.current;
@@ -390,6 +405,8 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
     serializeEventFilters(eventFilters) !== initialEventFiltersRef.current;
   const systemEventConfigDirty =
     serializeSystemEventConfig(systemEventConfig) !== initialSystemEventConfigRef.current;
+  const scmEventConfigDirty =
+    serializeScmEventConfig(scmEventConfig) !== initialScmEventConfigRef.current;
 
   const firstTriggerIdRef = useRef(
     !isCreate && props.triggers[0] ? props.triggers[0].id : null,
@@ -436,6 +453,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
     title.trim().length > 0 &&
     assigneeId.length > 0 &&
     modeAndTriggerAreCompatible &&
+    (triggerKind !== "scm_event" || scmEventConfig.events.length > 0) &&
     !submitting;
 
   const handleSubmit = async () => {
@@ -468,6 +486,12 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
               autopilotId: autopilot.id,
               kind: "system_event",
               event_config: systemEventConfig,
+            });
+          } else if (triggerKind === "scm_event") {
+            await createTrigger.mutateAsync({
+              autopilotId: autopilot.id,
+              kind: "scm_event",
+              event_config: scmEventConfig,
             });
           } else {
             await createTrigger.mutateAsync({
@@ -576,6 +600,22 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
             triggerOk = false;
             triggerErrMessage =
               err instanceof Error && err.message ? err.message : null;
+          }
+        }
+        if (
+          triggerKind === "scm_event" &&
+          scmEventConfigDirty &&
+          firstTriggerIdRef.current
+        ) {
+          try {
+            await updateTrigger.mutateAsync({
+              autopilotId: props.autopilotId,
+              triggerId: firstTriggerIdRef.current,
+              event_config: scmEventConfig,
+            });
+          } catch (err) {
+            triggerOk = false;
+            triggerErrMessage = err instanceof Error && err.message ? err.message : null;
           }
         }
         onOpenChange(false);
@@ -775,11 +815,13 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
                 eventFilters={eventFilters}
                 onEventFiltersChange={setEventFilters}
               />
-            ) : (
+            ) : triggerKind === "system_event" ? (
               <SystemEventSection
                 config={systemEventConfig}
                 onChange={setSystemEventConfig}
               />
+            ) : (
+              <ScmEventSection config={scmEventConfig} onChange={setScmEventConfig} />
             )}
           </aside>
         </div>
@@ -1191,7 +1233,7 @@ function TriggerKindSection({
   return (
     <div>
       <SectionLabel>{t(($) => $.dialog.section_trigger_kind)}</SectionLabel>
-      <div className="grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
+      <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
         <TriggerKindButton
           active={kind === "schedule"}
           onClick={() => onChange("schedule")}
@@ -1205,12 +1247,34 @@ function TriggerKindSection({
           label={t(($) => $.dialog.trigger_kind_system_event)}
         />
         <TriggerKindButton
+          active={kind === "scm_event"}
+          onClick={() => onChange("scm_event")}
+          icon={<GitPullRequest className="h-3.5 w-3.5" />}
+          label={t(($) => $.dialog.trigger_kind_scm_event)}
+        />
+        <TriggerKindButton
           active={kind === "webhook"}
           onClick={() => onChange("webhook")}
           icon={<Webhook className="h-3.5 w-3.5" />}
           label={t(($) => $.dialog.trigger_kind_webhook)}
         />
       </div>
+    </div>
+  );
+}
+
+function ScmEventSection({
+  config,
+  onChange,
+}: {
+  config: AutopilotScmEventConfig;
+  onChange: (config: AutopilotScmEventConfig) => void;
+}) {
+  const { t } = useT("autopilots");
+  return (
+    <div>
+      <SectionLabel>{t(($) => $.dialog.section_scm_event)}</SectionLabel>
+      <ScmEventConfigSection config={config} onChange={onChange} />
     </div>
   );
 }

@@ -10,9 +10,8 @@ import {
 } from "@multiremi/ui/components/ui/empty";
 import { useT } from "../../i18n";
 
-// The Co-authored-by trailer toggle moved into the dedicated GitHub Settings
-// tab (see github-tab.tsx). Labs is kept as a container for future
-// experimental flags rather than removed from the IA.
+// Commit attribution now lives in the provider-neutral Source Control tab.
+// Labs stays as a container for future experimental flags.
 export function LabsTab() {
   const { t } = useT("settings");
   return (

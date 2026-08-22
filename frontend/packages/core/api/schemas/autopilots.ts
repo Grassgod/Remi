@@ -23,6 +23,34 @@ export const AutopilotSystemEventConfigSchema = z.object({
   project_id: z.string().nullable().optional().default(null),
 }).loose();
 
+export const AutopilotScmEventConfigSchema = z.object({
+  resource: z.literal("scm"),
+  events: z.array(z.enum([
+    "change.opened",
+    "change.updated",
+    "change.closed",
+    "change.reopened",
+    "change.merged",
+    "comment.created",
+    "comment.updated",
+    "comment.deleted",
+    "review.submitted",
+    "review.dismissed",
+    "pipeline.started",
+    "pipeline.completed",
+    "default_branch.updated",
+    "push.observed",
+  ])).default([]),
+  connectionId: z.string().nullable().optional().default(null),
+  repositoryIds: z.array(z.string()).optional().default([]),
+  branch: z.string().nullable().optional().default(null),
+}).loose();
+
+export const AutopilotEventConfigSchema = z.union([
+  AutopilotSystemEventConfigSchema,
+  AutopilotScmEventConfigSchema,
+]);
+
 export const AutopilotSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
@@ -59,7 +87,7 @@ export const AutopilotTriggerSchema = z.object({
     event: z.string(),
     actions: z.array(z.string()).optional(),
   }).loose()).nullable().optional(),
-  event_config: AutopilotSystemEventConfigSchema.nullable().catch(null).default(null),
+  event_config: AutopilotEventConfigSchema.nullable().catch(null).default(null),
   last_fired_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),

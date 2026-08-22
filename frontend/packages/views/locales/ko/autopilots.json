@@ -112,6 +112,7 @@
     "manual": "수동",
     "webhook": "Webhook",
     "system_event": "시스템 이벤트",
+    "scm_event": "코드 이벤트",
     "api": "API"
   },
   "run": {
@@ -137,6 +138,7 @@
   "trigger_kind": {
     "schedule": "일정",
     "system_event": "시스템 이벤트",
+    "scm_event": "코드 이벤트",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -145,6 +147,7 @@
     "deprecated_badge": "지원 중단",
     "next_label": "다음: {{date}}",
     "system_event_summary": "이슈 상태가 {{status}}(으)로 변경 · {{project}}",
+    "scm_event_summary": "코드 이벤트 {{count}}종 · {{repositories}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "URL 복사",
     "url_copied": "Webhook URL을 복사했습니다",
@@ -217,6 +220,7 @@
     "type_label": "유형",
     "type_schedule": "일정",
     "type_system_event": "시스템 이벤트",
+    "type_scm_event": "코드 이벤트",
     "type_webhook": "Webhook",
     "label_field": "라벨(선택 사항)",
     "label_placeholder": "예: 평일 오전",
@@ -225,6 +229,7 @@
     "submitting": "추가하는 중...",
     "toast_added_schedule": "일정 트리거를 추가했습니다",
     "toast_added_system_event": "시스템 이벤트 트리거를 추가했습니다",
+    "toast_added_scm_event": "코드 이벤트 트리거를 추가했습니다",
     "toast_added_webhook": "Webhook 트리거를 추가했습니다",
     "toast_add_failed": "트리거를 추가하지 못했습니다"
   },
@@ -268,8 +273,10 @@
     "section_trigger_kind": "트리거",
     "trigger_kind_schedule": "일정",
     "trigger_kind_system_event": "시스템 이벤트",
+    "trigger_kind_scm_event": "코드 이벤트",
     "trigger_kind_webhook": "Webhook",
     "section_system_event": "시스템 이벤트",
+    "section_scm_event": "코드 이벤트",
     "section_webhook": "Webhook",
     "webhook_help_create": "이 오토파일럿을 만들면 Multiremi가 Webhook URL을 생성합니다. 해당 URL로 JSON을 POST하면 실행됩니다.",
     "webhook_help_edit": "이 오토파일럿은 Webhook으로 실행됩니다. URL 복사와 재발급은 오토파일럿 상세 페이지에서 관리하세요.",
@@ -313,6 +320,35 @@
         "blocked": "차단됨",
         "cancelled": "취소됨"
       }
+    },
+    "scm_event": {
+      "connection_label": "소스 제어 연결",
+      "all_connections": "활성화된 모든 연결",
+      "unavailable_connection": "사용할 수 없는 연결",
+      "repositories_label": "저장소 범위",
+      "all_repositories": "연결된 모든 저장소",
+      "no_repositories": "사용 가능한 저장소가 없습니다. 먼저 소스 제어 설정에서 연결하세요.",
+      "events_label": "이벤트",
+      "groups": { "changes": "변경", "collaboration": "협업", "delivery": "배포" },
+      "events": {
+        "change.opened": "변경 생성",
+        "change.updated": "변경 업데이트",
+        "change.closed": "변경 닫힘",
+        "change.reopened": "변경 다시 열림",
+        "change.merged": "변경 병합",
+        "comment.created": "댓글 생성",
+        "comment.updated": "댓글 업데이트",
+        "comment.deleted": "댓글 삭제",
+        "review.submitted": "리뷰 제출",
+        "review.dismissed": "리뷰 취소",
+        "pipeline.started": "파이프라인 시작",
+        "pipeline.completed": "파이프라인 완료",
+        "default_branch.updated": "기본 브랜치 업데이트",
+        "push.observed": "푸시 감지"
+      },
+      "branch_label": "대상 브랜치(선택)",
+      "branch_placeholder": "예: main. 비워 두면 모든 브랜치",
+      "hint": "Webhook과 폴링은 같은 이벤트로 변환됩니다. 혼합 모드에서도 같은 이벤트는 한 번만 실행되며 첫 폴링은 과거 기록을 재생하지 않습니다."
     },
     "output_modes": {
       "create_issue": {

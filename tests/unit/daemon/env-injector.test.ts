@@ -5,7 +5,7 @@ import { describe, expect, it } from "bun:test";
 import { buildTaskEnv } from "@daemon/agent-runtime/env/injector.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
-const OPTS = { daemonPort: 6200, serverUrl: "http://server:6120", fallbackToken: null };
+const OPTS = { daemonPort: 6200, serverUrl: "http://server:6120" };
 
 function taskWith(overrides: Partial<AgentTask>): AgentTask {
   return {
@@ -45,6 +45,17 @@ describe("buildTaskEnv", () => {
   it("accepts the snake_case wire field", () => {
     const env = buildTaskEnv(taskWith({ workspace_env: { GH_TOKEN: "ghp_snake" } }), OPTS);
     expect(env.GH_TOKEN).toBe("ghp_snake");
+  });
+
+  it("never falls back to the daemon credential when a claim has no task token", () => {
+    const env = buildTaskEnv(taskWith({
+      workspaceEnv: { MULTIREMI_TOKEN: "spoofed-workspace-token" },
+      agent: { customEnv: { MULTIREMI_TOKEN: "spoofed-agent-token" } } as unknown as AgentTask["agent"],
+    }), OPTS);
+
+    // Empty is intentional: the provider overlays this on process.env, where
+    // the daemon credential may exist for supervisor control-plane requests.
+    expect(env.MULTIREMI_TOKEN).toBe("");
   });
 
   it("never lets workspace or agent env override the Multiremi coordinates", () => {
@@ -132,10 +143,22 @@ describe("buildTaskEnv", () => {
     }), OPTS);
     expect(env.ONLY_AGENT).toBe("1");
     expect(Object.keys(env).sort()).toEqual([
+      "GCM_INTERACTIVE",
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0",
+      "GIT_CONFIG_KEY_1",
+      "GIT_CONFIG_KEY_2",
+      "GIT_CONFIG_VALUE_0",
+      "GIT_CONFIG_VALUE_1",
+      "GIT_CONFIG_VALUE_2",
+      "GIT_SSH_COMMAND",
+      "GIT_TERMINAL_PROMPT",
       "MULTIREMI_AGENT_NAME",
       "MULTIREMI_DAEMON_PORT",
+      "MULTIREMI_GIT_CREDENTIAL_TIMEOUT_MS",
       "MULTIREMI_SERVER_URL",
       "MULTIREMI_TASK_ID",
+      "MULTIREMI_TOKEN",
       "MULTIREMI_WORKSPACE_ID",
       "ONLY_AGENT",
     ]);

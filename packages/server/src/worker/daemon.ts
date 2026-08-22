@@ -33,8 +33,12 @@ import {
   localSkillRootForProvider,
   scanRuntimeDirectories,
 } from "./local-skills.js";
-import { buildTaskPromptArtifact, type TaskRepoCheckout } from "@multiremi/prompt.js";
-import { MultiremiRepoCache, normalizeRepoList } from "@multiremi/repo-cache.js";
+import { buildTaskPromptArtifact, type TaskRepoCheckout, type TaskRepoWarning } from "@multiremi/prompt.js";
+import {
+  MultiremiRepoCache,
+  normalizeRepoList,
+  type MultiremiRepoSyncResult,
+} from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
@@ -355,6 +359,24 @@ interface RunSummary {
 interface PreparedIssueWorkspace {
   checkouts: TaskRepoCheckout[];
   repos: MultiremiIssueWorkspaceRepo[];
+  warnings: TaskRepoWarning[];
+}
+
+function repoWarningsFromSyncResults(results: MultiremiRepoSyncResult[]): TaskRepoWarning[] {
+  return results.flatMap((result) => {
+    if (result.status === "fresh") return [];
+    return [{
+      repoUrl: result.repoUrl,
+      kind: result.status === "cached" ? "stale_cache" as const : "unavailable" as const,
+      message: result.error ?? "repository preparation failed",
+    }];
+  });
+}
+
+function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning): void {
+  const index = warnings.findIndex((item) => item.repoUrl === warning.repoUrl);
+  if (index >= 0) warnings[index] = warning;
+  else warnings.push(warning);
 }
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
@@ -554,7 +576,12 @@ export class MultiremiDaemon {
         return await this.client.getSshMeshConfig(runtimeId, signal);
       },
     });
-    this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot);
+    this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot, {
+      credentialBroker: {
+        serverUrl: this.options.serverUrl,
+        token: this.options.token,
+      },
+    });
     this.agentPluginCache = new AgentPluginCache({
       root: this.options.pluginCacheRoot,
       serverUrl: this.options.serverUrl,
@@ -1831,10 +1858,13 @@ export class MultiremiDaemon {
   private async autoCheckoutTaskRepos(
     task: MultiremiTaskWithAgent,
     resolvedWorkDir: ResolvedTaskWorkDir,
+    syncResults: MultiremiRepoSyncResult[],
+    signal: AbortSignal,
   ): Promise<PreparedIssueWorkspace> {
     const repos = normalizeRepoList(task.repos ?? []);
+    const warnings = repoWarningsFromSyncResults(syncResults);
     if (!repos.length || !task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
-      return { checkouts: [], repos: [] };
+      return { checkouts: [], repos: [], warnings };
     }
     const checkouts: TaskRepoCheckout[] = [];
     const workspaceRepos: MultiremiIssueWorkspaceRepo[] = [];
@@ -1851,9 +1881,13 @@ export class MultiremiDaemon {
     }
     for (const repo of repos) {
       try {
-        await this.ensureRepoReady(task.workspaceId, repo.url);
+        const syncResult = syncResults.find((result) => result.repoUrl === repo.url);
+        if (syncResult?.status === "failed" && !this.repoCache.lookup(task.workspaceId, repo.url)) {
+          throw new Error(syncResult.error ?? "repository sync failed");
+        }
+        await this.ensureRepoReady(task.workspaceId, repo.url, signal);
         this.assertWorkspaceRootOwner();
-        const result = this.repoCache.createWorktree({
+        const result = await this.repoCache.createWorktree({
           workspaceId: task.workspaceId,
           repoUrl: repo.url,
           workDir: resolvedWorkDir.workDir,
@@ -1861,6 +1895,8 @@ export class MultiremiDaemon {
           taskId: task.issue?.key || task.id,
           branchName,
           reuseExisting: true,
+          skipFetch: true,
+          signal,
           coAuthoredByEnabled: this.workspaceCoAuthoredByEnabled(task.workspaceId),
         });
         checkouts.push({ repoUrl: repo.url, path: result.path, branch: result.branchName, baseRef: result.baseRef });
@@ -1875,7 +1911,9 @@ export class MultiremiDaemon {
           error: null,
         });
       } catch (err) {
+        signal.throwIfAborted();
         const error = err instanceof Error ? err.message : String(err);
+        upsertRepoWarning(warnings, { repoUrl: repo.url, kind: "unavailable", message: error });
         workspaceRepos.push({
           repoUrl: repo.url,
           repoName: basename(repo.url.replace(/\.git$/, "")),
@@ -1898,15 +1936,17 @@ export class MultiremiDaemon {
         repos: workspaceRepos,
       }).catch((err) => log.warn(`Failed to report workspace for ${task.id}: ${err instanceof Error ? err.message : String(err)}`));
     }
-    return { checkouts, repos: workspaceRepos };
+    return { checkouts, repos: workspaceRepos, warnings };
   }
 
   private async prepareTaskWorkspace(
     task: MultiremiTaskWithAgent,
     resolvedWorkDir: ResolvedTaskWorkDir,
+    syncResults: MultiremiRepoSyncResult[],
+    signal: AbortSignal,
   ): Promise<PreparedIssueWorkspace> {
     if (task.issue?.issueKind !== "intake") {
-      const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir);
+      const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
       if (!resolvedWorkDir.localDirectory) {
         await prepareIssueWikiWorkspace(resolvedWorkDir.workDir, task);
       }
@@ -1927,8 +1967,16 @@ export class MultiremiDaemon {
     }
     let prepared: PreparedIssueWorkspace;
     try {
-      prepared = prepareIntakeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, {
+      const staleRepo = syncResults.find((result) => result.status !== "fresh");
+      if (staleRepo) {
+        throw new Error(
+          `Intake workspace requires a fresh repository snapshot, but ${staleRepo.repoUrl} is ${staleRepo.status}: ${staleRepo.error ?? "repository refresh failed"}`,
+        );
+      }
+      prepared = await prepareIntakeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, {
         snapshotsRoot: join(this.options.workspacesRoot, ".snapshots"),
+        skipRepoFetch: true,
+        signal,
       });
     } catch (error) {
       if (runtimeId) {
@@ -2142,8 +2190,8 @@ export class MultiremiDaemon {
     // — if it vanished post-resolve the run fails loudly instead of mkdir-ing a
     // machine-local path on a pool machine that shouldn't have it.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
-    await this.registerTaskRepos(task.workspaceId, task.repos ?? []);
-    const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir);
+    const repoSyncResults = await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
+    const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal);
     this.assertWorkspaceRootOwner();
     try {
       writeTaskContext(workDir, task);
@@ -2163,7 +2211,6 @@ export class MultiremiDaemon {
       daemonOptions: {
         daemonPort: this.repoServerPort,
         serverUrl: this.options.serverUrl,
-        fallbackToken: this.options.token,
         workspacesRoot: this.options.workspacesRoot,
       },
       workDir,
@@ -2200,7 +2247,10 @@ export class MultiremiDaemon {
 
     try {
       const session = new AgentSession(provider as any, config);
-      const promptArtifact = buildTaskPromptArtifact(task, { repoCheckouts: preparedWorkspace.checkouts });
+      const promptArtifact = buildTaskPromptArtifact(task, {
+        repoCheckouts: preparedWorkspace.checkouts,
+        repoWarnings: preparedWorkspace.warnings,
+      });
       await this.client.reportTaskPrompt(task.id, promptArtifact);
       signal.throwIfAborted();
       for await (const event of session.run(promptArtifact.prompt)) {
@@ -2312,15 +2362,16 @@ export class MultiremiDaemon {
 
     try {
       this.assertWorkspaceRootOwner();
-      await this.ensureRepoReady(workspaceId, repoUrl);
+      await this.ensureRepoReady(workspaceId, repoUrl, request.signal);
       this.assertWorkspaceRootOwner();
-      const result = this.repoCache.createWorktree({
+      const result = await this.repoCache.createWorktree({
         workspaceId,
         repoUrl,
         workDir,
         ref: stringField(body.ref) ?? undefined,
         agentName: stringField(body.agent_name ?? body.agentName) ?? "agent",
         taskId: stringField(body.task_id ?? body.taskId) ?? "task",
+        signal: request.signal,
         coAuthoredByEnabled: this.workspaceCoAuthoredByEnabled(workspaceId),
       });
       return jsonResponse(result);
@@ -2401,21 +2452,37 @@ export class MultiremiDaemon {
     }
   }
 
-  private async registerTaskRepos(workspaceId: string, repos: MultiremiRepoData[]): Promise<void> {
+  private async registerTaskRepos(
+    workspaceId: string,
+    repos: MultiremiRepoData[],
+    signal?: AbortSignal,
+  ): Promise<MultiremiRepoSyncResult[]> {
     const normalized = normalizeRepoList(repos);
-    if (!normalized.length) return;
+    if (!normalized.length) return [];
     const allowed = this.workspaceRepoUrls.get(workspaceId) ?? new Set<string>();
     for (const repo of normalized) allowed.add(repo.url);
     this.workspaceRepoUrls.set(workspaceId, allowed);
     try {
       this.assertWorkspaceRootOwner();
-      this.repoCache.sync(workspaceId, normalized);
+      const results = await this.repoCache.sync(workspaceId, normalized, { signal });
+      for (const result of results) {
+        if (result.status !== "fresh") {
+          log.warn(`Task repo ${result.status} for ${workspaceId}: ${result.repoUrl}: ${result.error ?? "unknown error"}`);
+        }
+      }
+      return results;
     } catch (err) {
       log.warn(`Task repo sync failed for ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`);
+      signal?.throwIfAborted();
+      return normalized.map((repo) => ({
+        repoUrl: repo.url,
+        status: "failed" as const,
+        error: err instanceof Error ? err.message : String(err),
+      }));
     }
   }
 
-  private async ensureRepoReady(workspaceId: string, repoUrl: string): Promise<void> {
+  private async ensureRepoReady(workspaceId: string, repoUrl: string, signal?: AbortSignal): Promise<void> {
     if (!this.isRepoAllowed(workspaceId, repoUrl)) {
       await this.refreshWorkspaceRepos(workspaceId);
     }
@@ -2424,7 +2491,8 @@ export class MultiremiDaemon {
     }
     if (!this.repoCache.lookup(workspaceId, repoUrl)) {
       this.assertWorkspaceRootOwner();
-      this.repoCache.sync(workspaceId, [{ url: repoUrl }]);
+      const [result] = await this.repoCache.sync(workspaceId, [{ url: repoUrl }], { signal });
+      if (result?.status === "failed") throw new Error(result.error ?? `repo sync failed: ${repoUrl}`);
     }
     if (!this.repoCache.lookup(workspaceId, repoUrl)) {
       throw new Error(`repo is configured but not synced: ${repoUrl}`);
@@ -2438,10 +2506,6 @@ export class MultiremiDaemon {
   private workspaceCoAuthoredByEnabled(workspaceId: string): boolean {
     const settings = this.workspaceSettings.get(workspaceId);
     if (!settings) return true;
-    const githubEnabled = optionalBoolean(settings.github_enabled)
-      ?? optionalBoolean(settings.githubEnabled)
-      ?? optionalBoolean(settings.enabled);
-    if (githubEnabled === false) return false;
     const coAuthoredByEnabled = optionalBoolean(settings.co_authored_by_enabled)
       ?? optionalBoolean(settings.coAuthoredByEnabled)
       ?? optionalBoolean(settings.coauthor_enabled)

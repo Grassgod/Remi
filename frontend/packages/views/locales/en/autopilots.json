@@ -113,6 +113,7 @@
     "manual": "Manual",
     "webhook": "Webhook",
     "system_event": "System Event",
+    "scm_event": "Code Event",
     "api": "API"
   },
   "run": {
@@ -138,6 +139,7 @@
   "trigger_kind": {
     "schedule": "Schedule",
     "system_event": "System Event",
+    "scm_event": "Code Event",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -146,6 +148,7 @@
     "deprecated_badge": "Deprecated",
     "next_label": "Next: {{date}}",
     "system_event_summary": "Issue status becomes {{status}} · {{project}}",
+    "scm_event_summary": "{{count}} code event types · {{repositories}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "Copy URL",
     "url_copied": "Webhook URL copied",
@@ -218,6 +221,7 @@
     "type_label": "Type",
     "type_schedule": "Schedule",
     "type_system_event": "System Event",
+    "type_scm_event": "Code Event",
     "type_webhook": "Webhook",
     "label_field": "Label (optional)",
     "label_placeholder": "e.g. Weekday morning",
@@ -226,6 +230,7 @@
     "submitting": "Adding...",
     "toast_added_schedule": "Schedule trigger added",
     "toast_added_system_event": "System event trigger added",
+    "toast_added_scm_event": "Code event trigger added",
     "toast_added_webhook": "Webhook trigger added",
     "toast_add_failed": "Failed to add trigger"
   },
@@ -269,8 +274,10 @@
     "section_trigger_kind": "Trigger",
     "trigger_kind_schedule": "Schedule",
     "trigger_kind_system_event": "System Event",
+    "trigger_kind_scm_event": "Code Event",
     "trigger_kind_webhook": "Webhook",
     "section_system_event": "System Event",
+    "section_scm_event": "Code Event",
     "section_webhook": "Webhook",
     "webhook_help_create": "Multiremi will generate a webhook URL after this autopilot is created. POST any JSON to that URL to fire it.",
     "webhook_help_edit": "This autopilot is fired by webhook. Manage the URL (copy / rotate) on the autopilot's detail page.",
@@ -314,6 +321,35 @@
         "blocked": "Blocked",
         "cancelled": "Cancelled"
       }
+    },
+    "scm_event": {
+      "connection_label": "Source control connection",
+      "all_connections": "All enabled connections",
+      "unavailable_connection": "Unavailable connection",
+      "repositories_label": "Repository scope",
+      "all_repositories": "All bound repositories",
+      "no_repositories": "No repositories available. Bind one in Source Control settings first.",
+      "events_label": "Events",
+      "groups": { "changes": "Changes", "collaboration": "Collaboration", "delivery": "Delivery" },
+      "events": {
+        "change.opened": "Change opened",
+        "change.updated": "Change updated",
+        "change.closed": "Change closed",
+        "change.reopened": "Change reopened",
+        "change.merged": "Change merged",
+        "comment.created": "Comment created",
+        "comment.updated": "Comment updated",
+        "comment.deleted": "Comment deleted",
+        "review.submitted": "Review submitted",
+        "review.dismissed": "Review dismissed",
+        "pipeline.started": "Pipeline started",
+        "pipeline.completed": "Pipeline completed",
+        "default_branch.updated": "Default branch updated",
+        "push.observed": "Push observed"
+      },
+      "branch_label": "Target branch (optional)",
+      "branch_placeholder": "For example main; blank matches every branch",
+      "hint": "Webhooks and polling produce the same event contract. Hybrid ingestion fires a matching event once, and the first poll never replays history."
     },
     "output_modes": {
       "create_issue": {

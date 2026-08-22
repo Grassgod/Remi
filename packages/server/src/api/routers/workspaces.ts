@@ -2,10 +2,8 @@ import type { Context, Hono } from "hono";
 import {
   backfillWorkspaceRepositoryDefaultBranches,
   denyCurrentUserWorkspaceAccess,
-  githubConnectResponse,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
-  isGitHubAppConfigured,
   isJsonApiError,
   loadCurrentWorkspaceMember,
   mergeAgentEnv,
@@ -85,12 +83,18 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    if (hasOwn(body, "repos")) {
+      return c.json({ error: "repositories can only be changed through the workspace repository API" }, 400);
+    }
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
   app.patch("/api/workspaces/:id", async (c) => {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    if (hasOwn(body, "repos")) {
+      return c.json({ error: "repositories can only be changed through the workspace repository API" }, 400);
+    }
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
   app.get("/api/workspaces/:id/repos", async (c) => {
@@ -465,13 +469,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     return c.body(null, 204);
   });
 
-  app.get("/api/workspaces/:id/github/connect", (c) => c.json(githubConnectResponse(c.req.param("id"))));
-  app.get("/api/workspaces/:id/github/installations", (c) => c.json({
-    installations: [],
-    configured: isGitHubAppConfigured(),
-    can_manage: true,
-  }));
-  app.delete("/api/workspaces/:id/github/installations/:installationId", (c) => c.body(null, 204));
   app.get("/api/workspaces/:id/lark/installations", (c) => c.json({
     installations: [],
     configured: false,
@@ -495,6 +492,10 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     session_id: c.req.param("sessionId"),
   }));
   app.delete("/api/workspaces/:id/lark/installations/:installationId", (c) => c.body(null, 204));
+}
+
+function hasOwn(value: unknown, key: string): boolean {
+  return typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function sshMeshErrorResponse(c: Context, error: unknown): Response {

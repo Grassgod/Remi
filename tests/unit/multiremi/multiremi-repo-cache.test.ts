@@ -20,19 +20,19 @@ afterEach(() => {
 });
 
 describe("Multiremi repo cache", () => {
-  it("uses a remote-tracking fetch layout before creating agent worktrees", () => {
+  it("uses a remote-tracking fetch layout before creating agent worktrees", async () => {
     const source = createRepo("main", "main content");
     const cacheRoot = tempDir("multiremi-repo-cache-");
     const workDir = tempDir("multiremi-repo-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
 
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
     const barePath = cache.lookup("local", source)!;
 
     expect(git(barePath, ["config", "--get", "remote.origin.fetch"])).toBe("+refs/heads/*:refs/remotes/origin/*");
     expect(git(barePath, ["rev-parse", "--verify", "refs/remotes/origin/main"])).toBeString();
 
-    const result = cache.createWorktree({
+    const result = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -44,29 +44,29 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(result.path, "README.md"), "utf8")).toContain("main content");
   });
 
-  it("does not place repositories in reserved Issue workspace directories", () => {
+  it("does not place repositories in reserved Issue workspace directories", async () => {
     const sourceParent = tempDir("multiremi-reserved-source-");
     const source = join(sourceParent, "wiki");
     initializeRepo(source, "main", "wiki repository");
     const cacheRoot = tempDir("multiremi-reserved-cache-");
     const workDir = tempDir("multiremi-reserved-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
 
-    const result = cache.createWorktree({ workspaceId: "local", repoUrl: source, workDir });
+    const result = await cache.createWorktree({ workspaceId: "local", repoUrl: source, workDir });
 
     expect(basename(result.path)).toMatch(/^wiki-repo-[a-f0-9]{8}$/);
     expect(existsSync(join(workDir, "wiki"))).toBe(false);
   });
 
-  it("reuseExisting keeps an existing worktree's branch and uncommitted work", () => {
+  it("reuseExisting keeps an existing worktree's branch and uncommitted work", async () => {
     const source = createRepo("main", "reuse repo");
     const cacheRoot = tempDir("multiremi-repo-reuse-");
     const workDir = tempDir("multiremi-repo-reuse-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
 
-    const first = cache.createWorktree({
+    const first = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -79,7 +79,7 @@ describe("Multiremi repo cache", () => {
 
     writeFileSync(join(first.path, "wip.txt"), "uncommitted\n");
 
-    const second = cache.createWorktree({
+    const second = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -93,14 +93,14 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(first.path, "wip.txt"), "utf8")).toBe("uncommitted\n");
   });
 
-  it("uses one explicit Issue branch and refuses to switch a reused workspace", () => {
+  it("uses one explicit Issue branch and refuses to switch a reused workspace", async () => {
     const source = createRepo("main", "issue branch repo");
     const cacheRoot = tempDir("multiremi-repo-issue-");
     const workDir = tempDir("multiremi-repo-issue-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
 
-    const first = cache.createWorktree({
+    const first = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -110,29 +110,29 @@ describe("Multiremi repo cache", () => {
     expect(first.branchName).toBe("agent/MUL-28");
     writeFileSync(join(first.path, "wip.txt"), "keep me\n");
 
-    expect(() => cache.createWorktree({
+    await expect(cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
       branchName: "agent/MUL-29",
       reuseExisting: true,
-    })).toThrow(/refusing to switch a persistent workspace/);
+    })).rejects.toThrow(/refusing to switch a persistent workspace/);
     expect(readFileSync(join(first.path, "wip.txt"), "utf8")).toBe("keep me\n");
   });
 
-  it("creates immutable commit snapshots without git metadata and reuses them by commit", () => {
+  it("creates immutable commit snapshots without git metadata and reuses them by commit", async () => {
     const source = createRepo("main", "snapshot v1");
     const cacheRoot = tempDir("multiremi-repo-snapshot-");
     const snapshotsRoot = tempDir("multiremi-snapshots-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
 
-    const first = cache.createSnapshot({
+    const first = await cache.createSnapshot({
       workspaceId: "local",
       repoUrl: source,
       snapshotsRoot,
     });
-    const reused = cache.createSnapshot({
+    const reused = await cache.createSnapshot({
       workspaceId: "local",
       repoUrl: source,
       snapshotsRoot,
@@ -152,9 +152,9 @@ describe("Multiremi repo cache", () => {
     writeFileSync(join(source, "README.md"), "snapshot v2\n");
     git(source, ["add", "README.md"]);
     git(source, ["commit", "-m", "snapshot v2"]);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
 
-    const second = cache.createSnapshot({
+    const second = await cache.createSnapshot({
       workspaceId: "local",
       repoUrl: source,
       snapshotsRoot,
@@ -165,7 +165,7 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(first.path, "README.md"), "utf8")).toBe("snapshot v1\n");
   });
 
-  it("mirrors a remote tag that moved to a newer commit", () => {
+  it("mirrors a remote tag that moved to a newer commit", async () => {
     const source = createRepo("main", "tagged snapshot v1");
     const cacheRoot = tempDir("multiremi-repo-moved-tag-");
     const snapshotsRoot = tempDir("multiremi-moved-tag-snapshots-");
@@ -173,8 +173,8 @@ describe("Multiremi repo cache", () => {
     const movingTag = "agent-server-kit-main-last-notified";
 
     git(source, ["tag", movingTag]);
-    cache.sync("local", [{ url: source }]);
-    const first = cache.createSnapshot({
+    await cache.sync("local", [{ url: source }]);
+    const first = await cache.createSnapshot({
       workspaceId: "local",
       repoUrl: source,
       snapshotsRoot,
@@ -187,7 +187,7 @@ describe("Multiremi repo cache", () => {
     const movedCommit = git(source, ["rev-parse", "HEAD"]);
     git(source, ["tag", "--force", movingTag]);
 
-    const second = cache.createSnapshot({
+    const second = await cache.createSnapshot({
       workspaceId: "local",
       repoUrl: source,
       snapshotsRoot,
@@ -199,12 +199,216 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(second.path, "README.md"), "utf8")).toBe("tagged snapshot v2\n");
   });
 
-  it("serializes repo mutations with lock dirs and recovers stale locks", () => {
+  it("retries transient network failures while refreshing a cached repository", async () => {
+    const source = createRepo("main", "retry snapshot");
+    const cacheRoot = tempDir("multiremi-repo-retry-cache-");
+    const snapshotsRoot = tempDir("multiremi-repo-retry-snapshots-");
+    const cache = new MultiremiRepoCache(cacheRoot, { fetchRetryDelaysMs: [0, 0] });
+    await cache.sync("local", [{ url: source }]);
+
+    const attempts = tempDir("multiremi-repo-retry-attempts-");
+    const restorePath = installGitFetchWrapper(attempts, 2, "ssh: connect to host code.byted.org port 22: Connection timed out");
+    try {
+      const snapshot = await cache.createSnapshot({ workspaceId: "local", repoUrl: source, snapshotsRoot });
+      expect(readFileSync(join(snapshot.path, "README.md"), "utf8")).toBe("retry snapshot\n");
+      expect(readFetchAttempts(attempts)).toBe(3);
+    } finally {
+      restorePath();
+    }
+  });
+
+  it("does not retry deterministic fetch failures", async () => {
+    const source = createRepo("main", "auth failure snapshot");
+    const cacheRoot = tempDir("multiremi-repo-no-retry-cache-");
+    const snapshotsRoot = tempDir("multiremi-repo-no-retry-snapshots-");
+    const cache = new MultiremiRepoCache(cacheRoot, { fetchRetryDelaysMs: [0, 0] });
+    await cache.sync("local", [{ url: source }]);
+
+    const attempts = tempDir("multiremi-repo-no-retry-attempts-");
+    const restorePath = installGitFetchWrapper(attempts, Number.MAX_SAFE_INTEGER, "Permission denied (publickey)");
+    try {
+      await expect(cache.createSnapshot({ workspaceId: "local", repoUrl: source, snapshotsRoot }))
+        .rejects.toThrow(/Permission denied \(publickey\)/);
+      expect(readFetchAttempts(attempts)).toBe(1);
+    } finally {
+      restorePath();
+    }
+  });
+
+  it("times out a hung fetch without blocking the event loop and keeps an existing cache", async () => {
+    const source = createRepo("main", "hung fetch cache");
+    const cacheRoot = tempDir("multiremi-repo-hung-fetch-cache-");
+    const initialCache = new MultiremiRepoCache(cacheRoot);
+    await initialCache.sync("local", [{ url: source }]);
+    const barePath = initialCache.lookup("local", source)!;
+    const wrapperRoot = tempDir("multiremi-repo-hung-fetch-wrapper-");
+    const restorePath = installHangingGitWrapper(wrapperRoot, "fetch");
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      fetchTimeoutMs: 40,
+      repoSyncTimeoutMs: 400,
+      processKillGraceMs: 20,
+    });
+    let ticks = 0;
+    const ticker = setInterval(() => ticks += 1, 5);
+    const startedAt = Date.now();
+    try {
+      const result = await cache.sync("local", [{ url: source }]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ repoUrl: source, status: "cached" });
+      expect(result[0]?.error).toContain("timed out after 40ms");
+      expect(readFetchAttempts(wrapperRoot)).toBe(3);
+      expect(ticks).toBeGreaterThan(5);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(existsSync(multiremiRepoCacheLockPath(barePath))).toBe(false);
+      await expectRecordedProcessesToExit(wrapperRoot);
+    } finally {
+      clearInterval(ticker);
+      restorePath();
+    }
+  });
+
+  it("returns a bounded failure when a first clone hangs", async () => {
+    const source = createRepo("main", "hung clone");
+    const cacheRoot = tempDir("multiremi-repo-hung-clone-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-hung-clone-wrapper-");
+    const restorePath = installHangingGitWrapper(wrapperRoot, "clone");
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      cloneTimeoutMs: 1_000,
+      repoSyncTimeoutMs: 40,
+      processKillGraceMs: 20,
+    });
+    try {
+      const result = await cache.sync("local", [{ url: source }]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({ repoUrl: source, status: "failed" });
+      expect(result[0]?.error).toContain("repository sync timed out after 40ms");
+      expect(cache.lookup("local", source)).toBeNull();
+      await expectRecordedProcessesToExit(wrapperRoot);
+    } finally {
+      restorePath();
+    }
+  });
+
+  it("retries a transient broker HTTPS fetch without losing the original repository identity", async () => {
+    const source = createRepo("main", "broker retry");
+    const cacheRoot = tempDir("multiremi-repo-broker-retry-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-broker-retry-wrapper-");
+    const repositoryUrl = "git@example.test:team/repo.git";
+    const httpsUrl = "https://example.test/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl,
+      explicitFetchFailures: 2,
+    });
+    try {
+      await cache.sync("wsp_broker", [{ url: repositoryUrl }]);
+      await cache.sync("wsp_broker", [{ url: repositoryUrl }]);
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_broker", repositoryUrl)!;
+    expect(readFetchAttempts(wrapperRoot)).toBe(3);
+    expect(readFileSync(join(wrapperRoot, "broker-workspace"), "utf8")).toBe("wsp_broker");
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(httpsUrl);
+    expect(git(barePath, ["config", "--get", "multiremi.repository-url"])).toBe(repositoryUrl);
+  });
+
+  it("falls back to the original transport when the broker clone path is unavailable", async () => {
+    const source = createRepo("main", "broker fallback");
+    const cacheRoot = tempDir("multiremi-repo-broker-fallback-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-broker-fallback-wrapper-");
+    const repositoryUrl = "git@example.test:team/repo.git";
+    const httpsUrl = "https://example.test/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl,
+      failBrokerClone: true,
+    });
+    try {
+      await cache.sync("wsp_fallback", [{ url: repositoryUrl }]);
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_fallback", repositoryUrl)!;
+    expect(readFileSync(join(wrapperRoot, "clone-urls"), "utf8").trim().split("\n"))
+      .toEqual([httpsUrl, repositoryUrl]);
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(repositoryUrl);
+  });
+
+  it("falls back to the original transport without broker env when broker fetch is unavailable", async () => {
+    const source = createRepo("main", "broker fetch fallback");
+    const cacheRoot = tempDir("multiremi-repo-broker-fetch-fallback-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-broker-fetch-fallback-wrapper-");
+    const repositoryUrl = "git@example.test:team/repo.git";
+    const httpsUrl = "https://example.test/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl,
+      failBrokerFetch: true,
+    });
+    try {
+      await cache.sync("wsp_fetch_fallback", [{ url: repositoryUrl }]);
+      await cache.sync("wsp_fetch_fallback", [{ url: repositoryUrl }]);
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_fetch_fallback", repositoryUrl)!;
+    expect(Number(readFileSync(join(wrapperRoot, "plain-fetches"), "utf8"))).toBeGreaterThanOrEqual(1);
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(repositoryUrl);
+  });
+
+  it("preserves custom-port SSH transports when broker HTTPS conversion is unsafe", async () => {
+    const source = createRepo("main", "custom ssh transport");
+    const cacheRoot = tempDir("multiremi-repo-custom-ssh-cache-");
+    const wrapperRoot = tempDir("multiremi-repo-custom-ssh-wrapper-");
+    const repositoryUrl = "ssh://git@example.test:2222/team/repo.git";
+    const cache = new MultiremiRepoCache(cacheRoot, {
+      fetchRetryDelaysMs: [0, 0],
+      credentialBroker: brokerOptions(),
+    });
+    const restorePath = installGitTransportWrapper(wrapperRoot, {
+      source,
+      repositoryUrl,
+      httpsUrl: repositoryUrl,
+    });
+    try {
+      await expect(cache.sync("wsp_custom_ssh", [{ url: repositoryUrl }])).resolves.toEqual([
+        { repoUrl: repositoryUrl, status: "fresh", error: null },
+      ]);
+    } finally {
+      restorePath();
+    }
+
+    const barePath = cache.lookup("wsp_custom_ssh", repositoryUrl)!;
+    expect(readFileSync(join(wrapperRoot, "clone-urls"), "utf8").trim()).toBe(repositoryUrl);
+    expect(git(barePath, ["remote", "get-url", "origin"])).toBe(repositoryUrl);
+  });
+
+  it("serializes repo mutations with lock dirs and recovers stale locks", async () => {
     const source = createRepo("main", "locked repo");
     const cacheRoot = tempDir("multiremi-repo-lock-");
     const workDir = tempDir("multiremi-repo-lock-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
     const barePath = cache.lookup("local", source)!;
     const lockPath = multiremiRepoCacheLockPath(barePath);
 
@@ -212,13 +416,13 @@ describe("Multiremi repo cache", () => {
     writeFileSync(join(lockPath, "holder.json"), JSON.stringify({ pid: process.pid }));
     try {
       const lockedCache = new MultiremiRepoCache(cacheRoot, { lockTimeoutMs: 25, staleLockMs: 60_000 });
-      expect(() => lockedCache.createWorktree({
+      await expect(lockedCache.createWorktree({
         workspaceId: "local",
         repoUrl: source,
         workDir,
         agentName: "Claude",
         taskId: "tsk_locked",
-      })).toThrow(/timed out waiting for repo cache lock/);
+      })).rejects.toThrow(/timed out waiting for repo cache lock/);
     } finally {
       rmSync(lockPath, { recursive: true, force: true });
     }
@@ -228,19 +432,19 @@ describe("Multiremi repo cache", () => {
     mkdirSync(lockPath);
     writeFileSync(join(lockPath, "holder.json"), JSON.stringify({ pid: exited.pid }));
     const deadOwnerAwareCache = new MultiremiRepoCache(cacheRoot, { lockTimeoutMs: 500, staleLockMs: 60_000 });
-    expect(deadOwnerAwareCache.createWorktree({
+    expect((await deadOwnerAwareCache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
       agentName: "Claude",
       taskId: "tsk_dead_lock_owner",
-    }).path).toContain("repo");
+    })).path).toContain("repo");
 
     mkdirSync(lockPath);
     const stale = new Date(Date.now() - 10_000);
     utimesSync(lockPath, stale, stale);
     const staleAwareCache = new MultiremiRepoCache(cacheRoot, { lockTimeoutMs: 500, staleLockMs: 1 });
-    const result = staleAwareCache.createWorktree({
+    const result = await staleAwareCache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -251,14 +455,14 @@ describe("Multiremi repo cache", () => {
     expect(result.path).toContain("repo");
   });
 
-  it("prunes stale metadata for the target repo before recreating its worktree", () => {
+  it("prunes stale metadata for the target repo before recreating its worktree", async () => {
     const source = createRepo("main", "prune repo");
     const cacheRoot = tempDir("multiremi-repo-prune-");
     const workDir = tempDir("multiremi-repo-prune-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
     const barePath = cache.lookup("local", source)!;
-    const result = cache.createWorktree({
+    const result = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -269,7 +473,7 @@ describe("Multiremi repo cache", () => {
     rmSync(result.path, { recursive: true, force: true });
     expect(git(barePath, ["worktree", "list", "--porcelain"])).toContain(result.path);
 
-    const recreated = cache.createWorktree({
+    const recreated = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -285,14 +489,14 @@ describe("Multiremi repo cache", () => {
     expect(registrations.split(recreated.path).length - 1).toBe(1);
   });
 
-  it("installs and removes the daemon co-authored-by hook from agent worktrees", () => {
+  it("installs and removes the daemon co-authored-by hook from agent worktrees", async () => {
     const source = createRepo("main", "hook repo");
     const cacheRoot = tempDir("multiremi-repo-hook-");
     const workDir = tempDir("multiremi-repo-hook-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
 
-    const result = cache.createWorktree({
+    const result = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -311,26 +515,111 @@ describe("Multiremi repo cache", () => {
     writeFileSync(join(result.path, "agent.txt"), "agent change\n");
     git(result.path, ["add", "agent.txt"]);
     git(result.path, ["commit", "-m", "agent change"]);
-    expect(git(result.path, ["log", "-1", "--format=%B"])).toContain("Co-authored-by: multiremi-agent <github@multiremi.ai>");
+    expect(git(result.path, ["log", "-1", "--format=%B"])).toContain("Co-authored-by: Remi <remi@openremi.fun>");
 
-    cache.createWorktree({
+    await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
       agentName: "Codex",
       taskId: "tsk_hook",
+      reuseExisting: true,
       coAuthoredByEnabled: false,
     });
     expect(existsSync(hookPath)).toBe(false);
   });
 
-  it("preserves user prepare-commit-msg hooks when co-authored-by is disabled", () => {
+  it("upgrades a legacy hook while reusing an existing worktree", async () => {
+    const source = createRepo("main", "legacy hook repo");
+    const cacheRoot = tempDir("multiremi-repo-legacy-hook-");
+    const workDir = tempDir("multiremi-repo-legacy-hook-work-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    await cache.sync("local", [{ url: source }]);
+    const result = await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_legacy_hook",
+      coAuthoredByEnabled: false,
+    });
+    const hookPath = prepareCommitMsgHookPath(result.path);
+    writeFileSync(hookPath, `#!/bin/sh
+# multimira:prepare-commit-msg:co-authored-by
+# Installed by the Multimira daemon.
+git interpret-trailers --in-place --trailer "Co-authored-by: Multimira Agent <github@multimira.ai>" "$1"
+`, { mode: 0o755 });
+
+    const reused = await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_legacy_hook",
+      reuseExisting: true,
+      coAuthoredByEnabled: true,
+    });
+
+    expect(reused.created).toBe(false);
+    const upgraded = readFileSync(hookPath, "utf8");
+    expect(upgraded).toContain("Co-authored-by: Remi <remi@openremi.fun>");
+    expect(upgraded).not.toContain("Multimira Agent");
+  });
+
+  it("chains and restores an existing user prepare-commit-msg hook", async () => {
+    const source = createRepo("main", "chained hook repo");
+    const cacheRoot = tempDir("multiremi-repo-chained-hook-");
+    const workDir = tempDir("multiremi-repo-chained-hook-work-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    await cache.sync("local", [{ url: source }]);
+    const result = await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_chained_hook",
+      coAuthoredByEnabled: false,
+    });
+    const hookPath = prepareCommitMsgHookPath(result.path);
+    const userHook = `#!/bin/sh
+git interpret-trailers --in-place --trailer "User-Hook: preserved" "$1"
+`;
+    writeFileSync(hookPath, userHook, { mode: 0o755 });
+
+    await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_chained_hook",
+      reuseExisting: true,
+      coAuthoredByEnabled: true,
+    });
+    const managed = readFileSync(hookPath, "utf8");
+    expect(managed).toContain("# multiremi:chained-hook-suffix=");
+    git(result.path, ["config", "user.email", "agent@example.test"]);
+    git(result.path, ["config", "user.name", "Agent"]);
+    writeFileSync(join(result.path, "chain.txt"), "chain\n");
+    git(result.path, ["add", "chain.txt"]);
+    git(result.path, ["commit", "-m", "chained hooks"]);
+    const message = git(result.path, ["log", "-1", "--format=%B"]);
+    expect(message).toContain("User-Hook: preserved");
+    expect(message).toContain("Co-authored-by: Remi <remi@openremi.fun>");
+
+    await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_chained_hook",
+      reuseExisting: true,
+      coAuthoredByEnabled: false,
+    });
+    expect(readFileSync(hookPath, "utf8")).toBe(userHook);
+  });
+
+  it("preserves user prepare-commit-msg hooks when co-authored-by is disabled", async () => {
     const source = createRepo("main", "user hook repo");
     const cacheRoot = tempDir("multiremi-repo-user-hook-");
     const workDir = tempDir("multiremi-repo-user-hook-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
-    const result = cache.createWorktree({
+    await cache.sync("local", [{ url: source }]);
+    const result = await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -343,7 +632,7 @@ describe("Multiremi repo cache", () => {
     mkdirSync(dirname(hookPath), { recursive: true });
     writeFileSync(hookPath, userHook, { mode: 0o755 });
 
-    cache.createWorktree({
+    await cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
@@ -355,7 +644,7 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(hookPath, "utf8")).toBe(userHook);
   });
 
-  it("fails ambiguous default branches instead of guessing a stale bare HEAD", () => {
+  it("fails ambiguous default branches instead of guessing a stale bare HEAD", async () => {
     const source = createRepo("alpha", "alpha");
     git(source, ["checkout", "-b", "beta"]);
     writeFileSync(join(source, "README.md"), "beta\n");
@@ -365,21 +654,21 @@ describe("Multiremi repo cache", () => {
     const cacheRoot = tempDir("multiremi-repo-ambiguous-");
     const workDir = tempDir("multiremi-repo-ambiguous-work-");
     const cache = new MultiremiRepoCache(cacheRoot);
-    cache.sync("local", [{ url: source }]);
+    await cache.sync("local", [{ url: source }]);
     const barePath = cache.lookup("local", source)!;
 
     tryGit(barePath, ["symbolic-ref", "-d", "refs/remotes/origin/HEAD"]);
     git(barePath, ["symbolic-ref", "HEAD", "refs/heads/legacy"]);
     git(barePath, ["remote", "set-url", "origin", join(tempDir("multiremi-missing-remote-"), "missing")]);
 
-    expect(() => cache.createWorktree({
+    await expect(cache.createWorktree({
       workspaceId: "local",
       repoUrl: source,
       workDir,
       agentName: "Codex",
       taskId: "tsk_ambiguous",
-    })).toThrow(/origin\/\* is empty or ambiguous/);
-  });
+    })).rejects.toThrow(/origin\/\* is empty or ambiguous/);
+  }, 15_000);
 });
 
 function createRepo(branch: string, readme: string): string {
@@ -423,6 +712,167 @@ function tryGit(cwd: string, args: string[]): void {
 function prepareCommitMsgHookPath(worktreePath: string): string {
   const commonDir = git(worktreePath, ["rev-parse", "--git-common-dir"]);
   return join(isAbsolute(commonDir) ? commonDir : join(worktreePath, commonDir), "hooks", "prepare-commit-msg");
+}
+
+function installGitFetchWrapper(root: string, failures: number, failureMessage: string): () => void {
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const wrapperDir = join(root, "bin");
+  const attemptsFile = join(root, "attempts");
+  mkdirSync(wrapperDir);
+  writeFileSync(join(wrapperDir, "git"), `#!/bin/sh
+case " $* " in
+  *" fetch "*)
+    attempts=0
+    if [ -f ${shellQuote(attemptsFile)} ]; then attempts=$(cat ${shellQuote(attemptsFile)}); fi
+    attempts=$((attempts + 1))
+    printf '%s' "$attempts" > ${shellQuote(attemptsFile)}
+    if [ "$attempts" -le ${failures} ]; then
+      printf '%s\\n' ${shellQuote(failureMessage)} >&2
+      exit 128
+    fi
+    ;;
+esac
+exec ${shellQuote(realGit)} "$@"
+`, { mode: 0o755 });
+  return prependPath(wrapperDir);
+}
+
+function installHangingGitWrapper(root: string, operation: "fetch" | "clone"): () => void {
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const wrapperDir = join(root, "bin");
+  const attemptsFile = join(root, "attempts");
+  const pidsFile = join(root, "pids");
+  mkdirSync(wrapperDir);
+  writeFileSync(join(wrapperDir, "git"), `#!/bin/sh
+if [ "$1" = ${shellQuote(operation)} ]; then
+  attempts=0
+  if [ -f ${shellQuote(attemptsFile)} ]; then attempts=$(cat ${shellQuote(attemptsFile)}); fi
+  attempts=$((attempts + 1))
+  printf '%s' "$attempts" > ${shellQuote(attemptsFile)}
+  printf '%s\\n' "$$" >> ${shellQuote(pidsFile)}
+  trap '' TERM
+  sleep 30 &
+  printf '%s\\n' "$!" >> ${shellQuote(pidsFile)}
+  wait
+fi
+exec ${shellQuote(realGit)} "$@"
+`, { mode: 0o755 });
+  return prependPath(wrapperDir);
+}
+
+function installGitTransportWrapper(
+  root: string,
+  options: {
+    source: string;
+    repositoryUrl: string;
+    httpsUrl: string;
+    explicitFetchFailures?: number;
+    failBrokerClone?: boolean;
+    failBrokerFetch?: boolean;
+  },
+): () => void {
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const wrapperDir = join(root, "bin");
+  const attemptsFile = join(root, "attempts");
+  const cloneUrlsFile = join(root, "clone-urls");
+  const brokerWorkspaceFile = join(root, "broker-workspace");
+  const plainFetchesFile = join(root, "plain-fetches");
+  mkdirSync(wrapperDir);
+  writeFileSync(join(wrapperDir, "git"), `#!/bin/sh
+if [ "$1" = "clone" ] && [ "$2" = "--bare" ]; then
+  printf '%s\\n' "$3" >> ${shellQuote(cloneUrlsFile)}
+  if [ "${options.failBrokerClone ? "1" : "0"}" = "1" ] && [ -n "\${MULTIREMI_SERVER_URL:-}" ] && [ "$3" = ${shellQuote(options.httpsUrl)} ]; then
+    printf '%s\\n' 'credential broker unavailable' >&2
+    exit 128
+  fi
+  if [ "$3" = ${shellQuote(options.httpsUrl)} ] || [ "$3" = ${shellQuote(options.repositoryUrl)} ]; then
+    exec ${shellQuote(realGit)} clone --bare ${shellQuote(options.source)} "$4"
+  fi
+fi
+if [ "$1" = "fetch" ]; then
+  remote="$4"
+  if [ -n "\${MULTIREMI_SERVER_URL:-}" ]; then
+    printf '%s' "\${MULTIREMI_WORKSPACE_ID:-}" > ${shellQuote(brokerWorkspaceFile)}
+    if [ "${options.failBrokerFetch ? "1" : "0"}" = "1" ]; then
+      printf '%s\\n' 'credential broker unavailable' >&2
+      exit 128
+    fi
+  else
+    plain=0
+    if [ -f ${shellQuote(plainFetchesFile)} ]; then plain=$(cat ${shellQuote(plainFetchesFile)}); fi
+    plain=$((plain + 1))
+    printf '%s' "$plain" > ${shellQuote(plainFetchesFile)}
+  fi
+  if [ "$remote" = ${shellQuote(options.httpsUrl)} ]; then
+    attempts=0
+    if [ -f ${shellQuote(attemptsFile)} ]; then attempts=$(cat ${shellQuote(attemptsFile)}); fi
+    attempts=$((attempts + 1))
+    printf '%s' "$attempts" > ${shellQuote(attemptsFile)}
+    if [ "$attempts" -le ${options.explicitFetchFailures ?? 0} ]; then
+      printf '%s\\n' 'Connection timed out' >&2
+      exit 128
+    fi
+  fi
+  exec ${shellQuote(realGit)} fetch --prune --prune-tags ${shellQuote(options.source)} "$5" "$6"
+fi
+if [ "$1" = "remote" ] && [ "$2" = "set-head" ]; then
+  exit 0
+fi
+exec ${shellQuote(realGit)} "$@"
+`, { mode: 0o755 });
+  return prependPath(wrapperDir);
+}
+
+function prependPath(wrapperDir: string): () => void {
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${wrapperDir}:${previousPath ?? ""}`;
+  return () => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  };
+}
+
+function readFetchAttempts(root: string): number {
+  return Number.parseInt(readFileSync(join(root, "attempts"), "utf8"), 10);
+}
+
+async function expectRecordedProcessesToExit(root: string): Promise<void> {
+  const pids = readFileSync(join(root, "pids"), "utf8")
+    .split(/\r?\n/)
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isSafeInteger(value) && value > 0);
+  const deadline = Date.now() + 1_000;
+  while (pids.some(processExists) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(pids.every((pid) => !processExists(pid))).toBe(true);
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(
+      error
+      && typeof error === "object"
+      && "code" in error
+      && (error as { code?: unknown }).code !== "ESRCH"
+    );
+  }
+}
+
+function brokerOptions() {
+  return {
+    serverUrl: "https://multiremi.example",
+    token: "daemon-token",
+    helperCommand: "'remi' git-credential",
+    fallbackHelpers: [],
+  };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function gitEnv(): NodeJS.ProcessEnv {

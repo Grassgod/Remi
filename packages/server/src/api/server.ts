@@ -11,10 +11,11 @@ import {
   DaemonRetiredError,
 } from "@multiremi/store/repos/daemon-retirement-repo.js";
 import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
+import { PlatformOperationConflictError } from "@multiremi/store/repos/platform-operations-repo.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
-import { registerGithubRoutes } from "./routers/github.js";
 import { registerWebhookRoutes } from "./routers/webhooks.js";
+import { registerScmWebhookRoutes } from "@multiremi/scm/router.js";
 import { registerRemiReleaseRoutes } from "./routers/remi-releases.js";
 import { registerDaemonRoutes } from "./routers/daemon.js";
 import { registerSessionArchiveRoutes } from "./routers/session-archives.js";
@@ -22,6 +23,7 @@ import { registerCloudRuntimeRoutes } from "./routers/cloud-runtime.js";
 import { registerCloudBillingRoutes } from "./routers/cloud-billing.js";
 import { registerMeRoutes } from "./routers/me.js";
 import { registerWorkspaceRoutes } from "./routers/workspaces.js";
+import { registerScmRoutes } from "./routers/scm.js";
 import { registerMemberRoutes } from "./routers/members.js";
 import { registerInvitationRoutes } from "./routers/invitations.js";
 import { registerAgentRoutes } from "./routers/agents.js";
@@ -45,6 +47,7 @@ import { registerCommentRoutes } from "./routers/comments.js";
 import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
+import { registerPlatformRoutes } from "./routers/platform.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -61,6 +64,7 @@ import {
   resolveAgentPluginGitSource,
   type AgentPluginGitSourceResolver,
 } from "@multiremi/agent-plugins/git-import.js";
+import { createScmAuthenticatedAgentPluginGitSourceResolver } from "@multiremi/agent-plugins/scm-git-auth.js";
 import {
   createControlPlaneSshMeshFromEnv,
   type ControlPlaneSshMeshLifecycle,
@@ -86,10 +90,18 @@ import {
   isTaskTokenForbiddenRequest,
   log,
   readJson,
+  resolveWebhookClientIpAddress,
+  setWebhookClientIpAddress,
   verifyJwtToken,
   withFeedbackRequestMetadata,
 } from "./helpers.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
+import {
+  createScmConnectionVerifier,
+  type ScmConnectionVerifier,
+} from "@multiremi/scm/verification.js";
+import { scmIngestionStore } from "@multiremi/scm/store.js";
 import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
@@ -126,12 +138,18 @@ import type {
 
 let authDisabledWarningEmitted = false;
 
+function envEnabled(value: string | undefined, fallback = true): boolean {
+  if (value === undefined) return fallback;
+  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+}
+
 export interface MultiremiApiOptions {
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
   /** Undefined reads the opt-in env config; null explicitly disables it. */
   controlPlaneSshMesh?: ControlPlaneSshMeshLifecycle | null;
   authToken?: string | null;
+  platformUpdaterToken?: string | null;
   shareSecret?: string | null;
   hostname?: string;
   realtimeState?: MultiremiRealtimeState;
@@ -141,12 +159,20 @@ export interface MultiremiApiOptions {
   resolveAgentPluginGitSource?: AgentPluginGitSourceResolver;
   projectKnowledge?: ProjectKnowledgeServiceContract;
   sessionArchives?: SessionArchiveService;
+  /** Undefined enables server-owned API polling; null explicitly disables it. */
+  scmPolling?: ScmPollingScheduler | null;
+  /** Disable every server-owned background job for a read-only blue/green candidate. */
+  backgroundJobs?: boolean;
+  verifyScmConnection?: ScmConnectionVerifier;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const platformUpdaterToken = options.platformUpdaterToken
+    ?? process.env.MULTIREMI_PLATFORM_UPDATER_TOKEN
+    ?? "";
   const shareSecret = options.shareSecret?.trim()
     || process.env.MULTIREMI_SHARE_SECRET?.trim()
     || authToken
@@ -162,15 +188,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     store,
     scheduler,
     authToken,
+    platformUpdaterToken,
     shareSecret,
     webhookRateLimiter,
     webhookIpRateLimiter,
     inspectGitRemoteRepository:
       options.inspectGitRemoteRepository ?? inspectGitRemoteRepository,
     resolveAgentPluginGitSource:
-      options.resolveAgentPluginGitSource ?? resolveAgentPluginGitSource,
+      options.resolveAgentPluginGitSource
+        ?? createScmAuthenticatedAgentPluginGitSourceResolver(store, resolveAgentPluginGitSource),
     projectKnowledge,
     sessionArchives,
+    verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
   };
 
   app.use("*", cors());
@@ -263,6 +292,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (err instanceof RuntimeRegistrationIdentityConflictError) {
       return c.json({ error: err.message, code: err.code }, 409);
     }
+    if (err instanceof PlatformOperationConflictError) {
+      return c.json({ error: err.message, code: err.code }, 409);
+    }
     if (err instanceof DaemonIdentityOwnerConflictError) {
       return c.json({ error: "daemon is owned by another user", code: err.code }, 403);
     }
@@ -306,8 +338,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     enabled: realtimeState.enabled,
     transport: "websocket",
   }));
-  registerGithubRoutes(app, deps);
   registerWebhookRoutes(app, deps);
+  registerScmWebhookRoutes(app, deps);
   app.get("/api/multiremi/health", (c) => c.json({ ok: true }));
   registerRemiReleaseRoutes(app, deps);
   // The `/api/daemon/*` prefix guards stay in the skeleton and MUST stay above
@@ -383,6 +415,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   registerMeRoutes(app, deps);
   registerWorkspaceRoutes(app, deps);
+  registerScmRoutes(app, deps);
   registerMemberRoutes(app, deps);
   registerInvitationRoutes(app, deps);
   app.post("/api/lark/binding/redeem", async (c) => {
@@ -426,6 +459,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   registerRuntimeRoutes(app, deps);
   registerDaemonRetirementRoutes(app, deps);
+  registerPlatformRoutes(app, deps);
 
   registerDashboardRoutes(app, deps);
 
@@ -456,15 +490,27 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
 export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
   const store = options.store ?? new MultiremiStore();
-  const scheduler = options.scheduler === undefined ? new MultiremiScheduler({ store }) : options.scheduler;
-  const controlPlaneSshMesh = options.controlPlaneSshMesh === undefined
-    ? createControlPlaneSshMeshFromEnv(store)
-    : options.controlPlaneSshMesh;
+  const backgroundJobs = options.backgroundJobs
+    ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
+  const scheduler = backgroundJobs
+    ? (options.scheduler === undefined ? new MultiremiScheduler({ store }) : options.scheduler)
+    : null;
+  const scmPolling = backgroundJobs
+    ? (options.scmPolling === undefined
+      ? new ScmPollingScheduler({ store: scmIngestionStore(store) })
+      : options.scmPolling)
+    : null;
+  const controlPlaneSshMesh = backgroundJobs
+    ? (options.controlPlaneSshMesh === undefined
+      ? createControlPlaneSshMeshFromEnv(store)
+      : options.controlPlaneSshMesh)
+    : null;
   scheduler?.start();
+  scmPolling?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
-  sessionArchives.startIssueArchivePurgeRecovery();
+  if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
   const app = createMultiremiApp({
     ...options,
     store,
@@ -498,6 +544,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     port,
     hostname,
     async fetch(req, server) {
+      const socketAddress = server.requestIP(req)?.address;
+      setWebhookClientIpAddress(req, resolveWebhookClientIpAddress(req, socketAddress));
       const url = new URL(req.url);
       if (url.pathname === "/api/daemon/ws") {
         const runtimeIds = parseDaemonWebSocketRuntimeIds(url);
@@ -666,13 +714,14 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
-    sessionArchives.stopIssueArchivePurgeRecovery();
+    if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();
     unsubscribeTaskEnqueued();
     unsubscribeTaskEvent();
     unsubscribeTaskMessages();
     unsubscribeWorkspaceEvent();
     scheduler?.stop();
+    scmPolling?.stop();
     return stopServer(closeActiveConnections);
   };
   return server;

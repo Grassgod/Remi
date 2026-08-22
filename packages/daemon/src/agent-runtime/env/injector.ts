@@ -10,14 +10,13 @@
 
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { IssueSessionProviderHome } from "../workspace/session-home.js";
+import { appendGitCredentialBrokerEnv } from "../repo/credential-broker.js";
 
 export interface BuildTaskEnvOptions {
   /** Port of the daemon's local repo-checkout server. */
   daemonPort: number;
   /** Multiremi server URL forwarded to the agent. */
   serverUrl: string;
-  /** Token used when the task carries none of its own. */
-  fallbackToken?: string | null;
   /** Resolved task workspace, independent of the agent's current repo cwd. */
   workDir?: string;
   /** Issue Session-scoped provider config/history root. */
@@ -37,8 +36,11 @@ export interface BuildTaskEnvOptions {
  */
 export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record<string, string> {
   const agent = task.agent;
-  const taskAuthToken = task.authToken ?? task.auth_token ?? opts.fallbackToken;
-  return {
+  // The child agent must only receive the capability minted for this task.
+  // The daemon credential remains in the supervisor process so it can keep
+  // heartbeating/registering, but it is never a fallback child credential.
+  const taskAuthToken = task.authToken ?? task.auth_token;
+  const env = {
     ...(task.workspaceEnv ?? task.workspace_env),
     ...agent?.customEnv,
     ...opts.providerEnv,
@@ -60,6 +62,17 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
         : {}),
     ...(taskAuthToken ? { MULTIREMI_TOKEN: taskAuthToken } : {}),
   };
+  const brokerEnv = appendGitCredentialBrokerEnv(env, {
+    serverUrl: opts.serverUrl,
+    token: taskAuthToken,
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    repositoryUrls: task.repos.map((repo) => repo.url),
+  });
+  // AcpProvider merges this overlay on top of the daemon process environment.
+  // Keep an explicit tombstone so an inherited daemon token cannot reappear.
+  if (!taskAuthToken) brokerEnv.MULTIREMI_TOKEN = "";
+  return cleanProcessEnv(brokerEnv);
 }
 
 /** Drop undefined values so the result is a string-only env for Bun.spawn. */

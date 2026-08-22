@@ -5,9 +5,18 @@ import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
+import { PlatformOperationsRepo } from "@multiremi/store/repos/platform-operations-repo.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
 import { AgentPluginsRepo } from "@multiremi/store/repos/agent-plugins-repo.js";
-import { GitHubRepo } from "@multiremi/store/repos/github-repo.js";
+import {
+  ScmRepo,
+  type RecordScmCanonicalEventResult,
+  type ScmConnectionWithRepositories,
+} from "@multiremi/store/repos/scm-repo.js";
+import type {
+  ScmSnapshotEventFactory,
+  ScmSnapshotEventWriteResult,
+} from "@multiremi/scm/types.js";
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
@@ -81,6 +90,7 @@ import {
   type WorkspaceEventListener,
 } from "@multiremi/store/context.js";
 import type {
+  AdvanceScmEntitySnapshotResult,
   AddSessionParticipantInput,
   AddSquadMemberInput,
   AssignIssueInput,
@@ -163,9 +173,6 @@ import type {
   MultiremiIssueAssigneeGroup,
   MultiremiIssueSearchResult,
   MultiremiFeedback,
-  MultiremiGitHubPullRequest,
-  MultiremiGitHubPullRequestState,
-  MultiremiGitHubSettings,
   MultiremiLabel,
   MultiremiNotificationPreferences,
   MultiremiNotificationPreferenceResponse,
@@ -261,6 +268,38 @@ import type {
   UpdateWorkspaceMemberInput,
 } from "@multiremi/contracts/types.js";
 import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/types.js";
+import type {
+  CreatePlatformOperationInput,
+  MultiremiPlatformOperation,
+  MultiremiPlatformRelease,
+  MultiremiPlatformService,
+  ReportPlatformOperationInput,
+} from "@multiremi/contracts/types.js";
+import type {
+  ClaimScmSyncStreamInput,
+  CreateScmConnectionInput,
+  MultiremiScmCanonicalEvent,
+  MultiremiScmCanonicalEventType,
+  MultiremiScmChangeRequest,
+  MultiremiScmConnection,
+  MultiremiScmConnectionCredential,
+  MultiremiScmVerificationResult,
+  MultiremiScmEntitySnapshot,
+  MultiremiScmEntityType,
+  MultiremiScmEventEvidence,
+  MultiremiScmIssueLink,
+  MultiremiScmProvider,
+  MultiremiScmRepositoryBinding,
+  MultiremiScmSyncCursor,
+  MultiremiScmSyncStream,
+  RecordScmCanonicalEventInput,
+  ReleaseScmSyncStreamInput,
+  UpdateScmConnectionInput,
+  UpdateClaimedScmSyncCursorInput,
+  UpsertScmEntitySnapshotInput,
+  UpsertScmRepositoryBindingInput,
+  UpsertScmSyncCursorInput,
+} from "@multiremi/contracts/types.js";
 
 // daemonRuntimeId / isTerminalStatus used to live here; api.ts and index.ts import them from this module.
 export { daemonRuntimeId, isTerminalStatus };
@@ -272,10 +311,11 @@ export class MultiremiStore {
   private accessTokens: AccessTokensRepo;
   private issueShares: IssueSharesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
+  private platformOperations: PlatformOperationsRepo;
   private agents: AgentsSkillsRepo;
   private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
-  private github: GitHubRepo;
+  private scm: ScmRepo;
   private usage: UsageRepo;
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
@@ -298,10 +338,11 @@ export class MultiremiStore {
     this.accessTokens = new AccessTokensRepo(this.db);
     this.issueShares = new IssueSharesRepo(this.db);
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
+    this.platformOperations = new PlatformOperationsRepo(this.db);
     this.agents = new AgentsSkillsRepo(this.ctx);
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
-    this.github = new GitHubRepo(this.ctx);
+    this.scm = new ScmRepo(this.ctx);
     this.usage = new UsageRepo(this.ctx);
     this.squads = new SquadsRepo(this.ctx);
     this.analytics = new AnalyticsRepo(this.ctx);
@@ -367,6 +408,54 @@ export class MultiremiStore {
 
   migrate(): void {
 runMigrations(this.db);
+  }
+
+  getPlatformState() {
+    return this.platformOperations.getState();
+  }
+
+  setPlatformAutoUpdateStable(enabled: boolean) {
+    return this.platformOperations.setAutoUpdateStable(enabled);
+  }
+
+  heartbeatPlatformUpdater(input: {
+    driver: "systemd_release" | "docker_compose";
+    currentRelease?: MultiremiPlatformRelease | null;
+    latestRelease?: MultiremiPlatformRelease | null;
+    recentReleases?: MultiremiPlatformRelease[];
+    services?: MultiremiPlatformService[];
+  }) {
+    return this.platformOperations.heartbeat(input);
+  }
+
+  createPlatformOperation(
+    input: CreatePlatformOperationInput,
+    requestedBy: string,
+  ): MultiremiPlatformOperation {
+    return this.platformOperations.create(input, requestedBy);
+  }
+
+  getPlatformOperation(id: string): MultiremiPlatformOperation | null {
+    return this.platformOperations.get(id);
+  }
+
+  getActivePlatformOperation(): MultiremiPlatformOperation | null {
+    return this.platformOperations.active();
+  }
+
+  listPlatformOperations(limit?: number): MultiremiPlatformOperation[] {
+    return this.platformOperations.list(limit);
+  }
+
+  claimPlatformOperation(): MultiremiPlatformOperation | null {
+    return this.platformOperations.claim();
+  }
+
+  reportPlatformOperation(
+    id: string,
+    input: ReportPlatformOperationInput,
+  ): MultiremiPlatformOperation | null {
+    return this.platformOperations.report(id, input);
   }
 
   getSessionArchive(id: string): MultiremiSessionArchive | null {
@@ -804,6 +893,31 @@ runMigrations(this.db);
     return this.workspaces.updateWorkspace(id, input);
   }
 
+  mutateWorkspaceRepositories<TResult>(
+    id: string,
+    mutate: (repositories: unknown[]) => { repositories: unknown[]; result: TResult },
+  ): { workspace: MultiremiWorkspace; result: TResult } {
+    return this.db.transaction(() => {
+      const locked = this.db.query(
+        "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ? RETURNING id",
+      ).get(id) as { id?: string } | null;
+      if (!locked) throw new Error(`Workspace not found: ${id}`);
+      const current = this.workspaces.getWorkspace(id);
+      if (!current) throw new Error(`Workspace not found: ${id}`);
+      const next = mutate([...current.repos]);
+      const workspace = this.workspaces.updateWorkspace(id, { repos: next.repositories });
+      this.scm.reconcileRepositoryBindingsWithinTransaction(id, workspace.repos);
+      return { workspace, result: next.result };
+    })();
+  }
+
+  updateWorkspaceRepositories(id: string, repositories: unknown[]): MultiremiWorkspace {
+    return this.mutateWorkspaceRepositories(id, () => ({
+      repositories,
+      result: undefined,
+    })).workspace;
+  }
+
   deleteWorkspace(id: string): boolean {
     return this.workspaces.deleteWorkspace(id);
   }
@@ -1019,55 +1133,178 @@ runMigrations(this.db);
     return this.feedback.countRecentFeedbackByUser(userId, since);
   }
 
-  getGitHubSettings(workspaceId = "local"): MultiremiGitHubSettings {
-    return this.github.getGitHubSettings(workspaceId);
+  listScmConnections(input: {
+    workspaceId?: string | null;
+    provider?: MultiremiScmProvider | null;
+    enabled?: boolean;
+  } = {}): MultiremiScmConnection[] {
+    return this.scm.listConnections(input);
   }
 
-  updateGitHubSettings(input: {
+  listScmConnectionsWithRepositories(input: {
+    workspaceId?: string | null;
+    provider?: MultiremiScmProvider | null;
+    enabled?: boolean;
+  } = {}): ScmConnectionWithRepositories[] {
+    return this.scm.listConnectionsWithRepositories(input);
+  }
+
+  getScmConnection(id: string): MultiremiScmConnection | null {
+    return this.scm.getConnection(id);
+  }
+
+  getScmConnectionWithRepositories(id: string): ScmConnectionWithRepositories | null {
+    return this.scm.getConnectionWithRepositories(id);
+  }
+
+  createScmConnection(input: CreateScmConnectionInput): ScmConnectionWithRepositories {
+    return this.scm.createConnection(input);
+  }
+
+  updateScmConnection(id: string, input: UpdateScmConnectionInput): ScmConnectionWithRepositories {
+    return this.scm.updateConnection(id, input);
+  }
+
+  deleteScmConnection(id: string): boolean {
+    return this.scm.deleteConnection(id);
+  }
+
+  getScmConnectionCredential(id: string): MultiremiScmConnectionCredential | null {
+    return this.scm.getConnectionCredential(id);
+  }
+
+  listScmRepositoryBindings(input: {
+    connectionId?: string | null;
     workspaceId?: string | null;
     enabled?: boolean;
-    prSidebar?: boolean;
-    coAuthor?: boolean;
-    autoLinkPRs?: boolean;
-  }): MultiremiGitHubSettings {
-    return this.github.updateGitHubSettings(input);
+  } = {}): MultiremiScmRepositoryBinding[] {
+    return this.scm.listRepositoryBindings(input);
   }
 
-  listGitHubPullRequests(input: { workspaceId?: string | null; issueId?: string | null } = {}): MultiremiGitHubPullRequest[] {
-    return this.github.listGitHubPullRequests(input);
+  getScmRepositoryBinding(connectionId: string, repositoryId: string): MultiremiScmRepositoryBinding | null {
+    return this.scm.getRepositoryBinding(connectionId, repositoryId);
   }
 
-  listGitHubPullRequestsForIssue(issueId: string): MultiremiGitHubPullRequest[] | null {
-    return this.github.listGitHubPullRequestsForIssue(issueId);
+  findScmRepositoryBindingByUrl(workspaceId: string, repositoryUrl: string): MultiremiScmRepositoryBinding | null {
+    return this.scm.findRepositoryBindingByUrl(workspaceId, repositoryUrl);
   }
 
-  upsertGitHubPullRequest(input: {
-    id?: string;
-    workspaceId?: string | null;
-    issueId?: string | null;
-    repoOwner: string;
-    repoName: string;
-    number: number;
-    title: string;
-    state?: MultiremiGitHubPullRequestState | string;
-    htmlUrl?: string | null;
-    branch?: string | null;
-    authorLogin?: string | null;
-    authorAvatarUrl?: string | null;
-    mergedAt?: string | null;
-    closedAt?: string | null;
-    prCreatedAt?: string | null;
-    prUpdatedAt?: string | null;
-    mergeableState?: string | null;
-    checksConclusion?: string | null;
-    checksPassed?: number;
-    checksFailed?: number;
-    checksPending?: number;
-    additions?: number;
-    deletions?: number;
-    changedFiles?: number;
-  }): MultiremiGitHubPullRequest {
-    return this.github.upsertGitHubPullRequest(input);
+  upsertScmRepositoryBinding(input: UpsertScmRepositoryBindingInput): MultiremiScmRepositoryBinding {
+    return this.scm.upsertRepositoryBinding(input);
+  }
+
+  deleteScmRepositoryBinding(connectionId: string, repositoryId: string): boolean {
+    return this.scm.deleteRepositoryBinding(connectionId, repositoryId);
+  }
+
+  reconcileScmRepositoryBindings(workspaceId: string): MultiremiScmRepositoryBinding[] {
+    return this.scm.reconcileRepositoryBindings(workspaceId);
+  }
+
+  deleteScmRepositoryBindingsForWorkspaceRepository(workspaceId: string, repositoryId: string): number {
+    return this.scm.deleteRepositoryBindingsForWorkspaceRepository(workspaceId, repositoryId);
+  }
+
+  markScmConnectionVerificationStarted(id: string): { connection: MultiremiScmConnection; runId: string } {
+    return this.scm.markConnectionVerificationStarted(id);
+  }
+
+  recordScmConnectionVerification(
+    id: string,
+    result: MultiremiScmVerificationResult,
+    runId: string,
+  ): MultiremiScmConnection {
+    return this.scm.recordConnectionVerification(id, result, runId);
+  }
+
+  getScmSyncCursor(connectionId: string, repositoryId: string, stream: MultiremiScmSyncStream): MultiremiScmSyncCursor | null {
+    return this.scm.getSyncCursor(connectionId, repositoryId, stream);
+  }
+
+  upsertScmSyncCursor(input: UpsertScmSyncCursorInput): MultiremiScmSyncCursor {
+    return this.scm.upsertSyncCursor(input);
+  }
+
+  claimScmSyncStream(input: ClaimScmSyncStreamInput): MultiremiScmSyncCursor | null {
+    return this.scm.claimSyncStream(input);
+  }
+
+  updateClaimedScmSyncCursor(input: UpdateClaimedScmSyncCursorInput): MultiremiScmSyncCursor | null {
+    return this.scm.updateClaimedSyncCursor(input);
+  }
+
+  releaseScmSyncStream(input: ReleaseScmSyncStreamInput): boolean {
+    return this.scm.releaseSyncStream(input);
+  }
+
+  getScmEntitySnapshot(
+    connectionId: string,
+    repositoryId: string,
+    entityType: MultiremiScmEntityType,
+    externalId: string,
+  ): MultiremiScmEntitySnapshot | null {
+    return this.scm.getEntitySnapshot(connectionId, repositoryId, entityType, externalId);
+  }
+
+  upsertScmEntitySnapshot(input: UpsertScmEntitySnapshotInput): MultiremiScmEntitySnapshot {
+    return this.scm.upsertEntitySnapshot(input);
+  }
+
+  advanceScmEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult {
+    return this.scm.advanceEntitySnapshot(input);
+  }
+
+  advanceScmEntitySnapshotWithEvents(
+    input: UpsertScmEntitySnapshotInput,
+    createEvents: ScmSnapshotEventFactory,
+  ): ScmSnapshotEventWriteResult {
+    return this.scm.advanceEntitySnapshotWithEvents(input, createEvents);
+  }
+
+  recordScmCanonicalEvent(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {
+    return this.scm.recordCanonicalEvent(input);
+  }
+
+  getScmChangeRequest(id: string): MultiremiScmChangeRequest | null {
+    return this.scm.getChangeRequest(id);
+  }
+
+  listScmChangeRequestsForIssue(issueId: string): MultiremiScmChangeRequest[] | null {
+    return this.scm.listChangeRequestsForIssue(issueId);
+  }
+
+  linkScmChangeRequestToIssue(issueId: string, changeRequestId: string): {
+    changeRequest: MultiremiScmChangeRequest;
+    link: MultiremiScmIssueLink;
+  } {
+    return this.scm.linkChangeRequestToIssue(issueId, changeRequestId);
+  }
+
+  unlinkScmChangeRequestFromIssue(issueId: string, changeRequestId: string): boolean {
+    return this.scm.unlinkChangeRequestFromIssue(issueId, changeRequestId);
+  }
+
+  getScmCanonicalEvent(id: string): MultiremiScmCanonicalEvent | null {
+    return this.scm.getCanonicalEvent(id);
+  }
+
+  listScmCanonicalEvents(input: {
+    workspaceId: string;
+    repositoryId?: string | null;
+    connectionId?: string | null;
+    type?: MultiremiScmCanonicalEventType | null;
+    after?: string | null;
+    limit?: number;
+  }): MultiremiScmCanonicalEvent[] {
+    return this.scm.listCanonicalEvents(input);
+  }
+
+  listScmEventEvidence(eventId: string): MultiremiScmEventEvidence[] {
+    return this.scm.listEventEvidence(eventId);
+  }
+
+  dispatchPendingScmEvents(now: Date = new Date(), limit = 25): MultiremiAutopilotRun[] {
+    return this.scm.dispatchPendingEvents(now, limit);
   }
 
   async createAccessToken(input: CreateAccessTokenInput): Promise<MultiremiCreatedAccessToken> {

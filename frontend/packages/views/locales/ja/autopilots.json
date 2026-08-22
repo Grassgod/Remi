@@ -112,6 +112,7 @@
     "manual": "手動",
     "webhook": "Webhook",
     "system_event": "システムイベント",
+    "scm_event": "コードイベント",
     "api": "API"
   },
   "run": {
@@ -137,6 +138,7 @@
   "trigger_kind": {
     "schedule": "スケジュール",
     "system_event": "システムイベント",
+    "scm_event": "コードイベント",
     "webhook": "Webhook",
     "api": "API"
   },
@@ -145,6 +147,7 @@
     "deprecated_badge": "非推奨",
     "next_label": "次回: {{date}}",
     "system_event_summary": "イシューの状態が{{status}}になる · {{project}}",
+    "scm_event_summary": "{{count}} 種類のコードイベント · {{repositories}}",
     "webhook_url_label": "Webhook URL",
     "copy_url": "URL をコピー",
     "url_copied": "Webhook URL をコピーしました",
@@ -217,6 +220,7 @@
     "type_label": "種類",
     "type_schedule": "スケジュール",
     "type_system_event": "システムイベント",
+    "type_scm_event": "コードイベント",
     "type_webhook": "Webhook",
     "label_field": "ラベル(任意)",
     "label_placeholder": "例: 平日の朝",
@@ -225,6 +229,7 @@
     "submitting": "追加中...",
     "toast_added_schedule": "スケジュールトリガーを追加しました",
     "toast_added_system_event": "システムイベントトリガーを追加しました",
+    "toast_added_scm_event": "コードイベントトリガーを追加しました",
     "toast_added_webhook": "Webhook トリガーを追加しました",
     "toast_add_failed": "トリガーを追加できませんでした"
   },
@@ -268,8 +273,10 @@
     "section_trigger_kind": "トリガー",
     "trigger_kind_schedule": "スケジュール",
     "trigger_kind_system_event": "システムイベント",
+    "trigger_kind_scm_event": "コードイベント",
     "trigger_kind_webhook": "Webhook",
     "section_system_event": "システムイベント",
+    "section_scm_event": "コードイベント",
     "section_webhook": "Webhook",
     "webhook_help_create": "このオートパイロットを作成すると、Multiremi が Webhook URL を生成します。その URL に任意の JSON を POST すると実行されます。",
     "webhook_help_edit": "このオートパイロットは Webhook で実行されます。URL の管理(コピー / 再生成)はオートパイロットの詳細ページで行ってください。",
@@ -313,6 +320,35 @@
         "blocked": "ブロック中",
         "cancelled": "キャンセル済み"
       }
+    },
+    "scm_event": {
+      "connection_label": "ソース管理接続",
+      "all_connections": "有効なすべての接続",
+      "unavailable_connection": "利用できない接続",
+      "repositories_label": "リポジトリ範囲",
+      "all_repositories": "紐付け済みの全リポジトリ",
+      "no_repositories": "利用可能なリポジトリがありません。先にソース管理設定で紐付けてください。",
+      "events_label": "イベント",
+      "groups": { "changes": "変更", "collaboration": "コラボレーション", "delivery": "デリバリー" },
+      "events": {
+        "change.opened": "変更を作成",
+        "change.updated": "変更を更新",
+        "change.closed": "変更を閉じる",
+        "change.reopened": "変更を再開",
+        "change.merged": "変更をマージ",
+        "comment.created": "コメントを作成",
+        "comment.updated": "コメントを更新",
+        "comment.deleted": "コメントを削除",
+        "review.submitted": "レビューを送信",
+        "review.dismissed": "レビューを取り消し",
+        "pipeline.started": "パイプライン開始",
+        "pipeline.completed": "パイプライン完了",
+        "default_branch.updated": "既定ブランチ更新",
+        "push.observed": "プッシュを検出"
+      },
+      "branch_label": "対象ブランチ（任意）",
+      "branch_placeholder": "例: main。空欄なら全ブランチ",
+      "hint": "Webhook とポーリングは同じイベントに変換されます。ハイブリッドでも同じイベントは一度だけ実行され、初回ポーリングは履歴を再生しません。"
     },
     "output_modes": {
       "create_issue": {

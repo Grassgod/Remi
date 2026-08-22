@@ -84,6 +84,10 @@ register("serve", "Production daemon (PM2 subprocess)", async () => {
   return { run: runServe };
 }, true);
 
+register("git-credential", "Multiremi JIT Git credential helper", async () => {
+  return await import("./git-credential.js");
+}, true);
+
 // `remi multiremi …` retained (hidden): the agent background re-invoke targets
 // `remi multiremi daemon start --foreground`.
 register("multiremi", "Multiremi subcommands (internal)", async () => {

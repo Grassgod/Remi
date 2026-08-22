@@ -41,6 +41,13 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
 
   it("serves project resource endpoints", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_example", name: "repo", url: "git@github.com:example/repo.git", source: "github" },
+        { id: "repo_example_updated", name: "repo-updated", url: "git@github.com:example/repo-updated.git", source: "github" },
+      ],
+    });
     const app = createMultiremiApp({ store });
     const project = store.createProject({ title: "Resources" });
     const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorId?: string | null; actorType?: string }> = [];
@@ -534,6 +541,13 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
 
   it("serves original project, squad, and autopilot compatibility endpoints", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_example", name: "repo", url: "https://github.com/example/repo", source: "github" },
+        { id: "repo_example_updated", name: "repo-updated", url: "https://github.com/example/repo-updated", source: "github" },
+      ],
+    });
     const agent = store.createAgent({ name: "Original Codex", provider: "codex" });
     const app = createMultiremiApp({ store });
     const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorId?: string | null; actorType?: string }> = [];
@@ -899,7 +913,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       body: JSON.stringify({ kind: "api" }),
     });
     expect(invalidTriggerKind.status).toBe(400);
-    expect(await invalidTriggerKind.json()).toEqual({ error: "kind must be schedule, webhook, or system_event" });
+    expect(await invalidTriggerKind.json()).toEqual({ error: "kind must be schedule, webhook, system_event, or scm_event" });
 
     const webhookTimezone = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, {
       method: "POST",
@@ -923,7 +937,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       body: JSON.stringify({ kind: "webhook", provider: "slack" }),
     });
     expect(invalidProvider.status).toBe(400);
-    expect(await invalidProvider.json()).toEqual({ error: "provider must be generic or github" });
+    expect(await invalidProvider.json()).toEqual({ error: "provider must be generic, github, or codebase" });
 
     const camelSchedule = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, {
       method: "POST",

@@ -128,54 +128,6 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(legacyOpen.status).toBe("todo");
   });
 
-  it("links GitHub pull requests by issue key and closes merged issues", () => {
-    const store = createStore();
-    const issue = store.createIssue({ title: "Implement GitHub linking" });
-
-    const pullRequest = store.upsertGitHubPullRequest({
-      repoOwner: "example",
-      repoName: "remi",
-      number: 17,
-      title: `${issue.key} add linked pull request sidebar`,
-      branch: `feature/${issue.key}-github-links`,
-      state: "open",
-      checksConclusion: "pending",
-      checksPending: 1,
-      additions: 12,
-      deletions: 3,
-      changedFiles: 2,
-    });
-
-    expect(pullRequest.issueId).toBe(issue.id);
-    expect(pullRequest.htmlUrl).toBe("https://github.com/example/remi/pull/17");
-    expect(store.listGitHubPullRequests({ issueId: issue.id })[0]?.number).toBe(17);
-
-    const merged = store.upsertGitHubPullRequest({
-      repoOwner: "example",
-      repoName: "remi",
-      number: 17,
-      title: `${issue.key} add linked pull request sidebar`,
-      branch: `feature/${issue.key}-github-links`,
-      state: "merged",
-      checksConclusion: "passed",
-      checksPassed: 4,
-      mergedAt: "2026-06-03T00:00:00.000Z",
-    });
-
-    expect(merged.id).toBe(pullRequest.id);
-    expect(store.getIssue(issue.id)?.status).toBe("done");
-
-    store.updateGitHubSettings({ enabled: false });
-    const ignoredIssue = store.createIssue({ title: "Disabled GitHub linking" });
-    const ignored = store.upsertGitHubPullRequest({
-      repoOwner: "example",
-      repoName: "remi",
-      number: 18,
-      title: `${ignoredIssue.key} should not auto-link`,
-    });
-    expect(ignored.issueId).toBeNull();
-  });
-
   it("manages issue hierarchy, priority, scheduling, and planning fields", () => {
     const store = createStore();
     const project = store.createProject({ title: "Hierarchy project" });

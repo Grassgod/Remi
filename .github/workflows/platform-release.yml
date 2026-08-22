@@ -1,0 +1,148 @@
+name: Platform release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing formal SemVer tag and GitHub Release (for example v0.2.42)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+      version: ${{ steps.meta.outputs.version }}
+      owner: ${{ steps.meta.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate immutable formal release
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git rev-parse --verify "refs/tags/$TAG^{commit}" >/dev/null
+          SHA="$(git rev-list -n 1 "$TAG")"
+          VERSION="$(git show "$SHA:package.json" | node -e "let value=''; process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', () => console.log(JSON.parse(value).version))")"
+          test "$TAG" = "v$VERSION"
+          test "$(git merge-base "$SHA" origin/main)" = "$SHA"
+          test "$(gh release view "$TAG" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | any')" = "false"
+          SUCCESS_RUNS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-build-check.yml/runs?head_sha=$SHA&status=success&per_page=1" --jq '.total_count')"
+          test "$SUCCESS_RUNS" -ge 1
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse reused image tags
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          API_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/remi-api:$TAG"
+          WEB_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/remi-web:$TAG"
+          ! docker buildx imagetools inspect "$API_IMAGE" >/dev/null 2>&1
+          ! docker buildx imagetools inspect "$WEB_IMAGE" >/dev/null 2>&1
+
+      - name: Build and publish API image
+        id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.api
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-api:${{ inputs.tag }}
+          cache-from: type=gha,scope=platform-api
+          cache-to: type=gha,scope=platform-api,mode=max
+
+      - name: Build and publish Web image
+        id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.web
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-web:${{ inputs.tag }}
+          cache-from: type=gha,scope=platform-web
+          cache-to: type=gha,scope=platform-web,mode=max
+
+      - name: Build deployment manifest
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          SHA: ${{ needs.validate.outputs.sha }}
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          set -euo pipefail
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          ARCHIVE="platform-systemd-$TAG.tar.gz"
+          git archive --format=tar.gz --prefix="remi-$TAG/" -o "$ARCHIVE" "$SHA"
+          SOURCE_SHA="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+          ASSET_BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          MANIFEST_URL="$ASSET_BASE/platform-release.json"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg ref "$SHA" \
+            --arg publishedAt "$(date -u +%FT%TZ)" \
+            --arg releaseUrl "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --arg manifestUrl "$MANIFEST_URL" \
+            --arg apiImage "${REGISTRY}/${OWNER}/remi-api@${API_DIGEST}" \
+            --arg webImage "${REGISTRY}/${OWNER}/remi-web@${WEB_DIGEST}" \
+            --arg sourceUrl "$ASSET_BASE/$ARCHIVE" \
+            --arg sourceSha256 "$SOURCE_SHA" \
+            '{version:$version,ref:$ref,publishedAt:$publishedAt,releaseUrl:$releaseUrl,manifestUrl:$manifestUrl,apiImage:$apiImage,webImage:$webImage,sourceUrl:$sourceUrl,sourceSha256:$sourceSha256}' \
+            > platform-release.json
+
+      - name: Upload platform assets to the existing GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" platform-release.json "platform-systemd-$TAG.tar.gz"
+
+      - name: Attest API image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-api
+          subject-digest: ${{ steps.api.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest Web image
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-web
+          subject-digest: ${{ steps.web.outputs.digest }}
+          push-to-registry: true

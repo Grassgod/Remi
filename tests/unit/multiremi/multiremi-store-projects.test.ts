@@ -48,7 +48,11 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
-      repos: [{ url: "https://github.com/example/workspace", description: "workspace repo" }],
+      repos: [
+        { url: "https://github.com/example/workspace", description: "workspace repo" },
+        { url: "https://github.com/example/repo" },
+        { url: "https://github.com/example/repo-updated" },
+      ],
     });
     const project = store.createProject({
       title: "Repo scoped work",
@@ -114,6 +118,10 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   it("writes project resources into the daemon workdir", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [{ url: "https://github.com/example/runtime" }],
+    });
     const project = store.createProject({
       title: "Runtime resources",
       resources: [{

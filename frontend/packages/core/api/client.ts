@@ -24,12 +24,13 @@ import { LabelsEndpoints } from "./endpoints/labels";
 import { PinsEndpoints } from "./endpoints/pins";
 import { SquadsEndpoints } from "./endpoints/squads";
 import { AutopilotsEndpoints } from "./endpoints/autopilots";
-import { GitHubEndpoints } from "./endpoints/github";
 import { LarkEndpoints } from "./endpoints/lark";
 import { RepositoriesEndpoints } from "./endpoints/repositories";
 import { PluginsEndpoints } from "./endpoints/plugins";
 import { IssueSharesEndpoints } from "./endpoints/issue-shares";
 import { SessionArchivesEndpoints } from "./endpoints/session-archives";
+import { ScmEndpoints } from "./endpoints/scm";
+import { PlatformEndpoints } from "./endpoints/platform";
 
 export { ApiError, PreviewTooLargeError, PreviewUnsupportedError } from "./http";
 export type { ApiClientIdentity, ApiClientOptions } from "./http";
@@ -77,12 +78,13 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new PinsEndpoints(http),
   (http: HttpClient) => new SquadsEndpoints(http),
   (http: HttpClient) => new AutopilotsEndpoints(http),
-  (http: HttpClient) => new GitHubEndpoints(http),
   (http: HttpClient) => new LarkEndpoints(http),
   (http: HttpClient) => new RepositoriesEndpoints(http),
   (http: HttpClient) => new PluginsEndpoints(http),
   (http: HttpClient) => new IssueSharesEndpoints(http),
   (http: HttpClient) => new SessionArchivesEndpoints(http),
+  (http: HttpClient) => new ScmEndpoints(http),
+  (http: HttpClient) => new PlatformEndpoints(http),
 ];
 
 // Declaration merging: the facade's type is the union of every endpoint
@@ -121,12 +123,13 @@ export interface ApiClient extends
     PinsEndpoints,
     SquadsEndpoints,
     AutopilotsEndpoints,
-    GitHubEndpoints,
     LarkEndpoints,
     RepositoriesEndpoints,
     PluginsEndpoints,
     IssueSharesEndpoints,
-    SessionArchivesEndpoints {}
+    SessionArchivesEndpoints,
+    ScmEndpoints,
+    PlatformEndpoints {}
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- see the interface above
 export class ApiClient {

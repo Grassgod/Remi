@@ -84,7 +84,6 @@ export interface EphemeralContext {
 export interface EphemeralDaemonOptions {
   daemonPort: number;
   serverUrl: string;
-  fallbackToken?: string | null;
   workspacesRoot: string;
 }
 

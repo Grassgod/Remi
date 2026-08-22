@@ -18,6 +18,7 @@ import {
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
@@ -1256,7 +1257,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(existsSync(join(checkoutPath, "README.md"))).toBe(true);
       expect(readFileSync(join(checkoutPath, "README.md"), "utf8")).toContain("hello from repo");
       expect(execFileSync("git", ["-C", checkoutPath, "branch", "--show-current"], { encoding: "utf8" }).trim().startsWith("agent/repo-claude/")).toBe(true);
-      expect(existsSync(prepareCommitMsgHookPath(checkoutPath))).toBe(false);
+      expect(existsSync(prepareCommitMsgHookPath(checkoutPath))).toBe(true);
       expect(prompts[0]).toContain("## Available Repositories");
       expect(prompts[0]).toContain("remi repo checkout <url>");
       expect(prompts[0]).toContain(sourceRepo);
@@ -1334,6 +1335,72 @@ describe("Bun Multiremi daemon smoke", () => {
         status: "ready",
         repos: [{ repoName: "repo", worktreePath: worktree, branchName: branch }],
       });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("continues an Issue task and tells the agent about stale and unavailable repositories", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-repo-warning-");
+    const sourceRepo = createSourceRepo(join(workDir, "_source", "cached-repo"));
+    const repoCacheRoot = join(workDir, ".repo-cache");
+    const cache = new MultiremiRepoCache(repoCacheRoot);
+    await cache.sync("local", [{ url: sourceRepo }]);
+    rmSync(sourceRepo, { recursive: true, force: true });
+    const unavailableRepo = join(workDir, "missing", "repo.git");
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      settings: { github_enabled: false, co_authored_by_enabled: false },
+      repos: [
+        { url: sourceRepo, description: "cached source repo" },
+        { url: unavailableRepo, description: "unavailable source repo" },
+      ],
+    });
+    const agent = store.createAgent({ name: "Repo Claude", provider: "claude" });
+    const issue = store.createIssue({ title: "Unavailable checkout issue" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Inspect the repo" });
+    const daemonToken = await store.createAccessToken({
+      name: "Repo warning daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-repo-warning-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const prompts: string[] = [];
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeName: "repo-warning-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot: join(workDir, "workspaces"),
+        repoCacheRoot,
+        providerFactory: messageProviderFactory({
+          text: "reported unavailable repo",
+          sessionId: "sess-repo-warning",
+          requestId: "req-repo-warning",
+          onSend: (message) => { prompts.push(message); },
+        }),
+      });
+
+      await daemon.start();
+
+      expect(store.getTask(task.id)?.status).toBe("completed");
+      expect(prompts[0]).toContain("## Repository Availability Warnings");
+      expect(prompts[0]).toContain(sourceRepo);
+      expect(prompts[0]).toContain(unavailableRepo);
+      expect(prompts[0]).toContain("may use stale cached data");
+      expect(prompts[0]).toContain("checkout is unavailable");
+      expect(prompts[0]).toContain("Do not claim that you inspected its source code");
     } finally {
       server.stop(true);
     }

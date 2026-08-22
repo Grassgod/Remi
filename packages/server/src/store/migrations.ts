@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("multiremi-store");
+const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
+const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -10,7 +13,13 @@ const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 
 export function runMigrations(db: SqlDatabase): void {
   renameLegacyMulticaObjects(db);
+  const legacyGithubTables = existingTableNames(db);
   db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS multiremi_agents (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -529,48 +538,6 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_feedback_user_created ON multiremi_feedback(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_multiremi_feedback_workspace_created ON multiremi_feedback(workspace_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS multiremi_github_settings (
-      workspace_id TEXT PRIMARY KEY,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      pr_sidebar INTEGER NOT NULL DEFAULT 1,
-      co_author INTEGER NOT NULL DEFAULT 1,
-      auto_link_prs INTEGER NOT NULL DEFAULT 1,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS multiremi_github_pull_requests (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL DEFAULT 'local',
-      issue_id TEXT,
-      repo_owner TEXT NOT NULL,
-      repo_name TEXT NOT NULL,
-      number INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      state TEXT NOT NULL,
-      html_url TEXT NOT NULL,
-      branch TEXT,
-      author_login TEXT,
-      author_avatar_url TEXT,
-      merged_at TEXT,
-      closed_at TEXT,
-      pr_created_at TEXT NOT NULL,
-      pr_updated_at TEXT NOT NULL,
-      mergeable_state TEXT,
-      checks_conclusion TEXT,
-      checks_passed INTEGER NOT NULL DEFAULT 0,
-      checks_failed INTEGER NOT NULL DEFAULT 0,
-      checks_pending INTEGER NOT NULL DEFAULT 0,
-      additions INTEGER NOT NULL DEFAULT 0,
-      deletions INTEGER NOT NULL DEFAULT 0,
-      changed_files INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE(workspace_id, repo_owner, repo_name, number)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_multiremi_github_prs_issue ON multiremi_github_pull_requests(issue_id, pr_updated_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_github_prs_workspace ON multiremi_github_pull_requests(workspace_id, pr_updated_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_issues (
       id TEXT PRIMARY KEY,
@@ -1155,6 +1122,248 @@ export function runMigrations(db: SqlDatabase): void {
       ON multiremi_webhook_deliveries(trigger_id, dedupe_key)
       WHERE dedupe_key IS NOT NULL AND status NOT IN ('rejected', 'failed');
 
+    CREATE TABLE IF NOT EXISTS multiremi_scm_connections (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'poll',
+      base_url TEXT NOT NULL,
+      api_base_url TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 60,
+      repository_scope TEXT NOT NULL DEFAULT 'selected',
+      is_default INTEGER NOT NULL DEFAULT 0,
+      access_token_encrypted TEXT,
+      access_token_hint TEXT,
+      webhook_secret_encrypted TEXT,
+      webhook_secret_hint TEXT,
+      verification_status TEXT NOT NULL DEFAULT 'unverified',
+      verified_at TEXT,
+      verification_identity TEXT,
+      verified_repository_count INTEGER NOT NULL DEFAULT 0,
+      verified_repository_total INTEGER NOT NULL DEFAULT 0,
+      verification_error_code TEXT,
+      verification_error TEXT,
+      verification_generation INTEGER NOT NULL DEFAULT 0,
+      verification_run_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, provider, name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_connections_poll
+      ON multiremi_scm_connections(enabled, mode, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_repository_bindings (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      repository_url TEXT NOT NULL,
+      external_id TEXT,
+      owner TEXT,
+      name TEXT NOT NULL,
+      default_branch TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      assignment_origin TEXT NOT NULL DEFAULT 'explicit',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, repository_id),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_repository_bindings_connection
+      ON multiremi_scm_repository_bindings(connection_id, enabled, repository_id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_repository_bindings_url
+      ON multiremi_scm_repository_bindings(workspace_id, repository_url);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_sync_cursors (
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      stream TEXT NOT NULL,
+      cursor TEXT,
+      watermark TEXT,
+      baseline_completed_at TEXT,
+      last_started_at TEXT,
+      last_completed_at TEXT,
+      last_error TEXT,
+      lease_owner TEXT,
+      lease_until TEXT,
+      lease_token TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(connection_id, repository_id, stream),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_entity_snapshots (
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      version TEXT,
+      revision_at TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      observed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(connection_id, repository_id, entity_type, external_id),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_entity_snapshots_observed
+      ON multiremi_scm_entity_snapshots(connection_id, repository_id, entity_type, observed_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_change_requests (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      number INTEGER,
+      title TEXT NOT NULL,
+      body TEXT,
+      state TEXT NOT NULL,
+      draft INTEGER NOT NULL DEFAULT 0,
+      url TEXT,
+      source_branch TEXT,
+      target_branch TEXT,
+      head_sha TEXT,
+      base_sha TEXT,
+      author TEXT,
+      provider_created_at TEXT,
+      provider_updated_at TEXT,
+      closed_at TEXT,
+      merged_at TEXT,
+      merge_sha TEXT,
+      mergeable_state TEXT,
+      checks_conclusion TEXT,
+      checks_passed INTEGER NOT NULL DEFAULT 0,
+      checks_failed INTEGER NOT NULL DEFAULT 0,
+      checks_pending INTEGER NOT NULL DEFAULT 0,
+      additions INTEGER NOT NULL DEFAULT 0,
+      deletions INTEGER NOT NULL DEFAULT 0,
+      changed_files INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(connection_id, repository_id, external_id),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_change_requests_workspace
+      ON multiremi_scm_change_requests(workspace_id, provider_updated_at, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_change_requests_repository
+      ON multiremi_scm_change_requests(repository_id, provider_updated_at, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_change_requests_number
+      ON multiremi_scm_change_requests(connection_id, repository_id, number);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_issue_links (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      change_request_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      linked_at TEXT NOT NULL,
+      unlinked_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(change_request_id, issue_id),
+      FOREIGN KEY(change_request_id) REFERENCES multiremi_scm_change_requests(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_issue_links_issue
+      ON multiremi_scm_issue_links(issue_id, active, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_events (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      type TEXT NOT NULL,
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      logical_key TEXT NOT NULL,
+      primary_source TEXT NOT NULL,
+      fidelity TEXT NOT NULL,
+      occurred_at TEXT,
+      observed_at TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT NOT NULL,
+      lease_until TEXT,
+      last_error TEXT,
+      processed_at TEXT,
+      targets_initialized INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      UNIQUE(connection_id, logical_key),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_events_pending
+      ON multiremi_scm_events(status, available_at, lease_until, observed_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_events_repository
+      ON multiremi_scm_events(workspace_id, repository_id, observed_at, id);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_effects (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      effect_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      applied_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(event_id, issue_id, effect_type),
+      FOREIGN KEY(event_id) REFERENCES multiremi_scm_events(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_event_evidence (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      provider_event_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      payload TEXT,
+      raw_body TEXT,
+      observed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(event_id, source, dedupe_key),
+      FOREIGN KEY(event_id) REFERENCES multiremi_scm_events(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_event_evidence_event
+      ON multiremi_scm_event_evidence(event_id, observed_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_event_deliveries (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      trigger_id TEXT NOT NULL,
+      autopilot_run_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT NOT NULL,
+      lease_until TEXT,
+      last_error TEXT,
+      delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(event_id, trigger_id),
+      FOREIGN KEY(event_id) REFERENCES multiremi_scm_events(id) ON DELETE CASCADE,
+      FOREIGN KEY(trigger_id) REFERENCES multiremi_autopilot_triggers(id) ON DELETE CASCADE,
+      FOREIGN KEY(autopilot_run_id) REFERENCES multiremi_autopilot_runs(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_event_deliveries_pending
+      ON multiremi_scm_event_deliveries(status, available_at, lease_until, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_chat_sessions (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1310,6 +1519,45 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_task ON multiremi_task_human_requests(task_id, status);
+
+    CREATE TABLE IF NOT EXISTS multiremi_platform_state (
+      id TEXT PRIMARY KEY,
+      driver TEXT NOT NULL DEFAULT 'systemd_release',
+      current_release TEXT,
+      latest_release TEXT,
+      recent_releases TEXT NOT NULL DEFAULT '[]',
+      services TEXT NOT NULL DEFAULT '[]',
+      auto_update_stable INTEGER NOT NULL DEFAULT 0,
+      updater_heartbeat_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_platform_operations (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      driver TEXT NOT NULL,
+      active_slot INTEGER,
+      target_version TEXT,
+      target_ref TEXT,
+      target_manifest TEXT NOT NULL DEFAULT '{}',
+      progress TEXT NOT NULL DEFAULT '{}',
+      requested_by TEXT NOT NULL,
+      output TEXT,
+      error TEXT,
+      previous_release TEXT,
+      result_release TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_platform_operations_active
+      ON multiremi_platform_operations(active_slot);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_platform_operations_created
+      ON multiremi_platform_operations(created_at);
   `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS multiremi_issue_workspaces (
@@ -1519,6 +1767,47 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_autopilot_runs", "trigger_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_runs", "event_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_runs", "issue_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_owner TEXT");
+  addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_until TEXT");
+  addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_token TEXT");
+  addColumnIfMissing(
+    db,
+    "multiremi_scm_connections",
+    "repository_scope TEXT NOT NULL DEFAULT 'selected'",
+  );
+  addColumnIfMissing(
+    db,
+    "multiremi_scm_connections",
+    "is_default INTEGER NOT NULL DEFAULT 0",
+  );
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_status TEXT NOT NULL DEFAULT 'unverified'");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verified_at TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_identity TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verified_repository_count INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verified_repository_total INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_error_code TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_error TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_generation INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_run_id TEXT");
+  addColumnIfMissing(db, "multiremi_scm_repository_bindings", "assignment_origin TEXT NOT NULL DEFAULT 'explicit'");
+  runMigrationOnce(db, SCM_CONNECTION_ORIGIN_MIGRATION, () => normalizeScmConnectionOrigins(db));
+  runMigrationOnce(db, SCM_DEFAULT_SCOPE_MIGRATION, () => backfillSingleScmDefaults(db));
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_sync_cursors_lease
+      ON multiremi_scm_sync_cursors(lease_until, connection_id, repository_id, stream);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_scm_connections_default
+      ON multiremi_scm_connections(workspace_id, provider, base_url)
+      WHERE is_default = 1;
+  `);
+  addColumnIfMissing(db, "multiremi_scm_entity_snapshots", "revision_at TEXT");
+  addColumnIfMissing(db, "multiremi_scm_entity_snapshots", "revision TEXT");
+  addColumnIfMissing(db, "multiremi_scm_events", "targets_initialized INTEGER NOT NULL DEFAULT 0");
+  db.run(
+    `UPDATE multiremi_scm_entity_snapshots
+     SET revision_at = COALESCE(revision_at, observed_at),
+         revision = COALESCE(revision, version, content_hash)
+     WHERE revision_at IS NULL OR revision IS NULL`,
+  );
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_system_event
       ON multiremi_autopilot_runs(trigger_id, event_id)
@@ -1593,6 +1882,103 @@ export function runMigrations(db: SqlDatabase): void {
   // is cleared, which is the invariant the pool model needs.
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
+  migrateLegacyGithubProjection(db, legacyGithubTables);
+}
+
+function migrateLegacyGithubProjection(db: SqlDatabase, legacyTables: Set<string>): void {
+  const now = new Date().toISOString();
+  const settingsRows = legacyTables.has("multiremi_github_settings")
+    ? db.query("SELECT * FROM multiremi_github_settings").all() as Array<Record<string, unknown>>
+    : [];
+  for (const row of settingsRows) {
+    const workspaceId = String(row.workspace_id ?? "local");
+    const workspace = db.query("SELECT settings FROM multiremi_workspaces WHERE id = ?").get(workspaceId) as { settings?: unknown } | null;
+    if (!workspace) continue;
+    let settings: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(String(workspace.settings ?? "{}"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) settings = parsed;
+    } catch {
+      settings = {};
+    }
+    if (!("scm_change_sidebar_enabled" in settings)) settings.scm_change_sidebar_enabled = Boolean(Number(row.pr_sidebar ?? 1));
+    if (!("scm_auto_link_enabled" in settings)) settings.scm_auto_link_enabled = Boolean(Number(row.auto_link_prs ?? 1));
+    if (!("scm_complete_issue_on_merge_enabled" in settings)) settings.scm_complete_issue_on_merge_enabled = false;
+    if (!("co_authored_by_enabled" in settings)) settings.co_authored_by_enabled = Boolean(Number(row.co_author ?? 1));
+    db.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = ?", [JSON.stringify(settings), workspaceId]);
+  }
+
+  if (!legacyTables.has("multiremi_github_pull_requests")) return;
+  const rows = db.query(
+    `SELECT p.*, b.connection_id, b.repository_id
+     FROM multiremi_github_pull_requests p
+     JOIN multiremi_scm_repository_bindings b
+       ON b.workspace_id = p.workspace_id
+      AND LOWER(b.name) = LOWER(p.repo_name)
+      AND LOWER(COALESCE(b.owner, '')) = LOWER(p.repo_owner)
+     JOIN multiremi_scm_connections c
+       ON c.id = b.connection_id AND c.provider = 'github'`,
+  ).all() as Array<Record<string, unknown>>;
+  for (const row of rows) {
+    const legacyId = String(row.id);
+    const changeRequestId = `scr_legacy_${legacyId}`;
+    db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_change_requests (
+        id, workspace_id, connection_id, repository_id, provider, external_id,
+        number, title, body, state, draft, url, source_branch, target_branch,
+        head_sha, base_sha, author, provider_created_at, provider_updated_at,
+        closed_at, merged_at, merge_sha, mergeable_state, checks_conclusion,
+        checks_passed, checks_failed, checks_pending, additions, deletions,
+        changed_files, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'github', ?, ?, ?, NULL, ?, ?, ?, ?, NULL,
+        NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        changeRequestId,
+        String(row.workspace_id ?? "local"),
+        String(row.connection_id),
+        String(row.repository_id),
+        `legacy-number:${String(row.number)}`,
+        Number(row.number),
+        String(row.title ?? ""),
+        String(row.state ?? "open"),
+        row.state === "draft" ? 1 : 0,
+        row.html_url == null ? null : String(row.html_url),
+        row.branch == null ? null : String(row.branch),
+        row.author_login == null ? null : String(row.author_login),
+        row.pr_created_at == null ? null : String(row.pr_created_at),
+        row.pr_updated_at == null ? null : String(row.pr_updated_at),
+        row.closed_at == null ? null : String(row.closed_at),
+        row.merged_at == null ? null : String(row.merged_at),
+        row.mergeable_state == null ? null : String(row.mergeable_state),
+        row.checks_conclusion == null ? null : String(row.checks_conclusion),
+        Number(row.checks_passed ?? 0),
+        Number(row.checks_failed ?? 0),
+        Number(row.checks_pending ?? 0),
+        Number(row.additions ?? 0),
+        Number(row.deletions ?? 0),
+        Number(row.changed_files ?? 0),
+        String(row.created_at ?? now),
+        String(row.updated_at ?? now),
+      ],
+    );
+    const projected = db.query(
+      "SELECT id FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ? AND number = ?",
+    ).get(String(row.connection_id), String(row.repository_id), Number(row.number)) as { id?: unknown } | null;
+    const issueId = row.issue_id == null ? null : String(row.issue_id);
+    if (!projected?.id || !issueId) continue;
+    const issue = db.query("SELECT id FROM multiremi_issues WHERE id = ? AND workspace_id = ?").get(
+      issueId,
+      String(row.workspace_id ?? "local"),
+    );
+    if (!issue) continue;
+    db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_issue_links (
+        id, workspace_id, change_request_id, issue_id, source, active,
+        linked_at, unlinked_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'legacy', 1, ?, NULL, ?, ?)`,
+      [`sil_legacy_${legacyId}`, String(row.workspace_id ?? "local"), String(projected.id), issueId, now, now, now],
+    );
+  }
 }
 
 function normalizeSquadLeaderRoles(db: SqlDatabase): void {
@@ -1732,6 +2118,14 @@ function renameLegacyMulticaObjects(db: SqlDatabase): void {
   }
 }
 
+function existingTableNames(db: SqlDatabase): Set<string> {
+  return new Set((db
+    .query("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'index')")
+    .all() as Array<{ name: string; type: string }>)
+    .filter((entry) => entry.type === "table")
+    .map((entry) => entry.name));
+}
+
 function addColumnIfMissing(db: SqlDatabase, table: string, definition: string): boolean {
   try {
     db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
@@ -1747,6 +2141,17 @@ function addColumnIfMissing(db: SqlDatabase, table: string, definition: string):
     }
     return false;
   }
+}
+
+function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {
+  db.transaction(() => {
+    const claimed = db.run(
+      "INSERT OR IGNORE INTO multiremi_schema_migrations (id, applied_at) VALUES (?, ?)",
+      [id, new Date().toISOString()],
+    ).changes;
+    if (claimed !== 1) return;
+    migrate();
+  })();
 }
 
 function ensureIssueSubscriberTypedSchema(db: SqlDatabase): void {
@@ -1863,6 +2268,209 @@ function backfillIssueKeys(db: SqlDatabase): void {
       [number, formatIssueKey(number), row.id],
     );
   }
+}
+
+function backfillSingleScmDefaults(db: SqlDatabase): void {
+  for (const rows of scmConnectionOriginGroups(db).values()) {
+    if (rows.length !== 1) continue;
+    const row = rows[0]!;
+    db.run(
+      `UPDATE multiremi_scm_connections
+       SET repository_scope = 'all', is_default = 1
+       WHERE id = ? AND is_default = 0 AND repository_scope = 'selected'`,
+      [row.id],
+    );
+    const existingBindings = db.query(
+      `SELECT repository_id, repository_url
+       FROM multiremi_scm_repository_bindings WHERE connection_id = ?`,
+    ).all(row.id) as Array<{ repository_id: string; repository_url: string }>;
+    for (const binding of existingBindings) {
+      if (scmRepositoryOrigin(binding.repository_url) !== scmRepositoryOrigin(row.base_url)) continue;
+      db.run(
+        `UPDATE multiremi_scm_repository_bindings SET assignment_origin = 'default'
+         WHERE connection_id = ? AND repository_id = ?`,
+        [row.id, binding.repository_id],
+      );
+    }
+
+    const workspace = db.query("SELECT repos FROM multiremi_workspaces WHERE id = ?")
+      .get(row.workspace_id) as { repos?: string } | null;
+    const repositories = parseScmMigrationRepositories(workspace?.repos);
+    const now = new Date().toISOString();
+    for (const repository of repositories) {
+      if (repository.provider !== row.provider) continue;
+      if (scmRepositoryOrigin(repository.url) !== scmRepositoryOrigin(row.base_url)) continue;
+      const coordinates = scmMigrationRepositoryCoordinates(repository.url);
+      db.run(
+        `INSERT INTO multiremi_scm_repository_bindings (
+          id, workspace_id, connection_id, repository_id, repository_url, external_id,
+          owner, name, default_branch, enabled, assignment_origin, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, 'default', ?, ?)
+        ON CONFLICT(workspace_id, repository_id) DO NOTHING`,
+        [
+          `srb_migrated_${row.id}_${repository.id}`,
+          row.workspace_id,
+          row.id,
+          repository.id,
+          repository.url,
+          coordinates.owner,
+          repository.name || coordinates.name || "repository",
+          repository.defaultBranch,
+          now,
+          now,
+        ],
+      );
+    }
+  }
+}
+
+interface ScmMigrationConnectionRow {
+  id: string;
+  workspace_id: string;
+  provider: string;
+  base_url: string;
+  repository_scope: string;
+  is_default: number;
+  created_at: string;
+}
+
+function scmConnectionOriginGroups(db: SqlDatabase): Map<string, ScmMigrationConnectionRow[]> {
+  const rows = db.query(
+    `SELECT id, workspace_id, provider, base_url, repository_scope, is_default, created_at
+     FROM multiremi_scm_connections
+     ORDER BY workspace_id, provider, created_at, id`,
+  ).all() as ScmMigrationConnectionRow[];
+  const groups = new Map<string, ScmMigrationConnectionRow[]>();
+  for (const row of rows) {
+    const origin = normalizeScmMigrationBaseUrl(row.base_url);
+    const key = `${row.workspace_id}\u0000${row.provider}\u0000${origin}`;
+    const group = groups.get(key) ?? [];
+    group.push(row);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
+function normalizeScmConnectionOrigins(db: SqlDatabase): void {
+  for (const rows of scmConnectionOriginGroups(db).values()) {
+    const defaultCandidates = rows.filter((row) => (
+      Number(row.is_default) === 1 || row.repository_scope === "all"
+    ));
+    const winner = defaultCandidates[0] ?? null;
+
+    // Demote duplicate defaults before normalizing URLs. An older deployment
+    // may already have the partial unique index, and two path-shaped base URLs
+    // can otherwise collide when both become the same origin.
+    for (const row of rows) {
+      if (winner && row.id === winner.id) {
+        db.run(
+          `UPDATE multiremi_scm_connections
+           SET repository_scope = 'all', is_default = 1
+           WHERE id = ? AND (repository_scope != 'all' OR is_default != 1)`,
+          [row.id],
+        );
+        continue;
+      }
+      db.run(
+        `UPDATE multiremi_scm_connections
+         SET repository_scope = 'selected', is_default = 0
+         WHERE id = ? AND (repository_scope != 'selected' OR is_default != 0)`,
+        [row.id],
+      );
+      db.run(
+        `UPDATE multiremi_scm_repository_bindings
+         SET assignment_origin = 'explicit'
+         WHERE connection_id = ? AND assignment_origin = 'default'`,
+        [row.id],
+      );
+    }
+
+    for (const row of rows) {
+      const origin = normalizeScmMigrationBaseUrl(row.base_url);
+      if (origin === row.base_url) continue;
+      db.run("UPDATE multiremi_scm_connections SET base_url = ? WHERE id = ?", [origin, row.id]);
+    }
+  }
+}
+
+function normalizeScmMigrationBaseUrl(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/u, "");
+  try {
+    const url = new URL(trimmed);
+    return url.origin === "null" ? trimmed : url.origin;
+  } catch {
+    return trimmed;
+  }
+}
+
+function parseScmMigrationRepositories(value: string | undefined): Array<{
+  id: string;
+  url: string;
+  name: string | null;
+  provider: "github" | "codebase" | "unknown";
+  defaultBranch: string | null;
+}> {
+  let rows: unknown;
+  try {
+    rows = JSON.parse(value ?? "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const row = value as Record<string, unknown>;
+    const url = typeof row.url === "string" ? row.url.trim() : "";
+    if (!url) return [];
+    const canonicalKey = scmMigrationCanonicalGitUrl(url);
+    const source = row.source === "github" || row.source === "codebase" ? row.source : null;
+    const host = scmRepositoryOrigin(url);
+    const provider = source ?? (host === "github.com" ? "github" : host === "code.byted.org" ? "codebase" : "unknown");
+    const coordinates = scmMigrationRepositoryCoordinates(url);
+    return [{
+      id: typeof row.id === "string" && row.id.trim()
+        ? row.id.trim()
+        : `repo_${createHash("sha256").update(canonicalKey).digest("hex").slice(0, 16)}`,
+      url,
+      name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : coordinates.name,
+      provider,
+      defaultBranch: typeof (row.default_branch ?? row.defaultBranch) === "string"
+        ? String(row.default_branch ?? row.defaultBranch).trim() || null
+        : null,
+    }];
+  });
+}
+
+function scmRepositoryOrigin(value: string): string {
+  const scpHost = value.trim().match(/^(?:ssh:\/\/)?[^@\s]+@([^:/\s]+)[:/]/u)?.[1];
+  if (scpHost) return scpHost.toLowerCase();
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function scmMigrationCanonicalGitUrl(value: string): string {
+  const coordinates = scmMigrationRepositoryCoordinates(value);
+  return `${scmRepositoryOrigin(value)}/${coordinates.owner ?? ""}/${coordinates.name ?? ""}`.toLowerCase();
+}
+
+function scmMigrationRepositoryCoordinates(value: string): { owner: string | null; name: string | null } {
+  const trimmed = value.trim();
+  const scpPath = trimmed.match(/^(?:ssh:\/\/)?[^@\s]+@[^:/\s]+[:/](.+)$/u)?.[1];
+  let path = scpPath ?? "";
+  if (!path) {
+    try {
+      path = new URL(trimmed).pathname;
+    } catch {
+      path = trimmed;
+    }
+  }
+  const parts = path.replace(/^\/+|\/+$/gu, "").split("/").filter(Boolean);
+  if (!parts.length) return { owner: null, name: null };
+  const name = parts.pop()!.replace(/\.git$/iu, "");
+  return { owner: parts.join("/") || null, name: name || null };
 }
 
 // Populate multiremi_workspace_members.user_id from the legacy `mem_<ws>_<userId>`

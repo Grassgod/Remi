@@ -242,6 +242,7 @@ export interface ProjectsSurface {
 export interface AutopilotsSurface {
   getAutopilot(id: string): MultiremiAutopilot | null;
   getAutopilotRun(id: string): MultiremiAutopilotRun | null;
+  runAutopilot(autopilotId: string, input?: import("@multiremi/contracts/types.js").RunAutopilotInput): MultiremiAutopilotRun;
   enqueueIssueStatusChangedEvent(input: {
     issue: MultiremiIssue;
     previousStatus: string;
@@ -377,6 +378,14 @@ export class StoreContext {
    * The caller must already be inside a database transaction.
    */
   lockWorkspaceRuntimeLifecycle(workspaceId: string): void {
+    this.db.run(
+      "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+      [workspaceId],
+    );
+  }
+
+  /** Serialize repository topology and project repository-resource mutations. */
+  lockWorkspaceRepositoryTopology(workspaceId: string): void {
     this.db.run(
       "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
       [workspaceId],

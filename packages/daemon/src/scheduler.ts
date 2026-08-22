@@ -92,6 +92,7 @@ export class MultiremiScheduler {
   sync(): void {
     this.tickDueTriggers();
     this.tickSystemEvents();
+    this.tickScmEvents();
     const active = new Map(
       this.store.listAutopilots()
         .filter(isSchedulable)
@@ -136,6 +137,10 @@ export class MultiremiScheduler {
 
   tickSystemEvents(now: Date = new Date()): AutopilotRun[] {
     return this.store.dispatchPendingSystemEvents(now);
+  }
+
+  tickScmEvents(now: Date = new Date()): AutopilotRun[] {
+    return this.store.dispatchPendingScmEvents(now);
   }
 
   runFailureMonitorOnce(
