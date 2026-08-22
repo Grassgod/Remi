@@ -673,6 +673,8 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     autopilotTriggerPayload: raw.autopilot_trigger_payload ?? raw.autopilotTriggerPayload ?? null,
     quickCreatePrompt: stringOrNull(raw.quick_create_prompt ?? raw.quickCreatePrompt),
     workspaceContext: stringOrNull(raw.workspace_context ?? raw.workspaceContext),
+    workspaceBootstrapPrompt: stringOrNull(raw.workspace_bootstrap_prompt ?? raw.workspaceBootstrapPrompt),
+    workspaceDeltaPrompt: stringOrNull(raw.workspace_delta_prompt ?? raw.workspaceDeltaPrompt),
     workspaceEnv: objectOrDefault(raw.workspace_env ?? raw.workspaceEnv),
     requestingUserName: stringOrNull(raw.requesting_user_name ?? raw.requestingUserName),
     requestingUserProfileDescription: stringOrNull(raw.requesting_user_profile_description ?? raw.requestingUserProfileDescription),
@@ -778,6 +780,9 @@ function normalizeDaemonClaimProject(raw: any): MultiremiTaskWithAgent["project"
     ...raw,
     workspaceId: stringOrNull(raw.workspace_id ?? raw.workspaceId) ?? "",
     instructions: typeof raw.instructions === "string" ? raw.instructions : "",
+    deltaInstructions: typeof (raw.delta_instructions ?? raw.deltaInstructions) === "string"
+      ? raw.delta_instructions ?? raw.deltaInstructions
+      : "",
     instructionsRevision: numberOrDefault(raw.instructions_revision ?? raw.instructionsRevision, 0),
     instructionsUpdatedAt: stringOrNull(raw.instructions_updated_at ?? raw.instructionsUpdatedAt),
     instructionsUpdatedBy: stringOrNull(raw.instructions_updated_by ?? raw.instructionsUpdatedBy),

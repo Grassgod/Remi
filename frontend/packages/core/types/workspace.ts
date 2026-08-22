@@ -19,6 +19,20 @@ export interface Workspace {
   updated_at: string;
 }
 
+export interface WorkspacePromptSettings {
+  bootstrapPrompt: string;
+  deltaPrompt: string;
+  revision: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface UpdateWorkspacePromptSettingsRequest {
+  bootstrapPrompt: string;
+  deltaPrompt: string;
+  expectedRevision: number;
+}
+
 export interface Member {
   id: string;
   workspace_id: string;

@@ -43,7 +43,14 @@ import {
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type {
   CreateWorkspaceInput,
+  UpdateMultiremiPromptSettingsInput,
 } from "@multiremi/contracts/types.js";
+import { nowIso } from "@multiremi/ids.js";
+import {
+  mergeWorkspacePromptSettings,
+  readWorkspacePromptSettings,
+  WorkspacePromptRevisionConflictError,
+} from "../../prompts/workspace-settings.js";
 import {
   discoverGatewayModels,
   triggerGatewayDiscovery,
@@ -79,10 +86,55 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     return c.json(workspace);
   });
+  app.get("/api/workspaces/:id/prompts", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    return c.json(readWorkspacePromptSettings(workspace));
+  });
+  app.put("/api/workspaces/:id/prompts", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<UpdateMultiremiPromptSettingsInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    try {
+      const merged = mergeWorkspacePromptSettings(
+        workspace,
+        body,
+        currentRequestUserId(c),
+        nowIso(),
+      );
+      if (merged.settings !== workspace.settings) {
+        store.updateWorkspace(workspaceId, { settings: merged.settings });
+      }
+      return c.json(merged.prompts);
+    } catch (error) {
+      if (error instanceof WorkspacePromptRevisionConflictError) {
+        return c.json({
+          error: error.message,
+          code: error.code,
+          expectedRevision: error.expectedRevision,
+          currentRevision: error.currentRevision,
+        }, 409);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json({ error: message }, 400);
+    }
+  });
   app.put("/api/workspaces/:id", async (c) => {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    if (hasOwn(body, "settings")) {
+      const adminDenied = requireWorkspaceAdmin(c, store, c.req.param("id"));
+      if (adminDenied) return adminDenied;
+    }
     if (hasOwn(body, "repos")) {
       return c.json({ error: "repositories can only be changed through the workspace repository API" }, 400);
     }
@@ -92,6 +144,10 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    if (hasOwn(body, "settings")) {
+      const adminDenied = requireWorkspaceAdmin(c, store, c.req.param("id"));
+      if (adminDenied) return adminDenied;
+    }
     if (hasOwn(body, "repos")) {
       return c.json({ error: "repositories can only be changed through the workspace repository API" }, 400);
     }

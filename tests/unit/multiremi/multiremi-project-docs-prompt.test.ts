@@ -45,6 +45,8 @@ describe("bootstrap and delta task prompts", () => {
     const artifact = buildTaskPromptArtifact({
       ...task,
       workspaceContext: "Use the shared release checklist.",
+      workspaceBootstrapPrompt: "Create a pull request before completion.",
+      workspaceDeltaPrompt: "DO_NOT_INCLUDE_DELTA_ON_BOOTSTRAP",
       sessionProjection: {
         mode: "bootstrap",
         jsonl: '{"type":"session_projection","mode":"bootstrap"}',
@@ -56,6 +58,8 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("# Bootstrap Prompt");
     expect(artifact.prompt).toContain("## Current Request\nDo the work");
     expect(artifact.prompt).toContain("## Workspace Context");
+    expect(artifact.prompt).toContain("## Workspace Bootstrap Instructions\nCreate a pull request before completion.");
+    expect(artifact.prompt).not.toContain("DO_NOT_INCLUDE_DELTA_ON_BOOTSTRAP");
     expect(artifact.prompt).toContain(`Key: ${issue.key}`);
     expect(artifact.prompt).toContain("Implement the requested behavior.");
     expect(artifact.prompt).toContain("## Project Context");
@@ -123,11 +127,14 @@ describe("bootstrap and delta task prompts", () => {
     const store = createStore();
     const { task } = createProjectTask(store);
     const instructions = "DO_NOT_REPEAT_PROJECT_INSTRUCTIONS";
+    const deltaInstructions = "Re-read the newest review comment.";
     const prompt = buildTaskPrompt({
       ...task,
-      project: { ...task.project!, instructions },
+      project: { ...task.project!, instructions, deltaInstructions },
       prompt: "Apply the review feedback.",
       workspaceContext: "DO_NOT_REPEAT_WORKSPACE",
+      workspaceBootstrapPrompt: "DO_NOT_REPEAT_WORKSPACE_BOOTSTRAP",
+      workspaceDeltaPrompt: "Keep the follow-up concise.",
       sessionProjection: {
         mode: "delta",
         jsonl: [
@@ -140,8 +147,11 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain("# Delta Prompt");
     expect(prompt).toContain("## Current Request\nApply the review feedback.");
     expect(prompt).toContain("New review feedback");
+    expect(prompt).toContain("## Workspace Delta Instructions\nKeep the follow-up concise.");
+    expect(prompt).toContain(`## Project Delta Instructions\n${deltaInstructions}`);
     expect(prompt).toContain("## Issue");
     expect(prompt).not.toContain("DO_NOT_REPEAT_WORKSPACE");
+    expect(prompt).not.toContain("DO_NOT_REPEAT_WORKSPACE_BOOTSTRAP");
     expect(prompt).not.toContain("Implement the requested behavior.");
     expect(prompt).not.toContain("## Project Context");
     expect(prompt).not.toContain("## Project Instructions");

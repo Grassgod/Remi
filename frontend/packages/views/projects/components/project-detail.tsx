@@ -520,11 +520,12 @@ export function ProjectDetail({
   }, [archiveProject, project, t]);
 
   const handleSaveInstructions = useCallback(
-    async (instructions: string, expectedRevision: number) => {
+    async (instructions: string, deltaInstructions: string, expectedRevision: number) => {
       if (!project) return;
       await updateProject.mutateAsync({
         id: project.id,
         instructions,
+        delta_instructions: deltaInstructions,
         expected_instructions_revision: expectedRevision,
       });
     },
@@ -758,6 +759,7 @@ export function ProjectDetail({
 
       <ProjectInstructionsSection
         instructions={project.instructions}
+        deltaInstructions={project.delta_instructions}
         revision={project.instructions_revision}
         updatedAt={project.instructions_updated_at}
         updatedByName={

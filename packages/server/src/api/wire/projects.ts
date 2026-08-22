@@ -22,6 +22,7 @@ export function projectCompatibilityResponse(project: MultiremiProject): Record<
   return {
     ...projectCompatibilitySummaryResponse(project),
     instructions: project.instructions,
+    delta_instructions: project.deltaInstructions,
     instructions_revision: project.instructionsRevision,
     instructions_updated_at: project.instructionsUpdatedAt,
     instructions_updated_by: project.instructionsUpdatedBy,
@@ -89,6 +90,7 @@ export function projectCreateCompatibilityInput(c: Context, input: CreateProject
     title: input.title,
     description: input.description,
     instructions: input.instructions,
+    deltaInstructions: input.delta_instructions ?? input.deltaInstructions,
     icon: input.icon,
     workspaceId: input.workspace_id ?? c.req.query("workspace_id") ?? "local",
     status: input.status,
@@ -113,6 +115,7 @@ export function projectUpdateCompatibilityInput(input: UpdateProjectInput): Upda
     title: input.title,
     description: input.description,
     instructions: input.instructions,
+    deltaInstructions: input.deltaInstructions ?? input.delta_instructions,
     expectedInstructionsRevision: input.expectedInstructionsRevision ?? input.expected_instructions_revision,
     icon: input.icon,
     status: input.status,
