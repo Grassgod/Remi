@@ -429,10 +429,14 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     const taskToken = await store.createTaskAccessToken(task, "owner");
     const taskRead = await app.request(`/api/agents/${agent.id}`, { headers: authHeaders(taskToken.token) });
     expect(taskRead.status).toBe(200);
-    expect(await taskRead.json()).toMatchObject({
-      mcp_config: null,
-      mcp_config_redacted: true,
+    const taskDirectoryAgent = await taskRead.json();
+    expect(taskDirectoryAgent).toMatchObject({
+      id: agent.id,
+      name: "MCP Redact",
+      workspace_id: "local",
     });
+    expect(taskDirectoryAgent).not.toHaveProperty("mcp_config");
+    expect(JSON.stringify(taskDirectoryAgent)).not.toContain("secret-command");
 
     store.updateWorkspace("local", { settings: { always_redact_env: true } });
     const alwaysRedactedAdminRead = await app.request(`/api/agents/${agent.id}`, { headers: authHeaders(adminToken.token) });

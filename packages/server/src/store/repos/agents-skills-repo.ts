@@ -634,8 +634,10 @@ export class AgentsSkillsRepo {
     );
   }
 
-  listAgents(): MultiremiAgent[] {
-    const rows = this.ctx.db.query("SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
+  listAgents(options: { includeArchived?: boolean } = {}): MultiremiAgent[] {
+    const rows = this.ctx.db.query(options.includeArchived
+      ? "SELECT * FROM multiremi_agents ORDER BY created_at ASC"
+      : "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
     return rows.map((row) => this.hydrateAgent(toAgent(row)));
   }
 

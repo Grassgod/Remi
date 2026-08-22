@@ -6,7 +6,8 @@
  */
 
 import { VERSION } from "@shared/version.js";
-import { CommandRegistry, type CommandInventoryEntry } from "./core/command-registry.js";
+import { CommandRegistry, type CommandInventoryEntry, type CommandSource } from "./core/command-registry.js";
+import { agentExtensionCommandSpecs } from "./commands/agent-extensions.js";
 import { contextCommandSpec } from "./commands/context.js";
 import { collaborationCommandSpecs } from "./commands/collaboration.js";
 import { inviteCommandSpecs } from "./commands/invite.js";
@@ -28,15 +29,23 @@ for (const spec of [
   ...repoCommandSpecs(),
   ...knowledgeCommandSpecs(),
   ...collaborationCommandSpecs(),
+  ...agentExtensionCommandSpecs(),
 ]) commandRegistry.register(spec);
 
 // Lazy-load commands to avoid importing heavy modules when not needed
-function register(name: string, description: string, loader: () => Promise<{ run: (args: string[]) => Promise<void> }>, hidden?: boolean): void {
+function register(
+  name: string,
+  description: string,
+  loader: () => Promise<{ run: (args: string[]) => Promise<void> }>,
+  hidden?: boolean,
+  source: CommandSource = { kind: "builtin" },
+): void {
   commandRegistry.register({
-    id: `legacy.${name}`,
+    id: source.kind === "plugin" ? `plugin-cli.${normalizeCommandId(source.pluginId)}.${normalizeCommandId(name)}` : `legacy.${name}`,
     path: [name],
     description,
     hidden,
+    source,
     parse: "passthrough",
     run: async (invocation) => {
       const mod = await loader();
@@ -72,7 +81,6 @@ forward("config", "Get/set agent config keys", ["config"]);
 // ── multiremi server task/issue management (client → server) ──
 forward("issue", "Manage issues on the multiremi server", ["issue"]);
 forward("attachment", "Download an attachment", ["attachment"]);
-forward("seed", "Create a default local agent", ["seed"], true);
 
 // ── Monolith-native ──
 register("doctor", "Health check (runtime, config, auth)", async () => {
@@ -117,7 +125,14 @@ function showHelp(): void {
   console.log("Commands:");
   for (const cmd of commandRegistry.topLevelCommands()) {
     if (cmd.hidden) continue;
-    console.log(`  ${cmd.path[0]!.padEnd(12)} ${cmd.description}`);
+    const source = cmd.source.kind === "plugin" ? ` [plugin:${cmd.source.pluginId}]` : "";
+    console.log(`  ${cmd.path[0]!.padEnd(12)} ${cmd.description}${source}`);
+  }
+  for (const entry of commandRegistry.inventory()) {
+    for (const alias of entry.aliases.filter((candidate) => !candidate.hidden && candidate.path.length === 1)) {
+      const replacement = alias.replacement ?? `remi ${entry.path.join(" ")}`;
+      console.log(`  ${alias.path[0]!.padEnd(12)} Deprecated alias; use ${replacement}`);
+    }
   }
   console.log("");
 }
@@ -127,25 +142,39 @@ function loadPluginCommands(): void {
   try {
     const { loadConfig } = require("@shared/config.js");
     const { PluginRegistry } = require("@daemon/agent-runtime/plugins/registry.js");
-    const builtins = new Set(commandRegistry.topLevelCommands().map((entry) => entry.path[0]!));
     // Guard: a plugin must not shadow a built-in command.
-    const safeRegister: typeof register = (name, description, loader, hidden) => {
-      if (builtins.has(name)) {
-        console.error(`[plugins] command "${name}" conflicts with a built-in command, ignored`);
-        return;
-      }
-      // Help/unknown-command dispatch may probe plugins more than once in one
-      // process. The historical table simply replaced the same entry; keep the
-      // operation idempotent now that duplicate Registry paths are rejected.
-      if (commandRegistry.hasPath([name])) return;
-      register(name, description, loader, hidden);
-    };
-    new PluginRegistry().load(loadConfig()).dispatchCli(safeRegister);
+    new PluginRegistry().load(loadConfig()).dispatchCli(registerPluginCliCommand);
   } catch (e) {
     // never block the dispatcher on plugin load issues — but say so, otherwise a
     // broken require path silently disables every plugin command forever.
     console.error(`[plugins] CLI command loading failed: ${e instanceof Error ? e.message : e}`);
   }
+}
+
+const builtinTopLevelCommands = new Set(commandRegistry.topLevelCommands().map((entry) => entry.path[0]!));
+
+export function registerPluginCliCommand(
+  name: string,
+  description: string,
+  loader: () => Promise<{ run: (args: string[]) => Promise<void> }>,
+  hidden = false,
+  source?: { kind: "plugin"; pluginId: string; pluginVersion: string },
+): boolean {
+  if (builtinTopLevelCommands.has(name)) {
+    console.error(`[plugins] command "${name}" conflicts with a built-in command, ignored`);
+    return false;
+  }
+  if (commandRegistry.hasPath([name])) return false;
+  if (!source) {
+    console.error(`[plugins] command "${name}" has no plugin source, ignored`);
+    return false;
+  }
+  register(name, description, loader, hidden, source);
+  return true;
+}
+
+function normalizeCommandId(value: string): string {
+  return value.trim().replace(/[^a-zA-Z0-9_.-]+/g, "-") || "unknown";
 }
 
 export async function dispatch(args: string[]): Promise<void> {

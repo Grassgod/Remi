@@ -187,7 +187,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 function resourceRows(value: unknown, collectionKeys: readonly string[]): Record<string, unknown>[] {
   const rows = extractRecords(value, collectionKeys);
   if (rows.length !== 1 || !isRecord(value)) return rows;
-  for (const key of ["workspace", "member", "invitation", "token", "project", "repository", "doc", "metadata"]) {
+  for (const key of [
+    "workspace", "member", "invitation", "token", "project", "repository", "doc", "metadata",
+    "agent", "squad", "skill", "plugin", "binding", "version", "inspection",
+  ]) {
     if (isRecord(value[key])) return [value[key] as Record<string, unknown>];
   }
   return rows;

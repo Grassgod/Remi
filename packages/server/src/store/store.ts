@@ -805,8 +805,8 @@ runMigrations(this.db);
     return this.agents.getAgentByRef(ref, workspaceId);
   }
 
-  listAgents(): MultiremiAgent[] {
-    return this.agents.listAgents();
+  listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[] {
+    return this.agents.listAgents(options);
   }
 
   createWorkspaceMember(input: CreateWorkspaceMemberInput): MultiremiWorkspaceMember {

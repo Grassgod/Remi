@@ -70,6 +70,10 @@ describe("remi CLI dispatcher", () => {
       "label",
       "chat",
       "task",
+      "agent",
+      "squad",
+      "skill",
+      "plugin",
       "start",
       "stop",
       "restart",
@@ -80,7 +84,6 @@ describe("remi CLI dispatcher", () => {
       "config",
       "issue",
       "attachment",
-      "seed",
       "doctor",
       "login",
       "update",
@@ -119,12 +122,14 @@ describe("remi CLI dispatcher", () => {
     try {
       await dispatch(["repo", "checkout", "--help"]);
       await dispatch(["help", "memory", "recall"]);
+      await dispatch(["--help"]);
     } finally {
       console.log = originalLog;
     }
     expect(output.join("\n")).toContain("Usage: remi repo checkout <repository-or-url> [options]");
     expect(output.join("\n")).toContain("--ref <branch-or-sha>");
     expect(output.join("\n")).toContain("Usage: remi memory search <query> [options]");
+    expect(output.join("\n")).toContain("seed         Deprecated alias; use remi agent default");
   });
 
   it("still rejects a command nobody registered", async () => {

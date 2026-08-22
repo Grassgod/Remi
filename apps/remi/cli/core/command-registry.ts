@@ -7,6 +7,10 @@ export type CliOptionType = "string" | "integer" | "boolean";
 export type CliParsedScalar = string | number | boolean;
 export type CliParsedValue = CliParsedScalar | CliParsedScalar[];
 
+export type CommandSource =
+  | { kind: "builtin" }
+  | { kind: "plugin"; pluginId: string; pluginVersion: string };
+
 export interface CliOptionSpec {
   name: string;
   aliases?: readonly string[];
@@ -57,6 +61,7 @@ export interface CommandSpec {
   positionals?: readonly CliPositionalSpec[];
   options?: readonly CliOptionSpec[];
   parse?: "strict" | "passthrough";
+  source?: CommandSource;
   run(invocation: CommandInvocation): Promise<void>;
 }
 
@@ -70,6 +75,7 @@ export interface CommandInventoryEntry {
   auth: readonly CliIdentity[];
   mutation: CliMutation;
   outputs: readonly CliOutputMode[];
+  source: CommandSource;
 }
 
 interface RegisteredPath {
@@ -151,6 +157,7 @@ export class CommandRegistry {
       auth: [...(spec.auth ?? [])],
       mutation: spec.mutation ?? "read",
       outputs: [...(spec.outputs ?? [])],
+      source: spec.source ?? { kind: "builtin" },
     }));
   }
 
@@ -170,6 +177,9 @@ export class CommandRegistry {
       }
       if ((spec.options?.length ?? 0) > 0) usageParts.push("[options]");
       const lines = [`Usage: ${usageParts.join(" ")}`, "", exact.description];
+      if (exact.source.kind === "plugin") {
+        lines.push("", `Source: plugin ${exact.source.pluginId}@${exact.source.pluginVersion}`);
+      }
       const visibleAliases = exact.aliases.filter((alias) => !alias.hidden);
       if (visibleAliases.length) {
         lines.push("", "Aliases:", ...visibleAliases.map((alias) => {
@@ -205,7 +215,8 @@ export class CommandRegistry {
       "Commands:",
       ...[...unique.values()].map((entry) => {
         const name = entry.path.slice(0, path.length + 1).join(" ");
-        return `  ${name.padEnd(width)}  ${entry.description}`;
+        const source = entry.source.kind === "plugin" ? ` [plugin:${entry.source.pluginId}]` : "";
+        return `  ${name.padEnd(width)}  ${entry.description}${source}`;
       }),
     ].join("\n");
   }

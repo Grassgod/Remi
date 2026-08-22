@@ -94,11 +94,18 @@ export interface PluginWebContext {
   pluginConfig: Record<string, unknown>;
 }
 /** The host's CLI command registrar. Matches src/cli/index.ts register(). */
+export interface CliCommandSource {
+  kind: "plugin";
+  pluginId: string;
+  pluginVersion: string;
+}
+
 export type CliRegister = (
   name: string,
   description: string,
   loader: () => Promise<{ run: (args: string[]) => Promise<void> }>,
   hidden?: boolean,
+  source?: CliCommandSource,
 ) => void;
 
 /**

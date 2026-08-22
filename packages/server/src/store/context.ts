@@ -172,7 +172,7 @@ export interface IssuesSurface {
 
 export interface AgentsSurface {
   getAgent(id: string): MultiremiAgent | null;
-  listAgents(): MultiremiAgent[];
+  listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[];
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;

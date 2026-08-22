@@ -2248,6 +2248,676 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "json",
         "jsonl"
       ]
+    },
+    "agent.list": {
+      "command": "remi agent list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "agent.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.get": {
+      "command": "remi agent get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "agent.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.create": {
+      "command": "remi agent create",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.update": {
+      "command": "remi agent update",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.archive": {
+      "command": "remi agent archive",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.restore": {
+      "command": "remi agent restore",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.restore",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.default": {
+      "command": "remi agent default",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.default",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.cancel-tasks": {
+      "command": "remi agent cancel-tasks",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.cancel-tasks",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.template.list": {
+      "command": "remi agent template list",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.template.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.template.get": {
+      "command": "remi agent template get",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.template.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.template.create": {
+      "command": "remi agent template create",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.template.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.skill.list": {
+      "command": "remi agent skill list",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.skill.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.skill.set": {
+      "command": "remi agent skill set",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.skill.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.skill.add": {
+      "command": "remi agent skill add",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.skill.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.task.list": {
+      "command": "remi agent task list",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.task.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.env.get": {
+      "command": "remi agent env get",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.env.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.env.update": {
+      "command": "remi agent env update",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.env.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.plugin.list": {
+      "command": "remi agent plugin list",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.plugin.bind": {
+      "command": "remi agent plugin bind",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.bind",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.plugin.update": {
+      "command": "remi agent plugin update",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.plugin.unbind": {
+      "command": "remi agent plugin unbind",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.unbind",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.list": {
+      "command": "remi squad list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.get": {
+      "command": "remi squad get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.create": {
+      "command": "remi squad create",
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.update": {
+      "command": "remi squad update",
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.archive": {
+      "command": "remi squad archive",
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.member.list": {
+      "command": "remi squad member list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.member.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.member.status": {
+      "command": "remi squad member status",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.member.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.member.add": {
+      "command": "remi squad member add",
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.member.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.member.update": {
+      "command": "remi squad member update",
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.member.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "squad.member.remove": {
+      "command": "remi squad member remove",
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.member.remove",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.list": {
+      "command": "remi skill list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.search": {
+      "command": "remi skill search",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.search",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.get": {
+      "command": "remi skill get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.create": {
+      "command": "remi skill create",
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.update": {
+      "command": "remi skill update",
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.archive": {
+      "command": "remi skill archive",
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.import": {
+      "command": "remi skill import",
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.import",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.file.list": {
+      "command": "remi skill file list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.file.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.file.update": {
+      "command": "remi skill file update",
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.file.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "skill.file.delete": {
+      "command": "remi skill file delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.file.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.list": {
+      "command": "remi plugin list",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.get": {
+      "command": "remi plugin get",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.update": {
+      "command": "remi plugin update",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.archive": {
+      "command": "remi plugin archive",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.restore": {
+      "command": "remi plugin restore",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.restore",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.inspect": {
+      "command": "remi plugin inspect",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.inspect",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.import": {
+      "command": "remi plugin import",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.import",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.version.list": {
+      "command": "remi plugin version list",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.version.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.version.create": {
+      "command": "remi plugin version create",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.version.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.activate": {
+      "command": "remi plugin activate",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.activate",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.rollback": {
+      "command": "remi plugin rollback",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.rollback",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.runtime.list": {
+      "command": "remi plugin runtime list",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.runtime.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.runtime.retry": {
+      "command": "remi plugin runtime retry",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.runtime.retry",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "plugin.runtime.get": {
+      "command": "remi plugin runtime get",
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.runtime.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
     }
   }
 } as const;

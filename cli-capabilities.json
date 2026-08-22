@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": "scripts/api-routes.golden.json",
-  "max_planned_routes": 256,
+  "max_planned_routes": 172,
   "domains": [
     "context",
     "workspace",
@@ -3195,6 +3195,953 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "agent": {
+      "command": "remi agent",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.list": {
+      "command": "remi agent list",
+      "aliases": [
+        "remi multiremi agent list"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "agent.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.get": {
+      "command": "remi agent get",
+      "aliases": [
+        "remi multiremi agent get"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "agent.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.create": {
+      "command": "remi agent create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.update": {
+      "command": "remi agent update",
+      "aliases": [
+        "remi agent edit",
+        "remi multiremi agent edit",
+        "remi multiremi agent update"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.archive": {
+      "command": "remi agent archive",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.archive",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.restore": {
+      "command": "remi agent restore",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.restore",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.default": {
+      "command": "remi agent default",
+      "aliases": [
+        "remi seed",
+        "remi multiremi seed"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.default",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.cancel-tasks": {
+      "command": "remi agent cancel-tasks",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.cancel-tasks",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.template.list": {
+      "command": "remi agent template list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.template.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.template.get": {
+      "command": "remi agent template get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.template.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.template.create": {
+      "command": "remi agent template create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.template.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.skill.list": {
+      "command": "remi agent skill list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.skill.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.skill.set": {
+      "command": "remi agent skill set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.skill.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.skill.add": {
+      "command": "remi agent skill add",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.skill.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.task.list": {
+      "command": "remi agent task list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.task.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.env.get": {
+      "command": "remi agent env get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.env.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.env.update": {
+      "command": "remi agent env update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.env.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.plugin.list": {
+      "command": "remi agent plugin list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.plugin.bind": {
+      "command": "remi agent plugin bind",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.bind",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.plugin.update": {
+      "command": "remi agent plugin update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.plugin.unbind": {
+      "command": "remi agent plugin unbind",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.plugin.unbind",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad": {
+      "command": "remi squad",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.list": {
+      "command": "remi squad list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.get": {
+      "command": "remi squad get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.create": {
+      "command": "remi squad create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.update": {
+      "command": "remi squad update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.archive": {
+      "command": "remi squad archive",
+      "aliases": [
+        "remi squad delete"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.archive",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.member.list": {
+      "command": "remi squad member list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.member.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.member.status": {
+      "command": "remi squad member status",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "squad.member.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.member.add": {
+      "command": "remi squad member add",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.member.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.member.update": {
+      "command": "remi squad member update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.member.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "squad.member.remove": {
+      "command": "remi squad member remove",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "squad.member.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill": {
+      "command": "remi skill",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.list": {
+      "command": "remi skill list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.search": {
+      "command": "remi skill search",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.search",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.get": {
+      "command": "remi skill get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.create": {
+      "command": "remi skill create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.update": {
+      "command": "remi skill update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.archive": {
+      "command": "remi skill archive",
+      "aliases": [
+        "remi skill delete"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.archive",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.import": {
+      "command": "remi skill import",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.import",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.file.list": {
+      "command": "remi skill file list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "skill.file.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.file.update": {
+      "command": "remi skill file update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.file.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "skill.file.delete": {
+      "command": "remi skill file delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "skill.file.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin": {
+      "command": "remi plugin",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.list": {
+      "command": "remi plugin list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.get": {
+      "command": "remi plugin get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.update": {
+      "command": "remi plugin update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.archive": {
+      "command": "remi plugin archive",
+      "aliases": [
+        "remi plugin delete"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.archive",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.restore": {
+      "command": "remi plugin restore",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.restore",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.inspect": {
+      "command": "remi plugin inspect",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.inspect",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.import": {
+      "command": "remi plugin import",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.import",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.version.list": {
+      "command": "remi plugin version list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.version.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.version.create": {
+      "command": "remi plugin version create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.version.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.activate": {
+      "command": "remi plugin activate",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.activate",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.rollback": {
+      "command": "remi plugin rollback",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.rollback",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.runtime.list": {
+      "command": "remi plugin runtime list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.runtime.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.runtime.retry": {
+      "command": "remi plugin runtime retry",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.runtime.retry",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "plugin.runtime.get": {
+      "command": "remi plugin runtime get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "plugin.runtime.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "legacy.start": {
       "command": "remi start",
       "aliases": [],
@@ -3293,16 +4240,6 @@
       "mutation": "read",
       "output": [],
       "hidden": false,
-      "migration_status": "legacy_passthrough"
-    },
-    "legacy.seed": {
-      "command": "remi seed",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": true,
       "migration_status": "legacy_passthrough"
     },
     "legacy.doctor": {
@@ -3536,6 +4473,66 @@
       "replacement": "remi task message list",
       "hidden": false
     },
+    "remi multiremi agent list": {
+      "command": "agent.list",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi agent list",
+      "hidden": false
+    },
+    "remi multiremi agent get": {
+      "command": "agent.get",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi agent get",
+      "hidden": false
+    },
+    "remi agent edit": {
+      "command": "agent.update",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi agent update",
+      "hidden": false
+    },
+    "remi multiremi agent edit": {
+      "command": "agent.update",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi agent update",
+      "hidden": false
+    },
+    "remi multiremi agent update": {
+      "command": "agent.update",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi agent update",
+      "hidden": false
+    },
+    "remi seed": {
+      "command": "agent.default",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi agent default",
+      "hidden": false
+    },
+    "remi multiremi seed": {
+      "command": "agent.default",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi agent default",
+      "hidden": true
+    },
+    "remi squad delete": {
+      "command": "squad.archive",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi squad archive",
+      "hidden": false
+    },
+    "remi skill delete": {
+      "command": "skill.archive",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi skill archive",
+      "hidden": false
+    },
+    "remi plugin delete": {
+      "command": "plugin.archive",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi plugin archive",
+      "hidden": false
+    },
     "remi multiremi": {
       "command": "legacy.multiremi",
       "deprecated_since": "0.3.0",
@@ -3600,16 +4597,13 @@
       "command": "label.delete"
     },
     "DELETE /api/multiremi/agent-plugins/:id": {
-      "planned_command": "plugin.delete",
-      "domain": "plugin"
+      "command": "plugin.archive"
     },
     "DELETE /api/multiremi/agents/:id": {
-      "planned_command": "agent.delete",
-      "domain": "agent"
+      "command": "agent.archive"
     },
     "DELETE /api/multiremi/agents/:id/plugins/:bindingId": {
-      "planned_command": "agent.delete",
-      "domain": "agent"
+      "command": "agent.plugin.unbind"
     },
     "DELETE /api/multiremi/autopilots/:id": {
       "planned_command": "autopilot.delete",
@@ -3659,16 +4653,13 @@
       "command": "project.resource.delete"
     },
     "DELETE /api/multiremi/skills/:id": {
-      "planned_command": "skill.delete",
-      "domain": "skill"
+      "command": "skill.archive"
     },
     "DELETE /api/multiremi/squads/:id": {
-      "planned_command": "squad.delete",
-      "domain": "squad"
+      "command": "squad.archive"
     },
     "DELETE /api/multiremi/squads/:id/members": {
-      "planned_command": "squad.delete",
-      "domain": "squad"
+      "command": "squad.member.remove"
     },
     "DELETE /api/multiremi/tokens/:id": {
       "command": "token.delete"
@@ -3691,20 +4682,16 @@
       "domain": "runtime"
     },
     "DELETE /api/skills/:id": {
-      "planned_command": "skill.delete",
-      "domain": "skill"
+      "command": "skill.archive"
     },
     "DELETE /api/skills/:id/files/:fileId": {
-      "planned_command": "skill.delete",
-      "domain": "skill"
+      "command": "skill.file.delete"
     },
     "DELETE /api/squads/:id": {
-      "planned_command": "squad.delete",
-      "domain": "squad"
+      "command": "squad.archive"
     },
     "DELETE /api/squads/:id/members": {
-      "planned_command": "squad.delete",
-      "domain": "squad"
+      "command": "squad.member.remove"
     },
     "DELETE /api/tokens/:id": {
       "command": "token.delete"
@@ -3751,32 +4738,25 @@
       "domain": "dashboard"
     },
     "GET /api/agent-templates": {
-      "planned_command": "agent.list",
-      "domain": "agent"
+      "command": "agent.template.list"
     },
     "GET /api/agent-templates/:slug": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.template.get"
     },
     "GET /api/agents": {
-      "planned_command": "agent.list",
-      "domain": "agent"
+      "command": "agent.list"
     },
     "GET /api/agents/:id": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.get"
     },
     "GET /api/agents/:id/env": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.env.get"
     },
     "GET /api/agents/:id/skills": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.skill.list"
     },
     "GET /api/agents/:id/tasks": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.task.list"
     },
     "GET /api/assignee-frequency": {
       "planned_command": "dashboard.list",
@@ -4090,20 +5070,16 @@
       "domain": "dashboard"
     },
     "GET /api/multiremi/agent-plugins": {
-      "planned_command": "plugin.list",
-      "domain": "plugin"
+      "command": "plugin.list"
     },
     "GET /api/multiremi/agent-plugins/:id": {
-      "planned_command": "plugin.get",
-      "domain": "plugin"
+      "command": "plugin.get"
     },
     "GET /api/multiremi/agent-plugins/:id/runtimes": {
-      "planned_command": "plugin.get",
-      "domain": "plugin"
+      "command": "plugin.runtime.list"
     },
     "GET /api/multiremi/agent-plugins/:id/versions": {
-      "planned_command": "plugin.get",
-      "domain": "plugin"
+      "command": "plugin.version.list"
     },
     "GET /api/multiremi/agent-run-counts": {
       "planned_command": "dashboard.list",
@@ -4114,32 +5090,25 @@
       "domain": "dashboard"
     },
     "GET /api/multiremi/agent-templates": {
-      "planned_command": "agent.list",
-      "domain": "agent"
+      "command": "agent.template.list"
     },
     "GET /api/multiremi/agent-templates/:slug": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.template.get"
     },
     "GET /api/multiremi/agents": {
-      "planned_command": "agent.list",
-      "domain": "agent"
+      "command": "agent.list"
     },
     "GET /api/multiremi/agents/:id": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.get"
     },
     "GET /api/multiremi/agents/:id/plugins": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.plugin.list"
     },
     "GET /api/multiremi/agents/:id/skills": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.skill.list"
     },
     "GET /api/multiremi/agents/:id/tasks": {
-      "planned_command": "agent.get",
-      "domain": "agent"
+      "command": "agent.task.list"
     },
     "GET /api/multiremi/assignee-frequency": {
       "planned_command": "dashboard.list",
@@ -4345,36 +5314,29 @@
       "domain": "runtime"
     },
     "GET /api/multiremi/runtimes/:runtimeId/agent-plugins": {
-      "planned_command": "runtime.get",
-      "domain": "runtime"
+      "command": "plugin.runtime.get"
     },
     "GET /api/multiremi/scheduler": {
       "planned_command": "autopilot.list",
       "domain": "autopilot"
     },
     "GET /api/multiremi/skills": {
-      "planned_command": "skill.list",
-      "domain": "skill"
+      "command": "skill.list"
     },
     "GET /api/multiremi/skills/:id": {
-      "planned_command": "skill.get",
-      "domain": "skill"
+      "command": "skill.get"
     },
     "GET /api/multiremi/skills/search": {
-      "planned_command": "skill.search",
-      "domain": "skill"
+      "command": "skill.search"
     },
     "GET /api/multiremi/squads": {
-      "planned_command": "squad.list",
-      "domain": "squad"
+      "command": "squad.list"
     },
     "GET /api/multiremi/squads/:id": {
-      "planned_command": "squad.get",
-      "domain": "squad"
+      "command": "squad.get"
     },
     "GET /api/multiremi/squads/:id/members": {
-      "planned_command": "squad.get",
-      "domain": "squad"
+      "command": "squad.member.list"
     },
     "GET /api/multiremi/tasks": {
       "command": "task.list"
@@ -4512,36 +5474,28 @@
       "command": "share.view"
     },
     "GET /api/skills": {
-      "planned_command": "skill.list",
-      "domain": "skill"
+      "command": "skill.list"
     },
     "GET /api/skills/:id": {
-      "planned_command": "skill.get",
-      "domain": "skill"
+      "command": "skill.get"
     },
     "GET /api/skills/:id/files": {
-      "planned_command": "skill.get",
-      "domain": "skill"
+      "command": "skill.file.list"
     },
     "GET /api/skills/search": {
-      "planned_command": "skill.search",
-      "domain": "skill"
+      "command": "skill.search"
     },
     "GET /api/squads": {
-      "planned_command": "squad.list",
-      "domain": "squad"
+      "command": "squad.list"
     },
     "GET /api/squads/:id": {
-      "planned_command": "squad.get",
-      "domain": "squad"
+      "command": "squad.get"
     },
     "GET /api/squads/:id/members": {
-      "planned_command": "squad.get",
-      "domain": "squad"
+      "command": "squad.member.list"
     },
     "GET /api/squads/:id/members/status": {
-      "planned_command": "squad.get",
-      "domain": "squad"
+      "command": "squad.member.status"
     },
     "GET /api/tasks/:id/human-requests": {
       "command": "task.request.list"
@@ -4660,16 +5614,13 @@
       "command": "member.onboarding.update"
     },
     "PATCH /api/multiremi/agent-plugins/:id": {
-      "planned_command": "plugin.update",
-      "domain": "plugin"
+      "command": "plugin.update"
     },
     "PATCH /api/multiremi/agents/:id": {
-      "planned_command": "agent.update",
-      "domain": "agent"
+      "command": "agent.update"
     },
     "PATCH /api/multiremi/agents/:id/plugins/:bindingId": {
-      "planned_command": "agent.update",
-      "domain": "agent"
+      "command": "agent.plugin.update"
     },
     "PATCH /api/multiremi/autopilots/:id": {
       "planned_command": "autopilot.update",
@@ -4705,28 +5656,23 @@
       "domain": "runtime"
     },
     "PATCH /api/multiremi/skills/:id": {
-      "planned_command": "skill.update",
-      "domain": "skill"
+      "command": "skill.update"
     },
     "PATCH /api/multiremi/squads/:id": {
-      "planned_command": "squad.update",
-      "domain": "squad"
+      "command": "squad.update"
     },
     "PATCH /api/multiremi/squads/:id/members": {
-      "planned_command": "squad.update",
-      "domain": "squad"
+      "command": "squad.member.update"
     },
     "PATCH /api/runtimes/:id": {
       "planned_command": "runtime.update",
       "domain": "runtime"
     },
     "PATCH /api/skills/:id": {
-      "planned_command": "skill.update",
-      "domain": "skill"
+      "command": "skill.update"
     },
     "PATCH /api/squads/:id/members/role": {
-      "planned_command": "squad.update",
-      "domain": "squad"
+      "command": "squad.member.update"
     },
     "PATCH /api/workspaces/:id": {
       "command": "workspace.update"
@@ -4742,28 +5688,22 @@
       "domain": "scm"
     },
     "POST /api/agents": {
-      "planned_command": "agent.create",
-      "domain": "agent"
+      "command": "agent.create"
     },
     "POST /api/agents/:id/archive": {
-      "planned_command": "agent.archive",
-      "domain": "agent"
+      "command": "agent.archive"
     },
     "POST /api/agents/:id/cancel-tasks": {
-      "planned_command": "agent.cancel_tasks",
-      "domain": "agent"
+      "command": "agent.cancel-tasks"
     },
     "POST /api/agents/:id/restore": {
-      "planned_command": "agent.restore",
-      "domain": "agent"
+      "command": "agent.restore"
     },
     "POST /api/agents/:id/skills/add": {
-      "planned_command": "agent.add",
-      "domain": "agent"
+      "command": "agent.skill.add"
     },
     "POST /api/agents/from-template": {
-      "planned_command": "agent.from_template",
-      "domain": "agent"
+      "command": "agent.template.create"
     },
     "POST /api/autopilots": {
       "planned_command": "autopilot.create",
@@ -5125,48 +6065,37 @@
       "command": "member.onboarding.runtime-bootstrap"
     },
     "POST /api/multiremi/agent-plugins/:id/activate": {
-      "planned_command": "plugin.activate",
-      "domain": "plugin"
+      "command": "plugin.activate"
     },
     "POST /api/multiremi/agent-plugins/:id/restore": {
-      "planned_command": "plugin.restore",
-      "domain": "plugin"
+      "command": "plugin.restore"
     },
     "POST /api/multiremi/agent-plugins/:id/rollback": {
-      "planned_command": "plugin.rollback",
-      "domain": "plugin"
+      "command": "plugin.rollback"
     },
     "POST /api/multiremi/agent-plugins/:id/runtimes/retry": {
-      "planned_command": "plugin.retry",
-      "domain": "plugin"
+      "command": "plugin.runtime.retry"
     },
     "POST /api/multiremi/agent-plugins/:id/versions": {
-      "planned_command": "plugin.versions",
-      "domain": "plugin"
+      "command": "plugin.version.create"
     },
     "POST /api/multiremi/agent-plugins/import": {
-      "planned_command": "plugin.import",
-      "domain": "plugin"
+      "command": "plugin.import"
     },
     "POST /api/multiremi/agent-plugins/inspect": {
-      "planned_command": "plugin.inspect",
-      "domain": "plugin"
+      "command": "plugin.inspect"
     },
     "POST /api/multiremi/agents": {
-      "planned_command": "agent.create",
-      "domain": "agent"
+      "command": "agent.create"
     },
     "POST /api/multiremi/agents/:id/plugins": {
-      "planned_command": "agent.plugins",
-      "domain": "agent"
+      "command": "agent.plugin.bind"
     },
     "POST /api/multiremi/agents/default": {
-      "planned_command": "agent.default",
-      "domain": "agent"
+      "command": "agent.default"
     },
     "POST /api/multiremi/agents/from-template": {
-      "planned_command": "agent.from_template",
-      "domain": "agent"
+      "command": "agent.template.create"
     },
     "POST /api/multiremi/attachments": {
       "command": "issue.attachment.upload"
@@ -5313,20 +6242,16 @@
       "domain": "runtime"
     },
     "POST /api/multiremi/skills": {
-      "planned_command": "skill.create",
-      "domain": "skill"
+      "command": "skill.create"
     },
     "POST /api/multiremi/skills/import": {
-      "planned_command": "skill.import",
-      "domain": "skill"
+      "command": "skill.import"
     },
     "POST /api/multiremi/squads": {
-      "planned_command": "squad.create",
-      "domain": "squad"
+      "command": "squad.create"
     },
     "POST /api/multiremi/squads/:id/members": {
-      "planned_command": "squad.members",
-      "domain": "squad"
+      "command": "squad.member.add"
     },
     "POST /api/multiremi/tasks": {
       "command": "task.create"
@@ -5405,20 +6330,16 @@
       "domain": "runtime"
     },
     "POST /api/skills": {
-      "planned_command": "skill.create",
-      "domain": "skill"
+      "command": "skill.create"
     },
     "POST /api/skills/import": {
-      "planned_command": "skill.import",
-      "domain": "skill"
+      "command": "skill.import"
     },
     "POST /api/squads": {
-      "planned_command": "squad.create",
-      "domain": "squad"
+      "command": "squad.create"
     },
     "POST /api/squads/:id/members": {
-      "planned_command": "squad.members",
-      "domain": "squad"
+      "command": "squad.member.add"
     },
     "POST /api/tasks/:id/cancel": {
       "command": "task.cancel"
@@ -5508,16 +6429,13 @@
       "domain": "context"
     },
     "PUT /api/agents/:id": {
-      "planned_command": "agent.update",
-      "domain": "agent"
+      "command": "agent.update"
     },
     "PUT /api/agents/:id/env": {
-      "planned_command": "agent.update",
-      "domain": "agent"
+      "command": "agent.env.update"
     },
     "PUT /api/agents/:id/skills": {
-      "planned_command": "agent.update",
-      "domain": "agent"
+      "command": "agent.skill.set"
     },
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret": {
       "planned_command": "autopilot.update",
@@ -5550,8 +6468,7 @@
       "command": "label.update"
     },
     "PUT /api/multiremi/agents/:id/skills": {
-      "planned_command": "agent.update",
-      "domain": "agent"
+      "command": "agent.skill.set"
     },
     "PUT /api/multiremi/comments/:id": {
       "command": "comment.update"
@@ -5575,8 +6492,7 @@
       "domain": "runtime"
     },
     "PUT /api/multiremi/skills/:id": {
-      "planned_command": "skill.update",
-      "domain": "skill"
+      "command": "skill.update"
     },
     "PUT /api/notification-preferences": {
       "planned_command": "notification.update",
@@ -5600,16 +6516,13 @@
       "domain": "runtime"
     },
     "PUT /api/skills/:id": {
-      "planned_command": "skill.update",
-      "domain": "skill"
+      "command": "skill.update"
     },
     "PUT /api/skills/:id/files": {
-      "planned_command": "skill.update",
-      "domain": "skill"
+      "command": "skill.file.update"
     },
     "PUT /api/squads/:id": {
-      "planned_command": "squad.update",
-      "domain": "squad"
+      "command": "squad.update"
     },
     "PUT /api/workspaces/:id": {
       "command": "workspace.update"
