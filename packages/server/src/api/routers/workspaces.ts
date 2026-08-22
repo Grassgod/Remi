@@ -83,12 +83,18 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    if (hasOwn(body, "repos")) {
+      return c.json({ error: "repositories can only be changed through the workspace repository API" }, 400);
+    }
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
   app.patch("/api/workspaces/:id", async (c) => {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    if (hasOwn(body, "repos")) {
+      return c.json({ error: "repositories can only be changed through the workspace repository API" }, 400);
+    }
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
   app.get("/api/workspaces/:id/repos", async (c) => {
@@ -486,6 +492,10 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     session_id: c.req.param("sessionId"),
   }));
   app.delete("/api/workspaces/:id/lark/installations/:installationId", (c) => c.body(null, 204));
+}
+
+function hasOwn(value: unknown, key: string): boolean {
+  return typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function sshMeshErrorResponse(c: Context, error: unknown): Response {

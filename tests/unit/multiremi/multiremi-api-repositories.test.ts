@@ -19,6 +19,63 @@ const inspectGitRemoteRepository = async (url: string) => {
 };
 
 describe("Multiremi API - workspace repositories", () => {
+  it("rejects repository writes through generic workspace update routes", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspace(workspace.id, {
+      repos: [{ id: "repo_existing", name: "existing", url: "git@github.com:acme/existing.git", source: "github" }],
+    });
+    const app = createMultiremiApp({ store });
+
+    for (const method of ["PUT", "PATCH"] as const) {
+      const response = await app.request(`/api/workspaces/${workspace.id}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Bypassed update", repos: [] }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "repositories can only be changed through the workspace repository API",
+      });
+      expect(store.getWorkspace(workspace.id)).toMatchObject({
+        name: workspace.name,
+        repos: [expect.objectContaining({ id: "repo_existing" })],
+      });
+    }
+  });
+
+  it("repairs default connection bindings when a prior repository write was interrupted", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    const connection = store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+    store.updateWorkspace(workspace.id, {
+      repos: [{
+        id: "repo_interrupted",
+        name: "interrupted",
+        url: "git@github.com:acme/interrupted.git",
+        source: "github",
+        default_branch: "main",
+      }],
+    });
+    expect(store.listScmRepositoryBindings({ connectionId: connection.id })).toEqual([]);
+
+    const app = createMultiremiApp({ store, inspectGitRemoteRepository });
+    const response = await app.request(`/api/workspaces/${workspace.id}/repos`);
+
+    expect(response.status).toBe(200);
+    expect(store.listScmRepositoryBindings({ connectionId: connection.id })).toContainEqual(
+      expect.objectContaining({
+        repositoryId: "repo_interrupted",
+        assignmentOrigin: "default",
+      }),
+    );
+  });
+
   it("inspects, imports, updates, lists, and removes Git repositories", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

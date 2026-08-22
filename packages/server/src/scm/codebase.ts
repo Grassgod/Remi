@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { codebaseAuthHeaders } from "./access-token.js";
 import { CODEBASE_SCM_CAPABILITIES } from "./capabilities.js";
 import { appendQuery, lowerCaseHeaders, scmRequestJson } from "./http.js";
 import { stableJsonHash } from "./reconcile.js";
@@ -557,13 +558,6 @@ function normalizeCodebaseChangeState(value: string): "open" | "closed" | "merge
   if (state.includes("merge")) return "merged";
   if (state === "closed" || state === "close" || state === "declined") return "closed";
   return "open";
-}
-
-function codebaseAuthHeaders(token: string | undefined): Record<string, string> {
-  if (!token) return {};
-  if (token.startsWith("jwt:")) return { "X-Code-User-JWT": token.slice(4) };
-  if (token.startsWith("bearer:")) return { Authorization: `Bearer ${token.slice(7)}` };
-  return { Authorization: `Bearer ${token}` };
 }
 
 function validWebhookCandidate(candidate: ScmWebhookCandidate): boolean {

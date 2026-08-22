@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
+import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { readyArchiveBinding } from "./helpers.js";
 
@@ -278,6 +279,70 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "PRAGMA table_info(multiremi_daemon_ssh_mesh_states)",
     ).all().map((row: { name: string }) => row.name);
     expect(sshMeshStateColumns).toEqual(expect.arrayContaining(["node_kind", "name"]));
+  });
+
+  it("does not replay the one-time SCM default backfill on Postgres restart", () => {
+    const workspaceId = freshWorkspace();
+    const connection = store.createScmConnection({
+      workspaceId,
+      name: "Explicit selected GitHub",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+    });
+    expect(connection).toMatchObject({ repositoryScope: "selected", isDefault: false });
+
+    runMigrations(db);
+
+    expect(store.getScmConnection(connection.id)).toMatchObject({
+      repositoryScope: "selected",
+      isDefault: false,
+    });
+  });
+
+  it("normalizes legacy SCM base URL paths and keeps one default per origin on Postgres", () => {
+    const workspaceId = freshWorkspace();
+    db.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260822_scm_connection_origins"],
+    );
+    for (const [id, name, baseUrl, createdAt] of [
+      [`scm_pg_origin_first_${wsCounter}`, "First origin", "https://github.com/acme/first", "2026-08-20T00:00:00.000Z"],
+      [`scm_pg_origin_second_${wsCounter}`, "Second origin", "https://github.com/acme/second/", "2026-08-21T00:00:00.000Z"],
+    ] as const) {
+      db.run(
+        `INSERT INTO multiremi_scm_connections (
+          id, workspace_id, name, provider, mode, base_url, api_base_url,
+          repository_scope, is_default, created_at, updated_at
+         ) VALUES (?, ?, ?, 'github', 'poll', ?, 'https://api.github.com', 'all', 1, ?, ?)`,
+        [id, workspaceId, name, baseUrl, createdAt, createdAt],
+      );
+    }
+
+    runMigrations(db);
+
+    expect(db.query(
+      `SELECT base_url, repository_scope, is_default
+       FROM multiremi_scm_connections
+       WHERE workspace_id = ? AND provider = 'github'
+       ORDER BY created_at, id`,
+    ).all(workspaceId)).toEqual([
+      { base_url: "https://github.com", repository_scope: "all", is_default: 1 },
+      { base_url: "https://github.com", repository_scope: "selected", is_default: 0 },
+    ]);
+
+    db.run(
+      `UPDATE multiremi_scm_connections
+       SET repository_scope = 'selected', is_default = 0
+       WHERE workspace_id = ? AND provider = 'github' AND is_default = 1`,
+      [workspaceId],
+    );
+    runMigrations(db);
+    const remainingDefaults = db.query(
+      `SELECT COUNT(*) AS count FROM multiremi_scm_connections
+       WHERE workspace_id = ? AND provider = 'github' AND is_default = 1`,
+    ).get(workspaceId) as { count: number | string };
+    expect(Number(remainingDefaults.count)).toBe(0);
   });
 
   it("registers daemon runtimes with models under one lifecycle transaction (PG)", () => {

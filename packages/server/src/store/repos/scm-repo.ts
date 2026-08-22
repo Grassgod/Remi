@@ -4,6 +4,10 @@ import { cleanOptionalString, nullableString, parseJson, toJson } from "@multire
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
 import { assertScmRepositoryMatchesConnection } from "@multiremi/scm/repository-url.js";
 import type {
+  ScmSnapshotEventFactory,
+  ScmSnapshotEventWriteResult,
+} from "@multiremi/scm/types.js";
+import type {
   AdvanceScmEntitySnapshotResult,
   ClaimScmSyncStreamInput,
   CreateScmConnectionInput,
@@ -47,6 +51,12 @@ export interface RecordScmCanonicalEventResult {
   event: MultiremiScmCanonicalEvent;
   created: boolean;
   evidenceCreated: boolean;
+}
+
+interface LockedSnapshotAdvanceResult {
+  advance: AdvanceScmEntitySnapshotResult;
+  projection: { changeRequestId: string; issueIds: string[] } | null;
+  workspaceId: string;
 }
 
 export class ScmRepo {
@@ -211,7 +221,8 @@ export class ScmRepo {
     const resetVerification = replaceAccessToken
       || clearAccessToken
       || baseUrl !== current.baseUrl
-      || apiBaseUrl !== current.apiBaseUrl;
+      || apiBaseUrl !== current.apiBaseUrl
+      || repositoryScope !== current.repositoryScope;
     const now = nowIso();
     this.ctx.db.transaction(() => {
       this.lockConnection(id);
@@ -247,6 +258,8 @@ export class ScmRepo {
           verified_repository_total = CASE WHEN ? = 1 THEN 0 ELSE verified_repository_total END,
           verification_error_code = CASE WHEN ? = 1 THEN NULL ELSE verification_error_code END,
           verification_error = CASE WHEN ? = 1 THEN NULL ELSE verification_error END,
+          verification_generation = verification_generation + CASE WHEN ? = 1 THEN 1 ELSE 0 END,
+          verification_run_id = CASE WHEN ? = 1 THEN NULL ELSE verification_run_id END,
           updated_at = ?
          WHERE id = ?`,
         [
@@ -272,7 +285,7 @@ export class ScmRepo {
           replaceWebhookSecret ? 1 : 0,
           secretHint(webhookSecret),
           clearWebhookSecret ? 1 : 0,
-          ...Array.from({ length: 7 }, () => resetVerification ? 1 : 0),
+          ...Array.from({ length: 9 }, () => resetVerification ? 1 : 0),
           now,
           id,
         ],
@@ -390,9 +403,21 @@ export class ScmRepo {
       if (input.transfer !== true) {
         throw new Error("Repository is already bound to another SCM connection; set transfer=true to move it atomically");
       }
-      this.deleteRepositorySyncStateLocked(existing.connectionId, repositoryId);
+      this.transferRepositorySyncStateLocked(existing.connectionId, input.connectionId, repositoryId);
     }
     const coordinates = repositoryCoordinatesFromUrl(repositoryUrl);
+    const externalId = cleanOptionalString(input.externalId);
+    const owner = cleanOptionalString(input.owner) ?? coordinates.owner;
+    const name = requiredString(input.name, "repository name");
+    const defaultBranch = cleanOptionalString(input.defaultBranch);
+    const enabled = input.enabled !== false;
+    const verificationChanged = !existing
+      || existing.connectionId !== input.connectionId
+      || existing.repositoryUrl !== repositoryUrl
+      || existing.externalId !== externalId
+      || existing.owner !== owner
+      || existing.name !== name
+      || existing.enabled !== enabled;
     const bindingId = existing?.id ?? createId("srb");
     const now = nowIso();
     const effectiveOrigin = assignmentOrigin === "explicit" || existing?.assignmentOrigin === "explicit"
@@ -419,16 +444,17 @@ export class ScmRepo {
         input.connectionId,
         repositoryId,
         repositoryUrl,
-        cleanOptionalString(input.externalId),
-        cleanOptionalString(input.owner) ?? coordinates.owner,
-        requiredString(input.name, "repository name"),
-        cleanOptionalString(input.defaultBranch),
-        input.enabled === false ? 0 : 1,
+        externalId,
+        owner,
+        name,
+        defaultBranch,
+        enabled ? 1 : 0,
         effectiveOrigin,
         existing?.createdAt ?? now,
         now,
       ],
     );
+    if (verificationChanged) this.invalidateConnectionVerificationLocked(input.connectionId);
     return this.getRepositoryBinding(input.connectionId, repositoryId)!;
   }
 
@@ -457,20 +483,25 @@ export class ScmRepo {
     })();
   }
 
-  markConnectionVerificationStarted(id: string): MultiremiScmConnection {
+  markConnectionVerificationStarted(id: string): { connection: MultiremiScmConnection; runId: string } {
+    const runId = createId("scv");
     const row = this.ctx.db.query(
       `UPDATE multiremi_scm_connections
-       SET verification_status = 'verifying', verification_error_code = NULL, verification_error = NULL
+       SET verification_status = 'verifying', verified_at = NULL, verification_identity = NULL,
+           verified_repository_count = 0, verified_repository_total = 0,
+           verification_error_code = NULL, verification_error = NULL,
+           verification_generation = verification_generation + 1,
+           verification_run_id = ?, updated_at = ?
        WHERE id = ? RETURNING *`,
-    ).get(id) as Row | null;
+    ).get(runId, nowIso(), id) as Row | null;
     if (!row) throw new Error(`SCM connection not found: ${id}`);
-    return toScmConnection(row);
+    return { connection: toScmConnection(row), runId };
   }
 
   recordConnectionVerification(
     id: string,
     result: MultiremiScmVerificationResult,
-    expectedUpdatedAt?: string,
+    runId: string,
   ): MultiremiScmConnection {
     const repositoryTotal = normalizeVerificationCount(result.repositoryTotal, "verification repository total");
     const repositoryCount = normalizeVerificationCount(result.repositoryCount, "verified repository count");
@@ -479,7 +510,6 @@ export class ScmRepo {
     if (status === "unverified" || status === "verifying") {
       throw new Error("completed SCM verification must have a terminal status");
     }
-    const expectedClause = expectedUpdatedAt ? " AND updated_at = ?" : "";
     const args: unknown[] = [
       status,
       normalizeIsoTimestamp(result.verifiedAt, "SCM verification time"),
@@ -488,15 +518,17 @@ export class ScmRepo {
       repositoryTotal,
       cleanOptionalString(result.errorCode),
       cleanVerificationError(result.error),
+      nowIso(),
       id,
+      requiredString(runId, "SCM verification run ID"),
     ];
-    if (expectedUpdatedAt) args.push(expectedUpdatedAt);
     const row = this.ctx.db.query(
       `UPDATE multiremi_scm_connections SET
         verification_status = ?, verified_at = ?, verification_identity = ?,
         verified_repository_count = ?, verified_repository_total = ?,
-        verification_error_code = ?, verification_error = ?
-       WHERE id = ?${expectedClause} RETURNING *`,
+        verification_error_code = ?, verification_error = ?,
+        verification_run_id = NULL, updated_at = ?
+       WHERE id = ? AND verification_run_id = ? RETURNING *`,
     ).get(...args) as Row | null;
     if (!row) {
       if (!this.getConnection(id)) throw new Error(`SCM connection not found: ${id}`);
@@ -672,88 +704,118 @@ export class ScmRepo {
   }
 
   advanceEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult {
+    const written = this.ctx.db.transaction(() => this.advanceEntitySnapshotLocked(input))();
+    this.emitSnapshotProjection(written);
+    return written.advance;
+  }
+
+  advanceEntitySnapshotWithEvents(
+    input: UpsertScmEntitySnapshotInput,
+    createEvents: ScmSnapshotEventFactory,
+  ): ScmSnapshotEventWriteResult {
+    const written = this.ctx.db.transaction(() => {
+      const snapshot = this.advanceEntitySnapshotLocked(input);
+      const events = createEvents(snapshot.advance).map((event) => this.recordCanonicalEventLocked(event));
+      return { snapshot, events };
+    })();
+    this.emitSnapshotProjection(written.snapshot);
+    for (const result of written.events) this.processPendingMergeEffects(result.event);
+    return { advance: written.snapshot.advance, events: written.events };
+  }
+
+  private advanceEntitySnapshotLocked(input: UpsertScmEntitySnapshotInput): LockedSnapshotAdvanceResult {
     const now = nowIso();
     const observedAt = normalizeIsoTimestamp(input.observedAt ?? now, "snapshot observation time");
     const revisionAt = normalizeIsoTimestamp(input.revisionAt ?? observedAt, "snapshot revision time");
     const contentHash = requiredString(input.contentHash, "snapshot content hash");
     const revision = requiredString(input.revision ?? cleanOptionalString(input.version) ?? contentHash, "snapshot revision");
     let projected: { changeRequestId: string; issueIds: string[] } | null = null;
-    let projectedWorkspaceId: string | null = null;
-    const result = this.ctx.db.transaction(() => {
-      const { connection, binding } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
-      projectedWorkspaceId = connection.workspaceId;
-      const values = [
-        input.connectionId,
-        input.repositoryId,
-        input.entityType,
-        requiredString(input.externalId, "external entity ID"),
-        cleanOptionalString(input.version),
-        revisionAt,
-        revision,
-        contentHash,
-        toJson(input.payload),
-        observedAt,
-        now,
-        now,
-      ];
-      const inserted = this.ctx.db.query(
-        `INSERT INTO multiremi_scm_entity_snapshots (
-          connection_id, repository_id, entity_type, external_id, version, revision_at,
-          revision, content_hash, payload, observed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(connection_id, repository_id, entity_type, external_id) DO NOTHING
-        RETURNING *`,
-      ).get(...values) as Row | null;
-      if (inserted) {
-        if (input.entityType === "change_request") {
-          projected = this.upsertChangeRequestProjectionLocked(connection, binding, input.externalId, input.payload, now);
-        }
-        return { applied: true, previous: null, snapshot: toEntitySnapshot(inserted) };
-      }
-
-      // A no-op UPDATE is portable across SQLite/Postgres and holds the entity
-      // row lock until this transaction commits. The returned row is therefore
-      // the exact predecessor used to derive a state transition.
-      const locked = this.ctx.db.query(
-        `UPDATE multiremi_scm_entity_snapshots SET updated_at = updated_at
-         WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
-         RETURNING *`,
-      ).get(input.connectionId, input.repositoryId, input.entityType, input.externalId) as Row | null;
-      if (!locked) throw new Error("SCM snapshot compare-and-set could not lock the current row");
-      const previous = toEntitySnapshot(locked);
-      if (
-        revisionAt < previous.revisionAt
-        || (revisionAt === previous.revisionAt && revision <= previous.revision)
-      ) {
-        return { applied: false, previous, snapshot: previous };
-      }
-      const updated = this.ctx.db.query(
-        `UPDATE multiremi_scm_entity_snapshots SET
-          version = ?, revision_at = ?, revision = ?, content_hash = ?, payload = ?,
-          observed_at = ?, updated_at = ?
-         WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
-         RETURNING *`,
-      ).get(
-        cleanOptionalString(input.version),
-        revisionAt,
-        revision,
-        contentHash,
-        toJson(input.payload),
-        observedAt,
-        now,
-        input.connectionId,
-        input.repositoryId,
-        input.entityType,
-        input.externalId,
-      ) as Row | null;
-      if (!updated) throw new Error("SCM snapshot compare-and-set lost its locked row");
+    const { connection, binding } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
+    const values = [
+      input.connectionId,
+      input.repositoryId,
+      input.entityType,
+      requiredString(input.externalId, "external entity ID"),
+      cleanOptionalString(input.version),
+      revisionAt,
+      revision,
+      contentHash,
+      toJson(input.payload),
+      observedAt,
+      now,
+      now,
+    ];
+    const inserted = this.ctx.db.query(
+      `INSERT INTO multiremi_scm_entity_snapshots (
+        connection_id, repository_id, entity_type, external_id, version, revision_at,
+        revision, content_hash, payload, observed_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(connection_id, repository_id, entity_type, external_id) DO NOTHING
+      RETURNING *`,
+    ).get(...values) as Row | null;
+    if (inserted) {
       if (input.entityType === "change_request") {
         projected = this.upsertChangeRequestProjectionLocked(connection, binding, input.externalId, input.payload, now);
       }
-      return { applied: true, previous, snapshot: toEntitySnapshot(updated) };
-    })();
-    if (projected && projectedWorkspaceId) this.emitChangeRequestUpdated(projectedWorkspaceId, projected);
-    return result;
+      return {
+        advance: { applied: true, previous: null, snapshot: toEntitySnapshot(inserted) },
+        projection: projected,
+        workspaceId: connection.workspaceId,
+      };
+    }
+
+    // A no-op UPDATE is portable across SQLite/Postgres and holds the entity
+    // row lock until this transaction commits. The returned row is therefore
+    // the exact predecessor used to derive a state transition.
+    const locked = this.ctx.db.query(
+      `UPDATE multiremi_scm_entity_snapshots SET updated_at = updated_at
+       WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
+       RETURNING *`,
+    ).get(input.connectionId, input.repositoryId, input.entityType, input.externalId) as Row | null;
+    if (!locked) throw new Error("SCM snapshot compare-and-set could not lock the current row");
+    const previous = toEntitySnapshot(locked);
+    if (
+      revisionAt < previous.revisionAt
+      || (revisionAt === previous.revisionAt && revision <= previous.revision)
+    ) {
+      return {
+        advance: { applied: false, previous, snapshot: previous },
+        projection: null,
+        workspaceId: connection.workspaceId,
+      };
+    }
+    const updated = this.ctx.db.query(
+      `UPDATE multiremi_scm_entity_snapshots SET
+        version = ?, revision_at = ?, revision = ?, content_hash = ?, payload = ?,
+        observed_at = ?, updated_at = ?
+       WHERE connection_id = ? AND repository_id = ? AND entity_type = ? AND external_id = ?
+       RETURNING *`,
+    ).get(
+      cleanOptionalString(input.version),
+      revisionAt,
+      revision,
+      contentHash,
+      toJson(input.payload),
+      observedAt,
+      now,
+      input.connectionId,
+      input.repositoryId,
+      input.entityType,
+      input.externalId,
+    ) as Row | null;
+    if (!updated) throw new Error("SCM snapshot compare-and-set lost its locked row");
+    if (input.entityType === "change_request") {
+      projected = this.upsertChangeRequestProjectionLocked(connection, binding, input.externalId, input.payload, now);
+    }
+    return {
+      advance: { applied: true, previous, snapshot: toEntitySnapshot(updated) },
+      projection: projected,
+      workspaceId: connection.workspaceId,
+    };
+  }
+
+  private emitSnapshotProjection(result: LockedSnapshotAdvanceResult): void {
+    if (result.projection) this.emitChangeRequestUpdated(result.workspaceId, result.projection);
   }
 
   getChangeRequest(id: string): MultiremiScmChangeRequest | null {
@@ -826,79 +888,79 @@ export class ScmRepo {
   }
 
   recordCanonicalEvent(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {
+    const result = this.ctx.db.transaction(() => this.recordCanonicalEventLocked(input))();
+    this.processPendingMergeEffects(result.event);
+    return result;
+  }
+
+  private recordCanonicalEventLocked(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {
     const logicalKey = requiredString(input.logicalKey, "SCM logical event key");
     const evidenceDedupeKey = requiredString(input.evidence.dedupeKey, "SCM evidence dedupe key");
     const observedAt = input.observedAt ?? nowIso();
     const eventId = createId("sce");
     const evidenceId = createId("scv");
-    let created = false;
-    let evidenceCreated = false;
-
-    const event = this.ctx.db.transaction(() => {
-      const { connection } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
-      if (connection.workspaceId !== input.workspaceId) throw new Error("SCM connection belongs to another workspace");
-      const inserted = this.ctx.db.run(
-        `INSERT OR IGNORE INTO multiremi_scm_events (
-          id, workspace_id, connection_id, repository_id, provider, type, subject_type,
-          subject_id, logical_key, primary_source, fidelity, occurred_at, observed_at,
-          payload, status, attempt_count, available_at, lease_until, last_error, processed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, ?)`,
-        [
-          eventId,
-          input.workspaceId,
-          input.connectionId,
-          input.repositoryId,
-          connection.provider,
-          input.type,
-          requiredString(input.subjectType, "SCM event subject type"),
-          requiredString(input.subjectId, "SCM event subject ID"),
-          logicalKey,
-          input.evidence.source,
-          input.fidelity,
-          input.occurredAt ?? null,
-          observedAt,
-          toJson(input.payload),
-          observedAt,
-          observedAt,
-        ],
+    const { connection } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
+    if (connection.workspaceId !== input.workspaceId) throw new Error("SCM connection belongs to another workspace");
+    const inserted = this.ctx.db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_events (
+        id, workspace_id, connection_id, repository_id, provider, type, subject_type,
+        subject_id, logical_key, primary_source, fidelity, occurred_at, observed_at,
+        payload, status, attempt_count, available_at, lease_until, last_error, processed_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, ?)`,
+      [
+        eventId,
+        input.workspaceId,
+        input.connectionId,
+        input.repositoryId,
+        connection.provider,
+        input.type,
+        requiredString(input.subjectType, "SCM event subject type"),
+        requiredString(input.subjectId, "SCM event subject ID"),
+        logicalKey,
+        input.evidence.source,
+        input.fidelity,
+        input.occurredAt ?? null,
+        observedAt,
+        toJson(input.payload),
+        observedAt,
+        observedAt,
+      ],
+    );
+    const created = inserted.changes > 0;
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_scm_events WHERE connection_id = ? AND logical_key = ?",
+    ).get(input.connectionId, logicalKey) as Row;
+    const canonical = toCanonicalEvent(row);
+    if (!created && input.fidelity === "exact" && canonical.fidelity === "inferred") {
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_events
+         SET fidelity = 'exact', occurred_at = COALESCE(?, occurred_at), payload = ?
+         WHERE id = ?`,
+        [input.occurredAt ?? null, toJson(input.payload), canonical.id],
       );
-      created = inserted.changes > 0;
-      const row = this.ctx.db.query(
-        "SELECT * FROM multiremi_scm_events WHERE connection_id = ? AND logical_key = ?",
-      ).get(input.connectionId, logicalKey) as Row;
-      const canonical = toCanonicalEvent(row);
-      if (!created && input.fidelity === "exact" && canonical.fidelity === "inferred") {
-        this.ctx.db.run(
-          `UPDATE multiremi_scm_events
-           SET fidelity = 'exact', occurred_at = COALESCE(?, occurred_at), payload = ?
-           WHERE id = ?`,
-          [input.occurredAt ?? null, toJson(input.payload), canonical.id],
-        );
-      }
-      const evidenceInsert = this.ctx.db.run(
-        `INSERT OR IGNORE INTO multiremi_scm_event_evidence (
-          id, event_id, source, provider_event_id, dedupe_key, payload, raw_body, observed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          evidenceId,
-          canonical.id,
-          input.evidence.source,
-          cleanOptionalString(input.evidence.providerEventId),
-          evidenceDedupeKey,
-          input.evidence.payload == null ? null : toJson(input.evidence.payload),
-          input.evidence.rawBody ?? null,
-          observedAt,
-          nowIso(),
-        ],
-      );
-      evidenceCreated = evidenceInsert.changes > 0;
-      if (created) {
-        this.ensureEventDeliveriesInitialized(canonical, observedAt);
-        this.scheduleLinkedIssueMergeEffectsLocked(canonical);
-      }
-      return this.getCanonicalEvent(canonical.id)!;
-    })();
-    this.processPendingMergeEffects(event);
+    }
+    const evidenceInsert = this.ctx.db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_event_evidence (
+        id, event_id, source, provider_event_id, dedupe_key, payload, raw_body, observed_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        evidenceId,
+        canonical.id,
+        input.evidence.source,
+        cleanOptionalString(input.evidence.providerEventId),
+        evidenceDedupeKey,
+        input.evidence.payload == null ? null : toJson(input.evidence.payload),
+        input.evidence.rawBody ?? null,
+        observedAt,
+        nowIso(),
+      ],
+    );
+    const evidenceCreated = evidenceInsert.changes > 0;
+    if (created) {
+      this.ensureEventDeliveriesInitialized(canonical, observedAt);
+      this.scheduleLinkedIssueMergeEffectsLocked(canonical);
+    }
+    const event = this.getCanonicalEvent(canonical.id)!;
     return { event, created, evidenceCreated };
   }
 
@@ -1191,12 +1253,16 @@ export class ScmRepo {
       ).get(connection.workspaceId, repositoryId) as Row | null;
       if (existingRow) {
         if (String(existingRow.connection_id) === connectionId) {
+          const current = this.getRepositoryBinding(connectionId, repositoryId);
           this.ctx.db.run(
             `UPDATE multiremi_scm_repository_bindings
              SET repository_url = ?, name = ?, default_branch = ?, updated_at = ?
              WHERE workspace_id = ? AND repository_id = ?`,
             [repository.url, repository.name, repository.defaultBranch, nowIso(), connection.workspaceId, repositoryId],
           );
+          if (current && (current.repositoryUrl !== repository.url || current.name !== repository.name)) {
+            this.invalidateConnectionVerificationLocked(connectionId);
+          }
         }
         continue;
       }
@@ -1218,7 +1284,7 @@ export class ScmRepo {
     const bindings = this.listRepositoryBindings({ connectionId: previousId })
       .filter((binding) => binding.assignmentOrigin === "default");
     for (const binding of bindings) {
-      this.deleteRepositorySyncStateLocked(previousId, binding.repositoryId);
+      this.transferRepositorySyncStateLocked(previousId, nextId, binding.repositoryId);
       this.ctx.db.run(
         `UPDATE multiremi_scm_repository_bindings
          SET connection_id = ?, updated_at = ?
@@ -1252,6 +1318,43 @@ export class ScmRepo {
     this.ctx.db.run(
       "DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ? AND repository_id = ?",
       [connectionId, repositoryId],
+    );
+    this.invalidateConnectionVerificationLocked(connectionId);
+  }
+
+  private transferRepositorySyncStateLocked(
+    previousConnectionId: string,
+    nextConnectionId: string,
+    repositoryId: string,
+  ): void {
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ? AND repository_id = ?",
+      [previousConnectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ? AND repository_id = ?",
+      [previousConnectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      `UPDATE multiremi_scm_change_requests
+       SET connection_id = ?, updated_at = ?
+       WHERE connection_id = ? AND repository_id = ?`,
+      [nextConnectionId, nowIso(), previousConnectionId, repositoryId],
+    );
+    this.invalidateConnectionVerificationLocked(previousConnectionId);
+    this.invalidateConnectionVerificationLocked(nextConnectionId);
+  }
+
+  private invalidateConnectionVerificationLocked(connectionId: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_scm_connections SET
+         verification_status = 'unverified', verified_at = NULL, verification_identity = NULL,
+         verified_repository_count = 0, verified_repository_total = 0,
+         verification_error_code = NULL, verification_error = NULL,
+         verification_generation = verification_generation + 1,
+         verification_run_id = NULL, updated_at = ?
+       WHERE id = ?`,
+      [nowIso(), connectionId],
     );
   }
 
@@ -1774,7 +1877,12 @@ function normalizeVerificationCount(value: unknown, label: string): number {
 }
 
 function normalizeBaseUrl(value: unknown, provider: MultiremiScmProvider): string {
-  return normalizeHttpUrl(value, provider === "github" ? "https://github.com" : "https://code.byted.org", "base URL");
+  const normalized = normalizeHttpUrl(
+    value,
+    provider === "github" ? "https://github.com" : "https://code.byted.org",
+    "base URL",
+  );
+  return new URL(normalized).origin;
 }
 
 function normalizeApiBaseUrl(value: unknown, provider: MultiremiScmProvider, baseUrl: string): string {

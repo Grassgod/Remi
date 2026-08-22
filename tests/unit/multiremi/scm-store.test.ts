@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
+import { reconcileObservation } from "@multiremi/scm/reconcile.js";
+import { scmIngestionStore } from "@multiremi/scm/store.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 const previousScmKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
@@ -184,6 +186,27 @@ describe("SCM connection and canonical event store", () => {
     expect(store.getScmRepositoryBinding(selectedConnection.id, "repo_future")).toBeNull();
   });
 
+  it("normalizes repository site URLs to one origin before selecting a default connection", () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 15).toString("base64");
+    const store = createLocalStore();
+    const first = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub default",
+      provider: "github",
+      mode: "poll",
+      baseUrl: "https://github.com/acme/widgets",
+    });
+    expect(first.baseUrl).toBe("https://github.com");
+    expect(() => store.createScmConnection({
+      workspaceId: "local",
+      name: "Duplicate origin",
+      provider: "github",
+      mode: "poll",
+      baseUrl: "https://github.com/another/path",
+      repositoryScope: "all",
+    })).toThrow("default connection already exists");
+  });
+
   it("requires an explicit atomic transfer and clears stale polling state", () => {
     const { store, connection } = seedConnection();
     const selected = store.createScmConnection({
@@ -251,8 +274,11 @@ describe("SCM connection and canonical event store", () => {
       "SELECT COUNT(*) AS count FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?",
     ).get(connection.id, "repo_widgets") as { count: number }).count).toBe(0);
     expect((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?",
+    ).get(selected.id, "repo_widgets") as { count: number }).count).toBe(1);
+    expect((db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_scm_issue_links WHERE issue_id = ?",
-    ).get(issue.id) as { count: number }).count).toBe(0);
+    ).get(issue.id) as { count: number }).count).toBe(1);
   });
 
   it("moves only default-origin bindings when selecting a new default connection", () => {
@@ -545,6 +571,64 @@ describe("SCM connection and canonical event store", () => {
     expect(newer.applied).toBe(true);
     expect(stale.applied).toBe(false);
     expect(stale.snapshot.payload.state).toBe("merged");
+  });
+
+  it("rolls back a polling snapshot and projection when canonical event persistence fails", () => {
+    const { store, connection } = seedConnection();
+    const binding = connection.repositories[0]!;
+    const workspaceEvents: string[] = [];
+    store.onWorkspaceEvent((event) => workspaceEvents.push(event.type));
+    const observation = {
+      stream: "change_requests" as const,
+      entityType: "change_request" as const,
+      externalId: "atomic-42",
+      version: "v1",
+      occurredAt: "2026-08-21T10:00:00.000Z",
+      observedAt: "2026-08-21T10:00:01.000Z",
+      payload: {
+        number: 42,
+        title: "Atomic polling transition",
+        state: "open",
+        source_branch: "feature/atomic",
+        target_branch: "main",
+        updated_at: "2026-08-21T10:00:00.000Z",
+      },
+    };
+    db!.exec(`
+      CREATE TRIGGER fail_atomic_scm_event
+      BEFORE INSERT ON multiremi_scm_events
+      BEGIN
+        SELECT RAISE(ABORT, 'injected canonical event failure');
+      END
+    `);
+
+    expect(() => reconcileObservation({
+      store: scmIngestionStore(store),
+      binding,
+      observation,
+      baseline: false,
+    })).toThrow("injected canonical event failure");
+    expect(store.getScmEntitySnapshot(connection.id, "repo_widgets", "change_request", "atomic-42")).toBeNull();
+    expect(db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_change_requests WHERE connection_id = ? AND external_id = ?",
+    ).get(connection.id, "atomic-42")).toEqual({ count: 0 });
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_events").get()).toEqual({ count: 0 });
+    expect(workspaceEvents).toEqual([]);
+
+    db!.exec("DROP TRIGGER fail_atomic_scm_event");
+    const retried = reconcileObservation({
+      store: scmIngestionStore(store),
+      binding,
+      observation,
+      baseline: false,
+    });
+    expect(retried.changed).toBe(true);
+    expect(retried.events).toHaveLength(1);
+    expect(store.getScmEntitySnapshot(connection.id, "repo_widgets", "change_request", "atomic-42")?.version).toBe("v1");
+    expect(db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_change_requests WHERE connection_id = ? AND external_id = ?",
+    ).get(connection.id, "atomic-42")).toEqual({ count: 1 });
+    expect(workspaceEvents).toEqual(["change_request:updated"]);
   });
 
   it("projects baseline change requests and auto-links issue keys from title, branch, or body", () => {
@@ -1033,6 +1117,48 @@ describe("SCM connection and canonical event store", () => {
       verificationStatus: "unverified",
       verifiedAt: null,
       verificationIdentity: null,
+      verifiedRepositoryCount: 0,
+      verifiedRepositoryTotal: 0,
+    });
+
+    const staleTokenRun = store.markScmConnectionVerificationStarted(connection.id);
+    store.updateScmConnection(connection.id, { accessToken: "newer-token" });
+    expect(() => store.recordScmConnectionVerification(connection.id, {
+      status: "valid",
+      verifiedAt: "2026-08-22T04:01:00.000Z",
+      identity: "stale",
+      repositoryCount: 1,
+      repositoryTotal: 1,
+      errorCode: null,
+      error: null,
+    }, staleTokenRun.runId)).toThrow("changed while credentials were being verified");
+    expect(store.getScmConnection(connection.id)?.verificationStatus).toBe("unverified");
+
+    const staleBindingRun = store.markScmConnectionVerificationStarted(connection.id);
+    store.updateWorkspace("local", {
+      repos: [
+        ...store.getWorkspace("local")!.repos,
+        {
+          id: "repo_new_private",
+          name: "new-private",
+          url: "git@github.com:acme/new-private.git",
+          source: "github",
+          default_branch: "main",
+        },
+      ],
+    });
+    store.reconcileScmRepositoryBindings("local", store.getWorkspace("local")!.repos);
+    expect(() => store.recordScmConnectionVerification(connection.id, {
+      status: "valid",
+      verifiedAt: "2026-08-22T04:02:00.000Z",
+      identity: "stale",
+      repositoryCount: 1,
+      repositoryTotal: 1,
+      errorCode: null,
+      error: null,
+    }, staleBindingRun.runId)).toThrow("changed while credentials were being verified");
+    expect(store.getScmConnection(connection.id)).toMatchObject({
+      verificationStatus: "unverified",
       verifiedRepositoryCount: 0,
       verifiedRepositoryTotal: 0,
     });

@@ -13,7 +13,12 @@ import type {
   UpsertScmEntitySnapshotInput,
   UpsertScmSyncCursorInput,
 } from "@multiremi/contracts/types.js";
-import type { ScmIngestionStore, ScmRecordResult } from "@multiremi/scm/types.js";
+import type {
+  ScmIngestionStore,
+  ScmRecordResult,
+  ScmSnapshotEventFactory,
+  ScmSnapshotEventWriteResult,
+} from "@multiremi/scm/types.js";
 
 export function scmConnection(overrides: Partial<MultiremiScmConnection> = {}): MultiremiScmConnection {
   return {
@@ -191,6 +196,29 @@ export class MemoryScmIngestionStore implements ScmIngestionStore {
     };
     this.snapshots.set(key, value);
     return { applied: true, previous: current ?? null, snapshot: value };
+  }
+
+  advanceEntitySnapshotWithEvents(
+    input: UpsertScmEntitySnapshotInput,
+    createEvents: ScmSnapshotEventFactory,
+  ): ScmSnapshotEventWriteResult {
+    const snapshots = new Map(this.snapshots);
+    const events = new Map(this.events);
+    const evidences = new Set(this.evidences);
+    const recordInputCount = this.recordInputs.length;
+    try {
+      const advance = this.advanceEntitySnapshot(input);
+      return {
+        advance,
+        events: createEvents(advance).map((event) => this.recordCanonicalEvent(event)),
+      };
+    } catch (error) {
+      this.snapshots = snapshots;
+      this.events = events;
+      this.evidences = evidences;
+      this.recordInputs.length = recordInputCount;
+      throw error;
+    }
   }
 
   recordCanonicalEvent(input: RecordScmCanonicalEventInput): ScmRecordResult {

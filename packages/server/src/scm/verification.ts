@@ -5,6 +5,7 @@ import type {
   MultiremiScmVerificationResult,
   MultiremiScmVerificationStatus,
 } from "@multiremi/contracts/types.js";
+import { codebaseAuthHeaders } from "./access-token.js";
 
 export interface VerifyScmConnectionInput {
   connection: MultiremiScmConnection;
@@ -255,12 +256,6 @@ function githubHeaders(token: string): Record<string, string> {
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "multiremi-scm-verifier",
   };
-}
-
-function codebaseAuthHeaders(token: string): Record<string, string> {
-  if (token.startsWith("jwt:")) return { "X-Code-User-JWT": token.slice(4) };
-  if (token.startsWith("bearer:")) return { Authorization: `Bearer ${token.slice(7)}` };
-  return { Authorization: `Bearer ${token}` };
 }
 
 function trimSlash(value: string): string {

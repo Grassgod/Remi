@@ -12,6 +12,10 @@ import {
   type RecordScmCanonicalEventResult,
   type ScmConnectionWithRepositories,
 } from "@multiremi/store/repos/scm-repo.js";
+import type {
+  ScmSnapshotEventFactory,
+  ScmSnapshotEventWriteResult,
+} from "@multiremi/scm/types.js";
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
@@ -1118,16 +1122,16 @@ runMigrations(this.db);
     return this.scm.deleteRepositoryBindingsForWorkspaceRepository(workspaceId, repositoryId);
   }
 
-  markScmConnectionVerificationStarted(id: string): MultiremiScmConnection {
+  markScmConnectionVerificationStarted(id: string): { connection: MultiremiScmConnection; runId: string } {
     return this.scm.markConnectionVerificationStarted(id);
   }
 
   recordScmConnectionVerification(
     id: string,
     result: MultiremiScmVerificationResult,
-    expectedUpdatedAt?: string,
+    runId: string,
   ): MultiremiScmConnection {
-    return this.scm.recordConnectionVerification(id, result, expectedUpdatedAt);
+    return this.scm.recordConnectionVerification(id, result, runId);
   }
 
   getScmSyncCursor(connectionId: string, repositoryId: string, stream: MultiremiScmSyncStream): MultiremiScmSyncCursor | null {
@@ -1165,6 +1169,13 @@ runMigrations(this.db);
 
   advanceScmEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult {
     return this.scm.advanceEntitySnapshot(input);
+  }
+
+  advanceScmEntitySnapshotWithEvents(
+    input: UpsertScmEntitySnapshotInput,
+    createEvents: ScmSnapshotEventFactory,
+  ): ScmSnapshotEventWriteResult {
+    return this.scm.advanceEntitySnapshotWithEvents(input, createEvents);
   }
 
   recordScmCanonicalEvent(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {

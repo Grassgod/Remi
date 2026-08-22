@@ -113,17 +113,17 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/workspaces/:workspaceId/scm/connections/:connectionId/verify", async (c) => {
     const loaded = loadConnection(c, deps, true);
     if (loaded instanceof Response) return loaded;
-    const expectedUpdatedAt = loaded.connection.updatedAt;
-    const credential = store.getScmConnectionCredential(loaded.connection.id);
-    if (!credential) return c.json({ error: "SCM connection not found" }, 404);
     try {
-      store.markScmConnectionVerificationStarted(loaded.connection.id);
+      const started = store.markScmConnectionVerificationStarted(loaded.connection.id);
+      const credential = store.getScmConnectionCredential(loaded.connection.id);
+      if (!credential) return c.json({ error: "SCM connection not found" }, 404);
+      const bindings = store.listScmRepositoryBindings({ connectionId: loaded.connection.id, enabled: true });
       let result;
       try {
         result = await deps.verifyScmConnection({
-          connection: loaded.connection,
+          connection: started.connection,
           credential,
-          bindings: loaded.connection.repositories,
+          bindings,
         });
       } catch {
         result = {
@@ -131,7 +131,7 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
           verifiedAt: new Date().toISOString(),
           identity: null,
           repositoryCount: 0,
-          repositoryTotal: loaded.connection.repositories.length,
+          repositoryTotal: bindings.length,
           errorCode: "verification_failed",
           error: "验证请求失败，请稍后重试",
         };
@@ -139,7 +139,7 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
       const connection = store.recordScmConnectionVerification(
         loaded.connection.id,
         result,
-        expectedUpdatedAt,
+        started.runId,
       );
       publishWorkspaceEvent(c, store, "scm:connection_verified", loaded.connection.workspaceId, { connection });
       return c.json({ connection });

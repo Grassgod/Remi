@@ -47,6 +47,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
+import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
 import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
@@ -176,7 +177,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!credential?.accessToken) {
       return c.json({ error: "repository credential is not configured", code: "scm_credential_missing" }, 409);
     }
-    if (/[\r\n]/u.test(credential.accessToken)) {
+    const password = scmGitCredentialPassword(connection.provider, credential.accessToken);
+    if (!password || /[\r\n]/u.test(password)) {
       return c.json({ error: "repository credential is invalid", code: "scm_credential_invalid" }, 500);
     }
     const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
@@ -186,7 +188,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       repositoryUrl: binding.repositoryUrl,
       cloneUrl,
       username: connection.provider === "github" ? "x-access-token" : "oauth2",
-      password: credential.accessToken,
+      password,
       expiresAt,
     });
   });

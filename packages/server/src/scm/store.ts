@@ -15,7 +15,12 @@ import type {
   UpsertScmEntitySnapshotInput,
   UpsertScmSyncCursorInput,
 } from "@multiremi/contracts/types.js";
-import type { ScmIngestionStore, ScmRecordResult } from "./types.js";
+import type {
+  ScmIngestionStore,
+  ScmRecordResult,
+  ScmSnapshotEventFactory,
+  ScmSnapshotEventWriteResult,
+} from "./types.js";
 
 /** The MultiremiStore facade prefixes SCM methods to avoid domain-name collisions. */
 export interface ScmStoreFacade {
@@ -48,6 +53,10 @@ export interface ScmStoreFacade {
   ): MultiremiScmEntitySnapshot | null;
   upsertScmEntitySnapshot(input: UpsertScmEntitySnapshotInput): MultiremiScmEntitySnapshot;
   advanceScmEntitySnapshot(input: UpsertScmEntitySnapshotInput): AdvanceScmEntitySnapshotResult;
+  advanceScmEntitySnapshotWithEvents(
+    input: UpsertScmEntitySnapshotInput,
+    createEvents: ScmSnapshotEventFactory,
+  ): ScmSnapshotEventWriteResult;
   recordScmCanonicalEvent(input: RecordScmCanonicalEventInput): ScmRecordResult;
 }
 
@@ -67,6 +76,8 @@ export function scmIngestionStore(facade: ScmStoreFacade): ScmIngestionStore {
       facade.getScmEntitySnapshot(connectionId, repositoryId, entityType, externalId),
     upsertEntitySnapshot: (input) => facade.upsertScmEntitySnapshot(input),
     advanceEntitySnapshot: (input) => facade.advanceScmEntitySnapshot(input),
+    advanceEntitySnapshotWithEvents: (input, createEvents) =>
+      facade.advanceScmEntitySnapshotWithEvents(input, createEvents),
     recordCanonicalEvent: (input) => facade.recordScmCanonicalEvent(input),
   };
 }

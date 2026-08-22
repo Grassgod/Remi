@@ -3,6 +3,8 @@ import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("multiremi-store");
+const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
+const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -13,6 +15,11 @@ export function runMigrations(db: SqlDatabase): void {
   renameLegacyMulticaObjects(db);
   const legacyGithubTables = existingTableNames(db);
   db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS multiremi_agents (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1136,6 +1143,8 @@ export function runMigrations(db: SqlDatabase): void {
       verified_repository_total INTEGER NOT NULL DEFAULT 0,
       verification_error_code TEXT,
       verification_error TEXT,
+      verification_generation INTEGER NOT NULL DEFAULT 0,
+      verification_run_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(workspace_id, provider, name)
@@ -1718,12 +1727,12 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_owner TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_until TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_token TEXT");
-  const scmRepositoryScopeAdded = addColumnIfMissing(
+  addColumnIfMissing(
     db,
     "multiremi_scm_connections",
     "repository_scope TEXT NOT NULL DEFAULT 'selected'",
   );
-  const scmDefaultAdded = addColumnIfMissing(
+  addColumnIfMissing(
     db,
     "multiremi_scm_connections",
     "is_default INTEGER NOT NULL DEFAULT 0",
@@ -1735,8 +1744,11 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_scm_connections", "verified_repository_total INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_scm_connections", "verification_error_code TEXT");
   addColumnIfMissing(db, "multiremi_scm_connections", "verification_error TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_generation INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_run_id TEXT");
   addColumnIfMissing(db, "multiremi_scm_repository_bindings", "assignment_origin TEXT NOT NULL DEFAULT 'explicit'");
-  if (scmRepositoryScopeAdded || scmDefaultAdded) backfillSingleScmDefaults(db);
+  runMigrationOnce(db, SCM_CONNECTION_ORIGIN_MIGRATION, () => normalizeScmConnectionOrigins(db));
+  runMigrationOnce(db, SCM_DEFAULT_SCOPE_MIGRATION, () => backfillSingleScmDefaults(db));
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_multiremi_scm_sync_cursors_lease
       ON multiremi_scm_sync_cursors(lease_until, connection_id, repository_id, stream);
@@ -2082,6 +2094,17 @@ function addColumnIfMissing(db: SqlDatabase, table: string, definition: string):
   }
 }
 
+function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {
+  db.transaction(() => {
+    const claimed = db.run(
+      "INSERT OR IGNORE INTO multiremi_schema_migrations (id, applied_at) VALUES (?, ?)",
+      [id, new Date().toISOString()],
+    ).changes;
+    if (claimed !== 1) return;
+    migrate();
+  })();
+}
+
 function ensureIssueSubscriberTypedSchema(db: SqlDatabase): void {
   const columns = db.query("PRAGMA table_info(multiremi_issue_subscribers)").all() as Array<{ name: string }>;
   const table = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'multiremi_issue_subscribers'")
@@ -2199,36 +2222,25 @@ function backfillIssueKeys(db: SqlDatabase): void {
 }
 
 function backfillSingleScmDefaults(db: SqlDatabase): void {
-  const rows = db.query(
-    `SELECT workspace_id, provider, MIN(id) AS connection_id, MIN(base_url) AS base_url,
-            COUNT(*) AS connection_count
-     FROM multiremi_scm_connections
-     GROUP BY workspace_id, provider`,
-  ).all() as Array<{
-    workspace_id: string;
-    provider: string;
-    base_url: string;
-    connection_id: string;
-    connection_count: number;
-  }>;
-  for (const row of rows) {
-    if (Number(row.connection_count) !== 1) continue;
+  for (const rows of scmConnectionOriginGroups(db).values()) {
+    if (rows.length !== 1) continue;
+    const row = rows[0]!;
     db.run(
       `UPDATE multiremi_scm_connections
        SET repository_scope = 'all', is_default = 1
        WHERE id = ? AND is_default = 0 AND repository_scope = 'selected'`,
-      [row.connection_id],
+      [row.id],
     );
     const existingBindings = db.query(
       `SELECT repository_id, repository_url
        FROM multiremi_scm_repository_bindings WHERE connection_id = ?`,
-    ).all(row.connection_id) as Array<{ repository_id: string; repository_url: string }>;
+    ).all(row.id) as Array<{ repository_id: string; repository_url: string }>;
     for (const binding of existingBindings) {
       if (scmRepositoryOrigin(binding.repository_url) !== scmRepositoryOrigin(row.base_url)) continue;
       db.run(
         `UPDATE multiremi_scm_repository_bindings SET assignment_origin = 'default'
          WHERE connection_id = ? AND repository_id = ?`,
-        [row.connection_id, binding.repository_id],
+        [row.id, binding.repository_id],
       );
     }
 
@@ -2247,9 +2259,9 @@ function backfillSingleScmDefaults(db: SqlDatabase): void {
         ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, 'default', ?, ?)
         ON CONFLICT(workspace_id, repository_id) DO NOTHING`,
         [
-          `srb_migrated_${row.connection_id}_${repository.id}`,
+          `srb_migrated_${row.id}_${repository.id}`,
           row.workspace_id,
-          row.connection_id,
+          row.id,
           repository.id,
           repository.url,
           coordinates.owner,
@@ -2260,6 +2272,85 @@ function backfillSingleScmDefaults(db: SqlDatabase): void {
         ],
       );
     }
+  }
+}
+
+interface ScmMigrationConnectionRow {
+  id: string;
+  workspace_id: string;
+  provider: string;
+  base_url: string;
+  repository_scope: string;
+  is_default: number;
+  created_at: string;
+}
+
+function scmConnectionOriginGroups(db: SqlDatabase): Map<string, ScmMigrationConnectionRow[]> {
+  const rows = db.query(
+    `SELECT id, workspace_id, provider, base_url, repository_scope, is_default, created_at
+     FROM multiremi_scm_connections
+     ORDER BY workspace_id, provider, created_at, id`,
+  ).all() as ScmMigrationConnectionRow[];
+  const groups = new Map<string, ScmMigrationConnectionRow[]>();
+  for (const row of rows) {
+    const origin = normalizeScmMigrationBaseUrl(row.base_url);
+    const key = `${row.workspace_id}\u0000${row.provider}\u0000${origin}`;
+    const group = groups.get(key) ?? [];
+    group.push(row);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
+function normalizeScmConnectionOrigins(db: SqlDatabase): void {
+  for (const rows of scmConnectionOriginGroups(db).values()) {
+    const defaultCandidates = rows.filter((row) => (
+      Number(row.is_default) === 1 || row.repository_scope === "all"
+    ));
+    const winner = defaultCandidates[0] ?? null;
+
+    // Demote duplicate defaults before normalizing URLs. An older deployment
+    // may already have the partial unique index, and two path-shaped base URLs
+    // can otherwise collide when both become the same origin.
+    for (const row of rows) {
+      if (winner && row.id === winner.id) {
+        db.run(
+          `UPDATE multiremi_scm_connections
+           SET repository_scope = 'all', is_default = 1
+           WHERE id = ? AND (repository_scope != 'all' OR is_default != 1)`,
+          [row.id],
+        );
+        continue;
+      }
+      db.run(
+        `UPDATE multiremi_scm_connections
+         SET repository_scope = 'selected', is_default = 0
+         WHERE id = ? AND (repository_scope != 'selected' OR is_default != 0)`,
+        [row.id],
+      );
+      db.run(
+        `UPDATE multiremi_scm_repository_bindings
+         SET assignment_origin = 'explicit'
+         WHERE connection_id = ? AND assignment_origin = 'default'`,
+        [row.id],
+      );
+    }
+
+    for (const row of rows) {
+      const origin = normalizeScmMigrationBaseUrl(row.base_url);
+      if (origin === row.base_url) continue;
+      db.run("UPDATE multiremi_scm_connections SET base_url = ? WHERE id = ?", [origin, row.id]);
+    }
+  }
+}
+
+function normalizeScmMigrationBaseUrl(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/u, "");
+  try {
+    const url = new URL(trimmed);
+    return url.origin === "null" ? trimmed : url.origin;
+  } catch {
+    return trimmed;
   }
 }
 

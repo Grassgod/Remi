@@ -512,6 +512,7 @@ export class WorkspacesRepo {
       if (!this.getWorkspace(id)) return false;
       this.ctx.lockWorkspaceRuntimeLifecycle(id);
       this.assertWorkspaceDaemonTrustRevoked(id);
+      this.deleteWorkspaceScmState(id);
       const result = this.ctx.db.run("DELETE FROM multiremi_workspaces WHERE id = ?", [id]);
       if (result.changes === 0) return false;
       this.ctx.db.run("DELETE FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ?", [id]);
@@ -524,6 +525,63 @@ export class WorkspacesRepo {
       ]);
       return true;
     })();
+  }
+
+  private deleteWorkspaceScmState(workspaceId: string): void {
+    const connectionIds = "SELECT id FROM multiremi_scm_connections WHERE workspace_id = ?";
+    const eventIds = `SELECT id FROM multiremi_scm_events
+      WHERE workspace_id = ? OR connection_id IN (${connectionIds})`;
+    const changeRequestIds = `SELECT id FROM multiremi_scm_change_requests
+      WHERE workspace_id = ? OR connection_id IN (${connectionIds})`;
+    const now = nowIso();
+
+    // Updating first takes the same connection-row lock used by polling claims.
+    // Once this transaction commits, stale pollers cannot acquire another lease.
+    this.ctx.db.run(
+      "UPDATE multiremi_scm_connections SET enabled = 0, updated_at = ? WHERE workspace_id = ?",
+      [now, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_event_deliveries WHERE event_id IN (${eventIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_event_evidence WHERE event_id IN (${eventIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_effects WHERE event_id IN (${eventIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_events
+       WHERE workspace_id = ? OR connection_id IN (${connectionIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_issue_links
+       WHERE workspace_id = ? OR change_request_id IN (${changeRequestIds})`,
+      [workspaceId, workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_change_requests
+       WHERE workspace_id = ? OR connection_id IN (${connectionIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_sync_cursors WHERE connection_id IN (${connectionIds})`,
+      [workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id IN (${connectionIds})`,
+      [workspaceId],
+    );
+    this.ctx.db.run(
+      `DELETE FROM multiremi_scm_repository_bindings
+       WHERE workspace_id = ? OR connection_id IN (${connectionIds})`,
+      [workspaceId, workspaceId],
+    );
+    this.ctx.db.run("DELETE FROM multiremi_scm_connections WHERE workspace_id = ?", [workspaceId]);
   }
 
   private assertWorkspaceDaemonTrustRevoked(workspaceId: string): void {

@@ -1,4 +1,5 @@
 export * from "./capabilities.js";
+export * from "./access-token.js";
 export * from "./codebase.js";
 export * from "./github.js";
 export * from "./poller.js";

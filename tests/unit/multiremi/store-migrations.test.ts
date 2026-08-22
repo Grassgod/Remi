@@ -67,6 +67,7 @@ describe("store migrations", () => {
       "multiremi_feedback",
       "multiremi_access_tokens",
       "multiremi_session_archives",
+      "multiremi_schema_migrations",
     ]) {
       expect(tables).toContain(table);
     }
@@ -297,7 +298,7 @@ describe("store migrations", () => {
     expect(row?.name).toBe("Keep me");
   });
 
-  it("backfills a sole provider connection as the default and binds all matching imported repositories", () => {
+  it("backfills each sole provider origin as the default and binds matching imported repositories", () => {
     const database = freshDb();
     database.exec(`
       CREATE TABLE multiremi_workspaces (
@@ -359,6 +360,7 @@ describe("store migrations", () => {
         JSON.stringify([
           { id: "repo_bound", name: "bound", url: "git@github.com:acme/bound.git", source: "github", default_branch: "main" },
           { id: "repo_missing", name: "missing", url: "https://github.com/acme/missing.git", source: "github", default_branch: "trunk" },
+          { id: "repo_enterprise", name: "enterprise", url: "https://github.acme.test/acme/enterprise.git", source: "github" },
           { id: "repo_codebase", name: "internal", url: "git@code.byted.org:acme/internal.git", source: "codebase" },
         ]),
         timestamp,
@@ -370,6 +372,22 @@ describe("store migrations", () => {
         id, workspace_id, name, provider, mode, base_url, api_base_url, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ["scm_github", "local", "GitHub", "github", "poll", "https://github.com", "https://api.github.com", timestamp, timestamp],
+    );
+    database.run(
+      `INSERT INTO multiremi_scm_connections (
+        id, workspace_id, name, provider, mode, base_url, api_base_url, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "scm_github_enterprise",
+        "local",
+        "GitHub Enterprise",
+        "github",
+        "poll",
+        "https://github.acme.test/organization/path",
+        "https://github.acme.test/api/v3",
+        timestamp,
+        timestamp,
+      ],
     );
     for (const [id, name] of [["scm_codebase_one", "Codebase one"], ["scm_codebase_two", "Codebase two"]]) {
       database.run(
@@ -395,8 +413,17 @@ describe("store migrations", () => {
     migrate(database);
 
     expect(database.query(
-      "SELECT repository_scope, is_default FROM multiremi_scm_connections WHERE id = 'scm_github'",
-    ).get()).toEqual({ repository_scope: "all", is_default: 1 });
+      `SELECT id, base_url, repository_scope, is_default FROM multiremi_scm_connections
+       WHERE provider = 'github' ORDER BY id`,
+    ).all()).toEqual([
+      { id: "scm_github", base_url: "https://github.com", repository_scope: "all", is_default: 1 },
+      {
+        id: "scm_github_enterprise",
+        base_url: "https://github.acme.test",
+        repository_scope: "all",
+        is_default: 1,
+      },
+    ]);
     expect(database.query(
       `SELECT id, repository_scope, is_default FROM multiremi_scm_connections
        WHERE provider = 'codebase' ORDER BY id`,
@@ -410,8 +437,175 @@ describe("store migrations", () => {
     ).all()).toEqual([
       { repository_id: "repo_bound", assignment_origin: "default" },
       { repository_id: "repo_codebase", assignment_origin: "explicit" },
+      { repository_id: "repo_enterprise", assignment_origin: "default" },
       { repository_id: "repo_missing", assignment_origin: "default" },
     ]);
+  });
+
+  it("atomically normalizes path-shaped SCM origins and resolves duplicate defaults", () => {
+    const database = freshDb();
+    migrate(database);
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260822_scm_connection_origins"],
+    );
+    const timestamp = "2026-08-21T00:00:00.000Z";
+    database.run(
+      `INSERT INTO multiremi_workspaces (id, name, slug, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      ["origin-migration", "Origin migration", "origin-migration", timestamp, timestamp],
+    );
+    for (const [id, name, baseUrl, createdAt] of [
+      ["scm_origin_first", "First", "https://github.com/acme/first", "2026-08-20T00:00:00.000Z"],
+      ["scm_origin_second", "Second", "https://github.com/acme/second/", "2026-08-21T00:00:00.000Z"],
+    ]) {
+      database.run(
+        `INSERT INTO multiremi_scm_connections (
+          id, workspace_id, name, provider, mode, base_url, api_base_url,
+          repository_scope, is_default, created_at, updated_at
+         ) VALUES (?, 'origin-migration', ?, 'github', 'poll', ?, 'https://api.github.com',
+                   'all', 1, ?, ?)`,
+        [id, name, baseUrl, createdAt, createdAt],
+      );
+      database.run(
+        `INSERT INTO multiremi_scm_repository_bindings (
+          id, workspace_id, connection_id, repository_id, repository_url, name,
+          assignment_origin, created_at, updated_at
+         ) VALUES (?, 'origin-migration', ?, ?, ?, ?, 'default', ?, ?)`,
+        [
+          `binding_${id}`,
+          id,
+          `repo_${id}`,
+          `https://github.com/acme/${name.toLowerCase()}.git`,
+          name,
+          createdAt,
+          createdAt,
+        ],
+      );
+    }
+    database.exec(`
+      CREATE TRIGGER abort_scm_origin_normalization
+      BEFORE UPDATE OF base_url ON multiremi_scm_connections
+      WHEN NEW.base_url != OLD.base_url
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated origin migration interruption');
+      END;
+    `);
+
+    expect(() => migrate(database)).toThrow(/simulated origin migration interruption/);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260822_scm_connection_origins'",
+    ).get()).toEqual({ count: 0 });
+    expect(database.query(
+      `SELECT id, base_url, repository_scope, is_default FROM multiremi_scm_connections
+       WHERE workspace_id = 'origin-migration' ORDER BY id`,
+    ).all()).toEqual([
+      {
+        id: "scm_origin_first",
+        base_url: "https://github.com/acme/first",
+        repository_scope: "all",
+        is_default: 1,
+      },
+      {
+        id: "scm_origin_second",
+        base_url: "https://github.com/acme/second/",
+        repository_scope: "all",
+        is_default: 1,
+      },
+    ]);
+
+    database.exec("DROP TRIGGER abort_scm_origin_normalization");
+    migrate(database);
+    expect(database.query(
+      `SELECT id, base_url, repository_scope, is_default FROM multiremi_scm_connections
+       WHERE workspace_id = 'origin-migration' ORDER BY id`,
+    ).all()).toEqual([
+      { id: "scm_origin_first", base_url: "https://github.com", repository_scope: "all", is_default: 1 },
+      { id: "scm_origin_second", base_url: "https://github.com", repository_scope: "selected", is_default: 0 },
+    ]);
+    expect(database.query(
+      `SELECT connection_id, assignment_origin FROM multiremi_scm_repository_bindings
+       WHERE workspace_id = 'origin-migration' ORDER BY connection_id`,
+    ).all()).toEqual([
+      { connection_id: "scm_origin_first", assignment_origin: "default" },
+      { connection_id: "scm_origin_second", assignment_origin: "explicit" },
+    ]);
+
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260822_scm_connection_origins"],
+    );
+    migrate(database);
+    expect(database.query(
+      `SELECT id, repository_scope, is_default FROM multiremi_scm_connections
+       WHERE workspace_id = 'origin-migration' ORDER BY id`,
+    ).all()).toEqual([
+      { id: "scm_origin_first", repository_scope: "all", is_default: 1 },
+      { id: "scm_origin_second", repository_scope: "selected", is_default: 0 },
+    ]);
+  });
+
+  it("resumes the SCM default backfill after an interrupted column upgrade and never replays it", () => {
+    const database = freshDb();
+    migrate(database);
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260822_scm_default_repository_scope"],
+    );
+    const timestamp = "2026-08-21T00:00:00.000Z";
+    database.run(
+      `INSERT INTO multiremi_workspaces (id, name, slug, repos, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        "migration-resume",
+        "Migration resume",
+        "migration-resume",
+        JSON.stringify([
+          { id: "repo_resume", name: "resume", url: "git@github.com:acme/resume.git", source: "github" },
+        ]),
+        timestamp,
+        timestamp,
+      ],
+    );
+    database.run(
+      `INSERT INTO multiremi_scm_connections (
+        id, workspace_id, name, provider, mode, base_url, api_base_url,
+        repository_scope, is_default, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'selected', 0, ?, ?)`,
+      [
+        "scm_resume",
+        "migration-resume",
+        "GitHub",
+        "github",
+        "poll",
+        "https://github.com",
+        "https://api.github.com",
+        timestamp,
+        timestamp,
+      ],
+    );
+
+    migrate(database);
+    expect(database.query(
+      "SELECT repository_scope, is_default FROM multiremi_scm_connections WHERE id = 'scm_resume'",
+    ).get()).toEqual({ repository_scope: "all", is_default: 1 });
+    expect(database.query(
+      "SELECT assignment_origin FROM multiremi_scm_repository_bindings WHERE repository_id = 'repo_resume'",
+    ).get()).toEqual({ assignment_origin: "default" });
+
+    database.run(
+      "UPDATE multiremi_scm_connections SET repository_scope = 'selected', is_default = 0 WHERE id = 'scm_resume'",
+    );
+    database.run(
+      "UPDATE multiremi_scm_repository_bindings SET assignment_origin = 'explicit' WHERE repository_id = 'repo_resume'",
+    );
+    migrate(database);
+    expect(database.query(
+      "SELECT repository_scope, is_default FROM multiremi_scm_connections WHERE id = 'scm_resume'",
+    ).get()).toEqual({ repository_scope: "selected", is_default: 0 });
+    expect(database.query(
+      "SELECT assignment_origin FROM multiremi_scm_repository_bindings WHERE repository_id = 'repo_resume'",
+    ).get()).toEqual({ assignment_origin: "explicit" });
   });
 
   it("adds system-event run columns before creating their unique index", () => {

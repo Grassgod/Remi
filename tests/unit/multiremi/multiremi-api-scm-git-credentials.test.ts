@@ -17,11 +17,22 @@ describe("Multiremi API — JIT Git credentials", () => {
     store.ensureLocalWorkspace();
     const repositoryUrl = "git@github.com:example/private.git";
     const otherRepositoryUrl = "git@github.com:example/other.git";
+    const codebaseRepositoryUrl = "git@code.byted.org:example/internal.git";
     store.updateWorkspace("local", {
       repos: [
         { id: "repo_private", name: "private", url: repositoryUrl, defaultBranch: "main" },
         { id: "repo_other", name: "other", url: otherRepositoryUrl, defaultBranch: "main" },
+        { id: "repo_codebase", name: "internal", url: codebaseRepositoryUrl, source: "codebase", defaultBranch: "main" },
       ],
+    });
+    store.createScmConnection({
+      id: "scm_codebase",
+      workspaceId: "local",
+      name: "Codebase",
+      provider: "codebase",
+      mode: "poll",
+      accessToken: "jwt:codebase-secret",
+      repositoryIds: ["repo_codebase"],
     });
     store.createScmConnection({
       id: "scm_github",
@@ -88,6 +99,15 @@ describe("Multiremi API — JIT Git credentials", () => {
     expect((await requestCredential(taskCredential.token, otherRepositoryUrl)).status).toBe(404);
     expect((await requestCredential(taskCredential.token, repositoryUrl, "another-workspace")).status).toBe(403);
     expect((await requestCredential(pat.token, repositoryUrl)).status).toBe(403);
+
+    const codebaseResponse = await requestCredential(daemon.token, codebaseRepositoryUrl);
+    expect(codebaseResponse.status).toBe(200);
+    expect(await codebaseResponse.json()).toMatchObject({
+      repositoryId: "repo_codebase",
+      cloneUrl: "https://code.byted.org/example/internal.git",
+      username: "oauth2",
+      password: "codebase-secret",
+    });
 
     store.completeTask(task.id, { output: "done" });
     const terminal = await requestCredential(taskCredential.token, repositoryUrl);

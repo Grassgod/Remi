@@ -129,7 +129,10 @@ export async function backfillWorkspaceRepositoryDefaultBranches(
 ): Promise<WorkspaceRepositoryData[]> {
   const repositories = listWorkspaceRepositories(store, workspaceId);
   const missing = repositories.filter((repository) => !repository.default_branch);
-  if (missing.length === 0) return repositories;
+  if (missing.length === 0) {
+    store.reconcileScmRepositoryBindings(workspaceId, repositories);
+    return repositories;
+  }
 
   const resolved = await Promise.all(missing.map(async (repository) => {
     try {
@@ -140,7 +143,10 @@ export async function backfillWorkspaceRepositoryDefaultBranches(
     }
   }));
   const branches = new Map(resolved);
-  if (![...branches.values()].some(Boolean)) return repositories;
+  if (![...branches.values()].some(Boolean)) {
+    store.reconcileScmRepositoryBindings(workspaceId, repositories);
+    return repositories;
+  }
 
   const now = nowIso();
   const updatedRepositories = repositories.map((repository) => {
