@@ -1808,6 +1808,18 @@ runMigrations(this.db);
     return this.issues.updateIssue(id, input);
   }
 
+  restoreIssue(id: string): MultiremiIssue {
+    return this.issues.restoreIssue(id);
+  }
+
+  archiveEligibleIssues(now?: Date): MultiremiIssue[] {
+    return this.issues.archiveEligibleIssues(now);
+  }
+
+  issueArchiveSweepIntervalMs(): number {
+    return this.issues.issueArchiveSweepIntervalMs();
+  }
+
   assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
     return this.issues.assignIssue(id, input);
   }

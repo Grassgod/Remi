@@ -50,6 +50,8 @@ export function issueCompatibilityResponse(
     position: issue.position,
     start_date: issue.startDate,
     due_date: issue.dueDate,
+    completed_at: issue.completedAt,
+    archived_at: issue.archivedAt,
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
     metadata: issue.metadata,

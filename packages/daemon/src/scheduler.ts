@@ -15,6 +15,7 @@ const DEFAULT_FAILURE_MONITOR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_FAILURE_MONITOR_MIN_RUNS = 50;
 const DEFAULT_FAILURE_MONITOR_FAIL_RATIO = 0.9;
 const DEFAULT_FAILURE_MONITOR_STARTUP_DELAY_MS = 60 * 1000;
+const DEFAULT_ISSUE_ARCHIVE_SWEEP_STARTUP_DELAY_MS = 60 * 1000;
 
 interface ScheduledAutopilotJob {
   expression: string;
@@ -29,6 +30,8 @@ export interface MultiremiSchedulerOptions {
   failureMonitorMinRuns?: number;
   failureMonitorFailRatio?: number;
   failureMonitorStartupDelayMs?: number;
+  issueArchiveSweepIntervalMs?: number;
+  issueArchiveSweepStartupDelayMs?: number;
 }
 
 export class MultiremiScheduler {
@@ -39,10 +42,13 @@ export class MultiremiScheduler {
   private failureMonitorMinRuns: number;
   private failureMonitorFailRatio: number;
   private failureMonitorStartupDelayMs: number;
+  private issueArchiveSweepIntervalMs: number | null;
+  private issueArchiveSweepStartupDelayMs: number;
   private jobs = new Map<string, ScheduledAutopilotJob>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private failureMonitorStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private failureMonitorTimer: ReturnType<typeof setInterval> | null = null;
+  private issueArchiveSweepTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
 
   constructor(options: MultiremiSchedulerOptions) {
@@ -53,6 +59,9 @@ export class MultiremiScheduler {
     this.failureMonitorMinRuns = options.failureMonitorMinRuns ?? DEFAULT_FAILURE_MONITOR_MIN_RUNS;
     this.failureMonitorFailRatio = options.failureMonitorFailRatio ?? DEFAULT_FAILURE_MONITOR_FAIL_RATIO;
     this.failureMonitorStartupDelayMs = options.failureMonitorStartupDelayMs ?? DEFAULT_FAILURE_MONITOR_STARTUP_DELAY_MS;
+    this.issueArchiveSweepIntervalMs = options.issueArchiveSweepIntervalMs ?? null;
+    this.issueArchiveSweepStartupDelayMs = options.issueArchiveSweepStartupDelayMs
+      ?? DEFAULT_ISSUE_ARCHIVE_SWEEP_STARTUP_DELAY_MS;
   }
 
   start(): void {
@@ -63,6 +72,7 @@ export class MultiremiScheduler {
     this.timer = setInterval(() => this.sync(), this.pollIntervalMs);
     this.timer.unref?.();
     this.startFailureMonitor();
+    this.startIssueArchiveSweep();
   }
 
   stop(): void {
@@ -73,6 +83,8 @@ export class MultiremiScheduler {
     this.failureMonitorStartupTimer = null;
     if (this.failureMonitorTimer) clearInterval(this.failureMonitorTimer);
     this.failureMonitorTimer = null;
+    if (this.issueArchiveSweepTimer) clearTimeout(this.issueArchiveSweepTimer);
+    this.issueArchiveSweepTimer = null;
     for (const entry of this.jobs.values()) entry.job.stop();
     this.jobs.clear();
   }
@@ -141,6 +153,12 @@ export class MultiremiScheduler {
     return paused;
   }
 
+  runIssueArchiveSweepOnce(now: Date = new Date()): Array<{ id: string }> {
+    const archived = this.store.archiveEligibleIssues(now);
+    if (archived.length) log.info(`Issue archive sweep archived ${archived.length} issue(s)`);
+    return archived;
+  }
+
   private startFailureMonitor(): void {
     if (this.failureMonitorIntervalMs <= 0) return;
     const run = () => {
@@ -155,6 +173,23 @@ export class MultiremiScheduler {
     }
     this.failureMonitorStartupTimer = setTimeout(run, this.failureMonitorStartupDelayMs);
     this.failureMonitorStartupTimer.unref?.();
+  }
+
+  private startIssueArchiveSweep(): void {
+    const schedule = (delayMs: number) => {
+      if (!this.running || delayMs <= 0) return;
+      this.issueArchiveSweepTimer = setTimeout(() => {
+        if (!this.running) return;
+        try {
+          this.runIssueArchiveSweepOnce();
+        } catch (error) {
+          log.warn(`Issue archive sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        schedule(this.issueArchiveSweepIntervalMs ?? this.store.issueArchiveSweepIntervalMs());
+      }, delayMs);
+      this.issueArchiveSweepTimer.unref?.();
+    };
+    schedule(this.issueArchiveSweepStartupDelayMs);
   }
 
   private addJob(autopilot: Autopilot): void {

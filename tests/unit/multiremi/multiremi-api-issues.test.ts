@@ -7,6 +7,50 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — issue endpoints", () => {
+  it("configures issue archiving and exposes archived list and restore APIs", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const archived = store.createIssue({ title: "Archived API issue", status: "done" });
+    const active = store.createIssue({ title: "Active API issue" });
+    const app = createMultiremiApp({ store });
+
+    const invalidSettings = await app.request("/api/workspaces/local/issue-archive", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl_ms: 1, sweep_interval_ms: 1, extra: true }),
+    });
+    expect(invalidSettings.status).toBe(400);
+
+    const settings = await app.request("/api/workspaces/local/issue-archive", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl_ms: 3_600_000, sweep_interval_ms: 60_000 }),
+    });
+    expect(await settings.json()).toEqual({
+      config: { ttl_ms: 3_600_000, sweep_interval_ms: 60_000 },
+    });
+
+    store.archiveEligibleIssues(new Date(Date.now() + 3_600_001));
+    const activeList = await app.request("/api/issues?workspace_id=local");
+    expect((await activeList.json()).issues.map((issue: any) => issue.id)).toEqual([active.id]);
+    const archivedList = await app.request("/api/issues?workspace_id=local&archived_only=true");
+    const archivedBody = await archivedList.json();
+    expect(archivedBody.issues).toHaveLength(1);
+    expect(archivedBody.issues[0]).toMatchObject({
+      id: archived.id,
+      completed_at: expect.any(String),
+      archived_at: expect.any(String),
+    });
+
+    const restored = await app.request(`/api/issues/${archived.id}/restore`, { method: "POST" });
+    expect(await restored.json()).toMatchObject({
+      id: archived.id,
+      completed_at: null,
+      archived_at: null,
+      status: "done",
+    });
+  });
+
   it("requires a human workspace owner or admin for single and batch hard deletion", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
