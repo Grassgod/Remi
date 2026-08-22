@@ -141,6 +141,127 @@ describe("SCM connection and canonical event store", () => {
     expect(connection.apiBaseUrl).toBe("https://codebase-api.byted.org/v2");
   });
 
+  it("makes the first provider-origin connection the default and binds every matching repository", () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 15).toString("base64");
+    const store = createLocalStore();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_one", name: "one", url: "git@github.com:acme/one.git", source: "github", default_branch: "main" },
+        { id: "repo_two", name: "two", url: "https://github.com/acme/two.git", source: "github", default_branch: "trunk" },
+        { id: "repo_internal", name: "internal", url: "git@code.byted.org:acme/internal.git", source: "codebase", default_branch: "main" },
+      ],
+    });
+
+    const defaultConnection = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub default",
+      provider: "github",
+      mode: "poll",
+    });
+    expect(defaultConnection.repositoryScope).toBe("all");
+    expect(defaultConnection.isDefault).toBe(true);
+    expect(defaultConnection.repositories.map((binding) => binding.repositoryId)).toEqual(["repo_one", "repo_two"]);
+    expect(defaultConnection.repositories.every((binding) => binding.assignmentOrigin === "default")).toBe(true);
+
+    const selectedConnection = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub selected",
+      provider: "github",
+      mode: "poll",
+    });
+    expect(selectedConnection.repositoryScope).toBe("selected");
+    expect(selectedConnection.isDefault).toBe(false);
+    expect(selectedConnection.repositories).toEqual([]);
+
+    store.updateWorkspace("local", {
+      repos: [
+        ...store.getWorkspace("local")!.repos,
+        { id: "repo_future", name: "future", url: "git@github.com:acme/future.git", source: "github", default_branch: "main" },
+      ],
+    });
+    store.reconcileScmRepositoryBindings("local", store.getWorkspace("local")!.repos);
+    expect(store.getScmRepositoryBinding(defaultConnection.id, "repo_future")?.assignmentOrigin).toBe("default");
+    expect(store.getScmRepositoryBinding(selectedConnection.id, "repo_future")).toBeNull();
+  });
+
+  it("requires an explicit atomic transfer and clears stale polling state", () => {
+    const { store, connection } = seedConnection();
+    const selected = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub secondary",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+    });
+    store.upsertScmSyncCursor({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      stream: "default_branch",
+      baselineCompletedAt: "2026-08-21T00:00:00.000Z",
+    });
+    store.upsertScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "ref",
+      externalId: "main",
+      contentHash: "old",
+      payload: { head_sha: "old" },
+    });
+
+    const move = {
+      workspaceId: "local",
+      connectionId: selected.id,
+      repositoryId: "repo_widgets",
+      repositoryUrl: "git@github.com:acme/widgets.git",
+      repositorySource: "github" as const,
+      name: "widgets",
+      defaultBranch: "main",
+      assignmentOrigin: "explicit" as const,
+    };
+    expect(() => store.upsertScmRepositoryBinding(move)).toThrow("transfer=true");
+    expect(store.getScmRepositoryBinding(connection.id, "repo_widgets")).not.toBeNull();
+
+    const transferred = store.upsertScmRepositoryBinding({ ...move, transfer: true });
+    expect(transferred.connectionId).toBe(selected.id);
+    expect(transferred.assignmentOrigin).toBe("explicit");
+    expect(store.getScmSyncCursor(connection.id, "repo_widgets", "default_branch")).toBeNull();
+    expect(store.getScmEntitySnapshot(connection.id, "repo_widgets", "ref", "main")).toBeNull();
+  });
+
+  it("moves only default-origin bindings when selecting a new default connection", () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 16).toString("base64");
+    const store = createLocalStore();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_default", name: "default", url: "git@github.com:acme/default.git", source: "github" },
+        { id: "repo_explicit", name: "explicit", url: "git@github.com:acme/explicit.git", source: "github" },
+      ],
+    });
+    const first = store.createScmConnection({ workspaceId: "local", name: "First", provider: "github", mode: "poll" });
+    const second = store.createScmConnection({
+      workspaceId: "local",
+      name: "Second",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+    });
+    store.upsertScmRepositoryBinding({
+      workspaceId: "local",
+      connectionId: first.id,
+      repositoryId: "repo_explicit",
+      repositoryUrl: "git@github.com:acme/explicit.git",
+      repositorySource: "github",
+      name: "explicit",
+      assignmentOrigin: "explicit",
+    });
+
+    const promoted = store.updateScmConnection(second.id, { repositoryScope: "all" });
+    expect(promoted.isDefault).toBe(true);
+    expect(store.getScmConnection(first.id)).toMatchObject({ repositoryScope: "selected", isDefault: false });
+    expect(store.getScmRepositoryBinding(second.id, "repo_default")?.assignmentOrigin).toBe("default");
+    expect(store.getScmRepositoryBinding(first.id, "repo_explicit")?.assignmentOrigin).toBe("explicit");
+  });
+
   it("requires a webhook secret exactly when the connection mode consumes webhooks", () => {
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 8).toString("base64");
     const store = createLocalStore();
@@ -649,6 +770,54 @@ describe("SCM connection and canonical event store", () => {
     expect(body.connections[0]?.id).toBe(connection.id);
     expect(JSON.stringify(body)).not.toContain("ghp_private-token");
     expect(JSON.stringify(body)).not.toContain("webhook-private-secret");
+  });
+
+  it("verifies credentials server-side and persists only structured, non-secret status", async () => {
+    const { store, connection } = seedConnection();
+    let observedToken = "";
+    const app = createMultiremiApp({
+      store,
+      verifyScmConnection: async ({ credential, bindings }) => {
+        observedToken = credential.accessToken ?? "";
+        return {
+          status: "valid",
+          verifiedAt: "2026-08-22T04:00:00.000Z",
+          identity: "octocat",
+          repositoryCount: bindings.length,
+          repositoryTotal: bindings.length,
+          errorCode: null,
+          error: null,
+        };
+      },
+    });
+    const response = await app.request(
+      `/api/workspaces/local/scm/connections/${connection.id}/verify`,
+      { method: "POST" },
+    );
+    expect(response.status).toBe(200);
+    expect(observedToken).toBe("ghp_private-token");
+    const body = await response.json() as { connection: Record<string, unknown> };
+    expect(body.connection).toMatchObject({
+      id: connection.id,
+      verificationStatus: "valid",
+      verifiedAt: "2026-08-22T04:00:00.000Z",
+      verificationIdentity: "octocat",
+      verifiedRepositoryCount: 1,
+      verifiedRepositoryTotal: 1,
+      verificationErrorCode: null,
+      verificationError: null,
+    });
+    expect(body.connection.repositories).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("ghp_private-token");
+
+    const changed = store.updateScmConnection(connection.id, { accessToken: "replacement-token" });
+    expect(changed).toMatchObject({
+      verificationStatus: "unverified",
+      verifiedAt: null,
+      verificationIdentity: null,
+      verifiedRepositoryCount: 0,
+      verifiedRepositoryTotal: 0,
+    });
   });
 
   it("returns a client error when connection API mutations leave webhook mode without a secret", async () => {

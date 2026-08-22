@@ -274,6 +274,7 @@ import type {
   MultiremiScmCanonicalEventType,
   MultiremiScmConnection,
   MultiremiScmConnectionCredential,
+  MultiremiScmVerificationResult,
   MultiremiScmEntitySnapshot,
   MultiremiScmEntityType,
   MultiremiScmEventEvidence,
@@ -1162,6 +1163,26 @@ runMigrations(this.db);
 
   deleteScmRepositoryBinding(connectionId: string, repositoryId: string): boolean {
     return this.scm.deleteRepositoryBinding(connectionId, repositoryId);
+  }
+
+  reconcileScmRepositoryBindings(workspaceId: string, repositories: unknown[]): MultiremiScmRepositoryBinding[] {
+    return this.scm.reconcileRepositoryBindings(workspaceId, repositories);
+  }
+
+  deleteScmRepositoryBindingsForWorkspaceRepository(workspaceId: string, repositoryId: string): number {
+    return this.scm.deleteRepositoryBindingsForWorkspaceRepository(workspaceId, repositoryId);
+  }
+
+  markScmConnectionVerificationStarted(id: string): MultiremiScmConnection {
+    return this.scm.markConnectionVerificationStarted(id);
+  }
+
+  recordScmConnectionVerification(
+    id: string,
+    result: MultiremiScmVerificationResult,
+    expectedUpdatedAt?: string,
+  ): MultiremiScmConnection {
+    return this.scm.recordConnectionVerification(id, result, expectedUpdatedAt);
   }
 
   getScmSyncCursor(connectionId: string, repositoryId: string, stream: MultiremiScmSyncStream): MultiremiScmSyncCursor | null {

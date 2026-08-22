@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 
@@ -1163,10 +1164,19 @@ export function runMigrations(db: SqlDatabase): void {
       api_base_url TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       poll_interval_seconds INTEGER NOT NULL DEFAULT 60,
+      repository_scope TEXT NOT NULL DEFAULT 'selected',
+      is_default INTEGER NOT NULL DEFAULT 0,
       access_token_encrypted TEXT,
       access_token_hint TEXT,
       webhook_secret_encrypted TEXT,
       webhook_secret_hint TEXT,
+      verification_status TEXT NOT NULL DEFAULT 'unverified',
+      verified_at TEXT,
+      verification_identity TEXT,
+      verified_repository_count INTEGER NOT NULL DEFAULT 0,
+      verified_repository_total INTEGER NOT NULL DEFAULT 0,
+      verification_error_code TEXT,
+      verification_error TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(workspace_id, provider, name)
@@ -1186,6 +1196,7 @@ export function runMigrations(db: SqlDatabase): void {
       name TEXT NOT NULL,
       default_branch TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
+      assignment_origin TEXT NOT NULL DEFAULT 'explicit',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(workspace_id, repository_id),
@@ -1671,9 +1682,31 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_owner TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_until TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_token TEXT");
+  const scmRepositoryScopeAdded = addColumnIfMissing(
+    db,
+    "multiremi_scm_connections",
+    "repository_scope TEXT NOT NULL DEFAULT 'selected'",
+  );
+  const scmDefaultAdded = addColumnIfMissing(
+    db,
+    "multiremi_scm_connections",
+    "is_default INTEGER NOT NULL DEFAULT 0",
+  );
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_status TEXT NOT NULL DEFAULT 'unverified'");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verified_at TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_identity TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verified_repository_count INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verified_repository_total INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_error_code TEXT");
+  addColumnIfMissing(db, "multiremi_scm_connections", "verification_error TEXT");
+  addColumnIfMissing(db, "multiremi_scm_repository_bindings", "assignment_origin TEXT NOT NULL DEFAULT 'explicit'");
+  if (scmRepositoryScopeAdded || scmDefaultAdded) backfillSingleScmDefaults(db);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_multiremi_scm_sync_cursors_lease
       ON multiremi_scm_sync_cursors(lease_until, connection_id, repository_id, stream);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_scm_connections_default
+      ON multiremi_scm_connections(workspace_id, provider, base_url)
+      WHERE is_default = 1;
   `);
   addColumnIfMissing(db, "multiremi_scm_entity_snapshots", "revision_at TEXT");
   addColumnIfMissing(db, "multiremi_scm_entity_snapshots", "revision TEXT");
@@ -2022,6 +2055,141 @@ function backfillIssueKeys(db: SqlDatabase): void {
       [number, formatIssueKey(number), row.id],
     );
   }
+}
+
+function backfillSingleScmDefaults(db: SqlDatabase): void {
+  const rows = db.query(
+    `SELECT workspace_id, provider, MIN(id) AS connection_id, MIN(base_url) AS base_url,
+            COUNT(*) AS connection_count
+     FROM multiremi_scm_connections
+     GROUP BY workspace_id, provider`,
+  ).all() as Array<{
+    workspace_id: string;
+    provider: string;
+    base_url: string;
+    connection_id: string;
+    connection_count: number;
+  }>;
+  for (const row of rows) {
+    if (Number(row.connection_count) !== 1) continue;
+    db.run(
+      `UPDATE multiremi_scm_connections
+       SET repository_scope = 'all', is_default = 1
+       WHERE id = ? AND is_default = 0 AND repository_scope = 'selected'`,
+      [row.connection_id],
+    );
+    const existingBindings = db.query(
+      `SELECT repository_id, repository_url
+       FROM multiremi_scm_repository_bindings WHERE connection_id = ?`,
+    ).all(row.connection_id) as Array<{ repository_id: string; repository_url: string }>;
+    for (const binding of existingBindings) {
+      if (scmRepositoryOrigin(binding.repository_url) !== scmRepositoryOrigin(row.base_url)) continue;
+      db.run(
+        `UPDATE multiremi_scm_repository_bindings SET assignment_origin = 'default'
+         WHERE connection_id = ? AND repository_id = ?`,
+        [row.connection_id, binding.repository_id],
+      );
+    }
+
+    const workspace = db.query("SELECT repos FROM multiremi_workspaces WHERE id = ?")
+      .get(row.workspace_id) as { repos?: string } | null;
+    const repositories = parseScmMigrationRepositories(workspace?.repos);
+    const now = new Date().toISOString();
+    for (const repository of repositories) {
+      if (repository.provider !== row.provider) continue;
+      if (scmRepositoryOrigin(repository.url) !== scmRepositoryOrigin(row.base_url)) continue;
+      const coordinates = scmMigrationRepositoryCoordinates(repository.url);
+      db.run(
+        `INSERT INTO multiremi_scm_repository_bindings (
+          id, workspace_id, connection_id, repository_id, repository_url, external_id,
+          owner, name, default_branch, enabled, assignment_origin, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, 'default', ?, ?)
+        ON CONFLICT(workspace_id, repository_id) DO NOTHING`,
+        [
+          `srb_migrated_${row.connection_id}_${repository.id}`,
+          row.workspace_id,
+          row.connection_id,
+          repository.id,
+          repository.url,
+          coordinates.owner,
+          repository.name || coordinates.name || "repository",
+          repository.defaultBranch,
+          now,
+          now,
+        ],
+      );
+    }
+  }
+}
+
+function parseScmMigrationRepositories(value: string | undefined): Array<{
+  id: string;
+  url: string;
+  name: string | null;
+  provider: "github" | "codebase" | "unknown";
+  defaultBranch: string | null;
+}> {
+  let rows: unknown;
+  try {
+    rows = JSON.parse(value ?? "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const row = value as Record<string, unknown>;
+    const url = typeof row.url === "string" ? row.url.trim() : "";
+    if (!url) return [];
+    const canonicalKey = scmMigrationCanonicalGitUrl(url);
+    const source = row.source === "github" || row.source === "codebase" ? row.source : null;
+    const host = scmRepositoryOrigin(url);
+    const provider = source ?? (host === "github.com" ? "github" : host === "code.byted.org" ? "codebase" : "unknown");
+    const coordinates = scmMigrationRepositoryCoordinates(url);
+    return [{
+      id: typeof row.id === "string" && row.id.trim()
+        ? row.id.trim()
+        : `repo_${createHash("sha256").update(canonicalKey).digest("hex").slice(0, 16)}`,
+      url,
+      name: typeof row.name === "string" && row.name.trim() ? row.name.trim() : coordinates.name,
+      provider,
+      defaultBranch: typeof (row.default_branch ?? row.defaultBranch) === "string"
+        ? String(row.default_branch ?? row.defaultBranch).trim() || null
+        : null,
+    }];
+  });
+}
+
+function scmRepositoryOrigin(value: string): string {
+  const scpHost = value.trim().match(/^(?:ssh:\/\/)?[^@\s]+@([^:/\s]+)[:/]/u)?.[1];
+  if (scpHost) return scpHost.toLowerCase();
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function scmMigrationCanonicalGitUrl(value: string): string {
+  const coordinates = scmMigrationRepositoryCoordinates(value);
+  return `${scmRepositoryOrigin(value)}/${coordinates.owner ?? ""}/${coordinates.name ?? ""}`.toLowerCase();
+}
+
+function scmMigrationRepositoryCoordinates(value: string): { owner: string | null; name: string | null } {
+  const trimmed = value.trim();
+  const scpPath = trimmed.match(/^(?:ssh:\/\/)?[^@\s]+@[^:/\s]+[:/](.+)$/u)?.[1];
+  let path = scpPath ?? "";
+  if (!path) {
+    try {
+      path = new URL(trimmed).pathname;
+    } catch {
+      path = trimmed;
+    }
+  }
+  const parts = path.replace(/^\/+|\/+$/gu, "").split("/").filter(Boolean);
+  if (!parts.length) return { owner: null, name: null };
+  const name = parts.pop()!.replace(/\.git$/iu, "");
+  return { owner: parts.join("/") || null, name: name || null };
 }
 
 // Populate multiremi_workspace_members.user_id from the legacy `mem_<ws>_<userId>`

@@ -205,6 +205,123 @@ describe("store migrations", () => {
     expect(row?.name).toBe("Keep me");
   });
 
+  it("backfills a sole provider connection as the default and binds all matching imported repositories", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        description TEXT,
+        context TEXT,
+        settings TEXT NOT NULL DEFAULT '{}',
+        repos TEXT NOT NULL DEFAULT '[]',
+        issue_prefix TEXT NOT NULL DEFAULT 'MUL',
+        env TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE multiremi_scm_connections (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        api_base_url TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        poll_interval_seconds INTEGER NOT NULL DEFAULT 60,
+        access_token_encrypted TEXT,
+        access_token_hint TEXT,
+        webhook_secret_encrypted TEXT,
+        webhook_secret_hint TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, provider, name)
+      );
+      CREATE TABLE multiremi_scm_repository_bindings (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        repository_id TEXT NOT NULL,
+        repository_url TEXT NOT NULL,
+        external_id TEXT,
+        owner TEXT,
+        name TEXT NOT NULL,
+        default_branch TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, repository_id),
+        UNIQUE(connection_id, repository_id)
+      );
+    `);
+    const timestamp = "2026-08-20T00:00:00.000Z";
+    database.run(
+      `INSERT INTO multiremi_workspaces (id, name, slug, repos, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        "local",
+        "Local",
+        "local",
+        JSON.stringify([
+          { id: "repo_bound", name: "bound", url: "git@github.com:acme/bound.git", source: "github", default_branch: "main" },
+          { id: "repo_missing", name: "missing", url: "https://github.com/acme/missing.git", source: "github", default_branch: "trunk" },
+          { id: "repo_codebase", name: "internal", url: "git@code.byted.org:acme/internal.git", source: "codebase" },
+        ]),
+        timestamp,
+        timestamp,
+      ],
+    );
+    database.run(
+      `INSERT INTO multiremi_scm_connections (
+        id, workspace_id, name, provider, mode, base_url, api_base_url, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["scm_github", "local", "GitHub", "github", "poll", "https://github.com", "https://api.github.com", timestamp, timestamp],
+    );
+    for (const [id, name] of [["scm_codebase_one", "Codebase one"], ["scm_codebase_two", "Codebase two"]]) {
+      database.run(
+        `INSERT INTO multiremi_scm_connections (
+          id, workspace_id, name, provider, mode, base_url, api_base_url, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, "local", name, "codebase", "poll", "https://code.byted.org", "https://codebase-api.byted.org/v2", timestamp, timestamp],
+      );
+    }
+    database.run(
+      `INSERT INTO multiremi_scm_repository_bindings (
+        id, workspace_id, connection_id, repository_id, repository_url, owner, name, default_branch, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["srb_existing", "local", "scm_github", "repo_bound", "git@github.com:acme/bound.git", "acme", "bound", "main", timestamp, timestamp],
+    );
+    database.run(
+      `INSERT INTO multiremi_scm_repository_bindings (
+        id, workspace_id, connection_id, repository_id, repository_url, owner, name, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["srb_codebase", "local", "scm_codebase_one", "repo_codebase", "git@code.byted.org:acme/internal.git", "acme", "internal", timestamp, timestamp],
+    );
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT repository_scope, is_default FROM multiremi_scm_connections WHERE id = 'scm_github'",
+    ).get()).toEqual({ repository_scope: "all", is_default: 1 });
+    expect(database.query(
+      `SELECT id, repository_scope, is_default FROM multiremi_scm_connections
+       WHERE provider = 'codebase' ORDER BY id`,
+    ).all()).toEqual([
+      { id: "scm_codebase_one", repository_scope: "selected", is_default: 0 },
+      { id: "scm_codebase_two", repository_scope: "selected", is_default: 0 },
+    ]);
+    expect(database.query(
+      `SELECT repository_id, assignment_origin
+       FROM multiremi_scm_repository_bindings ORDER BY repository_id`,
+    ).all()).toEqual([
+      { repository_id: "repo_bound", assignment_origin: "default" },
+      { repository_id: "repo_codebase", assignment_origin: "explicit" },
+      { repository_id: "repo_missing", assignment_origin: "default" },
+    ]);
+  });
+
   it("adds system-event run columns before creating their unique index", () => {
     const database = freshDb();
     database.exec(`

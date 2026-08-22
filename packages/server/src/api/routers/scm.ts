@@ -78,6 +78,44 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
 
+  app.post("/api/workspaces/:workspaceId/scm/connections/:connectionId/verify", async (c) => {
+    const loaded = loadConnection(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    const expectedUpdatedAt = loaded.connection.updatedAt;
+    const credential = store.getScmConnectionCredential(loaded.connection.id);
+    if (!credential) return c.json({ error: "SCM connection not found" }, 404);
+    try {
+      store.markScmConnectionVerificationStarted(loaded.connection.id);
+      let result;
+      try {
+        result = await deps.verifyScmConnection({
+          connection: loaded.connection,
+          credential,
+          bindings: loaded.connection.repositories,
+        });
+      } catch {
+        result = {
+          status: "unreachable" as const,
+          verifiedAt: new Date().toISOString(),
+          identity: null,
+          repositoryCount: 0,
+          repositoryTotal: loaded.connection.repositories.length,
+          errorCode: "verification_failed",
+          error: "验证请求失败，请稍后重试",
+        };
+      }
+      const connection = store.recordScmConnectionVerification(
+        loaded.connection.id,
+        result,
+        expectedUpdatedAt,
+      );
+      publishWorkspaceEvent(c, store, "scm:connection_verified", loaded.connection.workspaceId, { connection });
+      return c.json({ connection });
+    } catch (error) {
+      return scmErrorResponse(c, error);
+    }
+  });
+
   app.put("/api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId", async (c) => {
     const loaded = loadConnection(c, deps, true);
     if (loaded instanceof Response) return loaded;
@@ -86,6 +124,7 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
       external_id?: string | null;
       owner?: string | null;
       enabled?: boolean;
+      transfer?: boolean;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -103,6 +142,8 @@ export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
         externalId: body.externalId ?? body.external_id,
         owner: body.owner,
         enabled: body.enabled,
+        assignmentOrigin: "explicit",
+        transfer: body.transfer,
       });
       publishWorkspaceEvent(c, store, "scm:repository_bound", loaded.connection.workspaceId, { binding });
       return c.json({ connection: store.getScmConnectionWithRepositories(loaded.connection.id) });
@@ -187,7 +228,9 @@ function scmErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof ScmCredentialEncryptionError) {
     return c.json({ error: message, code: error.code }, 503);
   }
-  if (/already exists|UNIQUE constraint|duplicate key/iu.test(message)) return c.json({ error: message }, 409);
+  if (/already exists|already bound|changed while|UNIQUE constraint|duplicate key/iu.test(message)) {
+    return c.json({ error: message }, 409);
+  }
   if (/not found/iu.test(message)) return c.json({ error: message }, 404);
   if (/event history/iu.test(message)) return c.json({ error: message }, 409);
   return c.json({ error: message }, 400);

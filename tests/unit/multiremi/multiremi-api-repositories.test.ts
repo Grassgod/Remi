@@ -22,6 +22,12 @@ describe("Multiremi API - workspace repositories", () => {
   it("inspects, imports, updates, lists, and removes Git repositories", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
+    const githubConnection = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
     let inspectionCount = 0;
     const app = createMultiremiApp({
       store,
@@ -57,7 +63,9 @@ describe("Multiremi API - workspace repositories", () => {
       }),
     });
     expect(github.status).toBe(201);
-    expect(await github.json()).toMatchObject({
+    const githubBody = await github.json();
+    const importedRepositoryId = String(githubBody.repository.id);
+    expect(githubBody).toMatchObject({
       repository: {
         id: expect.stringMatching(/^repo_/),
         name: "remi",
@@ -67,6 +75,13 @@ describe("Multiremi API - workspace repositories", () => {
         default_branch: "release",
       },
     });
+    expect(store.listScmRepositoryBindings({ connectionId: githubConnection.id })).toContainEqual(
+      expect.objectContaining({
+        repositoryId: importedRepositoryId,
+        assignmentOrigin: "default",
+        defaultBranch: "release",
+      }),
+    );
 
     const codebase = await app.request("/api/workspaces/local/repos", {
       method: "POST",

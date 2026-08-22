@@ -102,6 +102,7 @@ export async function importWorkspaceRepository(
   const updated = store.updateWorkspace(workspaceId, {
     repos: [...repositories, repository],
   });
+  store.reconcileScmRepositoryBindings(workspaceId, updated.repos);
   return { repository, workspace: updated };
 }
 
@@ -149,6 +150,7 @@ export async function backfillWorkspaceRepositoryDefaultBranches(
       : repository;
   });
   store.updateWorkspace(workspaceId, { repos: updatedRepositories });
+  store.reconcileScmRepositoryBindings(workspaceId, updatedRepositories);
   return updatedRepositories;
 }
 
@@ -202,6 +204,7 @@ export async function updateWorkspaceRepository(
       candidate.id === repositoryId ? updatedRepository : candidate
     ),
   });
+  store.reconcileScmRepositoryBindings(workspaceId, updated.repos);
   return { repository: updatedRepository, workspace: updated };
 }
 
@@ -297,6 +300,7 @@ export function removeWorkspaceRepository(
   const updated = store.updateWorkspace(workspaceId, {
     repos: repositories.filter((repo) => repo.id !== repositoryId),
   });
+  store.deleteScmRepositoryBindingsForWorkspaceRepository(workspaceId, repositoryId);
   return { repository, workspace: updated };
 }
 

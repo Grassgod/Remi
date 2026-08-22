@@ -2966,6 +2966,19 @@ export type MultiremiScmEventStatus = "pending" | "processing" | "processed" | "
 
 export type MultiremiScmEventDeliveryStatus = "pending" | "processing" | "delivered" | "failed" | "skipped";
 
+export type MultiremiScmRepositoryScope = "all" | "selected";
+
+export type MultiremiScmRepositoryAssignmentOrigin = "default" | "explicit";
+
+export type MultiremiScmVerificationStatus =
+  | "unverified"
+  | "verifying"
+  | "valid"
+  | "partial"
+  | "invalid"
+  | "rate_limited"
+  | "unreachable";
+
 export interface MultiremiScmConnection {
   id: string;
   workspaceId: string;
@@ -2976,10 +2989,19 @@ export interface MultiremiScmConnection {
   apiBaseUrl: string;
   enabled: boolean;
   pollIntervalSeconds: number;
+  repositoryScope: MultiremiScmRepositoryScope;
+  isDefault: boolean;
   accessTokenSet: boolean;
   accessTokenHint: string | null;
   webhookSecretSet: boolean;
   webhookSecretHint: string | null;
+  verificationStatus: MultiremiScmVerificationStatus;
+  verifiedAt: string | null;
+  verificationIdentity: string | null;
+  verifiedRepositoryCount: number;
+  verifiedRepositoryTotal: number;
+  verificationErrorCode: string | null;
+  verificationError: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -3008,6 +3030,8 @@ export interface CreateScmConnectionInput {
   pollIntervalSeconds?: number;
   poll_interval_seconds?: number;
   enabled?: boolean;
+  repositoryScope?: MultiremiScmRepositoryScope;
+  repository_scope?: MultiremiScmRepositoryScope;
   repositoryIds?: string[];
   repository_ids?: string[];
 }
@@ -3030,6 +3054,8 @@ export interface UpdateScmConnectionInput {
   pollIntervalSeconds?: number;
   poll_interval_seconds?: number;
   enabled?: boolean;
+  repositoryScope?: MultiremiScmRepositoryScope;
+  repository_scope?: MultiremiScmRepositoryScope;
 }
 
 export interface MultiremiScmRepositoryBinding {
@@ -3043,6 +3069,7 @@ export interface MultiremiScmRepositoryBinding {
   name: string;
   defaultBranch: string | null;
   enabled: boolean;
+  assignmentOrigin: MultiremiScmRepositoryAssignmentOrigin;
   createdAt: string;
   updatedAt: string;
 }
@@ -3059,6 +3086,19 @@ export interface UpsertScmRepositoryBindingInput {
   name: string;
   defaultBranch?: string | null;
   enabled?: boolean;
+  assignmentOrigin?: MultiremiScmRepositoryAssignmentOrigin;
+  assignment_origin?: MultiremiScmRepositoryAssignmentOrigin;
+  transfer?: boolean;
+}
+
+export interface MultiremiScmVerificationResult {
+  status: MultiremiScmVerificationStatus;
+  verifiedAt: string;
+  identity: string | null;
+  repositoryCount: number;
+  repositoryTotal: number;
+  errorCode: string | null;
+  error: string | null;
 }
 
 export interface MultiremiScmSyncCursor {
