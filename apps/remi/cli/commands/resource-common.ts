@@ -49,7 +49,10 @@ export function commandOptions(
   return options;
 }
 
-export async function clientFor(invocation: CommandInvocation): Promise<CliApiClient> {
+export async function clientFor(
+  invocation: CommandInvocation,
+  options: { skipCapability?: boolean } = {},
+): Promise<CliApiClient> {
   const config = loadMultiremiConfig();
   const shareCredential = stringOption(invocation, "share");
   const client = new CliApiClient({
@@ -67,7 +70,7 @@ export async function clientFor(invocation: CommandInvocation): Promise<CliApiCl
     workspaceId: workspaceOption(invocation),
     timeoutMs: integerOption(invocation, "timeout") ?? 30_000,
   });
-  await client.requireCapability(invocation.spec.id);
+  if (!options.skipCapability) await client.requireCapability(invocation.spec.id);
   return client;
 }
 

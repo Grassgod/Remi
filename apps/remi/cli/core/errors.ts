@@ -44,7 +44,7 @@ export class CliError extends Error {
     message: string,
     options: CliErrorOptions = {},
   ) {
-    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    super(sanitizeCliMessage(message), options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "CliError";
     this.exitCode = options.exitCode ?? EXIT_CODES[code];
     this.retryable = options.retryable ?? false;
@@ -66,6 +66,13 @@ export class CliError extends Error {
 }
 
 const SECRET_KEY = /(?:authorization|token|password|secret|api[-_]?key|credential|cookie)/i;
+const SECRET_ASSIGNMENT = /\b(authorization|token|password|secret|api[-_]?key|credential|cookie)\s*[:=]\s*([^\s,;]+)/gi;
+
+export function sanitizeCliMessage(value: string): string {
+  return value
+    .replace(/\bBearer\s+\S+/gi, "Bearer ***")
+    .replace(SECRET_ASSIGNMENT, "$1=***");
+}
 
 export function sanitizeCliDetails(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") return value.replace(/\bBearer\s+\S+/gi, "Bearer ***");

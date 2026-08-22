@@ -5198,7 +5198,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "unknown",
+              "provider": "<user>",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -5966,7 +5966,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "unknown",
+              "provider": "<user>",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -6661,6 +6661,292 @@
             "allowed": true
           },
           {
+            "id": "autopilot.create",
+            "command": "remi autopilot create",
+            "capability": "autopilot.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delete",
+            "command": "remi autopilot delete",
+            "capability": "autopilot.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delivery.get",
+            "command": "remi autopilot delivery get",
+            "capability": "autopilot.delivery.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delivery.list",
+            "command": "remi autopilot delivery list",
+            "capability": "autopilot.delivery.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delivery.replay",
+            "command": "remi autopilot delivery replay",
+            "capability": "autopilot.delivery.replay",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.get",
+            "command": "remi autopilot get",
+            "capability": "autopilot.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.list",
+            "command": "remi autopilot list",
+            "capability": "autopilot.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.run",
+            "command": "remi autopilot run",
+            "capability": "autopilot.run",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.run.get",
+            "command": "remi autopilot run get",
+            "capability": "autopilot.run.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.run.list",
+            "command": "remi autopilot run list",
+            "capability": "autopilot.run.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.scheduler",
+            "command": "remi autopilot scheduler",
+            "capability": "autopilot.scheduler",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.create",
+            "command": "remi autopilot trigger create",
+            "capability": "autopilot.trigger.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.delete",
+            "command": "remi autopilot trigger delete",
+            "capability": "autopilot.trigger.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.list",
+            "command": "remi autopilot trigger list",
+            "capability": "autopilot.trigger.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.rotate-token",
+            "command": "remi autopilot trigger rotate-token",
+            "capability": "autopilot.trigger.rotate-token",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.set-secret",
+            "command": "remi autopilot trigger set-secret",
+            "capability": "autopilot.trigger.set-secret",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.update",
+            "command": "remi autopilot trigger update",
+            "capability": "autopilot.trigger.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.update",
+            "command": "remi autopilot update",
+            "capability": "autopilot.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.balance",
+            "command": "remi billing balance",
+            "capability": "billing.balance",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.batch.list",
+            "command": "remi billing batch list",
+            "capability": "billing.batch.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.checkout.create",
+            "command": "remi billing checkout create",
+            "capability": "billing.checkout.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.checkout.get",
+            "command": "remi billing checkout get",
+            "capability": "billing.checkout.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.portal.create",
+            "command": "remi billing portal create",
+            "capability": "billing.portal.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.tier.list",
+            "command": "remi billing tier list",
+            "capability": "billing.tier.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.topup.list",
+            "command": "remi billing topup list",
+            "capability": "billing.topup.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.transaction.list",
+            "command": "remi billing transaction list",
+            "capability": "billing.transaction.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "chat.create",
             "command": "remi chat create",
             "capability": "chat.create",
@@ -6870,9 +7156,273 @@
             "allowed": true
           },
           {
+            "id": "context.auth.google",
+            "command": "remi context auth google",
+            "capability": "context.auth.google",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.lark",
+            "command": "remi context auth lark",
+            "capability": "context.auth.lark",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.logout",
+            "command": "remi context auth logout",
+            "capability": "context.auth.logout",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.send-code",
+            "command": "remi context auth send-code",
+            "capability": "context.auth.send-code",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.verify-code",
+            "command": "remi context auth verify-code",
+            "capability": "context.auth.verify-code",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "context.get",
             "command": "remi context",
             "capability": "context.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.list",
+            "command": "remi daemon list",
+            "capability": "daemon.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.retire",
+            "command": "remi daemon retire",
+            "capability": "daemon.retire",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.retirement-plan",
+            "command": "remi daemon retirement-plan",
+            "capability": "daemon.retirement-plan",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-activity",
+            "command": "remi dashboard agent-activity",
+            "capability": "dashboard.agent-activity",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-runs",
+            "command": "remi dashboard agent-runs",
+            "capability": "dashboard.agent-runs",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-runtime",
+            "command": "remi dashboard agent-runtime",
+            "capability": "dashboard.agent-runtime",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-tasks",
+            "command": "remi dashboard agent-tasks",
+            "capability": "dashboard.agent-tasks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.assignee-frequency",
+            "command": "remi dashboard assignee-frequency",
+            "capability": "dashboard.assignee-frequency",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.runtime.daily",
+            "command": "remi dashboard runtime daily",
+            "capability": "dashboard.runtime.daily",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.by-agent",
+            "command": "remi dashboard usage by-agent",
+            "capability": "dashboard.usage.by-agent",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.daily",
+            "command": "remi dashboard usage daily",
+            "capability": "dashboard.usage.daily",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive",
+            "command": "remi inbox archive",
+            "capability": "inbox.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive-all",
+            "command": "remi inbox archive-all",
+            "capability": "inbox.archive-all",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive-all-read",
+            "command": "remi inbox archive-all-read",
+            "capability": "inbox.archive-all-read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive-completed",
+            "command": "remi inbox archive-completed",
+            "capability": "inbox.archive-completed",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.list",
+            "command": "remi inbox list",
+            "capability": "inbox.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.mark-all-read",
+            "command": "remi inbox mark-all-read",
+            "capability": "inbox.mark-all-read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.read",
+            "command": "remi inbox read",
+            "capability": "inbox.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.unread-count",
+            "command": "remi inbox unread-count",
+            "capability": "inbox.unread-count",
             "outputs": [
               "table",
               "json",
@@ -7475,6 +8025,83 @@
             "allowed": true
           },
           {
+            "id": "lark.binding.redeem",
+            "command": "remi lark binding redeem",
+            "capability": "lark.binding.redeem",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.daemon.install",
+            "command": "remi lark daemon install",
+            "capability": "lark.daemon.install",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.daemon.status",
+            "command": "remi lark daemon status",
+            "capability": "lark.daemon.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.install.begin",
+            "command": "remi lark install begin",
+            "capability": "lark.install.begin",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.install.status",
+            "command": "remi lark install status",
+            "capability": "lark.install.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.installation.delete",
+            "command": "remi lark installation delete",
+            "capability": "lark.installation.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.installation.list",
+            "command": "remi lark installation list",
+            "capability": "lark.installation.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "member.create",
             "command": "remi member create",
             "capability": "member.create",
@@ -7698,6 +8325,204 @@
             "id": "memory.update",
             "command": "remi memory update",
             "capability": "memory.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.get",
+            "command": "remi notification get",
+            "capability": "notification.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.update",
+            "command": "remi notification update",
+            "capability": "notification.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.create",
+            "command": "remi pin create",
+            "capability": "pin.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.delete",
+            "command": "remi pin delete",
+            "capability": "pin.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.list",
+            "command": "remi pin list",
+            "capability": "pin.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.reorder",
+            "command": "remi pin reorder",
+            "capability": "pin.reorder",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.feedback.create",
+            "command": "remi platform feedback create",
+            "capability": "platform.feedback.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.feedback.list",
+            "command": "remi platform feedback list",
+            "capability": "platform.feedback.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.health",
+            "command": "remi platform health",
+            "capability": "platform.health",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.operation.create",
+            "command": "remi platform operation create",
+            "capability": "platform.operation.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.operation.list",
+            "command": "remi platform operation list",
+            "capability": "platform.operation.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.ready",
+            "command": "remi platform ready",
+            "capability": "platform.ready",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.realtime",
+            "command": "remi platform realtime",
+            "capability": "platform.realtime",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.release.get",
+            "command": "remi platform release get",
+            "capability": "platform.release.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.release.latest",
+            "command": "remi platform release latest",
+            "capability": "platform.release.latest",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.release.version",
+            "command": "remi platform release version",
+            "capability": "platform.release.version",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.settings.update",
+            "command": "remi platform settings update",
+            "capability": "platform.settings.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.status",
+            "command": "remi platform status",
+            "capability": "platform.status",
             "outputs": [
               "table",
               "json",
@@ -8061,6 +8886,545 @@
             "id": "repo.update",
             "command": "remi repo update",
             "capability": "repo.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.activity",
+            "command": "remi runtime activity",
+            "capability": "runtime.activity",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.archive-agents-and-delete",
+            "command": "remi runtime archive-agents-and-delete",
+            "capability": "runtime.archive-agents-and-delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.health",
+            "command": "remi runtime cloud health",
+            "capability": "runtime.cloud.health",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.create",
+            "command": "remi runtime cloud node create",
+            "capability": "runtime.cloud.node.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.delete",
+            "command": "remi runtime cloud node delete",
+            "capability": "runtime.cloud.node.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.exec",
+            "command": "remi runtime cloud node exec",
+            "capability": "runtime.cloud.node.exec",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.list",
+            "command": "remi runtime cloud node list",
+            "capability": "runtime.cloud.node.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.reboot",
+            "command": "remi runtime cloud node reboot",
+            "capability": "runtime.cloud.node.reboot",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.start",
+            "command": "remi runtime cloud node start",
+            "capability": "runtime.cloud.node.start",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.status",
+            "command": "remi runtime cloud node status",
+            "capability": "runtime.cloud.node.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.stop",
+            "command": "remi runtime cloud node stop",
+            "capability": "runtime.cloud.node.stop",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.ready",
+            "command": "remi runtime cloud ready",
+            "capability": "runtime.cloud.ready",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.status",
+            "command": "remi runtime cloud status",
+            "capability": "runtime.cloud.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.create",
+            "command": "remi runtime create",
+            "capability": "runtime.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.delete",
+            "command": "remi runtime delete",
+            "capability": "runtime.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.directory.scan",
+            "command": "remi runtime directory scan",
+            "capability": "runtime.directory.scan",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.directory.status",
+            "command": "remi runtime directory status",
+            "capability": "runtime.directory.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.get",
+            "command": "remi runtime get",
+            "capability": "runtime.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.list",
+            "command": "remi runtime list",
+            "capability": "runtime.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.catalog",
+            "command": "remi runtime model catalog",
+            "capability": "runtime.model.catalog",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.list",
+            "command": "remi runtime model list",
+            "capability": "runtime.model.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.refresh",
+            "command": "remi runtime model refresh",
+            "capability": "runtime.model.refresh",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.set",
+            "command": "remi runtime model set",
+            "capability": "runtime.model.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.status",
+            "command": "remi runtime model status",
+            "capability": "runtime.model.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.release.start",
+            "command": "remi runtime release start",
+            "capability": "runtime.release.start",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.release.status",
+            "command": "remi runtime release status",
+            "capability": "runtime.release.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.import",
+            "command": "remi runtime skill import",
+            "capability": "runtime.skill.import",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.import-status",
+            "command": "remi runtime skill import-status",
+            "capability": "runtime.skill.import-status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.scan",
+            "command": "remi runtime skill scan",
+            "capability": "runtime.skill.scan",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.status",
+            "command": "remi runtime skill status",
+            "capability": "runtime.skill.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.task-activity",
+            "command": "remi runtime task-activity",
+            "capability": "runtime.task-activity",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.update",
+            "command": "remi runtime update",
+            "capability": "runtime.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.usage",
+            "command": "remi runtime usage",
+            "capability": "runtime.usage",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.usage.by-agent",
+            "command": "remi runtime usage by-agent",
+            "capability": "runtime.usage.by-agent",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.usage.by-hour",
+            "command": "remi runtime usage by-hour",
+            "capability": "runtime.usage.by-hour",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.capabilities",
+            "command": "remi scm capabilities",
+            "capability": "scm.capabilities",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.change-request.link",
+            "command": "remi scm change-request link",
+            "capability": "scm.change-request.link",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.change-request.list",
+            "command": "remi scm change-request list",
+            "capability": "scm.change-request.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.change-request.unlink",
+            "command": "remi scm change-request unlink",
+            "capability": "scm.change-request.unlink",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.create",
+            "command": "remi scm connection create",
+            "capability": "scm.connection.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.delete",
+            "command": "remi scm connection delete",
+            "capability": "scm.connection.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.get",
+            "command": "remi scm connection get",
+            "capability": "scm.connection.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.list",
+            "command": "remi scm connection list",
+            "capability": "scm.connection.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.update",
+            "command": "remi scm connection update",
+            "capability": "scm.connection.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.verify",
+            "command": "remi scm connection verify",
+            "capability": "scm.connection.verify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.event.get",
+            "command": "remi scm event get",
+            "capability": "scm.event.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.event.list",
+            "command": "remi scm event list",
+            "capability": "scm.event.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.repository.bind",
+            "command": "remi scm repository bind",
+            "capability": "scm.repository.bind",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.repository.unbind",
+            "command": "remi scm repository unbind",
+            "capability": "scm.repository.unbind",
             "outputs": [
               "table",
               "json",
@@ -9531,7 +10895,7 @@
         {
           "date": "2026-01-01",
           "runtimeId": "rt_snapshot",
-          "provider": "unknown",
+          "provider": "<user>",
           "model": "claude-sonnet-4",
           "inputTokens": 10,
           "outputTokens": 5,
@@ -10545,7 +11909,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "unknown",
+              "provider": "<user>",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -11558,7 +12922,7 @@
             "wait_reason": null,
             "usage": [
               {
-                "provider": "unknown",
+                "provider": "<user>",
                 "model": "claude-sonnet-4",
                 "inputTokens": 10,
                 "outputTokens": 5,
@@ -12398,7 +13762,7 @@
             "wait_reason": null,
             "usage": [
               {
-                "provider": "unknown",
+                "provider": "<user>",
                 "model": "claude-sonnet-4",
                 "inputTokens": 10,
                 "outputTokens": 5,
@@ -13480,7 +14844,7 @@
               "wait_reason": null,
               "usage": [
                 {
-                  "provider": "unknown",
+                  "provider": "<user>",
                   "model": "claude-sonnet-4",
                   "inputTokens": 10,
                   "outputTokens": 5,
@@ -15077,7 +16441,7 @@
         "usage": [
           {
             "runtimeId": "rt_snapshot",
-            "provider": "unknown",
+            "provider": "<user>",
             "model": "claude-sonnet-4",
             "inputTokens": 10,
             "outputTokens": 5,
@@ -15228,7 +16592,7 @@
         "usage": [
           {
             "runtimeId": "rt_snapshot",
-            "provider": "unknown",
+            "provider": "<user>",
             "model": "claude-sonnet-4",
             "inputTokens": 10,
             "outputTokens": 5,
@@ -15728,7 +17092,7 @@
             "wait_reason": null,
             "usage": [
               {
-                "provider": "unknown",
+                "provider": "<user>",
                 "model": "claude-sonnet-4",
                 "inputTokens": 10,
                 "outputTokens": 5,
@@ -15804,7 +17168,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "unknown",
+              "provider": "<user>",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -16496,7 +17860,7 @@
         "usage": [
           {
             "runtimeId": "rt_snapshot",
-            "provider": "unknown",
+            "provider": "<user>",
             "model": "claude-sonnet-4",
             "inputTokens": 10,
             "outputTokens": 5,
@@ -16637,7 +18001,7 @@
         {
           "runtime_id": "rt_snapshot",
           "date": "2026-01-01",
-          "provider": "unknown",
+          "provider": "<user>",
           "model": "claude-sonnet-4",
           "input_tokens": 10,
           "output_tokens": 5,

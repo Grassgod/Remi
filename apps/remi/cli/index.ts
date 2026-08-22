@@ -13,6 +13,7 @@ import { collaborationCommandSpecs } from "./commands/collaboration.js";
 import { inviteCommandSpecs } from "./commands/invite.js";
 import { knowledgeCommandSpecs } from "./commands/knowledge.js";
 import { memberCommandSpecs } from "./commands/member.js";
+import { operationsCommandSpecs } from "./commands/operations.js";
 import { projectCommandSpecs } from "./commands/project.js";
 import { repoCommandSpecs } from "./commands/repo.js";
 import { tokenCommandSpecs } from "./commands/token.js";
@@ -30,6 +31,7 @@ for (const spec of [
   ...knowledgeCommandSpecs(),
   ...collaborationCommandSpecs(),
   ...agentExtensionCommandSpecs(),
+  ...operationsCommandSpecs(),
 ]) commandRegistry.register(spec);
 
 // Lazy-load commands to avoid importing heavy modules when not needed

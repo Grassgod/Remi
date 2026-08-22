@@ -47,6 +47,8 @@ export function isDaemonTokenAllowedRequest(request: Request): boolean {
   if ((path === "/api/cli/context" || path === "/api/cli/capabilities") && method === "GET") return true;
   if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
+  if (method === "GET" && (path === "/api/runtimes" || path === "/api/multiremi/runtimes"
+    || /^\/api\/(?:multiremi\/)?runtimes\/[^/]+(?:\/.*)?$/.test(path))) return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
   return false;
 }
@@ -66,6 +68,14 @@ export function isTaskTokenForbiddenRequest(request: Request): boolean {
     if (/^\/api\/workspaces\/[^/]+\/repos$/.test(path) && method === "GET") return false;
     return true;
   }
+  if (path === "/api/runtimes" || path.startsWith("/api/runtimes/")
+    || path === "/api/multiremi/runtimes" || path.startsWith("/api/multiremi/runtimes/")
+    || path === "/api/cloud-runtime" || path.startsWith("/api/cloud-runtime/")
+    || path === "/api/autopilots" || path.startsWith("/api/autopilots/")
+    || path === "/api/multiremi/autopilots" || path.startsWith("/api/multiremi/autopilots/")
+    || path === "/api/cloud-billing" || path.startsWith("/api/cloud-billing/")
+    || path === "/api/multiremi/platform" || path.startsWith("/api/multiremi/platform/")
+    || path === "/api/lark/binding/redeem" || path === "/api/multiremi/install/daemon") return true;
   if (/^\/api\/(?:multiremi\/)?projects(?:\/[^/]+)?$/.test(path) && method !== "GET") return true;
   if (/^\/api\/(?:multiremi\/)?projects\/[^/]+\/restore$/.test(path)) return true;
   if (/^\/api\/(?:multiremi\/)?projects\/[^/]+\/resources(?:\/[^/]+)?$/.test(path) && method !== "GET") return true;

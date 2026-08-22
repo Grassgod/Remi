@@ -2918,6 +2918,1533 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "json",
         "jsonl"
       ]
+    },
+    "runtime.list": {
+      "command": "remi runtime list",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.get": {
+      "command": "remi runtime get",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.create": {
+      "command": "remi runtime create",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.update": {
+      "command": "remi runtime update",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.delete": {
+      "command": "remi runtime delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.archive-agents-and-delete": {
+      "command": "remi runtime archive-agents-and-delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.archive-agents-and-delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.model.list": {
+      "command": "remi runtime model list",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.model.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.model.set": {
+      "command": "remi runtime model set",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.model.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.model.refresh": {
+      "command": "remi runtime model refresh",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.model.refresh",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.model.status": {
+      "command": "remi runtime model status",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.model.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.release.start": {
+      "command": "remi runtime release start",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.release.start",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.release.status": {
+      "command": "remi runtime release status",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.release.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.skill.scan": {
+      "command": "remi runtime skill scan",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.skill.scan",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.skill.status": {
+      "command": "remi runtime skill status",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.skill.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.skill.import": {
+      "command": "remi runtime skill import",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.skill.import",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.skill.import-status": {
+      "command": "remi runtime skill import-status",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.skill.import-status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.directory.scan": {
+      "command": "remi runtime directory scan",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.directory.scan",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.directory.status": {
+      "command": "remi runtime directory status",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.directory.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.usage": {
+      "command": "remi runtime usage",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.usage",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.usage.by-agent": {
+      "command": "remi runtime usage by-agent",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.usage.by-agent",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.usage.by-hour": {
+      "command": "remi runtime usage by-hour",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.usage.by-hour",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.task-activity": {
+      "command": "remi runtime task-activity",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.task-activity",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.activity": {
+      "command": "remi runtime activity",
+      "auth": [
+        "human",
+        "daemon"
+      ],
+      "capability": "runtime.activity",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.model.catalog": {
+      "command": "remi runtime model catalog",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.model.catalog",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.status": {
+      "command": "remi runtime cloud status",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.health": {
+      "command": "remi runtime cloud health",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.health",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.ready": {
+      "command": "remi runtime cloud ready",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.ready",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.list": {
+      "command": "remi runtime cloud node list",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.create": {
+      "command": "remi runtime cloud node create",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.delete": {
+      "command": "remi runtime cloud node delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.start": {
+      "command": "remi runtime cloud node start",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.start",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.stop": {
+      "command": "remi runtime cloud node stop",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.stop",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.reboot": {
+      "command": "remi runtime cloud node reboot",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.reboot",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.status": {
+      "command": "remi runtime cloud node status",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.cloud.node.exec": {
+      "command": "remi runtime cloud node exec",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.cloud.node.exec",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "daemon.list": {
+      "command": "remi daemon list",
+      "auth": [
+        "human"
+      ],
+      "capability": "daemon.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "daemon.retirement-plan": {
+      "command": "remi daemon retirement-plan",
+      "auth": [
+        "human"
+      ],
+      "capability": "daemon.retirement-plan",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "daemon.retire": {
+      "command": "remi daemon retire",
+      "auth": [
+        "human"
+      ],
+      "capability": "daemon.retire",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.list": {
+      "command": "remi autopilot list",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.get": {
+      "command": "remi autopilot get",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.create": {
+      "command": "remi autopilot create",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.update": {
+      "command": "remi autopilot update",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.delete": {
+      "command": "remi autopilot delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.run.list": {
+      "command": "remi autopilot run list",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.run.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.run.get": {
+      "command": "remi autopilot run get",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.run.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.run": {
+      "command": "remi autopilot run",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.run",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.delivery.list": {
+      "command": "remi autopilot delivery list",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.delivery.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.delivery.get": {
+      "command": "remi autopilot delivery get",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.delivery.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.delivery.replay": {
+      "command": "remi autopilot delivery replay",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.delivery.replay",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.trigger.list": {
+      "command": "remi autopilot trigger list",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.trigger.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.trigger.create": {
+      "command": "remi autopilot trigger create",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.trigger.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.trigger.update": {
+      "command": "remi autopilot trigger update",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.trigger.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.trigger.delete": {
+      "command": "remi autopilot trigger delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.trigger.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.trigger.rotate-token": {
+      "command": "remi autopilot trigger rotate-token",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.trigger.rotate-token",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.trigger.set-secret": {
+      "command": "remi autopilot trigger set-secret",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.trigger.set-secret",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.scheduler": {
+      "command": "remi autopilot scheduler",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.scheduler",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.capabilities": {
+      "command": "remi scm capabilities",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.capabilities",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.connection.list": {
+      "command": "remi scm connection list",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.connection.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.connection.get": {
+      "command": "remi scm connection get",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.connection.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.connection.create": {
+      "command": "remi scm connection create",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.connection.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.connection.update": {
+      "command": "remi scm connection update",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.connection.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.connection.delete": {
+      "command": "remi scm connection delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.connection.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.connection.verify": {
+      "command": "remi scm connection verify",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.connection.verify",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.repository.bind": {
+      "command": "remi scm repository bind",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.repository.bind",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.repository.unbind": {
+      "command": "remi scm repository unbind",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.repository.unbind",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.event.list": {
+      "command": "remi scm event list",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.event.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.event.get": {
+      "command": "remi scm event get",
+      "auth": [
+        "human"
+      ],
+      "capability": "scm.event.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.change-request.list": {
+      "command": "remi scm change-request list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "scm.change-request.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.change-request.link": {
+      "command": "remi scm change-request link",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "scm.change-request.link",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "scm.change-request.unlink": {
+      "command": "remi scm change-request unlink",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "scm.change-request.unlink",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.list": {
+      "command": "remi inbox list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.unread-count": {
+      "command": "remi inbox unread-count",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.unread-count",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.read": {
+      "command": "remi inbox read",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.archive": {
+      "command": "remi inbox archive",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.mark-all-read": {
+      "command": "remi inbox mark-all-read",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.mark-all-read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.archive-all": {
+      "command": "remi inbox archive-all",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.archive-all",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.archive-all-read": {
+      "command": "remi inbox archive-all-read",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.archive-all-read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "inbox.archive-completed": {
+      "command": "remi inbox archive-completed",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "inbox.archive-completed",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.get": {
+      "command": "remi notification get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.update": {
+      "command": "remi notification update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "pin.list": {
+      "command": "remi pin list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "pin.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "pin.create": {
+      "command": "remi pin create",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "pin.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "pin.reorder": {
+      "command": "remi pin reorder",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "pin.reorder",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "pin.delete": {
+      "command": "remi pin delete",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "pin.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.usage.daily": {
+      "command": "remi dashboard usage daily",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.daily",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.usage.by-agent": {
+      "command": "remi dashboard usage by-agent",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.usage.by-agent",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.runtime.daily": {
+      "command": "remi dashboard runtime daily",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.runtime.daily",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.agent-runtime": {
+      "command": "remi dashboard agent-runtime",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.agent-runtime",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.agent-activity": {
+      "command": "remi dashboard agent-activity",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.agent-activity",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.agent-runs": {
+      "command": "remi dashboard agent-runs",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.agent-runs",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.agent-tasks": {
+      "command": "remi dashboard agent-tasks",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.agent-tasks",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "dashboard.assignee-frequency": {
+      "command": "remi dashboard assignee-frequency",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "dashboard.assignee-frequency",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.health": {
+      "command": "remi platform health",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.health",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.ready": {
+      "command": "remi platform ready",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.ready",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.realtime": {
+      "command": "remi platform realtime",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.realtime",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.status": {
+      "command": "remi platform status",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.operation.list": {
+      "command": "remi platform operation list",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.operation.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.feedback.list": {
+      "command": "remi platform feedback list",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.feedback.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.release.version": {
+      "command": "remi platform release version",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.release.version",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.feedback.create": {
+      "command": "remi platform feedback create",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.feedback.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.settings.update": {
+      "command": "remi platform settings update",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.settings.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.operation.create": {
+      "command": "remi platform operation create",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.operation.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.release.latest": {
+      "command": "remi platform release latest",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.release.latest",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.release.get": {
+      "command": "remi platform release get",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.release.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.balance": {
+      "command": "remi billing balance",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.balance",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.transaction.list": {
+      "command": "remi billing transaction list",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.transaction.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.batch.list": {
+      "command": "remi billing batch list",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.batch.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.topup.list": {
+      "command": "remi billing topup list",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.topup.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.tier.list": {
+      "command": "remi billing tier list",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.tier.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.checkout.create": {
+      "command": "remi billing checkout create",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.checkout.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.checkout.get": {
+      "command": "remi billing checkout get",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.checkout.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "billing.portal.create": {
+      "command": "remi billing portal create",
+      "auth": [
+        "human"
+      ],
+      "capability": "billing.portal.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "lark.installation.list": {
+      "command": "remi lark installation list",
+      "auth": [
+        "human"
+      ],
+      "capability": "lark.installation.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "lark.install.begin": {
+      "command": "remi lark install begin",
+      "auth": [
+        "human"
+      ],
+      "capability": "lark.install.begin",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "lark.install.status": {
+      "command": "remi lark install status",
+      "auth": [
+        "human"
+      ],
+      "capability": "lark.install.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "lark.installation.delete": {
+      "command": "remi lark installation delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "lark.installation.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "lark.binding.redeem": {
+      "command": "remi lark binding redeem",
+      "auth": [
+        "human"
+      ],
+      "capability": "lark.binding.redeem",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "lark.daemon.install": {
+      "command": "remi lark daemon install",
+      "auth": [
+        "human"
+      ],
+      "capability": "lark.daemon.install",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "lark.daemon.status": {
+      "command": "remi lark daemon status",
+      "auth": [
+        "human"
+      ],
+      "capability": "lark.daemon.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.lark": {
+      "command": "remi context auth lark",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.lark",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.google": {
+      "command": "remi context auth google",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.google",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.send-code": {
+      "command": "remi context auth send-code",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.send-code",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.verify-code": {
+      "command": "remi context auth verify-code",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.verify-code",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "context.auth.logout": {
+      "command": "remi context auth logout",
+      "auth": [
+        "human"
+      ],
+      "capability": "context.auth.logout",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
     }
   }
 } as const;

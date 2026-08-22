@@ -16,7 +16,7 @@ const ROOT = resolve(import.meta.dir, "..");
 const GOLDEN_PATH = resolve(ROOT, "scripts/api-routes.golden.json");
 const MANIFEST_PATH = resolve(ROOT, "cli-capabilities.json");
 const RUNTIME_MANIFEST_PATH = resolve(ROOT, "packages/server/src/api/cli-capabilities-generated.ts");
-const MAX_PLANNED_ROUTES = 172;
+const MAX_PLANNED_ROUTES = 0;
 
 const DOMAINS = [
   "context", "workspace", "member", "invite", "token",
@@ -131,6 +131,8 @@ function classifyRoute(route: string): CliManifestRoute {
 }
 
 function mappedResourceCommand(route: string): string | null {
+  const operation = mappedOperationsCommand(route);
+  if (operation) return operation;
   const exact: Record<string, string> = {
     "GET /api/cli/context": "context.get",
     "GET /api/cli/capabilities": "context.get",
@@ -405,6 +407,155 @@ function mappedResourceCommand(route: string): string | null {
   return rules.find(([pattern]) => pattern.test(route))?.[1] ?? null;
 }
 
+function mappedOperationsCommand(route: string): string | null {
+  const exact: Record<string, string> = {
+    "GET /api/runtimes": "runtime.list",
+    "GET /api/multiremi/runtimes": "runtime.list",
+    "POST /api/multiremi/runtimes": "runtime.create",
+    "GET /api/models": "runtime.model.catalog",
+    "GET /api/multiremi/models": "runtime.model.catalog",
+    "GET /api/cloud-runtime": "runtime.cloud.status",
+    "GET /api/cloud-runtime/healthz": "runtime.cloud.health",
+    "GET /api/cloud-runtime/readyz": "runtime.cloud.ready",
+    "GET /api/cloud-runtime/nodes": "runtime.cloud.node.list",
+    "POST /api/cloud-runtime/nodes": "runtime.cloud.node.create",
+    "DELETE /api/cloud-runtime/nodes": "runtime.cloud.node.delete",
+    "POST /api/cloud-runtime/nodes/start": "runtime.cloud.node.start",
+    "POST /api/cloud-runtime/nodes/stop": "runtime.cloud.node.stop",
+    "POST /api/cloud-runtime/nodes/reboot": "runtime.cloud.node.reboot",
+    "POST /api/cloud-runtime/nodes/status": "runtime.cloud.node.status",
+    "POST /api/cloud-runtime/nodes/exec": "runtime.cloud.node.exec",
+    "GET /api/multiremi/daemons": "daemon.list",
+    "GET /api/multiremi/scheduler": "autopilot.scheduler",
+    "GET /api/autopilots": "autopilot.list",
+    "GET /api/multiremi/autopilots": "autopilot.list",
+    "POST /api/autopilots": "autopilot.create",
+    "POST /api/multiremi/autopilots": "autopilot.create",
+    "GET /api/scm/capabilities": "scm.capabilities",
+    "GET /api/inbox": "inbox.list",
+    "GET /api/multiremi/inbox": "inbox.list",
+    "GET /api/inbox/unread-count": "inbox.unread-count",
+    "POST /api/inbox/mark-all-read": "inbox.mark-all-read",
+    "POST /api/inbox/archive-all": "inbox.archive-all",
+    "POST /api/inbox/archive-all-read": "inbox.archive-all-read",
+    "POST /api/inbox/archive-completed": "inbox.archive-completed",
+    "GET /api/notification-preferences": "notification.get",
+    "GET /api/multiremi/notification-preferences": "notification.get",
+    "PUT /api/notification-preferences": "notification.update",
+    "PUT /api/multiremi/notification-preferences": "notification.update",
+    "GET /api/pins": "pin.list",
+    "GET /api/multiremi/pins": "pin.list",
+    "POST /api/pins": "pin.create",
+    "POST /api/multiremi/pins": "pin.create",
+    "PUT /api/pins/reorder": "pin.reorder",
+    "PUT /api/multiremi/pins/reorder": "pin.reorder",
+    "GET /api/dashboard/usage/daily": "dashboard.usage.daily",
+    "GET /api/dashboard/usage/by-agent": "dashboard.usage.by-agent",
+    "GET /api/dashboard/runtime/daily": "dashboard.runtime.daily",
+    "GET /api/dashboard/agent-runtime": "dashboard.agent-runtime",
+    "GET /api/agent-activity-30d": "dashboard.agent-activity",
+    "GET /api/multiremi/agent-activity-30d": "dashboard.agent-activity",
+    "GET /api/agent-run-counts": "dashboard.agent-runs",
+    "GET /api/multiremi/agent-run-counts": "dashboard.agent-runs",
+    "GET /api/agent-task-snapshot": "dashboard.agent-tasks",
+    "GET /api/multiremi/agent-task-snapshot": "dashboard.agent-tasks",
+    "GET /api/assignee-frequency": "dashboard.assignee-frequency",
+    "GET /api/multiremi/assignee-frequency": "dashboard.assignee-frequency",
+    "GET /health": "platform.health",
+    "GET /healthz": "platform.health",
+    "GET /readyz": "platform.ready",
+    "GET /health/realtime": "platform.realtime",
+    "GET /api/multiremi/health": "platform.health",
+    "GET /api/multiremi/platform/status": "platform.status",
+    "GET /api/multiremi/platform/operations": "platform.operation.list",
+    "POST /api/multiremi/platform/operations": "platform.operation.create",
+    "PATCH /api/multiremi/platform/settings": "platform.settings.update",
+    "GET /api/multiremi/feedback": "platform.feedback.list",
+    "POST /api/multiremi/feedback": "platform.feedback.create",
+    "POST /api/feedback": "platform.feedback.create",
+    "GET /api/remi/releases/latest/version": "platform.release.version",
+    "GET /api/cloud-billing/balance": "billing.balance",
+    "GET /api/cloud-billing/transactions": "billing.transaction.list",
+    "GET /api/cloud-billing/batches": "billing.batch.list",
+    "GET /api/cloud-billing/topups": "billing.topup.list",
+    "GET /api/cloud-billing/price-tiers": "billing.tier.list",
+    "POST /api/cloud-billing/checkout-sessions": "billing.checkout.create",
+    "POST /api/cloud-billing/portal-sessions": "billing.portal.create",
+    "POST /api/lark/binding/redeem": "lark.binding.redeem",
+    "POST /api/multiremi/install/daemon": "lark.daemon.install",
+    "GET /api/multiremi/install/daemon": "lark.daemon.status",
+    "GET /auth/lark/url": "context.auth.lark",
+    "POST /auth/google": "context.auth.google",
+    "POST /auth/send-code": "context.auth.send-code",
+    "POST /auth/verify-code": "context.auth.verify-code",
+    "POST /auth/logout": "context.auth.logout",
+  };
+  if (exact[route]) return exact[route]!;
+  const rules: Array<[RegExp, string]> = [
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id$/, "runtime.get"],
+    [/^PATCH \/api\/(?:multiremi\/)?runtimes\/:id$/, "runtime.update"],
+    [/^DELETE \/api\/runtimes\/:id$/, "runtime.delete"],
+    [/^POST \/api\/runtimes\/:id\/archive-agents-and-delete$/, "runtime.archive-agents-and-delete"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/models$/, "runtime.model.list"],
+    [/^PUT \/api\/(?:multiremi\/)?runtimes\/:id\/models$/, "runtime.model.set"],
+    [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/models$/, "runtime.model.refresh"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/models\/:requestId$/, "runtime.model.status"],
+    [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/update$/, "runtime.release.start"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/update\/:updateId$/, "runtime.release.status"],
+    [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills$/, "runtime.skill.scan"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/:requestId$/, "runtime.skill.status"],
+    [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/import$/, "runtime.skill.import"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/import\/:requestId$/, "runtime.skill.import-status"],
+    [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/directory-scans$/, "runtime.directory.scan"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/directory-scans\/:requestId$/, "runtime.directory.status"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/usage$/, "runtime.usage"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/usage\/by-agent$/, "runtime.usage.by-agent"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/usage\/by-hour$/, "runtime.usage.by-hour"],
+    [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/task-activity$/, "runtime.task-activity"],
+    [/^GET \/api\/runtimes\/:id\/activity$/, "runtime.activity"],
+    [/^GET \/api\/multiremi\/daemons\/:daemonId\/retirement-plan$/, "daemon.retirement-plan"],
+    [/^POST \/api\/multiremi\/daemons\/:daemonId\/retire$/, "daemon.retire"],
+    [/^GET \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.get"],
+    [/^PATCH \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.update"],
+    [/^DELETE \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.delete"],
+    [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/runs$/, "autopilot.run.list"],
+    [/^GET \/api\/autopilots\/:id\/runs\/:runId$/, "autopilot.run.get"],
+    [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/(?:run|trigger)$/, "autopilot.run"],
+    [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries$/, "autopilot.delivery.list"],
+    [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries\/:deliveryId$/, "autopilot.delivery.get"],
+    [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries\/:deliveryId\/replay$/, "autopilot.delivery.replay"],
+    [/^POST \/api\/autopilots\/:id\/triggers$/, "autopilot.trigger.create"],
+    [/^PATCH \/api\/autopilots\/:id\/triggers\/:triggerId$/, "autopilot.trigger.update"],
+    [/^DELETE \/api\/autopilots\/:id\/triggers\/:triggerId$/, "autopilot.trigger.delete"],
+    [/^POST \/api\/autopilots\/:id\/triggers\/:triggerId\/rotate-webhook-token$/, "autopilot.trigger.rotate-token"],
+    [/^PUT \/api\/autopilots\/:id\/triggers\/:triggerId\/signing-secret$/, "autopilot.trigger.set-secret"],
+    [/^GET \/api\/workspaces\/:workspaceId\/scm\/connections$/, "scm.connection.list"],
+    [/^POST \/api\/workspaces\/:workspaceId\/scm\/connections$/, "scm.connection.create"],
+    [/^GET \/api\/workspaces\/:workspaceId\/scm\/connections\/:connectionId$/, "scm.connection.get"],
+    [/^PATCH \/api\/workspaces\/:workspaceId\/scm\/connections\/:connectionId$/, "scm.connection.update"],
+    [/^DELETE \/api\/workspaces\/:workspaceId\/scm\/connections\/:connectionId$/, "scm.connection.delete"],
+    [/^POST \/api\/workspaces\/:workspaceId\/scm\/connections\/:connectionId\/verify$/, "scm.connection.verify"],
+    [/^PUT \/api\/workspaces\/:workspaceId\/scm\/connections\/:connectionId\/repositories\/:repositoryId$/, "scm.repository.bind"],
+    [/^DELETE \/api\/workspaces\/:workspaceId\/scm\/connections\/:connectionId\/repositories\/:repositoryId$/, "scm.repository.unbind"],
+    [/^GET \/api\/workspaces\/:workspaceId\/scm\/events$/, "scm.event.list"],
+    [/^GET \/api\/workspaces\/:workspaceId\/scm\/events\/:eventId$/, "scm.event.get"],
+    [/^GET \/api\/issues\/:id\/change-requests$/, "scm.change-request.list"],
+    [/^PUT \/api\/issues\/:issueId\/change-requests\/:changeRequestId$/, "scm.change-request.link"],
+    [/^DELETE \/api\/issues\/:issueId\/change-requests\/:changeRequestId$/, "scm.change-request.unlink"],
+    [/^POST \/api\/(?:multiremi\/)?inbox\/:id\/read$/, "inbox.read"],
+    [/^POST \/api\/(?:multiremi\/)?inbox\/:id\/archive$/, "inbox.archive"],
+    [/^DELETE \/api\/(?:multiremi\/)?pins\/:itemType\/:itemId$/, "pin.delete"],
+    [/^GET \/api\/remi\/releases\/latest\/:filename$/, "platform.release.latest"],
+    [/^GET \/api\/remi\/releases\/download\/:tag\/:filename$/, "platform.release.get"],
+    [/^GET \/api\/cloud-billing\/checkout-sessions\/:sessionId$/, "billing.checkout.get"],
+    [/^GET \/api\/workspaces\/:id\/lark\/installations$/, "lark.installation.list"],
+    [/^POST \/api\/workspaces\/:id\/lark\/install\/begin$/, "lark.install.begin"],
+    [/^GET \/api\/workspaces\/:id\/lark\/install\/:sessionId\/status$/, "lark.install.status"],
+    [/^DELETE \/api\/workspaces\/:id\/lark\/installations\/:installationId$/, "lark.installation.delete"],
+  ];
+  return rules.find(([pattern]) => pattern.test(route))?.[1] ?? null;
+}
+
 function exemptRoute(route: string): CliManifestRoute | null {
   const path = route.slice(route.indexOf(" ") + 1);
   const exempt = (category: CliExemptCategory, reason: string): CliManifestRoute => ({
@@ -417,6 +568,12 @@ function exemptRoute(route: string): CliManifestRoute | null {
   }
   if (path.startsWith("/api/daemon/") || /\/runtimes\/[^/]+\/heartbeat$/.test(path) || path === "/api/multiremi/scheduler/tick") {
     return exempt("daemon_internal_protocol", "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic.");
+  }
+  if (path === "/api/multiremi/autopilots/:id/run-scheduled") {
+    return exempt("daemon_internal_protocol", "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run.");
+  }
+  if (path === "/api/multiremi/autopilots/:id/webhook") {
+    return exempt("oauth_or_webhook_callback", "Autopilot webhook reception is invoked by an external system, not a user command.");
   }
   if (path.startsWith("/api/webhooks/") || /\/(oauth|google|lark)\/callback$/.test(path)) {
     return exempt("oauth_or_webhook_callback", "External provider callback is authenticated and invoked by the provider, not a user command.");

@@ -1,0 +1,478 @@
+import {
+  ResourceResolver,
+  sanitizeCliDetails,
+  type CliApiClient,
+  type CliHttpMethod,
+  type CliIdentity,
+  type CliMutation,
+  type CliOptionSpec,
+  type CliPositionalSpec,
+  type CommandAlias,
+  type CommandInvocation,
+  type CommandSpec,
+} from "../core/index.js";
+import {
+  INPUT_OPTIONS,
+  PAGE_OPTIONS,
+  YES_OPTION,
+  clientFor,
+  commandOptions,
+  encodePath,
+  extractRecords,
+  positional,
+  queryOptions,
+  renderResource,
+  requestBody,
+  requireConfirmation,
+  requiredWorkspace,
+  stringOption,
+} from "./resource-common.js";
+
+const HUMAN: readonly CliIdentity[] = ["human"];
+const HUMAN_TASK: readonly CliIdentity[] = ["human", "task"];
+const HUMAN_DAEMON: readonly CliIdentity[] = ["human", "daemon"];
+const DEPRECATED_SINCE = "0.3.0";
+
+type OperationPath = string | ((invocation: CommandInvocation, client: CliApiClient) => string | Promise<string>);
+
+interface OperationDefinition {
+  id: string;
+  path: readonly string[];
+  description: string;
+  method: CliHttpMethod;
+  apiPath: OperationPath;
+  mutation?: CliMutation;
+  auth?: readonly CliIdentity[];
+  positionals?: readonly CliPositionalSpec[];
+  options?: readonly CliOptionSpec[];
+  aliases?: readonly CommandAlias[];
+  query?: (invocation: CommandInvocation) => Record<string, string | number | boolean | null | undefined>;
+  body?: (invocation: CommandInvocation) => Promise<Record<string, unknown>> | Record<string, unknown>;
+  collections?: readonly string[];
+  before?: (invocation: CommandInvocation, client: CliApiClient) => Promise<void>;
+  negotiate?: boolean;
+}
+
+export function operationsCommandSpecs(): CommandSpec[] {
+  return [
+    ...runtimeSpecs(),
+    ...daemonSpecs(),
+    ...autopilotSpecs(),
+    ...scmSpecs(),
+    ...inboxSpecs(),
+    ...notificationSpecs(),
+    ...pinSpecs(),
+    ...dashboardSpecs(),
+    ...platformSpecs(),
+    ...billingSpecs(),
+    ...larkSpecs(),
+    ...authContextSpecs(),
+  ];
+}
+
+function runtimeSpecs(): CommandSpec[] {
+  const runtime = (suffix: string) => async (invocation: CommandInvocation, client: CliApiClient) => {
+    const id = await resolveRuntimeId(client, invocation, positional(invocation, 0, "runtime"));
+    return `/api/runtimes/${encodePath(id)}${suffix}`;
+  };
+  return [
+    group("runtime", "Manage execution runtimes and cloud nodes"),
+    op({ id: "runtime.list", path: ["runtime", "list"], description: "List runtimes", method: "GET", apiPath: "/api/runtimes", auth: HUMAN_DAEMON, collections: ["runtimes"] }),
+    op({ id: "runtime.get", path: ["runtime", "get"], description: "Get a runtime", method: "GET", apiPath: runtime(""), auth: HUMAN_DAEMON, positionals: [ref("runtime")] }),
+    op({ id: "runtime.create", path: ["runtime", "create"], description: "Register a runtime", method: "POST", apiPath: "/api/multiremi/runtimes", auth: HUMAN_DAEMON, options: INPUT_OPTIONS, body: withWorkspace }),
+    op({ id: "runtime.update", path: ["runtime", "update"], description: "Update a runtime", method: "PATCH", apiPath: runtime(""), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.delete", path: ["runtime", "delete"], description: "Delete a runtime after reporting active impact", method: "DELETE", apiPath: runtime(""), mutation: "destructive", auth: HUMAN, positionals: [ref("runtime")], before: runtimeImpact }),
+    op({ id: "runtime.archive-agents-and-delete", path: ["runtime", "archive-agents-and-delete"], description: "Archive active agents and delete a runtime", method: "POST", apiPath: runtime("/archive-agents-and-delete"), mutation: "destructive", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS, before: runtimeImpact }),
+    op({ id: "runtime.model.list", path: ["runtime", "model", "list"], description: "List runtime models", method: "GET", apiPath: runtime("/models"), auth: HUMAN_DAEMON, positionals: [ref("runtime")], collections: ["models"] }),
+    op({ id: "runtime.model.set", path: ["runtime", "model", "set"], description: "Replace runtime model configuration", method: "PUT", apiPath: runtime("/models"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.model.refresh", path: ["runtime", "model", "refresh"], description: "Request a runtime model refresh", method: "POST", apiPath: runtime("/models"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.model.status", path: ["runtime", "model", "status"], description: "Get a model refresh request", method: "GET", apiPath: async (i, c) => `${await runtime("/models")(i, c)}/${encodePath(positional(i, 1, "request"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("request")] }),
+    op({ id: "runtime.release.start", path: ["runtime", "release", "start"], description: "Start a runtime update", method: "POST", apiPath: runtime("/update"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.release.status", path: ["runtime", "release", "status"], description: "Get a runtime update request", method: "GET", apiPath: async (i, c) => `${await runtime("/update")(i, c)}/${encodePath(positional(i, 1, "update"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("update")] }),
+    op({ id: "runtime.skill.scan", path: ["runtime", "skill", "scan"], description: "Request local skill discovery", method: "POST", apiPath: runtime("/local-skills"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.skill.status", path: ["runtime", "skill", "status"], description: "Get local skill discovery status", method: "GET", apiPath: async (i, c) => `${await runtime("/local-skills")(i, c)}/${encodePath(positional(i, 1, "request"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("request")] }),
+    op({ id: "runtime.skill.import", path: ["runtime", "skill", "import"], description: "Import local runtime skills", method: "POST", apiPath: runtime("/local-skills/import"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.skill.import-status", path: ["runtime", "skill", "import-status"], description: "Get local skill import status", method: "GET", apiPath: async (i, c) => `${await runtime("/local-skills/import")(i, c)}/${encodePath(positional(i, 1, "request"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("request")] }),
+    op({ id: "runtime.directory.scan", path: ["runtime", "directory", "scan"], description: "Request a runtime directory scan", method: "POST", apiPath: runtime("/directory-scans"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
+    op({ id: "runtime.directory.status", path: ["runtime", "directory", "status"], description: "Get directory scan status", method: "GET", apiPath: async (i, c) => `${await runtime("/directory-scans")(i, c)}/${encodePath(positional(i, 1, "request"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("request")] }),
+    ...[
+      ["runtime.usage", ["runtime", "usage"], "/usage", "Get runtime daily usage"],
+      ["runtime.usage.by-agent", ["runtime", "usage", "by-agent"], "/usage/by-agent", "Get runtime usage by agent"],
+      ["runtime.usage.by-hour", ["runtime", "usage", "by-hour"], "/usage/by-hour", "Get runtime usage by hour"],
+      ["runtime.task-activity", ["runtime", "task-activity"], "/task-activity", "Get runtime task activity"],
+      ["runtime.activity", ["runtime", "activity"], "/activity", "Get runtime activity"],
+    ].map(([id, path, suffix, description]) => op({ id: id as string, path: path as string[], description: description as string, method: "GET", apiPath: runtime(suffix as string), auth: HUMAN_DAEMON, positionals: [ref("runtime")] })),
+    op({ id: "runtime.model.catalog", path: ["runtime", "model", "catalog"], description: "List fleet model providers", method: "GET", apiPath: "/api/models", auth: HUMAN, collections: ["providers"] }),
+    op({ id: "runtime.cloud.status", path: ["runtime", "cloud", "status"], description: "Get cloud runtime status", method: "GET", apiPath: "/api/cloud-runtime", auth: HUMAN }),
+    op({ id: "runtime.cloud.health", path: ["runtime", "cloud", "health"], description: "Check cloud runtime health", method: "GET", apiPath: "/api/cloud-runtime/healthz", auth: HUMAN }),
+    op({ id: "runtime.cloud.ready", path: ["runtime", "cloud", "ready"], description: "Check cloud runtime readiness", method: "GET", apiPath: "/api/cloud-runtime/readyz", auth: HUMAN }),
+    op({ id: "runtime.cloud.node.list", path: ["runtime", "cloud", "node", "list"], description: "List cloud runtime nodes", method: "GET", apiPath: "/api/cloud-runtime/nodes", auth: HUMAN, collections: ["nodes"] }),
+    op({ id: "runtime.cloud.node.create", path: ["runtime", "cloud", "node", "create"], description: "Create a cloud runtime node", method: "POST", apiPath: "/api/cloud-runtime/nodes", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "runtime.cloud.node.delete", path: ["runtime", "cloud", "node", "delete"], description: "Delete cloud runtime nodes", method: "DELETE", apiPath: "/api/cloud-runtime/nodes", mutation: "destructive", auth: HUMAN, options: INPUT_OPTIONS }),
+    ...["start", "stop", "reboot", "status", "exec"].map((action) => op({
+      id: `runtime.cloud.node.${action}`,
+      path: ["runtime", "cloud", "node", action],
+      description: `${capital(action)} cloud runtime nodes`,
+      method: "POST",
+      apiPath: `/api/cloud-runtime/nodes/${action}`,
+      mutation: action === "status" ? "read" : "write",
+      auth: HUMAN,
+      options: INPUT_OPTIONS,
+    })),
+  ];
+}
+
+function daemonSpecs(): CommandSpec[] {
+  return [
+    group("daemon", "Manage local daemon lifecycle and machine retirement"),
+    op({ id: "daemon.list", path: ["daemon", "list"], description: "List daemon machines", method: "GET", apiPath: "/api/multiremi/daemons", auth: HUMAN, query: (i) => ({ workspace_id: requiredWorkspace(i) }), collections: ["daemons"] }),
+    op({ id: "daemon.retirement-plan", path: ["daemon", "retirement-plan"], description: "Review a daemon retirement plan", method: "GET", apiPath: (i) => `/api/multiremi/daemons/${encodePath(positional(i, 0, "daemon"))}/retirement-plan`, auth: HUMAN, positionals: [ref("daemon")], query: (i) => ({ workspace_id: requiredWorkspace(i) }) }),
+    daemonRetireSpec(),
+    ...["start", "stop", "restart", "status", "logs", "service"].map(localDaemonSpec),
+  ];
+}
+
+function localDaemonSpec(action: string): CommandSpec {
+  return {
+    id: `daemon.local.${action}`,
+    path: ["daemon", action],
+    description: `${capital(action)} the local daemon`,
+    auth: ["human", "daemon"],
+    mutation: ["status", "logs"].includes(action) ? "read" : "write",
+    outputs: ["table", "json", "jsonl"],
+    parse: "passthrough",
+    aliases: [{ path: [action], deprecatedSince: DEPRECATED_SINCE, replacement: `remi daemon ${action}`, dispatch: false }],
+    run: async (invocation) => {
+      const { runMultiremi } = await import("../multiremi.js");
+      await runMultiremi(["daemon", action, ...invocation.rawArgs], { programName: "remi multiremi" });
+    },
+  };
+}
+
+function daemonRetireSpec(): CommandSpec {
+  return {
+    id: "daemon.retire",
+    path: ["daemon", "retire"],
+    description: "Retire a daemon machine after reviewing its impact",
+    capability: "daemon.retire",
+    auth: HUMAN,
+    mutation: "destructive",
+    outputs: ["table", "json", "jsonl"],
+    positionals: [ref("daemon")],
+    options: commandOptions(PAGE_OPTIONS, INPUT_OPTIONS, [YES_OPTION]),
+    run: async (invocation) => {
+      requireConfirmation(invocation);
+      const daemonId = positional(invocation, 0, "daemon");
+      const client = await clientFor(invocation);
+      const query = { workspace_id: requiredWorkspace(invocation) };
+      const planResponse = await client.request<Record<string, unknown>>({ method: "GET", path: `/api/multiremi/daemons/${encodePath(daemonId)}/retirement-plan`, query });
+      const plan = isRecord(planResponse.data.plan) ? planResponse.data.plan : {};
+      const impact = isRecord(plan.impact) ? plan.impact : {};
+      console.error(`Retiring daemon ${daemonId}: ${Number(impact.runtimes_removed ?? 0)} runtime(s), ${Number(impact.agents_detached ?? 0)} agent(s), ${Number(impact.queued_tasks_requeued ?? 0)} queued task(s) affected.`);
+      const supplied = await requestBody(invocation);
+      const response = await client.request({
+        method: "POST",
+        path: `/api/multiremi/daemons/${encodePath(daemonId)}/retire`,
+        query,
+        body: { ...supplied, expected_snapshot: supplied.expected_snapshot ?? plan.snapshot, workspace_id: requiredWorkspace(invocation) },
+      });
+      renderSafe(invocation, response.data);
+    },
+  };
+}
+
+function autopilotSpecs(): CommandSpec[] {
+  const base = async (i: CommandInvocation, client: CliApiClient) => `/api/autopilots/${encodePath(await resolveListedId(
+    client, i, positional(i, 0, "autopilot"), "autopilot", "/api/autopilots", ["autopilots"],
+  ))}`;
+  return [
+    group("autopilot", "Manage scheduled and webhook automations"),
+    op({ id: "autopilot.list", path: ["autopilot", "list"], description: "List autopilots", method: "GET", apiPath: "/api/autopilots", auth: HUMAN, query: (i) => queryOptions(i, { workspace_id: requiredWorkspace(i) }), collections: ["autopilots"] }),
+    op({ id: "autopilot.get", path: ["autopilot", "get"], description: "Get an autopilot", method: "GET", apiPath: base, auth: HUMAN, positionals: [ref("autopilot")] }),
+    op({ id: "autopilot.create", path: ["autopilot", "create"], description: "Create an autopilot", method: "POST", apiPath: "/api/autopilots", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS, body: withWorkspace }),
+    op({ id: "autopilot.update", path: ["autopilot", "update"], description: "Update an autopilot", method: "PATCH", apiPath: base, mutation: "write", auth: HUMAN, positionals: [ref("autopilot")], options: INPUT_OPTIONS }),
+    op({ id: "autopilot.delete", path: ["autopilot", "delete"], description: "Delete an autopilot", method: "DELETE", apiPath: base, mutation: "destructive", auth: HUMAN, positionals: [ref("autopilot")] }),
+    op({ id: "autopilot.run.list", path: ["autopilot", "run", "list"], description: "List autopilot runs", method: "GET", apiPath: async (i, c) => `${await base(i, c)}/runs`, auth: HUMAN, positionals: [ref("autopilot")], collections: ["runs"] }),
+    op({ id: "autopilot.run.get", path: ["autopilot", "run", "get"], description: "Get an autopilot run", method: "GET", apiPath: async (i, c) => `${await base(i, c)}/runs/${encodePath(positional(i, 1, "run"))}`, auth: HUMAN, positionals: [ref("autopilot"), ref("run")] }),
+    op({ id: "autopilot.run", path: ["autopilot", "run"], description: "Run an autopilot", method: "POST", apiPath: async (i, c) => `${await base(i, c)}/trigger`, mutation: "write", auth: HUMAN, positionals: [ref("autopilot")], options: INPUT_OPTIONS }),
+    op({ id: "autopilot.delivery.list", path: ["autopilot", "delivery", "list"], description: "List autopilot webhook deliveries", method: "GET", apiPath: async (i, c) => `${await base(i, c)}/deliveries`, auth: HUMAN, positionals: [ref("autopilot")], collections: ["deliveries"] }),
+    op({ id: "autopilot.delivery.get", path: ["autopilot", "delivery", "get"], description: "Get an autopilot delivery", method: "GET", apiPath: async (i, c) => `${await base(i, c)}/deliveries/${encodePath(positional(i, 1, "delivery"))}`, auth: HUMAN, positionals: [ref("autopilot"), ref("delivery")] }),
+    op({ id: "autopilot.delivery.replay", path: ["autopilot", "delivery", "replay"], description: "Replay an autopilot delivery", method: "POST", apiPath: async (i, c) => `${await base(i, c)}/deliveries/${encodePath(positional(i, 1, "delivery"))}/replay`, mutation: "write", auth: HUMAN, positionals: [ref("autopilot"), ref("delivery")], options: INPUT_OPTIONS }),
+    op({ id: "autopilot.trigger.list", path: ["autopilot", "trigger", "list"], description: "List autopilot triggers", method: "GET", apiPath: base, auth: HUMAN, positionals: [ref("autopilot")], collections: ["triggers"] }),
+    op({ id: "autopilot.trigger.create", path: ["autopilot", "trigger", "create"], description: "Create an autopilot trigger", method: "POST", apiPath: async (i, c) => `${await base(i, c)}/triggers`, mutation: "write", auth: HUMAN, positionals: [ref("autopilot")], options: INPUT_OPTIONS }),
+    op({ id: "autopilot.trigger.update", path: ["autopilot", "trigger", "update"], description: "Update an autopilot trigger", method: "PATCH", apiPath: async (i, c) => `${await base(i, c)}/triggers/${encodePath(positional(i, 1, "trigger"))}`, mutation: "write", auth: HUMAN, positionals: [ref("autopilot"), ref("trigger")], options: INPUT_OPTIONS }),
+    op({ id: "autopilot.trigger.delete", path: ["autopilot", "trigger", "delete"], description: "Delete an autopilot trigger", method: "DELETE", apiPath: async (i, c) => `${await base(i, c)}/triggers/${encodePath(positional(i, 1, "trigger"))}`, mutation: "destructive", auth: HUMAN, positionals: [ref("autopilot"), ref("trigger")] }),
+    op({ id: "autopilot.trigger.rotate-token", path: ["autopilot", "trigger", "rotate-token"], description: "Rotate a webhook trigger token", method: "POST", apiPath: async (i, c) => `${await base(i, c)}/triggers/${encodePath(positional(i, 1, "trigger"))}/rotate-webhook-token`, mutation: "destructive", auth: HUMAN, positionals: [ref("autopilot"), ref("trigger")] }),
+    op({ id: "autopilot.trigger.set-secret", path: ["autopilot", "trigger", "set-secret"], description: "Set a webhook signing secret", method: "PUT", apiPath: async (i, c) => `${await base(i, c)}/triggers/${encodePath(positional(i, 1, "trigger"))}/signing-secret`, mutation: "write", auth: HUMAN, positionals: [ref("autopilot"), ref("trigger")], options: INPUT_OPTIONS }),
+    op({ id: "autopilot.scheduler", path: ["autopilot", "scheduler"], description: "Get scheduler state", method: "GET", apiPath: "/api/multiremi/scheduler", auth: HUMAN }),
+  ];
+}
+
+function scmSpecs(): CommandSpec[] {
+  const connection = async (i: CommandInvocation, client: CliApiClient) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/scm/connections/${encodePath(await resolveListedId(
+    client, i, positional(i, 0, "connection"), "SCM connection",
+    `/api/workspaces/${encodePath(requiredWorkspace(i))}/scm/connections`, ["connections"],
+  ))}`;
+  return [
+    group("scm", "Manage source-control connections, repositories, and change requests"),
+    op({ id: "scm.capabilities", path: ["scm", "capabilities"], description: "List SCM provider capabilities", method: "GET", apiPath: "/api/scm/capabilities", auth: HUMAN }),
+    op({ id: "scm.connection.list", path: ["scm", "connection", "list"], description: "List SCM connections", method: "GET", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/scm/connections`, auth: HUMAN, collections: ["connections"] }),
+    op({ id: "scm.connection.get", path: ["scm", "connection", "get"], description: "Get an SCM connection", method: "GET", apiPath: connection, auth: HUMAN, positionals: [ref("connection")] }),
+    op({ id: "scm.connection.create", path: ["scm", "connection", "create"], description: "Create an SCM connection", method: "POST", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/scm/connections`, mutation: "write", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "scm.connection.update", path: ["scm", "connection", "update"], description: "Update an SCM connection", method: "PATCH", apiPath: connection, mutation: "write", auth: HUMAN, positionals: [ref("connection")], options: INPUT_OPTIONS }),
+    op({ id: "scm.connection.delete", path: ["scm", "connection", "delete"], description: "Delete an SCM connection after reporting repository impact", method: "DELETE", apiPath: connection, mutation: "destructive", auth: HUMAN, positionals: [ref("connection")], before: scmImpact }),
+    op({ id: "scm.connection.verify", path: ["scm", "connection", "verify"], description: "Verify an SCM connection", method: "POST", apiPath: async (i, c) => `${await connection(i, c)}/verify`, mutation: "write", auth: HUMAN, positionals: [ref("connection")] }),
+    op({ id: "scm.repository.bind", path: ["scm", "repository", "bind"], description: "Bind a repository to an SCM connection", method: "PUT", apiPath: async (i, c) => `${await connection(i, c)}/repositories/${encodePath(positional(i, 1, "repository"))}`, mutation: "write", auth: HUMAN, positionals: [ref("connection"), ref("repository")], options: INPUT_OPTIONS }),
+    op({ id: "scm.repository.unbind", path: ["scm", "repository", "unbind"], description: "Unbind a repository from an SCM connection", method: "DELETE", apiPath: async (i, c) => `${await connection(i, c)}/repositories/${encodePath(positional(i, 1, "repository"))}`, mutation: "destructive", auth: HUMAN, positionals: [ref("connection"), ref("repository")] }),
+    op({ id: "scm.event.list", path: ["scm", "event", "list"], description: "List normalized SCM events", method: "GET", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/scm/events`, auth: HUMAN, collections: ["events"] }),
+    op({ id: "scm.event.get", path: ["scm", "event", "get"], description: "Get an SCM event and evidence", method: "GET", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/scm/events/${encodePath(positional(i, 0, "event"))}`, auth: HUMAN, positionals: [ref("event")] }),
+    op({ id: "scm.change-request.list", path: ["scm", "change-request", "list"], description: "List change requests linked to an issue", method: "GET", apiPath: (i) => `/api/issues/${encodePath(positional(i, 0, "issue"))}/change-requests`, auth: HUMAN_TASK, positionals: [ref("issue")], collections: ["changeRequests"] }),
+    op({ id: "scm.change-request.link", path: ["scm", "change-request", "link"], description: "Link a change request to an issue", method: "PUT", apiPath: changeRequestPath, mutation: "write", auth: HUMAN_TASK, positionals: [ref("issue"), ref("change-request")] }),
+    op({ id: "scm.change-request.unlink", path: ["scm", "change-request", "unlink"], description: "Unlink a change request from an issue", method: "DELETE", apiPath: changeRequestPath, mutation: "destructive", auth: HUMAN_TASK, positionals: [ref("issue"), ref("change-request")] }),
+  ];
+}
+
+function inboxSpecs(): CommandSpec[] {
+  return [
+    group("inbox", "Read and archive inbox items"),
+    op({ id: "inbox.list", path: ["inbox", "list"], description: "List inbox items", method: "GET", apiPath: "/api/inbox", auth: HUMAN_TASK, collections: ["items"] }),
+    op({ id: "inbox.unread-count", path: ["inbox", "unread-count"], description: "Get unread inbox count", method: "GET", apiPath: "/api/inbox/unread-count", auth: HUMAN_TASK }),
+    ...["read", "archive"].map((action) => op({ id: `inbox.${action}`, path: ["inbox", action], description: `${capital(action)} an inbox item`, method: "POST", apiPath: (i) => `/api/inbox/${encodePath(positional(i, 0, "item"))}/${action}`, mutation: "write", auth: HUMAN_TASK, positionals: [ref("item")] })),
+    ...[
+      ["inbox.mark-all-read", ["inbox", "mark-all-read"], "/api/inbox/mark-all-read", "Mark all inbox items read"],
+      ["inbox.archive-all", ["inbox", "archive-all"], "/api/inbox/archive-all", "Archive all inbox items"],
+      ["inbox.archive-all-read", ["inbox", "archive-all-read"], "/api/inbox/archive-all-read", "Archive all read inbox items"],
+      ["inbox.archive-completed", ["inbox", "archive-completed"], "/api/inbox/archive-completed", "Archive completed inbox items"],
+    ].map(([id, path, apiPath, description]) => op({ id: id as string, path: path as string[], description: description as string, method: "POST", apiPath: apiPath as string, mutation: "destructive", auth: HUMAN_TASK })),
+  ];
+}
+
+function notificationSpecs(): CommandSpec[] {
+  return [
+    group("notification", "Manage notification preferences"),
+    op({ id: "notification.get", path: ["notification", "get"], description: "Get notification preferences", method: "GET", apiPath: "/api/notification-preferences", auth: HUMAN_TASK, query: (i) => ({ workspace_id: requiredWorkspace(i) }) }),
+    op({ id: "notification.update", path: ["notification", "update"], description: "Update notification preferences", method: "PUT", apiPath: "/api/notification-preferences", mutation: "write", auth: HUMAN_TASK, options: INPUT_OPTIONS, body: withWorkspace }),
+  ];
+}
+
+function pinSpecs(): CommandSpec[] {
+  return [
+    group("pin", "Manage pinned resources"),
+    op({ id: "pin.list", path: ["pin", "list"], description: "List pinned resources", method: "GET", apiPath: "/api/pins", auth: HUMAN_TASK, collections: ["pins"] }),
+    op({ id: "pin.create", path: ["pin", "create"], description: "Pin a resource", method: "POST", apiPath: "/api/pins", mutation: "write", auth: HUMAN_TASK, options: INPUT_OPTIONS, body: withWorkspace }),
+    op({ id: "pin.reorder", path: ["pin", "reorder"], description: "Reorder pinned resources", method: "PUT", apiPath: "/api/pins/reorder", mutation: "write", auth: HUMAN_TASK, options: INPUT_OPTIONS, body: withWorkspace }),
+    op({ id: "pin.delete", path: ["pin", "delete"], description: "Remove a pinned resource", method: "DELETE", apiPath: (i) => `/api/pins/${encodePath(positional(i, 0, "type"))}/${encodePath(positional(i, 1, "resource"))}`, mutation: "destructive", auth: HUMAN_TASK, positionals: [ref("type"), ref("resource")] }),
+  ];
+}
+
+function dashboardSpecs(): CommandSpec[] {
+  return [
+    group("dashboard", "Read workspace activity and usage analytics"),
+    ...[
+      ["dashboard.usage.daily", ["dashboard", "usage", "daily"], "/api/dashboard/usage/daily", "Get daily usage"],
+      ["dashboard.usage.by-agent", ["dashboard", "usage", "by-agent"], "/api/dashboard/usage/by-agent", "Get usage by agent"],
+      ["dashboard.runtime.daily", ["dashboard", "runtime", "daily"], "/api/dashboard/runtime/daily", "Get runtime daily activity"],
+      ["dashboard.agent-runtime", ["dashboard", "agent-runtime"], "/api/dashboard/agent-runtime", "Get agent runtime activity"],
+      ["dashboard.agent-activity", ["dashboard", "agent-activity"], "/api/agent-activity-30d", "Get 30-day agent activity"],
+      ["dashboard.agent-runs", ["dashboard", "agent-runs"], "/api/agent-run-counts", "Get agent run counts"],
+      ["dashboard.agent-tasks", ["dashboard", "agent-tasks"], "/api/agent-task-snapshot", "Get agent task snapshot"],
+      ["dashboard.assignee-frequency", ["dashboard", "assignee-frequency"], "/api/assignee-frequency", "Get assignee frequency"],
+    ].map(([id, path, apiPath, description]) => op({ id: id as string, path: path as string[], description: description as string, method: "GET", apiPath: apiPath as string, auth: HUMAN_TASK, query: (i) => queryOptions(i, { workspace_id: requiredWorkspace(i) }) })),
+  ];
+}
+
+function platformSpecs(): CommandSpec[] {
+  return [
+    group("platform", "Inspect platform health, feedback, releases, and operations"),
+    ...[
+      ["platform.health", ["platform", "health"], "/health", "Get platform health"],
+      ["platform.ready", ["platform", "ready"], "/readyz", "Get platform readiness"],
+      ["platform.realtime", ["platform", "realtime"], "/health/realtime", "Get realtime transport health"],
+      ["platform.status", ["platform", "status"], "/api/multiremi/platform/status", "Get platform deployment status"],
+      ["platform.operation.list", ["platform", "operation", "list"], "/api/multiremi/platform/operations", "List platform operations"],
+      ["platform.feedback.list", ["platform", "feedback", "list"], "/api/multiremi/feedback", "List product feedback"],
+      ["platform.release.version", ["platform", "release", "version"], "/api/remi/releases/latest/version", "Get the latest CLI release version"],
+    ].map(([id, path, apiPath, description]) => op({ id: id as string, path: path as string[], description: description as string, method: "GET", apiPath: apiPath as string, auth: HUMAN })),
+    op({ id: "platform.feedback.create", path: ["platform", "feedback", "create"], description: "Submit product feedback", method: "POST", apiPath: "/api/feedback", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "platform.settings.update", path: ["platform", "settings", "update"], description: "Update platform settings", method: "PATCH", apiPath: "/api/multiremi/platform/settings", mutation: "destructive", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "platform.operation.create", path: ["platform", "operation", "create"], description: "Queue a platform update, restart, rollback, or update check", method: "POST", apiPath: "/api/multiremi/platform/operations", mutation: "destructive", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "platform.release.latest", path: ["platform", "release", "latest"], description: "Get latest release metadata", method: "GET", apiPath: (i) => `/api/remi/releases/latest/${encodePath(positional(i, 0, "filename"))}`, auth: HUMAN, positionals: [ref("filename")] }),
+    op({ id: "platform.release.get", path: ["platform", "release", "get"], description: "Get tagged release metadata", method: "GET", apiPath: (i) => `/api/remi/releases/download/${encodePath(positional(i, 0, "tag"))}/${encodePath(positional(i, 1, "filename"))}`, auth: HUMAN, positionals: [ref("tag"), ref("filename")] }),
+    platformUpdateAlias(),
+  ];
+}
+
+function platformUpdateAlias(): CommandSpec {
+  return {
+    id: "platform.local.update",
+    path: ["platform", "local-update"],
+    description: "Run the local CLI updater",
+    auth: HUMAN,
+    mutation: "destructive",
+    outputs: ["table", "json", "jsonl"],
+    parse: "passthrough",
+    aliases: [{ path: ["update"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi platform operation create", dispatch: false }],
+    run: async (invocation) => {
+      const { runUpdate } = await import("../update.js");
+      await runUpdate([...invocation.rawArgs]);
+    },
+  };
+}
+
+function billingSpecs(): CommandSpec[] {
+  return [
+    group("billing", "Inspect billing and create checkout or portal sessions"),
+    ...[
+      ["billing.balance", ["billing", "balance"], "/api/cloud-billing/balance", "Get billing balance"],
+      ["billing.transaction.list", ["billing", "transaction", "list"], "/api/cloud-billing/transactions", "List billing transactions"],
+      ["billing.batch.list", ["billing", "batch", "list"], "/api/cloud-billing/batches", "List billing batches"],
+      ["billing.topup.list", ["billing", "topup", "list"], "/api/cloud-billing/topups", "List top-ups"],
+      ["billing.tier.list", ["billing", "tier", "list"], "/api/cloud-billing/price-tiers", "List price tiers"],
+    ].map(([id, path, apiPath, description]) => op({ id: id as string, path: path as string[], description: description as string, method: "GET", apiPath: apiPath as string, auth: HUMAN })),
+    op({ id: "billing.checkout.create", path: ["billing", "checkout", "create"], description: "Create a checkout session", method: "POST", apiPath: "/api/cloud-billing/checkout-sessions", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "billing.checkout.get", path: ["billing", "checkout", "get"], description: "Get a checkout session", method: "GET", apiPath: (i) => `/api/cloud-billing/checkout-sessions/${encodePath(positional(i, 0, "session"))}`, auth: HUMAN, positionals: [ref("session")] }),
+    op({ id: "billing.portal.create", path: ["billing", "portal", "create"], description: "Create a billing portal session", method: "POST", apiPath: "/api/cloud-billing/portal-sessions", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS }),
+  ];
+}
+
+function larkSpecs(): CommandSpec[] {
+  return [
+    group("lark", "Manage Lark workspace installations and bindings"),
+    op({ id: "lark.installation.list", path: ["lark", "installation", "list"], description: "List Lark installations", method: "GET", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/lark/installations`, auth: HUMAN, collections: ["installations"] }),
+    op({ id: "lark.install.begin", path: ["lark", "install", "begin"], description: "Begin Lark installation", method: "POST", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/lark/install/begin`, mutation: "write", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "lark.install.status", path: ["lark", "install", "status"], description: "Get Lark installation status", method: "GET", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/lark/install/${encodePath(positional(i, 0, "session"))}/status`, auth: HUMAN, positionals: [ref("session")] }),
+    op({ id: "lark.installation.delete", path: ["lark", "installation", "delete"], description: "Delete a Lark installation", method: "DELETE", apiPath: (i) => `/api/workspaces/${encodePath(requiredWorkspace(i))}/lark/installations/${encodePath(positional(i, 0, "installation"))}`, mutation: "destructive", auth: HUMAN, positionals: [ref("installation")] }),
+    op({ id: "lark.binding.redeem", path: ["lark", "binding", "redeem"], description: "Redeem a Lark binding code", method: "POST", apiPath: "/api/lark/binding/redeem", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "lark.daemon.install", path: ["lark", "daemon", "install"], description: "Install daemon Lark support", method: "POST", apiPath: "/api/multiremi/install/daemon", mutation: "destructive", auth: HUMAN, options: INPUT_OPTIONS }),
+    op({ id: "lark.daemon.status", path: ["lark", "daemon", "status"], description: "Get daemon Lark install state", method: "GET", apiPath: "/api/multiremi/install/daemon", auth: HUMAN }),
+  ];
+}
+
+function authContextSpecs(): CommandSpec[] {
+  return [
+    op({ id: "context.auth.lark", path: ["context", "auth", "lark"], description: "Get the Lark login URL", method: "GET", apiPath: "/auth/lark/url", auth: HUMAN, negotiate: false }),
+    op({ id: "context.auth.google", path: ["context", "auth", "google"], description: "Authenticate with Google", method: "POST", apiPath: "/auth/google", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS, negotiate: false }),
+    op({ id: "context.auth.send-code", path: ["context", "auth", "send-code"], description: "Send an email login code", method: "POST", apiPath: "/auth/send-code", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS, negotiate: false }),
+    op({ id: "context.auth.verify-code", path: ["context", "auth", "verify-code"], description: "Verify an email login code", method: "POST", apiPath: "/auth/verify-code", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS, negotiate: false }),
+    op({ id: "context.auth.logout", path: ["context", "auth", "logout"], description: "Log out the current browser context", method: "POST", apiPath: "/auth/logout", mutation: "destructive", auth: HUMAN, negotiate: false }),
+  ];
+}
+
+function op(definition: OperationDefinition): CommandSpec {
+  const mutation = definition.mutation ?? (definition.method === "GET" ? "read" : "write");
+  return {
+    id: definition.id,
+    path: definition.path,
+    description: definition.description,
+    capability: definition.id,
+    auth: definition.auth ?? HUMAN,
+    mutation,
+    outputs: ["table", "json", "jsonl"],
+    positionals: definition.positionals,
+    aliases: definition.aliases,
+    options: commandOptions(
+      mutation === "read" ? PAGE_OPTIONS : [],
+      definition.options ?? [],
+      mutation === "destructive" ? [YES_OPTION] : [],
+    ),
+    run: async (invocation) => {
+      if (mutation === "destructive") requireConfirmation(invocation);
+      const client = await clientFor(invocation, { skipCapability: definition.negotiate === false });
+      await definition.before?.(invocation, client);
+      const path = typeof definition.apiPath === "string"
+        ? definition.apiPath
+        : await definition.apiPath(invocation, client);
+      const body = definition.body
+        ? await definition.body(invocation)
+        : definition.method === "POST" || definition.method === "PUT" || definition.method === "PATCH"
+          ? await requestBody(invocation)
+          : undefined;
+      const response = await client.request({
+        method: definition.method,
+        path,
+        query: definition.query?.(invocation) ?? (mutation === "read" ? queryOptions(invocation) : undefined),
+        body,
+      });
+      renderSafe(invocation, response.data, definition.collections);
+    },
+  };
+}
+
+function group(name: string, description: string): CommandSpec {
+  return { id: `${name}.group`, path: [name], description, hidden: false, parse: "passthrough", run: async () => {} };
+}
+
+function ref(name: string): CliPositionalSpec {
+  return { name, required: true };
+}
+
+async function withWorkspace(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  return requestBody(invocation, { workspace_id: requiredWorkspace(invocation) });
+}
+
+async function resolveRuntimeId(client: CliApiClient, invocation: CommandInvocation, value: string): Promise<string> {
+  return resolveListedId(client, invocation, value, "runtime", "/api/runtimes", ["runtimes"]);
+}
+
+async function resolveListedId(
+  client: CliApiClient,
+  invocation: CommandInvocation,
+  value: string,
+  kind: string,
+  path: string,
+  collections: readonly string[],
+): Promise<string> {
+  const list = async () => extractRecords((await client.request({
+    method: "GET",
+    path,
+    query: queryOptions(invocation, { workspace_id: requiredWorkspace(invocation) }),
+  })).data, collections);
+  const resource = await new ResourceResolver<Record<string, unknown>>({
+    kind,
+    getById: async (id) => (await list()).find((entry) => entry.id === id) ?? null,
+    search: list,
+    id: (entry) => String(entry.id ?? ""),
+    name: (entry) => typeof entry.name === "string" ? entry.name : typeof entry.title === "string" ? entry.title : null,
+  }).resolve(value);
+  return String(resource.id);
+}
+
+async function runtimeImpact(invocation: CommandInvocation, client: CliApiClient): Promise<void> {
+  const runtimeId = await resolveRuntimeId(client, invocation, positional(invocation, 0, "runtime"));
+  const response = await client.request({ method: "GET", path: "/api/agents", query: { workspace_id: requiredWorkspace(invocation), runtime_id: runtimeId } });
+  const active = extractRecords(response.data, ["agents"]).filter((agent) => agent.status !== "archived");
+  console.error(`Deleting runtime ${runtimeId}: ${active.length} active agent(s) are currently attached; active work may be interrupted.`);
+}
+
+async function scmImpact(invocation: CommandInvocation, client: CliApiClient): Promise<void> {
+  const listPath = `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/scm/connections`;
+  const connectionId = await resolveListedId(client, invocation, positional(invocation, 0, "connection"), "SCM connection", listPath, ["connections"]);
+  const response = await client.request<Record<string, unknown>>({ method: "GET", path: `${listPath}/${encodePath(connectionId)}` });
+  const connection = isRecord(response.data.connection) ? response.data.connection : {};
+  const repositories = extractRecords(connection.repositories, ["repositories"]);
+  console.error(`Deleting SCM connection ${connectionId}: ${repositories.length} repository binding(s) will stop receiving SCM events.`);
+}
+
+function changeRequestPath(invocation: CommandInvocation): string {
+  return `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/change-requests/${encodePath(positional(invocation, 1, "change-request"))}`;
+}
+
+function renderSafe(invocation: CommandInvocation, value: unknown, collections: readonly string[] = []): void {
+  renderResource(invocation, omitSecretFields(sanitizeCliDetails(value)), collections);
+}
+
+function omitSecretFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitSecretFields);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !/(?:authorization|token|password|secret|api[-_]?key|credential|cookie)/i.test(key))
+    .map(([key, entry]) => [key, omitSecretFields(entry)]));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function capital(value: string): string {
+  return value.slice(0, 1).toUpperCase() + value.slice(1);
+}

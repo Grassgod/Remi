@@ -26,14 +26,14 @@ describe("CLI capabilities manifest", () => {
     expect(generatedRuntime).toEqual(cliRuntimeCapabilities(manifest));
   });
 
-  it("keeps staged user routes visible as missing and records compatibility aliases", () => {
+  it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 334,
-      exempt: 63,
-      missing: 172,
+      mapped: 504,
+      exempt: 65,
+      missing: 0,
       total: 569,
     });
-    expect(manifest.max_planned_routes).toBe(172);
+    expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);
     expect(manifest.routes["GET /api/cli/context"]).toEqual({ command: "context.get" });
     expect(manifest.routes["GET /api/cli/capabilities"]).toEqual({ command: "context.get" });
@@ -61,14 +61,24 @@ describe("CLI capabilities manifest", () => {
       replacement: "remi agent list",
       deprecated_since: "0.3.0",
     });
-    expect(Object.values(manifest.routes).filter((route) => "planned_command" in route).length).toBeGreaterThan(0);
+    expect(manifest.aliases["remi start"]).toMatchObject({
+      command: "daemon.local.start",
+      replacement: "remi daemon start",
+      deprecated_since: "0.3.0",
+    });
+    expect(manifest.aliases["remi update"]).toMatchObject({
+      command: "platform.local.update",
+      replacement: "remi platform operation create",
+      deprecated_since: "0.3.0",
+    });
+    expect(Object.values(manifest.routes).filter((route) => "planned_command" in route)).toEqual([]);
   });
 
-  it("rejects growth beyond the staged migration ratchet", () => {
+  it("rejects any new unmapped route after the zero-gap ratchet", () => {
     const overBudget = structuredClone(manifest);
-    overBudget.max_planned_routes--;
+    overBudget.routes["GET /api/runtimes"] = { planned_command: "runtime.list", domain: "runtime" };
     expect(validateCliCapabilities(golden.routes, overBudget, cliCommandInventory())).toContain(
-      "planned route count 172 exceeds ratchet 171",
+      "planned route count 1 exceeds ratchet 0",
     );
   });
 });
