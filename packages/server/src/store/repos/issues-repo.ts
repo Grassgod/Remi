@@ -1258,7 +1258,7 @@ export class IssuesRepo {
         });
       }
     }
-    const messageEvent = this.ctx.issueSessions().appendSessionEvent(issueSessionId, {
+    this.ctx.issueSessions().appendSessionEvent(issueSessionId, {
       authorType,
       authorId: input.authorId ?? null,
       kind: "message",
@@ -1303,7 +1303,7 @@ export class IssuesRepo {
       mentionedMemberIds,
       { comment_id: id, issue_session_id: issueSessionId },
     );
-    const mentionTasks = this.triggerCommentMentions(issue, comment, messageEvent.seq);
+    const mentionTasks = this.triggerCommentMentions(issue, comment);
     this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
     return comment;
   }
@@ -1313,8 +1313,9 @@ export class IssuesRepo {
    * leader) so the assignee keeps the conversation without an explicit @
    * (MUL-35). Any explicit mention — agent, squad or member — suppresses this:
    * the author already addressed someone. Agent/system comments never trigger
-   * it, so an agent's own replies cannot re-queue itself; agents wake other
-   * agents only through explicit mentions. Each human comment dispatches
+   * it, so an agent's own replies cannot re-queue itself. Agent-to-agent
+   * dispatch is reserved for a Squad leader's rich mention of a teammate;
+   * ordinary agent comments are messages only. Each human comment dispatches
    * individually (no batching, by request).
    */
   private triggerAssigneeAutoResponse(
@@ -2394,7 +2395,6 @@ export class IssuesRepo {
   private triggerCommentMentions(
     issue: MultiremiIssue,
     comment: MultiremiIssueComment,
-    sourceEventSeq: number,
   ): MultiremiTask[] {
     const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
@@ -2413,23 +2413,10 @@ export class IssuesRepo {
       if (comment.authorType === "agent" && comment.authorId === agent.id) continue;
       seenAgents.add(agent.id);
 
-      // A delegated child explicitly mentioning its original delegator is a
-      // return signal for the existing delegation, not a fresh A -> B edge.
-      // The same coalescer handles the later terminal event, so the explicit
-      // mention and automatic return cannot enqueue equivalent leader work.
       if (
-        taskAuthoredByCommentAgent
-        && sourceTask?.delegationId
-        && sourceTask.delegatedByAgentId === agent.id
-      ) {
-        const wakeup = this.ctx.tasks().ensureDelegationWakeup({
-          sourceTaskId: sourceTask.id,
-          requiredEventSeq: sourceEventSeq,
-          triggerCommentId: comment.id,
-        });
-        if (wakeup.created && wakeup.task) tasks.push(wakeup.task);
-        continue;
-      }
+        comment.authorType === "agent"
+        && !this.isSquadLeaderDelegation(issue, comment.authorId, sourceTask, taskAuthoredByCommentAgent, agent.id)
+      ) continue;
 
       const delegationId = taskAuthoredByCommentAgent ? createId("dlg") : null;
       const task = this.ctx.tasks().createTask({
@@ -2487,14 +2474,32 @@ export class IssuesRepo {
       if (kind === "agent" ? inWorkspaceAgent(id) : inWorkspaceSquad(id)) addTarget(kind, id);
     }
 
-    const withoutLinks = body.replace(/\[[^\]]+\]\(mention:\/\/[^)]+\)/g, " ");
-    for (const agent of this.ctx.agents().listAgents()) {
-      if (agent.workspaceId === workspaceId && hasPlainMention(withoutLinks, agent.name)) addTarget("agent", agent.id);
-    }
-    for (const squad of this.ctx.squads().listSquads()) {
-      if (squad.workspaceId === workspaceId && hasPlainMention(withoutLinks, squad.name)) addTarget("squad", squad.id);
-    }
     return targets;
+  }
+
+  private isSquadLeaderDelegation(
+    issue: MultiremiIssue,
+    authorId: string | null,
+    sourceTask: MultiremiTask | null,
+    taskAuthoredByCommentAgent: boolean,
+    targetAgentId: string,
+  ): boolean {
+    if (
+      !authorId
+      || !sourceTask
+      || !taskAuthoredByCommentAgent
+      || sourceTask.agentId !== authorId
+      || sourceTask.issueId !== issue.id
+      || issue.assigneeType !== "squad"
+      || !issue.assigneeId
+    ) return false;
+    const squad = this.ctx.squads().getSquad(issue.assigneeId);
+    if (!squad || squad.archivedAt || squad.leaderId !== authorId) return false;
+    return this.ctx.squads().listSquadMembers(squad.id).some((member) =>
+      member.memberType === "agent"
+      && member.memberId === targetAgentId
+      && member.memberId !== authorId
+    );
   }
 
   private resolveCommentMemberMentionTargets(body: string, workspaceId: string): string[] {

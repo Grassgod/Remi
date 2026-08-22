@@ -243,6 +243,26 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).not.toContain("remi issue create");
   });
 
+  it("does not teach squad mention syntax to a non-leader agent", () => {
+    const store = createStore();
+    const { agent, task } = createProjectTask(store);
+    const prompt = buildTaskPrompt({
+      ...task,
+      squadContext: {
+        id: "sqd_core",
+        name: "Core squad",
+        leaderAgentId: "agt_leader",
+        members: [
+          { agentId: "agt_leader", name: "Leader", role: "leader" },
+          { agentId: agent.id, name: agent.name, role: "member" },
+        ],
+      },
+    } as any);
+
+    expect(prompt).not.toContain("## Squad Coordination");
+    expect(prompt).not.toContain("mention://agent/");
+  });
+
   it("marks pre-checked-out repositories in bootstrap prompts", () => {
     const store = createStore();
     const { task } = createProjectTask(store);

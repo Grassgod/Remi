@@ -500,7 +500,9 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
   sections.push("Delegate when there are independent workstreams, a teammate has relevant specialization, or parallel work will materially shorten delivery. Keep small or tightly coupled work yourself.");
   if (teammates.length) {
     const example = teammates[0]!;
-    sections.push("Delegate inside this Issue by posting a rich @mention comment. Use the exact mention token from the roster; plain `@name` is not sufficient. State the deliverable, constraints, and verification, then integrate the teammate's response.");
+    sections.push("You alone coordinate this squad's delegation. Delegate inside this Issue by posting a rich @mention comment with the exact token from the roster; plain `@name` is display text and never assigns work.");
+    sections.push("Use a rich mention only to assign a concrete next task. Do not use one while summarizing, thanking, quoting, or referring to earlier work. Teammates do not need to mention you when they finish: the system returns each delegated task to you automatically.");
+    sections.push("Issue tasks run serially. A delegation is queued until the current task finishes; it is not an interrupt or a live agent-to-agent chat message. State the deliverable, constraints, and verification, then finish your turn so the teammate can run.");
     sections.push("```sh");
     sections.push(`cat <<'MULTIREMI_COMMENT' | remi issue comment add ${task.issue?.id ?? "<issue-id>"} --content-stdin`);
     sections.push(`${agentMentionToken(example.name, example.agentId)} <bounded task, constraints, and verification>`);
