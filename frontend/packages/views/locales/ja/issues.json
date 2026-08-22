@@ -141,6 +141,16 @@
     "empty_grouping": "一致するイシューがありません",
     "ordered_by": "{{field}} 順に並べたボード"
   },
+  "archive": {
+    "label": "アーカイブ済み",
+    "archived_ago": "{{time}}にアーカイブ",
+    "restore_issue": "イシューを復元",
+    "restore_success": "イシューを復元しました",
+    "restore_failed": "イシューを復元できませんでした",
+    "hide_column": "アーカイブ列を非表示",
+    "loading": "アーカイブ済みイシューを読み込み中...",
+    "empty": "アーカイブ済みイシューはありません"
+  },
   "detail": {
     "not_found": "このイシューはこのワークスペースに存在しないか、削除されています。",
     "breadcrumb_project_unknown": "不明なプロジェクト",
