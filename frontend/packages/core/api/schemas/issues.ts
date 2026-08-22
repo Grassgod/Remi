@@ -32,6 +32,8 @@ export const IssueSchema = z.object({
   metadata: IssueMetadataSchema,
   reactions: z.array(z.unknown()).optional(),
   labels: z.array(z.unknown()).optional(),
+  completed_at: z.string().nullable().default(null),
+  archived_at: z.string().nullable().default(null),
   created_at: z.string(),
   updated_at: z.string(),
 }).loose();
