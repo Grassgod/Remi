@@ -16,7 +16,7 @@ const ROOT = resolve(import.meta.dir, "..");
 const GOLDEN_PATH = resolve(ROOT, "scripts/api-routes.golden.json");
 const MANIFEST_PATH = resolve(ROOT, "cli-capabilities.json");
 const RUNTIME_MANIFEST_PATH = resolve(ROOT, "packages/server/src/api/cli-capabilities-generated.ts");
-const MAX_PLANNED_ROUTES = 505;
+const MAX_PLANNED_ROUTES = 417;
 
 const DOMAINS = [
   "context", "workspace", "member", "invite", "token",
@@ -91,6 +91,14 @@ function main(): void {
     domains: DOMAINS,
     commands,
     aliases: {
+      ...Object.fromEntries(inventory.flatMap((entry) => entry.aliases
+        .filter((alias) => alias.deprecatedSince)
+        .map((alias) => [`remi ${alias.path.join(" ")}`, {
+          command: entry.id,
+          deprecated_since: alias.deprecatedSince!,
+          replacement: alias.replacement ?? `remi ${entry.path.join(" ")}`,
+          hidden: Boolean(alias.hidden),
+        }]))),
       "remi multiremi": {
         command: "legacy.multiremi",
         deprecated_since: "0.3.0",
@@ -114,13 +122,100 @@ function main(): void {
 }
 
 function classifyRoute(route: string): CliManifestRoute {
-  if (route === "GET /api/cli/context" || route === "GET /api/cli/capabilities") {
-    return { command: "context.get" };
-  }
+  const mapped = mappedResourceCommand(route);
+  if (mapped) return { command: mapped };
   const exempt = exemptRoute(route);
   if (exempt) return exempt;
   const { domain, command } = plannedCommand(route);
   return { planned_command: command, domain };
+}
+
+function mappedResourceCommand(route: string): string | null {
+  const exact: Record<string, string> = {
+    "GET /api/cli/context": "context.get",
+    "GET /api/cli/capabilities": "context.get",
+    "GET /api/workspaces": "workspace.list",
+    "POST /api/workspaces": "workspace.create",
+    "GET /api/invitations": "invite.list",
+    "GET /api/me": "member.get",
+    "PATCH /api/me": "member.update",
+    "PATCH /api/me/onboarding": "member.onboarding.update",
+    "POST /api/me/onboarding/complete": "member.onboarding.complete",
+    "POST /api/me/onboarding/cloud-waitlist": "member.onboarding.cloud-waitlist",
+    "POST /api/me/onboarding/runtime-bootstrap": "member.onboarding.runtime-bootstrap",
+    "POST /api/me/onboarding/no-runtime-bootstrap": "member.onboarding.no-runtime-bootstrap",
+    "GET /api/multiremi/members": "member.list",
+    "POST /api/multiremi/members": "member.create",
+    "GET /api/tokens": "token.list",
+    "POST /api/tokens": "token.create",
+    "POST /api/tokens/current/renew": "token.renew",
+    "GET /api/multiremi/tokens": "token.list",
+    "POST /api/multiremi/tokens": "token.create",
+    "POST /api/cli-token": "token.create",
+    "GET /api/projects": "project.list",
+    "POST /api/projects": "project.create",
+    "GET /api/projects/search": "project.search",
+    "GET /api/multiremi/projects": "project.list",
+    "POST /api/multiremi/projects": "project.create",
+    "GET /api/multiremi/projects/search": "project.search",
+    "GET /api/project-docs": "memory.list",
+    "GET /api/project-knowledge/migration": "memory.migration.status",
+    "POST /api/project-knowledge/migration/backfill": "memory.migration.backfill",
+    "POST /api/project-knowledge/migration/verify": "memory.migration.verify",
+    "POST /api/project-knowledge/migration/retry-failed": "memory.migration.retry",
+  };
+  if (exact[route]) return exact[route]!;
+  const rules: Array<[RegExp, string]> = [
+    [/^GET \/api\/workspaces\/:id$/, "workspace.get"],
+    [/^(?:PUT|PATCH) \/api\/workspaces\/:id$/, "workspace.update"],
+    [/^DELETE \/api\/workspaces\/:id$/, "workspace.delete"],
+    [/^POST \/api\/workspaces\/:id\/leave$/, "workspace.leave"],
+    [/^GET \/api\/workspaces\/:id\/env$/, "workspace.env.get"],
+    [/^PUT \/api\/workspaces\/:id\/env$/, "workspace.env.update"],
+    [/^GET \/api\/workspaces\/:id\/ssh-mesh$/, "workspace.ssh-mesh.get"],
+    [/^PUT \/api\/workspaces\/:id\/ssh-mesh$/, "workspace.ssh-mesh.update"],
+    [/^POST \/api\/workspaces\/:id\/ssh-mesh\/rotate$/, "workspace.ssh-mesh.rotate"],
+    [/^POST \/api\/workspaces\/:id\/ssh-mesh\/test$/, "workspace.ssh-mesh.test"],
+    [/^GET \/api\/workspaces\/:id\/relay-config$/, "workspace.relay.get"],
+    [/^PUT \/api\/workspaces\/:id\/relay-config\/discovery$/, "workspace.relay.discovery"],
+    [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine$/, "workspace.relay.update"],
+    [/^POST \/api\/workspaces\/:id\/relay-config\/:engine\/reveal$/, "workspace.relay.reveal"],
+    [/^GET \/api\/workspaces\/:id\/members$/, "member.list"],
+    [/^PATCH \/api\/workspaces\/:id\/members\/:memberId$/, "member.update"],
+    [/^DELETE \/api\/workspaces\/:id\/members\/:memberId$/, "member.delete"],
+    [/^POST \/api\/workspaces\/:id\/members$/, "invite.create"],
+    [/^GET \/api\/multiremi\/members\/:id$/, "member.get"],
+    [/^PATCH \/api\/multiremi\/members\/:id$/, "member.update"],
+    [/^DELETE \/api\/multiremi\/members\/:id$/, "member.delete"],
+    [/^GET \/api\/workspaces\/:id\/invitations$/, "invite.list"],
+    [/^DELETE \/api\/workspaces\/:id\/invitations\/:invitationId$/, "invite.revoke"],
+    [/^GET \/api\/invitations\/:id$/, "invite.get"],
+    [/^POST \/api\/invitations\/:id\/accept$/, "invite.accept"],
+    [/^POST \/api\/invitations\/:id\/decline$/, "invite.decline"],
+    [/^DELETE \/api\/(?:multiremi\/)?tokens\/:id$/, "token.delete"],
+    [/^GET \/api\/(?:multiremi\/)?projects\/:id$/, "project.get"],
+    [/^(?:PUT|PATCH) \/api\/(?:multiremi\/)?projects\/:id$/, "project.update"],
+    [/^DELETE \/api\/(?:multiremi\/)?projects\/:id$/, "project.archive"],
+    [/^POST \/api\/(?:multiremi\/)?projects\/:id\/restore$/, "project.restore"],
+    [/^GET \/api\/(?:multiremi\/)?projects\/:id\/resources$/, "project.resource.list"],
+    [/^POST \/api\/(?:multiremi\/)?projects\/:id\/resources$/, "project.resource.create"],
+    [/^(?:PUT|PATCH) \/api\/(?:multiremi\/)?projects\/:id\/resources\/:resourceId$/, "project.resource.update"],
+    [/^DELETE \/api\/(?:multiremi\/)?projects\/:id\/resources\/:resourceId$/, "project.resource.delete"],
+    [/^GET \/api\/projects\/:id\/docs$/, "memory.list"],
+    [/^POST \/api\/projects\/:id\/docs$/, "memory.create"],
+    [/^GET \/api\/projects\/:id\/docs\/:ref$/, "memory.get"],
+    [/^PUT \/api\/projects\/:id\/docs\/:ref$/, "memory.update"],
+    [/^DELETE \/api\/projects\/:id\/docs\/:ref$/, "memory.delete"],
+    [/^GET \/api\/projects\/:id\/docs\/:ref\/revisions$/, "wiki.revisions"],
+    [/^GET \/api\/projects\/:id\/docs\/:ref\/backlinks$/, "memory.backlinks"],
+    [/^GET \/api\/projects\/:id\/knowledge\/recall$/, "memory.search"],
+    [/^GET \/api\/workspaces\/:id\/repos$/, "repo.list"],
+    [/^POST \/api\/workspaces\/:id\/repos\/inspect$/, "repo.inspect"],
+    [/^POST \/api\/workspaces\/:id\/repos$/, "repo.create"],
+    [/^PATCH \/api\/workspaces\/:id\/repos\/:repositoryId$/, "repo.update"],
+    [/^DELETE \/api\/workspaces\/:id\/repos\/:repositoryId$/, "repo.delete"],
+  ];
+  return rules.find(([pattern]) => pattern.test(route))?.[1] ?? null;
 }
 
 function exemptRoute(route: string): CliManifestRoute | null {
@@ -136,7 +231,7 @@ function exemptRoute(route: string): CliManifestRoute | null {
   if (path.startsWith("/api/daemon/") || /\/runtimes\/[^/]+\/heartbeat$/.test(path) || path === "/api/multiremi/scheduler/tick") {
     return exempt("daemon_internal_protocol", "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic.");
   }
-  if (path.startsWith("/api/webhooks/") || /\/(oauth|google)\/callback$/.test(path)) {
+  if (path.startsWith("/api/webhooks/") || /\/(oauth|google|lark)\/callback$/.test(path)) {
     return exempt("oauth_or_webhook_callback", "External provider callback is authenticated and invoked by the provider, not a user command.");
   }
   if (path.startsWith("/api/platform-updater/")) {
@@ -159,6 +254,9 @@ function plannedCommand(route: string): { domain: string; command: string } {
   if (segments[0] === "api") segments.shift();
   if (segments[0] === "multiremi") segments.shift();
   let rawDomain = segments[0] ?? "platform";
+  if (rawDomain === "workspaces" && segments.includes("scm")) rawDomain = "scm";
+  else if (rawDomain === "workspaces" && segments.includes("lark")) rawDomain = "lark";
+  else if (rawDomain === "workspaces" && segments.includes("session-archive")) rawDomain = "session";
   if (rawDomain === "auth") rawDomain = "context";
   if (rawDomain === "me") rawDomain = "member";
   if (rawDomain === "remi" || rawDomain === "install.sh") rawDomain = "platform";

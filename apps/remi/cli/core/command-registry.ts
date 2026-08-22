@@ -207,6 +207,21 @@ export class CommandRegistry {
       }),
     ].join("\n");
   }
+
+  renderHelpForArgv(argv: readonly string[], programName = "remi"): string {
+    const matched = [...this.paths.values()]
+      .filter((entry) => pathMatches(entry.path, argv))
+      .sort((a, b) => b.path.length - a.path.length || Number(Boolean(a.alias)) - Number(Boolean(b.alias)))[0];
+    if (!matched) throw new CliError("not_found", `unknown command: ${argv.join(" ")}`);
+    return this.renderHelp(matched.spec.path, programName);
+  }
+
+  supportsGeneratedHelp(argv: readonly string[]): boolean {
+    const matched = [...this.paths.values()]
+      .filter((entry) => pathMatches(entry.path, argv))
+      .sort((a, b) => b.path.length - a.path.length || Number(Boolean(a.alias)) - Number(Boolean(b.alias)))[0];
+    return Boolean(matched && !matched.spec.id.startsWith("legacy."));
+  }
 }
 
 function validateCommandSpec(spec: CommandSpec): void {
@@ -300,7 +315,10 @@ function parseCommandInput(
     let value: CliParsedScalar;
     if (definition.type === "boolean") {
       if (inlineValue !== null) value = parseBoolean(inlineValue, definition.name);
-      else value = !negated;
+      else if (!negated && isBooleanLiteral(rawArgs[index + 1])) {
+        value = parseBoolean(rawArgs[index + 1]!, definition.name);
+        index++;
+      } else value = !negated;
     } else {
       if (negated) throw new CliError("usage", `--no-${name} is only valid for boolean options`);
       if (inlineValue === null) {
@@ -369,6 +387,10 @@ function parseBoolean(value: string, name: string): boolean {
   if (value === "true" || value === "1") return true;
   if (value === "false" || value === "0") return false;
   throw new CliError("usage", `--${name} must be true or false`);
+}
+
+function isBooleanLiteral(value: string | undefined): boolean {
+  return value === "true" || value === "false" || value === "1" || value === "0";
 }
 
 function parseInteger(value: string, name: string): number {

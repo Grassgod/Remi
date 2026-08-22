@@ -32,6 +32,7 @@ describe("CLI command registry", () => {
 
     expect(await registry.execute(["issue", "list", "--limit", "3"])).toBe(true);
     expect(await registry.execute(["issue", "unknown", "--raw=value"])).toBe(true);
+    expect(registry.supportsGeneratedHelp(["issue", "unknown"])).toBe(false);
     expect(calls).toEqual([["3"], ["unknown", "--raw=value"]]);
   });
 
@@ -59,14 +60,14 @@ describe("CLI command registry", () => {
     const deprecated: string[] = [];
 
     await registry.execute([
-      "project", "edit", "prj_1", "--max=5", "--tag", "one", "--tag=two", "--no-archived",
+      "project", "edit", "prj_1", "--max=5", "--tag", "one", "--tag=two", "--archived", "false",
     ], {
       onDeprecatedAlias: (alias) => { deprecated.push(alias.replacement ?? ""); },
     });
 
     expect(captured).toMatchObject({
       matchedPath: ["project", "edit"],
-      rawArgs: ["prj_1", "--max=5", "--tag", "one", "--tag=two", "--no-archived"],
+      rawArgs: ["prj_1", "--max=5", "--tag", "one", "--tag=two", "--archived", "false"],
       positionals: ["prj_1"],
       options: { limit: 5, tag: ["one", "two"], archived: false },
     });
@@ -75,8 +76,11 @@ describe("CLI command registry", () => {
       .toThrow("--archived conflicts with --active");
     expect(() => registry.resolve(["project", "update", "prj_1", "--unknown"]))
       .toThrow("unknown option --unknown");
+    expect(registry.resolve(["project", "update", "prj_1", "--no-archived"])?.options.archived).toBe(false);
     expect(registry.renderHelp(["project", "update"])).toContain("Usage: remi project update <project> [options]");
     expect(registry.renderHelp(["project", "update"])).toContain("remi project edit (use remi project update)");
+    expect(registry.renderHelpForArgv(["project", "edit", "prj_1"])).toContain("Usage: remi project update");
+    expect(registry.supportsGeneratedHelp(["project", "edit"])).toBe(true);
   });
 
   it("rejects duplicate ids and paths and exposes hidden commands in inventory", () => {

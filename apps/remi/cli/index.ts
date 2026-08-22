@@ -8,9 +8,25 @@
 import { VERSION } from "@shared/version.js";
 import { CommandRegistry, type CommandInventoryEntry } from "./core/command-registry.js";
 import { contextCommandSpec } from "./commands/context.js";
+import { inviteCommandSpecs } from "./commands/invite.js";
+import { knowledgeCommandSpecs } from "./commands/knowledge.js";
+import { memberCommandSpecs } from "./commands/member.js";
+import { projectCommandSpecs } from "./commands/project.js";
+import { repoCommandSpecs } from "./commands/repo.js";
+import { tokenCommandSpecs } from "./commands/token.js";
+import { workspaceCommandSpecs } from "./commands/workspace.js";
 
 const commandRegistry = new CommandRegistry();
 commandRegistry.register(contextCommandSpec());
+for (const spec of [
+  ...workspaceCommandSpecs(),
+  ...memberCommandSpecs(),
+  ...inviteCommandSpecs(),
+  ...tokenCommandSpecs(),
+  ...projectCommandSpecs(),
+  ...repoCommandSpecs(),
+  ...knowledgeCommandSpecs(),
+]) commandRegistry.register(spec);
 
 // Lazy-load commands to avoid importing heavy modules when not needed
 function register(name: string, description: string, loader: () => Promise<{ run: (args: string[]) => Promise<void> }>, hidden?: boolean): void {
@@ -52,12 +68,8 @@ forward("setup", "Configure the multiremi server connection", ["setup"]);
 forward("config", "Get/set agent config keys", ["config"]);
 
 // ── multiremi server task/issue management (client → server) ──
-forward("repo", "Check out an allowed workspace repository", ["repo"]);
 forward("issue", "Manage issues on the multiremi server", ["issue"]);
 forward("attachment", "Download an attachment", ["attachment"]);
-forward("memory", "Recall and maintain workspace memory", ["memory"]);
-forward("wiki", "Search and maintain workspace wiki pages", ["wiki"]);
-forward("project", "Administer project knowledge migration", ["project"]);
 forward("seed", "Create a default local agent", ["seed"], true);
 
 // ── Monolith-native ──
@@ -150,7 +162,14 @@ export async function dispatch(args: string[]): Promise<void> {
   if (isHelp || !commandRegistry.hasPath([cmd])) loadPluginCommands();
 
   if (isHelp) {
-    showHelp();
+    if (cmd === "help" && cmdArgs.length) console.log(commandRegistry.renderHelpForArgv(cmdArgs));
+    else showHelp();
+    return;
+  }
+
+  const helpIndex = args.findIndex((arg) => arg === "--help" || arg === "-h");
+  if (helpIndex >= 0 && commandRegistry.supportsGeneratedHelp(args.slice(0, helpIndex))) {
+    console.log(commandRegistry.renderHelpForArgv(args.slice(0, helpIndex)));
     return;
   }
 
@@ -160,7 +179,12 @@ export async function dispatch(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  await commandRegistry.execute([cmd, ...cmdArgs]);
+  await commandRegistry.execute([cmd, ...cmdArgs], {
+    onDeprecatedAlias: (alias) => {
+      const replacement = alias.replacement ? `; use ${alias.replacement}` : "";
+      console.error(`Deprecated command alias: remi ${alias.path.join(" ")}${replacement}`);
+    },
+  });
 }
 
 export function cliCommandInventory(): readonly CommandInventoryEntry[] {

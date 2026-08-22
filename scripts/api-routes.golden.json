@@ -6439,6 +6439,864 @@
               "jsonl"
             ],
             "allowed": true
+          },
+          {
+            "id": "invite.accept",
+            "command": "remi invite accept",
+            "capability": "invite.accept",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.create",
+            "command": "remi invite create",
+            "capability": "invite.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.decline",
+            "command": "remi invite decline",
+            "capability": "invite.decline",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.get",
+            "command": "remi invite get",
+            "capability": "invite.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.list",
+            "command": "remi invite list",
+            "capability": "invite.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.revoke",
+            "command": "remi invite revoke",
+            "capability": "invite.revoke",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.create",
+            "command": "remi member create",
+            "capability": "member.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.delete",
+            "command": "remi member delete",
+            "capability": "member.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.get",
+            "command": "remi member get",
+            "capability": "member.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.list",
+            "command": "remi member list",
+            "capability": "member.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.cloud-waitlist",
+            "command": "remi member onboarding cloud-waitlist",
+            "capability": "member.onboarding.cloud-waitlist",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.complete",
+            "command": "remi member onboarding complete",
+            "capability": "member.onboarding.complete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.no-runtime-bootstrap",
+            "command": "remi member onboarding no-runtime-bootstrap",
+            "capability": "member.onboarding.no-runtime-bootstrap",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.runtime-bootstrap",
+            "command": "remi member onboarding runtime-bootstrap",
+            "capability": "member.onboarding.runtime-bootstrap",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.update",
+            "command": "remi member onboarding update",
+            "capability": "member.onboarding.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.update",
+            "command": "remi member update",
+            "capability": "member.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.backlinks",
+            "command": "remi memory backlinks",
+            "capability": "memory.backlinks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.create",
+            "command": "remi memory create",
+            "capability": "memory.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.delete",
+            "command": "remi memory delete",
+            "capability": "memory.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.get",
+            "command": "remi memory get",
+            "capability": "memory.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.list",
+            "command": "remi memory list",
+            "capability": "memory.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.backfill",
+            "command": "remi memory migration backfill",
+            "capability": "memory.migration.backfill",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.retry",
+            "command": "remi memory migration retry",
+            "capability": "memory.migration.retry",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.status",
+            "command": "remi memory migration status",
+            "capability": "memory.migration.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.verify",
+            "command": "remi memory migration verify",
+            "capability": "memory.migration.verify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.search",
+            "command": "remi memory search",
+            "capability": "memory.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.update",
+            "command": "remi memory update",
+            "capability": "memory.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.archive",
+            "command": "remi project archive",
+            "capability": "project.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.create",
+            "command": "remi project create",
+            "capability": "project.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.defaults",
+            "command": "remi project defaults",
+            "capability": "project.defaults",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.get",
+            "command": "remi project get",
+            "capability": "project.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.list",
+            "command": "remi project list",
+            "capability": "project.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.create",
+            "command": "remi project resource create",
+            "capability": "project.resource.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.delete",
+            "command": "remi project resource delete",
+            "capability": "project.resource.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.list",
+            "command": "remi project resource list",
+            "capability": "project.resource.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.update",
+            "command": "remi project resource update",
+            "capability": "project.resource.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.restore",
+            "command": "remi project restore",
+            "capability": "project.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.search",
+            "command": "remi project search",
+            "capability": "project.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.update",
+            "command": "remi project update",
+            "capability": "project.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.checkout",
+            "command": "remi repo checkout",
+            "capability": "repo.checkout",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.create",
+            "command": "remi repo create",
+            "capability": "repo.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.delete",
+            "command": "remi repo delete",
+            "capability": "repo.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.get",
+            "command": "remi repo get",
+            "capability": "repo.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.inspect",
+            "command": "remi repo inspect",
+            "capability": "repo.inspect",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.list",
+            "command": "remi repo list",
+            "capability": "repo.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.update",
+            "command": "remi repo update",
+            "capability": "repo.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.create",
+            "command": "remi token create",
+            "capability": "token.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.delete",
+            "command": "remi token delete",
+            "capability": "token.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.list",
+            "command": "remi token list",
+            "capability": "token.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.renew",
+            "command": "remi token renew",
+            "capability": "token.renew",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.backlinks",
+            "command": "remi wiki backlinks",
+            "capability": "wiki.backlinks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.create",
+            "command": "remi wiki create",
+            "capability": "wiki.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.delete",
+            "command": "remi wiki delete",
+            "capability": "wiki.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.diff",
+            "command": "remi wiki diff",
+            "capability": "wiki.diff",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.get",
+            "command": "remi wiki get",
+            "capability": "wiki.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.list",
+            "command": "remi wiki list",
+            "capability": "wiki.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.pull",
+            "command": "remi wiki pull",
+            "capability": "wiki.pull",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.push",
+            "command": "remi wiki push",
+            "capability": "wiki.push",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.revisions",
+            "command": "remi wiki revisions",
+            "capability": "wiki.revisions",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.search",
+            "command": "remi wiki search",
+            "capability": "wiki.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.status",
+            "command": "remi wiki status",
+            "capability": "wiki.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.update",
+            "command": "remi wiki update",
+            "capability": "wiki.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.create",
+            "command": "remi workspace create",
+            "capability": "workspace.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.delete",
+            "command": "remi workspace delete",
+            "capability": "workspace.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.env.get",
+            "command": "remi workspace env get",
+            "capability": "workspace.env.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.env.update",
+            "command": "remi workspace env update",
+            "capability": "workspace.env.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.get",
+            "command": "remi workspace get",
+            "capability": "workspace.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.leave",
+            "command": "remi workspace leave",
+            "capability": "workspace.leave",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.list",
+            "command": "remi workspace list",
+            "capability": "workspace.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.discovery",
+            "command": "remi workspace relay discovery",
+            "capability": "workspace.relay.discovery",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.get",
+            "command": "remi workspace relay get",
+            "capability": "workspace.relay.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.reveal",
+            "command": "remi workspace relay reveal",
+            "capability": "workspace.relay.reveal",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.update",
+            "command": "remi workspace relay update",
+            "capability": "workspace.relay.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.get",
+            "command": "remi workspace ssh-mesh get",
+            "capability": "workspace.ssh-mesh.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.rotate",
+            "command": "remi workspace ssh-mesh rotate",
+            "capability": "workspace.ssh-mesh.rotate",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.test",
+            "command": "remi workspace ssh-mesh test",
+            "capability": "workspace.ssh-mesh.test",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.update",
+            "command": "remi workspace ssh-mesh update",
+            "capability": "workspace.ssh-mesh.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.update",
+            "command": "remi workspace update",
+            "capability": "workspace.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
           }
         ]
       }

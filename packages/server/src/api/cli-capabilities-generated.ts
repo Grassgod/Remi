@@ -16,6 +16,969 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "json",
         "jsonl"
       ]
+    },
+    "workspace.list": {
+      "command": "remi workspace list",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.get": {
+      "command": "remi workspace get",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.create": {
+      "command": "remi workspace create",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.update": {
+      "command": "remi workspace update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.delete": {
+      "command": "remi workspace delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.leave": {
+      "command": "remi workspace leave",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.leave",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.env.get": {
+      "command": "remi workspace env get",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.env.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.env.update": {
+      "command": "remi workspace env update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.env.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.ssh-mesh.get": {
+      "command": "remi workspace ssh-mesh get",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.ssh-mesh.update": {
+      "command": "remi workspace ssh-mesh update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.ssh-mesh.rotate": {
+      "command": "remi workspace ssh-mesh rotate",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.rotate",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.ssh-mesh.test": {
+      "command": "remi workspace ssh-mesh test",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.test",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.relay.get": {
+      "command": "remi workspace relay get",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.relay.discovery": {
+      "command": "remi workspace relay discovery",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.discovery",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.relay.update": {
+      "command": "remi workspace relay update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.relay.reveal": {
+      "command": "remi workspace relay reveal",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.reveal",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.list": {
+      "command": "remi member list",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.get": {
+      "command": "remi member get",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.create": {
+      "command": "remi member create",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.update": {
+      "command": "remi member update",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.delete": {
+      "command": "remi member delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.onboarding.update": {
+      "command": "remi member onboarding update",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.onboarding.complete": {
+      "command": "remi member onboarding complete",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.complete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.onboarding.cloud-waitlist": {
+      "command": "remi member onboarding cloud-waitlist",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.cloud-waitlist",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.onboarding.runtime-bootstrap": {
+      "command": "remi member onboarding runtime-bootstrap",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.runtime-bootstrap",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "member.onboarding.no-runtime-bootstrap": {
+      "command": "remi member onboarding no-runtime-bootstrap",
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.no-runtime-bootstrap",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "invite.list": {
+      "command": "remi invite list",
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "invite.get": {
+      "command": "remi invite get",
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "invite.create": {
+      "command": "remi invite create",
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "invite.accept": {
+      "command": "remi invite accept",
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.accept",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "invite.decline": {
+      "command": "remi invite decline",
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.decline",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "invite.revoke": {
+      "command": "remi invite revoke",
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.revoke",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "token.list": {
+      "command": "remi token list",
+      "auth": [
+        "human"
+      ],
+      "capability": "token.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "token.create": {
+      "command": "remi token create",
+      "auth": [
+        "human"
+      ],
+      "capability": "token.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "token.renew": {
+      "command": "remi token renew",
+      "auth": [
+        "human"
+      ],
+      "capability": "token.renew",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "token.delete": {
+      "command": "remi token delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "token.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.list": {
+      "command": "remi project list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.search": {
+      "command": "remi project search",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.search",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.get": {
+      "command": "remi project get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.defaults": {
+      "command": "remi project defaults",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.defaults",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.create": {
+      "command": "remi project create",
+      "auth": [
+        "human"
+      ],
+      "capability": "project.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.update": {
+      "command": "remi project update",
+      "auth": [
+        "human"
+      ],
+      "capability": "project.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.archive": {
+      "command": "remi project archive",
+      "auth": [
+        "human"
+      ],
+      "capability": "project.archive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.restore": {
+      "command": "remi project restore",
+      "auth": [
+        "human"
+      ],
+      "capability": "project.restore",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.resource.list": {
+      "command": "remi project resource list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.resource.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.resource.create": {
+      "command": "remi project resource create",
+      "auth": [
+        "human"
+      ],
+      "capability": "project.resource.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.resource.update": {
+      "command": "remi project resource update",
+      "auth": [
+        "human"
+      ],
+      "capability": "project.resource.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.resource.delete": {
+      "command": "remi project resource delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "project.resource.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "repo.list": {
+      "command": "remi repo list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "repo.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "repo.get": {
+      "command": "remi repo get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "repo.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "repo.inspect": {
+      "command": "remi repo inspect",
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.inspect",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "repo.create": {
+      "command": "remi repo create",
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "repo.update": {
+      "command": "remi repo update",
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "repo.delete": {
+      "command": "remi repo delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "repo.checkout": {
+      "command": "remi repo checkout",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "repo.checkout",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.list": {
+      "command": "remi memory list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.search": {
+      "command": "remi memory search",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.search",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.get": {
+      "command": "remi memory get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.create": {
+      "command": "remi memory create",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.update": {
+      "command": "remi memory update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.delete": {
+      "command": "remi memory delete",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.backlinks": {
+      "command": "remi memory backlinks",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.backlinks",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.list": {
+      "command": "remi wiki list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.search": {
+      "command": "remi wiki search",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.search",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.get": {
+      "command": "remi wiki get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.create": {
+      "command": "remi wiki create",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.update": {
+      "command": "remi wiki update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.delete": {
+      "command": "remi wiki delete",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.backlinks": {
+      "command": "remi wiki backlinks",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.backlinks",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.revisions": {
+      "command": "remi wiki revisions",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.revisions",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.migration.status": {
+      "command": "remi memory migration status",
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.migration.backfill": {
+      "command": "remi memory migration backfill",
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.backfill",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.migration.verify": {
+      "command": "remi memory migration verify",
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.verify",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.migration.retry": {
+      "command": "remi memory migration retry",
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.retry",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.pull": {
+      "command": "remi wiki pull",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.pull",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.status": {
+      "command": "remi wiki status",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.diff": {
+      "command": "remi wiki diff",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.diff",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.push": {
+      "command": "remi wiki push",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.push",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
     }
   }
 } as const;

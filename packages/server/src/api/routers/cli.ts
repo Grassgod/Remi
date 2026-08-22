@@ -4,6 +4,7 @@ import { CLI_CAPABILITIES_RUNTIME } from "../cli-capabilities-generated.js";
 import {
   canonicalGitRemoteKey,
   listWorkspaceRepositories,
+  safeWorkspaceRepositoryData,
   type WorkspaceRepositoryData,
 } from "../helpers/repositories.js";
 import { resolveActiveIssueShareToken } from "../helpers/issue-share-tokens.js";
@@ -275,12 +276,13 @@ function safeProject(
 }
 
 function safeRepository(repository: WorkspaceRepositoryData) {
+  const safe = safeWorkspaceRepositoryData(repository);
   return {
-    id: repository.id,
-    name: repository.name,
-    url: redactRepositoryUrl(repository.url),
-    description: repository.description,
-    default_branch: repository.default_branch,
+    id: safe.id,
+    name: safe.name,
+    url: safe.url,
+    description: safe.description,
+    default_branch: safe.default_branch,
   };
 }
 
@@ -297,22 +299,6 @@ function repositoryIdsForProject(
     .filter(Boolean)
     .map((url) => idsByUrl.get(canonicalGitRemoteKey(url)))
     .filter((id): id is string => Boolean(id)))];
-}
-
-function redactRepositoryUrl(value: string): string {
-  const scp = value.match(/^[^@\s]+@([^:\s]+):(.+)$/);
-  if (scp) return `ssh://${scp[1]}/${scp[2]}`;
-  try {
-    const parsed = new URL(value);
-    parsed.username = "";
-    parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
-    return parsed.toString();
-  } catch {
-    const stripped = value.replace(/[?#].*$/, "");
-    return /^(?:[./]|[\w.-]+\/)[\w./-]+$/.test(stripped) ? stripped : "";
-  }
 }
 
 function allowedOperations(identity: CliIdentity): string[] {

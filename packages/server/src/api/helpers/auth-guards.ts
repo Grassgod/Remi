@@ -56,6 +56,19 @@ export function isTaskTokenForbiddenRequest(request: Request): boolean {
   const path = url.pathname;
   const method = request.method.toUpperCase();
   if (path === "/api/daemon/scm/git-credentials" && method === "POST") return false;
+  // Preserve the route's stable human_admin_required error contract.
+  if (/^\/api\/workspaces\/[^/]+$/.test(path) && method === "DELETE") return false;
+  if (path === "/api/workspaces" || path === "/api/me" || path.startsWith("/api/me/")
+    || path === "/api/invitations" || path.startsWith("/api/invitations/")
+    || path === "/api/tokens" || path.startsWith("/api/tokens/") || path === "/api/cli-token"
+    || path.startsWith("/api/multiremi/members") || path.startsWith("/api/multiremi/tokens")) return true;
+  if (path.startsWith("/api/workspaces/")) {
+    if (/^\/api\/workspaces\/[^/]+\/repos$/.test(path) && method === "GET") return false;
+    return true;
+  }
+  if (/^\/api\/(?:multiremi\/)?projects(?:\/[^/]+)?$/.test(path) && method !== "GET") return true;
+  if (/^\/api\/(?:multiremi\/)?projects\/[^/]+\/restore$/.test(path)) return true;
+  if (/^\/api\/(?:multiremi\/)?projects\/[^/]+\/resources(?:\/[^/]+)?$/.test(path) && method !== "GET") return true;
   if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;

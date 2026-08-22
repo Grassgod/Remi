@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": "scripts/api-routes.golden.json",
-  "max_planned_routes": 505,
+  "max_planned_routes": 417,
   "domains": [
     "context",
     "workspace",
@@ -48,6 +48,1386 @@
       ],
       "capability": "context.read",
       "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace": {
+      "command": "remi workspace",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.list": {
+      "command": "remi workspace list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.get": {
+      "command": "remi workspace get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.create": {
+      "command": "remi workspace create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.update": {
+      "command": "remi workspace update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.delete": {
+      "command": "remi workspace delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.leave": {
+      "command": "remi workspace leave",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.leave",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.env.get": {
+      "command": "remi workspace env get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.env.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.env.update": {
+      "command": "remi workspace env update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.env.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.ssh-mesh.get": {
+      "command": "remi workspace ssh-mesh get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.ssh-mesh.update": {
+      "command": "remi workspace ssh-mesh update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.ssh-mesh.rotate": {
+      "command": "remi workspace ssh-mesh rotate",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.rotate",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.ssh-mesh.test": {
+      "command": "remi workspace ssh-mesh test",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.ssh-mesh.test",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.relay.get": {
+      "command": "remi workspace relay get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.relay.discovery": {
+      "command": "remi workspace relay discovery",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.discovery",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.relay.update": {
+      "command": "remi workspace relay update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.relay.reveal": {
+      "command": "remi workspace relay reveal",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.relay.reveal",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member": {
+      "command": "remi member",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.list": {
+      "command": "remi member list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.get": {
+      "command": "remi member get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.create": {
+      "command": "remi member create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.update": {
+      "command": "remi member update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.delete": {
+      "command": "remi member delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.onboarding.update": {
+      "command": "remi member onboarding update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.onboarding.complete": {
+      "command": "remi member onboarding complete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.complete",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.onboarding.cloud-waitlist": {
+      "command": "remi member onboarding cloud-waitlist",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.cloud-waitlist",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.onboarding.runtime-bootstrap": {
+      "command": "remi member onboarding runtime-bootstrap",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.runtime-bootstrap",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "member.onboarding.no-runtime-bootstrap": {
+      "command": "remi member onboarding no-runtime-bootstrap",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "member.onboarding.no-runtime-bootstrap",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "invite": {
+      "command": "remi invite",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "invite.list": {
+      "command": "remi invite list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "invite.get": {
+      "command": "remi invite get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "invite.create": {
+      "command": "remi invite create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "invite.accept": {
+      "command": "remi invite accept",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.accept",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "invite.decline": {
+      "command": "remi invite decline",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.decline",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "invite.revoke": {
+      "command": "remi invite revoke",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "invite.revoke",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "token": {
+      "command": "remi token",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "token.list": {
+      "command": "remi token list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "token.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "token.create": {
+      "command": "remi token create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "token.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "token.renew": {
+      "command": "remi token renew",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "token.renew",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "token.delete": {
+      "command": "remi token delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "token.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project": {
+      "command": "remi project",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.list": {
+      "command": "remi project list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.search": {
+      "command": "remi project search",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.search",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.get": {
+      "command": "remi project get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.defaults": {
+      "command": "remi project defaults",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.defaults",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.create": {
+      "command": "remi project create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "project.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.update": {
+      "command": "remi project update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "project.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.archive": {
+      "command": "remi project archive",
+      "aliases": [
+        "remi project delete"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "project.archive",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.restore": {
+      "command": "remi project restore",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "project.restore",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.resource.list": {
+      "command": "remi project resource list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.resource.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.resource.create": {
+      "command": "remi project resource create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "project.resource.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.resource.update": {
+      "command": "remi project resource update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "project.resource.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.resource.delete": {
+      "command": "remi project resource delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "project.resource.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo": {
+      "command": "remi repo",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo.list": {
+      "command": "remi repo list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "repo.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo.get": {
+      "command": "remi repo get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "repo.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo.inspect": {
+      "command": "remi repo inspect",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.inspect",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo.create": {
+      "command": "remi repo create",
+      "aliases": [
+        "remi repo import"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo.update": {
+      "command": "remi repo update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo.delete": {
+      "command": "remi repo delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "repo.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "repo.checkout": {
+      "command": "remi repo checkout",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "repo.checkout",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory": {
+      "command": "remi memory",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki": {
+      "command": "remi wiki",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.list": {
+      "command": "remi memory list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.search": {
+      "command": "remi memory search",
+      "aliases": [
+        "remi memory recall"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.search",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.get": {
+      "command": "remi memory get",
+      "aliases": [
+        "remi memory read"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.create": {
+      "command": "remi memory create",
+      "aliases": [
+        "remi memory remember",
+        "remi memory add"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.update": {
+      "command": "remi memory update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.delete": {
+      "command": "remi memory delete",
+      "aliases": [
+        "remi memory forget"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.backlinks": {
+      "command": "remi memory backlinks",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "memory.backlinks",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.list": {
+      "command": "remi wiki list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.search": {
+      "command": "remi wiki search",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.search",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.get": {
+      "command": "remi wiki get",
+      "aliases": [
+        "remi wiki read"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.create": {
+      "command": "remi wiki create",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.update": {
+      "command": "remi wiki update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.delete": {
+      "command": "remi wiki delete",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.backlinks": {
+      "command": "remi wiki backlinks",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.backlinks",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.revisions": {
+      "command": "remi wiki revisions",
+      "aliases": [
+        "remi wiki history"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.revisions",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.migration.status": {
+      "command": "remi memory migration status",
+      "aliases": [
+        "remi project knowledge status"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.migration.backfill": {
+      "command": "remi memory migration backfill",
+      "aliases": [
+        "remi project knowledge backfill"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.backfill",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.migration.verify": {
+      "command": "remi memory migration verify",
+      "aliases": [
+        "remi project knowledge verify"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.verify",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.migration.retry": {
+      "command": "remi memory migration retry",
+      "aliases": [
+        "remi project knowledge retry-failed"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "memory.migration.retry",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.pull": {
+      "command": "remi wiki pull",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.pull",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.status": {
+      "command": "remi wiki status",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.diff": {
+      "command": "remi wiki diff",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.diff",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.push": {
+      "command": "remi wiki push",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.push",
+      "mutation": "write",
       "output": [
         "table",
         "json",
@@ -136,16 +1516,6 @@
       "hidden": false,
       "migration_status": "legacy_passthrough"
     },
-    "legacy.repo": {
-      "command": "remi repo",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": false,
-      "migration_status": "legacy_passthrough"
-    },
     "legacy.issue": {
       "command": "remi issue",
       "aliases": [],
@@ -158,36 +1528,6 @@
     },
     "legacy.attachment": {
       "command": "remi attachment",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": false,
-      "migration_status": "legacy_passthrough"
-    },
-    "legacy.memory": {
-      "command": "remi memory",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": false,
-      "migration_status": "legacy_passthrough"
-    },
-    "legacy.wiki": {
-      "command": "remi wiki",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": false,
-      "migration_status": "legacy_passthrough"
-    },
-    "legacy.project": {
-      "command": "remi project",
       "aliases": [],
       "auth": [],
       "capability": null,
@@ -269,6 +1609,84 @@
     }
   },
   "aliases": {
+    "remi project delete": {
+      "command": "project.archive",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi project archive",
+      "hidden": false
+    },
+    "remi repo import": {
+      "command": "repo.create",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi repo create",
+      "hidden": false
+    },
+    "remi memory recall": {
+      "command": "memory.search",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory search",
+      "hidden": false
+    },
+    "remi memory read": {
+      "command": "memory.get",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory get",
+      "hidden": false
+    },
+    "remi memory remember": {
+      "command": "memory.create",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory create",
+      "hidden": false
+    },
+    "remi memory add": {
+      "command": "memory.create",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory create",
+      "hidden": false
+    },
+    "remi memory forget": {
+      "command": "memory.delete",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory delete",
+      "hidden": false
+    },
+    "remi wiki read": {
+      "command": "wiki.get",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi wiki get",
+      "hidden": false
+    },
+    "remi wiki history": {
+      "command": "wiki.revisions",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi wiki revisions",
+      "hidden": false
+    },
+    "remi project knowledge status": {
+      "command": "memory.migration.status",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory migration status",
+      "hidden": false
+    },
+    "remi project knowledge backfill": {
+      "command": "memory.migration.backfill",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory migration backfill",
+      "hidden": false
+    },
+    "remi project knowledge verify": {
+      "command": "memory.migration.verify",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory migration verify",
+      "hidden": false
+    },
+    "remi project knowledge retry-failed": {
+      "command": "memory.migration.retry",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi memory migration retry",
+      "hidden": false
+    },
     "remi multiremi": {
       "command": "legacy.multiremi",
       "deprecated_since": "0.3.0",
@@ -402,20 +1820,17 @@
       "domain": "label"
     },
     "DELETE /api/multiremi/members/:id": {
-      "planned_command": "member.delete",
-      "domain": "member"
+      "command": "member.delete"
     },
     "DELETE /api/multiremi/pins/:itemType/:itemId": {
       "planned_command": "pin.delete",
       "domain": "pin"
     },
     "DELETE /api/multiremi/projects/:id": {
-      "planned_command": "project.delete",
-      "domain": "project"
+      "command": "project.archive"
     },
     "DELETE /api/multiremi/projects/:id/resources/:resourceId": {
-      "planned_command": "project.delete",
-      "domain": "project"
+      "command": "project.resource.delete"
     },
     "DELETE /api/multiremi/skills/:id": {
       "planned_command": "skill.delete",
@@ -430,24 +1845,20 @@
       "domain": "squad"
     },
     "DELETE /api/multiremi/tokens/:id": {
-      "planned_command": "token.delete",
-      "domain": "token"
+      "command": "token.delete"
     },
     "DELETE /api/pins/:itemType/:itemId": {
       "planned_command": "pin.delete",
       "domain": "pin"
     },
     "DELETE /api/projects/:id": {
-      "planned_command": "project.delete",
-      "domain": "project"
+      "command": "project.archive"
     },
     "DELETE /api/projects/:id/docs/:ref": {
-      "planned_command": "project.delete",
-      "domain": "project"
+      "command": "memory.delete"
     },
     "DELETE /api/projects/:id/resources/:resourceId": {
-      "planned_command": "project.delete",
-      "domain": "project"
+      "command": "project.resource.delete"
     },
     "DELETE /api/runtimes/:id": {
       "planned_command": "runtime.delete",
@@ -470,36 +1881,31 @@
       "domain": "squad"
     },
     "DELETE /api/tokens/:id": {
-      "planned_command": "token.delete",
-      "domain": "token"
+      "command": "token.delete"
     },
     "DELETE /api/workspaces/:id": {
-      "planned_command": "workspace.delete",
-      "domain": "workspace"
+      "command": "workspace.delete"
     },
     "DELETE /api/workspaces/:id/invitations/:invitationId": {
-      "planned_command": "workspace.delete",
-      "domain": "workspace"
+      "command": "invite.revoke"
     },
     "DELETE /api/workspaces/:id/lark/installations/:installationId": {
-      "planned_command": "workspace.delete",
-      "domain": "workspace"
+      "planned_command": "lark.delete",
+      "domain": "lark"
     },
     "DELETE /api/workspaces/:id/members/:memberId": {
-      "planned_command": "workspace.delete",
-      "domain": "workspace"
+      "command": "member.delete"
     },
     "DELETE /api/workspaces/:id/repos/:repositoryId": {
-      "planned_command": "workspace.delete",
-      "domain": "workspace"
+      "command": "repo.delete"
     },
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId": {
-      "planned_command": "workspace.delete",
-      "domain": "workspace"
+      "planned_command": "scm.delete",
+      "domain": "scm"
     },
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId": {
-      "planned_command": "workspace.delete",
-      "domain": "workspace"
+      "planned_command": "scm.delete",
+      "domain": "scm"
     },
     "GET /": {
       "cli_exempt": true,
@@ -756,12 +2162,10 @@
       "domain": "inbox"
     },
     "GET /api/invitations": {
-      "planned_command": "invite.list",
-      "domain": "invite"
+      "command": "invite.list"
     },
     "GET /api/invitations/:id": {
-      "planned_command": "invite.get",
-      "domain": "invite"
+      "command": "invite.get"
     },
     "GET /api/issues": {
       "planned_command": "issue.list",
@@ -888,8 +2292,7 @@
       "domain": "label"
     },
     "GET /api/me": {
-      "planned_command": "member.list",
-      "domain": "member"
+      "command": "member.get"
     },
     "GET /api/models": {
       "planned_command": "runtime.list",
@@ -1092,12 +2495,10 @@
       "domain": "label"
     },
     "GET /api/multiremi/members": {
-      "planned_command": "member.list",
-      "domain": "member"
+      "command": "member.list"
     },
     "GET /api/multiremi/members/:id": {
-      "planned_command": "member.get",
-      "domain": "member"
+      "command": "member.get"
     },
     "GET /api/multiremi/models": {
       "planned_command": "runtime.list",
@@ -1120,20 +2521,16 @@
       "domain": "platform"
     },
     "GET /api/multiremi/projects": {
-      "planned_command": "project.list",
-      "domain": "project"
+      "command": "project.list"
     },
     "GET /api/multiremi/projects/:id": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "project.get"
     },
     "GET /api/multiremi/projects/:id/resources": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "project.resource.list"
     },
     "GET /api/multiremi/projects/search": {
-      "planned_command": "project.search",
-      "domain": "project"
+      "command": "project.search"
     },
     "GET /api/multiremi/runtimes": {
       "planned_command": "runtime.list",
@@ -1232,8 +2629,7 @@
       "domain": "task"
     },
     "GET /api/multiremi/tokens": {
-      "planned_command": "token.list",
-      "domain": "token"
+      "command": "token.list"
     },
     "GET /api/notification-preferences": {
       "planned_command": "notification.list",
@@ -1244,48 +2640,37 @@
       "domain": "pin"
     },
     "GET /api/project-docs": {
-      "planned_command": "wiki.list",
-      "domain": "wiki"
+      "command": "memory.list"
     },
     "GET /api/project-knowledge/migration": {
-      "planned_command": "memory.get",
-      "domain": "memory"
+      "command": "memory.migration.status"
     },
     "GET /api/projects": {
-      "planned_command": "project.list",
-      "domain": "project"
+      "command": "project.list"
     },
     "GET /api/projects/:id": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "project.get"
     },
     "GET /api/projects/:id/docs": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "memory.list"
     },
     "GET /api/projects/:id/docs/:ref": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "memory.get"
     },
     "GET /api/projects/:id/docs/:ref/backlinks": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "memory.backlinks"
     },
     "GET /api/projects/:id/docs/:ref/revisions": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "wiki.revisions"
     },
     "GET /api/projects/:id/knowledge/recall": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "memory.search"
     },
     "GET /api/projects/:id/resources": {
-      "planned_command": "project.get",
-      "domain": "project"
+      "command": "project.resource.list"
     },
     "GET /api/projects/search": {
-      "planned_command": "project.search",
-      "domain": "project"
+      "command": "project.search"
     },
     "GET /api/realtime/ws": {
       "cli_exempt": true,
@@ -1413,68 +2798,59 @@
       "domain": "task"
     },
     "GET /api/tokens": {
-      "planned_command": "token.list",
-      "domain": "token"
+      "command": "token.list"
     },
     "GET /api/workspaces": {
-      "planned_command": "workspace.list",
-      "domain": "workspace"
+      "command": "workspace.list"
     },
     "GET /api/workspaces/:id": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "command": "workspace.get"
     },
     "GET /api/workspaces/:id/env": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "command": "workspace.env.get"
     },
     "GET /api/workspaces/:id/invitations": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "command": "invite.list"
     },
     "GET /api/workspaces/:id/lark/install/:sessionId/status": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "planned_command": "lark.get",
+      "domain": "lark"
     },
     "GET /api/workspaces/:id/lark/installations": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "planned_command": "lark.get",
+      "domain": "lark"
     },
     "GET /api/workspaces/:id/members": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "command": "member.list"
     },
     "GET /api/workspaces/:id/relay-config": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "command": "workspace.relay.get"
     },
     "GET /api/workspaces/:id/repos": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "command": "repo.list"
     },
     "GET /api/workspaces/:id/session-archive": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "planned_command": "session.get",
+      "domain": "session"
     },
     "GET /api/workspaces/:id/ssh-mesh": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "command": "workspace.ssh-mesh.get"
     },
     "GET /api/workspaces/:workspaceId/scm/connections": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "planned_command": "scm.get",
+      "domain": "scm"
     },
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "planned_command": "scm.get",
+      "domain": "scm"
     },
     "GET /api/workspaces/:workspaceId/scm/events": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "planned_command": "scm.get",
+      "domain": "scm"
     },
     "GET /api/workspaces/:workspaceId/scm/events/:eventId": {
-      "planned_command": "workspace.get",
-      "domain": "workspace"
+      "planned_command": "scm.get",
+      "domain": "scm"
     },
     "GET /auth/lark/url": {
       "planned_command": "context.get",
@@ -1527,12 +2903,10 @@
       "domain": "issue"
     },
     "PATCH /api/me": {
-      "planned_command": "member.update",
-      "domain": "member"
+      "command": "member.update"
     },
     "PATCH /api/me/onboarding": {
-      "planned_command": "member.update",
-      "domain": "member"
+      "command": "member.onboarding.update"
     },
     "PATCH /api/multiremi/agent-plugins/:id": {
       "planned_command": "plugin.update",
@@ -1567,20 +2941,17 @@
       "domain": "label"
     },
     "PATCH /api/multiremi/members/:id": {
-      "planned_command": "member.update",
-      "domain": "member"
+      "command": "member.update"
     },
     "PATCH /api/multiremi/platform/settings": {
       "planned_command": "platform.update",
       "domain": "platform"
     },
     "PATCH /api/multiremi/projects/:id": {
-      "planned_command": "project.update",
-      "domain": "project"
+      "command": "project.update"
     },
     "PATCH /api/multiremi/projects/:id/resources/:resourceId": {
-      "planned_command": "project.update",
-      "domain": "project"
+      "command": "project.resource.update"
     },
     "PATCH /api/multiremi/runtimes/:id": {
       "planned_command": "runtime.update",
@@ -1611,20 +2982,17 @@
       "domain": "squad"
     },
     "PATCH /api/workspaces/:id": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "workspace.update"
     },
     "PATCH /api/workspaces/:id/members/:memberId": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "member.update"
     },
     "PATCH /api/workspaces/:id/repos/:repositoryId": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "repo.update"
     },
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "planned_command": "scm.update",
+      "domain": "scm"
     },
     "POST /api/agents": {
       "planned_command": "agent.create",
@@ -1683,8 +3051,7 @@
       "domain": "chat"
     },
     "POST /api/cli-token": {
-      "planned_command": "token.create",
-      "domain": "token"
+      "command": "token.create"
     },
     "POST /api/cloud-billing/checkout-sessions": {
       "planned_command": "billing.checkout_sessions",
@@ -1925,12 +3292,10 @@
       "domain": "inbox"
     },
     "POST /api/invitations/:id/accept": {
-      "planned_command": "invite.accept",
-      "domain": "invite"
+      "command": "invite.accept"
     },
     "POST /api/invitations/:id/decline": {
-      "planned_command": "invite.decline",
-      "domain": "invite"
+      "command": "invite.decline"
     },
     "POST /api/issues": {
       "planned_command": "issue.create",
@@ -2029,20 +3394,16 @@
       "domain": "lark"
     },
     "POST /api/me/onboarding/cloud-waitlist": {
-      "planned_command": "member.cloud_waitlist",
-      "domain": "member"
+      "command": "member.onboarding.cloud-waitlist"
     },
     "POST /api/me/onboarding/complete": {
-      "planned_command": "member.complete",
-      "domain": "member"
+      "command": "member.onboarding.complete"
     },
     "POST /api/me/onboarding/no-runtime-bootstrap": {
-      "planned_command": "member.no_runtime_bootstrap",
-      "domain": "member"
+      "command": "member.onboarding.no-runtime-bootstrap"
     },
     "POST /api/me/onboarding/runtime-bootstrap": {
-      "planned_command": "member.runtime_bootstrap",
-      "domain": "member"
+      "command": "member.onboarding.runtime-bootstrap"
     },
     "POST /api/multiremi/agent-plugins/:id/activate": {
       "planned_command": "plugin.activate",
@@ -2201,8 +3562,7 @@
       "domain": "label"
     },
     "POST /api/multiremi/members": {
-      "planned_command": "member.create",
-      "domain": "member"
+      "command": "member.create"
     },
     "POST /api/multiremi/pins": {
       "planned_command": "pin.create",
@@ -2213,16 +3573,13 @@
       "domain": "platform"
     },
     "POST /api/multiremi/projects": {
-      "planned_command": "project.create",
-      "domain": "project"
+      "command": "project.create"
     },
     "POST /api/multiremi/projects/:id/resources": {
-      "planned_command": "project.resources",
-      "domain": "project"
+      "command": "project.resource.create"
     },
     "POST /api/multiremi/projects/:id/restore": {
-      "planned_command": "project.restore",
-      "domain": "project"
+      "command": "project.restore"
     },
     "POST /api/multiremi/runtimes": {
       "planned_command": "runtime.create",
@@ -2282,8 +3639,7 @@
       "domain": "task"
     },
     "POST /api/multiremi/tokens": {
-      "planned_command": "token.create",
-      "domain": "token"
+      "command": "token.create"
     },
     "POST /api/pins": {
       "planned_command": "pin.create",
@@ -2305,32 +3661,25 @@
       "reason": "Platform updater callback is an internal deployment control-plane protocol."
     },
     "POST /api/project-knowledge/migration/backfill": {
-      "planned_command": "memory.backfill",
-      "domain": "memory"
+      "command": "memory.migration.backfill"
     },
     "POST /api/project-knowledge/migration/retry-failed": {
-      "planned_command": "memory.retry_failed",
-      "domain": "memory"
+      "command": "memory.migration.retry"
     },
     "POST /api/project-knowledge/migration/verify": {
-      "planned_command": "memory.verify",
-      "domain": "memory"
+      "command": "memory.migration.verify"
     },
     "POST /api/projects": {
-      "planned_command": "project.create",
-      "domain": "project"
+      "command": "project.create"
     },
     "POST /api/projects/:id/docs": {
-      "planned_command": "project.docs",
-      "domain": "project"
+      "command": "memory.create"
     },
     "POST /api/projects/:id/resources": {
-      "planned_command": "project.resources",
-      "domain": "project"
+      "command": "project.resource.create"
     },
     "POST /api/projects/:id/restore": {
-      "planned_command": "project.restore",
-      "domain": "project"
+      "command": "project.restore"
     },
     "POST /api/runtimes/:id/archive-agents-and-delete": {
       "planned_command": "runtime.archive_agents_and_delete",
@@ -2381,12 +3730,10 @@
       "domain": "task"
     },
     "POST /api/tokens": {
-      "planned_command": "token.create",
-      "domain": "token"
+      "command": "token.create"
     },
     "POST /api/tokens/current/renew": {
-      "planned_command": "token.renew",
-      "domain": "token"
+      "command": "token.renew"
     },
     "POST /api/upload-file": {
       "planned_command": "attachment.create",
@@ -2408,56 +3755,49 @@
       "reason": "External provider callback is authenticated and invoked by the provider, not a user command."
     },
     "POST /api/workspaces": {
-      "planned_command": "workspace.create",
-      "domain": "workspace"
+      "command": "workspace.create"
     },
     "POST /api/workspaces/:id/lark/install/begin": {
-      "planned_command": "workspace.begin",
-      "domain": "workspace"
+      "planned_command": "lark.begin",
+      "domain": "lark"
     },
     "POST /api/workspaces/:id/leave": {
-      "planned_command": "workspace.leave",
-      "domain": "workspace"
+      "command": "workspace.leave"
     },
     "POST /api/workspaces/:id/members": {
-      "planned_command": "workspace.members",
-      "domain": "workspace"
+      "command": "invite.create"
     },
     "POST /api/workspaces/:id/relay-config/:engine/reveal": {
-      "planned_command": "workspace.reveal",
-      "domain": "workspace"
+      "command": "workspace.relay.reveal"
     },
     "POST /api/workspaces/:id/repos": {
-      "planned_command": "workspace.repos",
-      "domain": "workspace"
+      "command": "repo.create"
     },
     "POST /api/workspaces/:id/repos/inspect": {
-      "planned_command": "workspace.inspect",
-      "domain": "workspace"
+      "command": "repo.inspect"
     },
     "POST /api/workspaces/:id/ssh-mesh/rotate": {
-      "planned_command": "workspace.rotate",
-      "domain": "workspace"
+      "command": "workspace.ssh-mesh.rotate"
     },
     "POST /api/workspaces/:id/ssh-mesh/test": {
-      "planned_command": "workspace.test",
-      "domain": "workspace"
+      "command": "workspace.ssh-mesh.test"
     },
     "POST /api/workspaces/:workspaceId/scm/connections": {
-      "planned_command": "workspace.connections",
-      "domain": "workspace"
+      "planned_command": "scm.connections",
+      "domain": "scm"
     },
     "POST /api/workspaces/:workspaceId/scm/connections/:connectionId/verify": {
-      "planned_command": "workspace.verify",
-      "domain": "workspace"
+      "planned_command": "scm.verify",
+      "domain": "scm"
     },
     "POST /auth/google": {
       "planned_command": "context.google",
       "domain": "context"
     },
     "POST /auth/lark/callback": {
-      "planned_command": "context.callback",
-      "domain": "context"
+      "cli_exempt": true,
+      "category": "oauth_or_webhook_callback",
+      "reason": "External provider callback is authenticated and invoked by the provider, not a user command."
     },
     "POST /auth/logout": {
       "planned_command": "context.logout",
@@ -2558,16 +3898,13 @@
       "domain": "pin"
     },
     "PUT /api/projects/:id": {
-      "planned_command": "project.update",
-      "domain": "project"
+      "command": "project.update"
     },
     "PUT /api/projects/:id/docs/:ref": {
-      "planned_command": "project.update",
-      "domain": "project"
+      "command": "memory.update"
     },
     "PUT /api/projects/:id/resources/:resourceId": {
-      "planned_command": "project.update",
-      "domain": "project"
+      "command": "project.resource.update"
     },
     "PUT /api/runtimes/:id/models": {
       "planned_command": "runtime.update",
@@ -2586,32 +3923,27 @@
       "domain": "squad"
     },
     "PUT /api/workspaces/:id": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "workspace.update"
     },
     "PUT /api/workspaces/:id/env": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "workspace.env.update"
     },
     "PUT /api/workspaces/:id/relay-config/:engine": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "workspace.relay.update"
     },
     "PUT /api/workspaces/:id/relay-config/discovery": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "workspace.relay.discovery"
     },
     "PUT /api/workspaces/:id/session-archive": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "planned_command": "session.update",
+      "domain": "session"
     },
     "PUT /api/workspaces/:id/ssh-mesh": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "command": "workspace.ssh-mesh.update"
     },
     "PUT /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId": {
-      "planned_command": "workspace.update",
-      "domain": "workspace"
+      "planned_command": "scm.update",
+      "domain": "scm"
     }
   }
 }

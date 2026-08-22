@@ -28,12 +28,12 @@ describe("CLI capabilities manifest", () => {
 
   it("keeps staged user routes visible as missing and records compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 2,
-      exempt: 62,
-      missing: 505,
+      mapped: 89,
+      exempt: 63,
+      missing: 417,
       total: 569,
     });
-    expect(manifest.max_planned_routes).toBe(505);
+    expect(manifest.max_planned_routes).toBe(417);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);
     expect(manifest.routes["GET /api/cli/context"]).toEqual({ command: "context.get" });
     expect(manifest.routes["GET /api/cli/capabilities"]).toEqual({ command: "context.get" });
@@ -43,6 +43,14 @@ describe("CLI capabilities manifest", () => {
       replacement: "remi <command>",
       hidden: true,
     });
+    expect(manifest.aliases["remi memory recall"]).toMatchObject({
+      command: "memory.search",
+      replacement: "remi memory search",
+    });
+    expect(manifest.aliases["remi wiki history"]).toMatchObject({
+      command: "wiki.revisions",
+      replacement: "remi wiki revisions",
+    });
     expect(Object.values(manifest.routes).filter((route) => "planned_command" in route).length).toBeGreaterThan(0);
   });
 
@@ -50,7 +58,7 @@ describe("CLI capabilities manifest", () => {
     const overBudget = structuredClone(manifest);
     overBudget.max_planned_routes--;
     expect(validateCliCapabilities(golden.routes, overBudget, cliCommandInventory())).toContain(
-      "planned route count 505 exceeds ratchet 504",
+      "planned route count 417 exceeds ratchet 416",
     );
   });
 });

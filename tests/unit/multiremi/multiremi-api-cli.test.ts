@@ -103,6 +103,42 @@ describe("Multiremi API - CLI context and capabilities", () => {
     expect(shareContext.current.issue).toEqual(expect.objectContaining({ id: fixture.issueId }));
     expect(shareContext.catalog).toEqual({ projects: [], repositories: [], next_cursor: null });
   });
+
+  it("keeps task tokens on the safe directory and current-project knowledge surface", async () => {
+    const fixture = await cliFixture();
+    const taskHeaders = bearer(fixture.task);
+
+    for (const request of [
+      fixture.app.request("/api/workspaces/local", { headers: taskHeaders }),
+      fixture.app.request("/api/workspaces/local", { method: "PATCH", headers: taskHeaders, body: JSON.stringify({ name: "No" }) }),
+      fixture.app.request("/api/tokens", { method: "POST", headers: taskHeaders, body: JSON.stringify({ name: "No" }) }),
+      fixture.app.request("/api/multiremi/members", { headers: taskHeaders }),
+    ]) {
+      expect((await request).status).toBe(403);
+    }
+
+    const repositories = await fixture.app.request("/api/workspaces/local/repos", { headers: taskHeaders });
+    expect(repositories.status).toBe(200);
+    expect((await repositories.json()).repositories).toEqual([
+      expect.objectContaining({
+        id: fixture.repositoryId,
+        url: "https://example.com/org/remi.git",
+      }),
+    ]);
+
+    const created = await fixture.app.request(`/api/projects/${fixture.projectId}/docs`, {
+      method: "POST",
+      headers: { ...taskHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "memory", title: "Task memory", body: "Current project only" }),
+    });
+    expect(created.status).toBe(201);
+
+    const sibling = fixture.store.createProject({ title: "Sibling", workspaceId: "local" });
+    const siblingRead = await fixture.app.request(`/api/projects/${sibling.id}`, { headers: taskHeaders });
+    const siblingDocs = await fixture.app.request(`/api/projects/${sibling.id}/docs`, { headers: taskHeaders });
+    const siblingResources = await fixture.app.request(`/api/projects/${sibling.id}/resources`, { headers: taskHeaders });
+    expect([siblingRead.status, siblingDocs.status, siblingResources.status]).toEqual([404, 404, 404]);
+  });
 });
 
 async function cliFixture() {

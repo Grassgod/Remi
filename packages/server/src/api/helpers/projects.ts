@@ -50,7 +50,8 @@ export function loadProjectResourceForMutation(
   projectId: string,
   resourceId: string,
 ): MultiremiProjectResource | Response {
-  if (!store.getProject(projectId)) return c.json({ error: "project not found" }, 404);
+  const project = loadProjectForHumanMutation(c, store, projectId);
+  if (project instanceof Response) return project;
   const resource = store.getProjectResource(resourceId);
   if (!resource || resource.projectId !== projectId) return c.json({ error: "project resource not found" }, 404);
   return resource;

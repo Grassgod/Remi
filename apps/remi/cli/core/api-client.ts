@@ -39,6 +39,11 @@ export interface CliServerCapabilities {
   [key: string]: unknown;
 }
 
+interface CliServerCommandCapability {
+  id?: string;
+  allowed?: boolean;
+}
+
 export interface CliApiClientOptions {
   serverUrl: string;
   token?: string | null;
@@ -141,6 +146,23 @@ export class CliApiClient {
       });
     }
     return this.capabilitiesPromise;
+  }
+
+  async requireCapability(commandId: string): Promise<CliServerCapabilities> {
+    const capabilities = await this.capabilities();
+    const commands = Array.isArray(capabilities.commands)
+      ? capabilities.commands as CliServerCommandCapability[]
+      : [];
+    const command = commands.find((candidate) => candidate.id === commandId);
+    if (!command) {
+      throw new CliError("unsupported_capability", `server does not advertise CLI capability ${commandId}`, {
+        hint: "Upgrade the platform and CLI together, then retry.",
+      });
+    }
+    if (command.allowed !== true) {
+      throw new CliError("forbidden", `current credential cannot run ${commandId}`);
+    }
+    return capabilities;
   }
 
   private async fetchAttempt<T>(request: CliRequest): Promise<CliResponse<T> | Response> {

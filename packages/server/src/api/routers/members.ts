@@ -6,6 +6,7 @@ import {
   normalizeGoWorkspaceMemberRole,
   publishWorkspaceEvent,
   readJson,
+  requireWorkspaceAdmin,
   safeArchiveWorkspaceMember,
   safeCreateInvitation,
   safeUpdateWorkspaceMember,
@@ -78,22 +79,35 @@ export function registerMemberRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/members", async (c) => {
     const body = await readJson<CreateWorkspaceMemberInput>(c);
     const workspaceId = body.workspaceId ?? "local";
-    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     return c.json({ member: store.createWorkspaceMember(body) }, 201);
   });
   app.get("/api/multiremi/members/:id", (c) => {
     const member = store.getWorkspaceMember(c.req.param("id"));
     if (!member) return c.json({ error: "member not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, member.workspaceId);
+    if (denied) return denied;
     return c.json({ member });
   });
   app.patch("/api/multiremi/members/:id", async (c) => {
+    const current = store.getWorkspaceMember(c.req.param("id"));
+    if (!current) return c.json({ error: "member not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, current.workspaceId)
+      ?? requireWorkspaceAdmin(c, store, current.workspaceId);
+    if (denied) return denied;
     const body = await readJson<UpdateWorkspaceMemberInput>(c);
     const member = safeUpdateWorkspaceMember(store, c.req.param("id"), body);
     if ("error" in member) return c.json({ error: member.error }, member.status);
     return c.json({ member });
   });
   app.delete("/api/multiremi/members/:id", (c) => {
+    const current = store.getWorkspaceMember(c.req.param("id"));
+    if (!current) return c.json({ error: "member not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, current.workspaceId)
+      ?? requireWorkspaceAdmin(c, store, current.workspaceId);
+    if (denied) return denied;
     const member = safeArchiveWorkspaceMember(store, c.req.param("id"));
     if ("error" in member) return c.json({ error: member.error }, member.status);
     return c.json({ member });

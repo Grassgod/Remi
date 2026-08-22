@@ -52,10 +52,18 @@ async function runDispatch(args: string[]): Promise<DispatchResult> {
 }
 
 describe("remi CLI dispatcher", () => {
-  it("registers every legacy top-level entry, including hidden multiremi compatibility", () => {
+  it("registers native resource groups and every legacy top-level entry", () => {
     const inventory = cliCommandInventory();
-    expect(inventory.map((entry) => entry.path.join(" "))).toEqual([
+    expect(inventory.filter((entry) => entry.path.length === 1).map((entry) => entry.path.join(" "))).toEqual([
       "context",
+      "workspace",
+      "member",
+      "invite",
+      "token",
+      "project",
+      "repo",
+      "memory",
+      "wiki",
       "start",
       "stop",
       "restart",
@@ -64,12 +72,8 @@ describe("remi CLI dispatcher", () => {
       "service",
       "setup",
       "config",
-      "repo",
       "issue",
       "attachment",
-      "memory",
-      "wiki",
-      "project",
       "seed",
       "doctor",
       "login",
@@ -80,13 +84,14 @@ describe("remi CLI dispatcher", () => {
     ]);
     expect(inventory.find((entry) => entry.path[0] === "multiremi"))
       .toMatchObject({ hidden: true, id: "legacy.multiremi" });
+    expect(inventory.find((entry) => entry.id === "memory.search")?.aliases)
+      .toContainEqual(expect.objectContaining({ path: ["memory", "recall"], deprecatedSince: "0.3.0" }));
   });
 
-  it("routes `remi project` into the multiremi project command", async () => {
+  it("routes `remi project` into the native resource group", async () => {
     const result = await runDispatch(["project"]);
 
-    // Reaching the project layer's own usage error proves the command resolved.
-    expect(String((result.error as Error | null)?.message ?? "")).toContain("usage: multiremi project knowledge");
+    expect(String((result.error as Error | null)?.message ?? "")).toContain("usage: remi project list|get|search");
     expect(result.exitCode).toBeNull();
     expect(result.stderr.join("\n")).not.toContain("Unknown command");
   });
@@ -95,10 +100,25 @@ describe("remi CLI dispatcher", () => {
     const memoryResult = await runDispatch(["memory", "read", "entry"]);
     const wikiResult = await runDispatch(["wiki", "read", "page"]);
 
-    expect(String((memoryResult.error as Error | null)?.message ?? "")).toContain("--project <project-id> is required");
-    expect(String((wikiResult.error as Error | null)?.message ?? "")).toContain("--project <project-id> is required");
+    expect(String((memoryResult.error as Error | null)?.message ?? "")).toContain("--project is required");
+    expect(String((wikiResult.error as Error | null)?.message ?? "")).toContain("--project is required");
     expect(memoryResult.stderr.join("\n")).not.toContain("Unknown command");
     expect(wikiResult.stderr.join("\n")).not.toContain("Unknown command");
+  });
+
+  it("renders generated help for native command paths without executing them", async () => {
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...parts: unknown[]) => { output.push(parts.map(String).join(" ")); };
+    try {
+      await dispatch(["repo", "checkout", "--help"]);
+      await dispatch(["help", "memory", "recall"]);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(output.join("\n")).toContain("Usage: remi repo checkout <repository-or-url> [options]");
+    expect(output.join("\n")).toContain("--ref <branch-or-sha>");
+    expect(output.join("\n")).toContain("Usage: remi memory search <query> [options]");
   });
 
   it("still rejects a command nobody registered", async () => {
