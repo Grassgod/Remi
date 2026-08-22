@@ -1,0 +1,58 @@
+name: multiremi-platform-app
+
+# Migration compose for installations where PostgreSQL and OpenViking already
+# run in Docker. This stack owns only API/Web and joins their existing networks.
+services:
+  api:
+    image: ${REMI_API_IMAGE:?set REMI_API_IMAGE}
+    restart: unless-stopped
+    user: ${REMI_RUNTIME_UID:-1000}:${REMI_RUNTIME_GID:-1000}
+    env_file:
+      - ${REMI_API_ENV_FILE:?set REMI_API_ENV_FILE}
+    environment:
+      HOME: /srv/multiremi
+      MULTIREMI_HOST: 0.0.0.0
+      MULTIREMI_PORT: 6120
+      MULTIREMI_OPENVIKING_URL: http://openviking:1933
+      MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
+      MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
+      MULTIREMI_SSH_MESH_CONTROL_PLANE: ${REMI_SSH_MESH_CONTROL_PLANE:-0}
+      MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
+    volumes:
+      - ${REMI_STATE_ROOT:?set REMI_STATE_ROOT}:/srv/multiremi
+    networks:
+      - app
+      - postgres
+      - openviking
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:6120/readyz');process.exit(r.ok?0:1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - 127.0.0.1:${REMI_API_BIND_PORT:-16120}:6120
+
+  web:
+    image: ${REMI_WEB_IMAGE:?set REMI_WEB_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - 127.0.0.1:${REMI_WEB_BIND_PORT:-13000}:3000
+
+networks:
+  app:
+  postgres:
+    external: true
+    name: ${REMI_POSTGRES_NETWORK:?set REMI_POSTGRES_NETWORK}
+  openviking:
+    external: true
+    name: ${REMI_OPENVIKING_NETWORK:?set REMI_OPENVIKING_NETWORK}

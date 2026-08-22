@@ -51,6 +51,46 @@ describe("platform updater release validation", () => {
     await expect(fetchReleaseFeed("http://example.com/platform-release.json"))
       .rejects.toThrow("must use HTTPS");
   });
+
+  it("reports externally managed data containers", async () => {
+    const runner: CommandRunner = {
+      async run(command, args) {
+        if (command === "docker" && args.includes("compose")) {
+          return {
+            exitCode: 0,
+            stdout: [
+              JSON.stringify({ Service: "api", State: "running", Status: "Up", Image: "api:test" }),
+              JSON.stringify({ Service: "web", State: "running", Status: "Up", Image: "web:test" }),
+            ].join("\n"),
+            stderr: "",
+          };
+        }
+        const container = args.at(-1);
+        return {
+          exitCode: 0,
+          stdout: `${JSON.stringify({ Running: true, Status: "running", Health: { Status: "healthy" } })}|${container}:test\n`,
+          stderr: "",
+        };
+      },
+    };
+    const driver = new DockerComposeDriver({
+      composeFile: "/tmp/compose.yml",
+      envFile: "/tmp/platform.env",
+      stateDir: "/tmp/platform-state",
+      apiHealthUrl: "http://127.0.0.1:6120/readyz",
+      webHealthUrl: "http://127.0.0.1:3000/login",
+      postgresContainer: "postgres-existing",
+      openvikingContainer: "openviking-existing",
+    }, runner);
+
+    const inspection = await driver.inspect();
+    expect(inspection.services.map((service) => [service.id, service.status])).toEqual([
+      ["api", "ready"],
+      ["web", "ready"],
+      ["postgres", "ready"],
+      ["openviking", "ready"],
+    ]);
+  });
 });
 
 function operation(targetManifest: Record<string, unknown>): MultiremiPlatformOperation {

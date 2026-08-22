@@ -34,13 +34,20 @@ services:
   api:
     image: ${REMI_API_IMAGE:?set REMI_API_IMAGE to an immutable digest}
     restart: unless-stopped
+    user: ${REMI_RUNTIME_UID:-1000}:${REMI_RUNTIME_GID:-1000}
     env_file:
       - ${REMI_API_ENV_FILE:?set REMI_API_ENV_FILE}
     environment:
+      HOME: /srv/multiremi
       MULTIREMI_HOST: 0.0.0.0
       MULTIREMI_PORT: 6120
       MULTIREMI_DATABASE_URL: postgresql://${POSTGRES_USER:-multiremi}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-multiremi}
-      OPENVIKING_URL: http://openviking:1933
+      MULTIREMI_OPENVIKING_URL: http://openviking:1933
+      MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
+      MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
+      MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
+    volumes:
+      - ${REMI_STATE_ROOT:?set REMI_STATE_ROOT}:/srv/multiremi
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,7 +59,7 @@ services:
       timeout: 5s
       retries: 12
     ports:
-      - 127.0.0.1:6120:6120
+      - 127.0.0.1:${REMI_API_BIND_PORT:-6120}:6120
 
   web:
     image: ${REMI_WEB_IMAGE:?set REMI_WEB_IMAGE to an immutable digest}
@@ -66,7 +73,7 @@ services:
       timeout: 5s
       retries: 12
     ports:
-      - ${REMI_WEB_BIND:-0.0.0.0}:3000:3000
+      - ${REMI_WEB_BIND:-0.0.0.0}:${REMI_WEB_BIND_PORT:-3000}:3000
 
 volumes:
   postgres-data:

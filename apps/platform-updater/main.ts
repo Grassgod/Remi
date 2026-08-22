@@ -82,6 +82,8 @@ function createDriver(): PlatformDeploymentDriver {
       stateDir: process.env.MULTIREMI_PLATFORM_STATE_DIR ?? "/var/lib/multiremi-platform-updater",
       apiHealthUrl: process.env.MULTIREMI_PLATFORM_API_HEALTH_URL ?? `${apiUrl.replace(/\/$/, "")}/readyz`,
       webHealthUrl: process.env.MULTIREMI_PLATFORM_WEB_HEALTH_URL ?? "http://127.0.0.1:3000/login",
+      postgresContainer: optionalEnv("MULTIREMI_PLATFORM_POSTGRES_CONTAINER"),
+      openvikingContainer: optionalEnv("MULTIREMI_PLATFORM_OPENVIKING_CONTAINER"),
     }, runner);
   }
   if (kind !== "systemd_release") throw new Error(`Unsupported platform driver: ${kind}`);

@@ -14,6 +14,8 @@ interface ComposeConfig {
   stateDir: string;
   apiHealthUrl: string;
   webHealthUrl: string;
+  postgresContainer?: string | null;
+  openvikingContainer?: string | null;
 }
 
 interface ComposeManifest {
@@ -128,11 +130,34 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     const rows = result.stdout.split("\n").filter(Boolean).flatMap((line) => {
       try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
     });
-    return (["api", "web", "postgres", "openviking"] as const).map((id) => {
+    return Promise.all((["api", "web", "postgres", "openviking"] as const).map(async (id) => {
       const row = rows.find((item) => item.Service === id);
+      if (!row && (id === "postgres" || id === "openviking")) {
+        return this.inspectExternalDependency(id);
+      }
       const state = String(row?.State ?? "unknown");
       return { id, name: serviceName(id), status: state === "running" ? "ready" : state === "unknown" ? "unknown" : "stopped", detail: row ? String(row.Status ?? state) : null, version: row ? String(row.Image ?? "") || null : null, checkedAt: new Date().toISOString() };
-    });
+    }));
+  }
+
+  private async inspectExternalDependency(id: "postgres" | "openviking"): Promise<MultiremiPlatformService> {
+    const container = id === "postgres" ? this.config.postgresContainer : this.config.openvikingContainer;
+    if (!container) {
+      return { id, name: serviceName(id), status: "unknown", detail: "External container is not configured", version: null, checkedAt: new Date().toISOString() };
+    }
+    const result = await this.runner.run("docker", ["inspect", "--format", "{{json .State}}|{{.Config.Image}}", container]);
+    if (result.exitCode !== 0) {
+      return { id, name: serviceName(id), status: "stopped", detail: result.stderr.trim() || "Container not found", version: null, checkedAt: new Date().toISOString() };
+    }
+    const [stateJson = "{}", image = ""] = result.stdout.trim().split("|", 2);
+    let state: Record<string, unknown> = {};
+    try { state = JSON.parse(stateJson) as Record<string, unknown>; } catch {}
+    const health = state.Health && typeof state.Health === "object"
+      ? String((state.Health as Record<string, unknown>).Status ?? "")
+      : "";
+    const running = state.Running === true;
+    const status = running && (!health || health === "healthy") ? "ready" : running ? "degraded" : "stopped";
+    return { id, name: serviceName(id), status, detail: health || String(state.Status ?? "unknown"), version: image || null, checkedAt: new Date().toISOString() };
   }
 
   private async verify(): Promise<void> {
