@@ -50,6 +50,9 @@ export interface MultiremiAgentTemplateSummary {
   icon?: string;
   accent?: string;
   skills: MultiremiAgentTemplateSkill[];
+  recommendedProvider?: MultiremiAgentProvider;
+  recommendedModel?: string | null;
+  requiredPlugins?: string[];
 }
 
 export interface MultiremiAgentTemplate extends MultiremiAgentTemplateSummary {
@@ -161,6 +164,8 @@ export interface CreateAgentFromTemplateInput {
   runtime_id?: string | null;
   provider?: MultiremiAgentProvider | null;
   model?: string | null;
+  thinkingLevel?: string | null;
+  thinking_level?: string | null;
   visibility?: string;
   maxConcurrentTasks?: number;
   max_concurrent_tasks?: number;
@@ -182,6 +187,10 @@ export interface CreateAgentFromTemplateResult {
   imported_skill_ids: string[];
   reusedSkillIds: string[];
   reused_skill_ids: string[];
+  attachedPluginIds?: string[];
+  attached_plugin_ids?: string[];
+  missingPlugins?: string[];
+  missing_plugins?: string[];
 }
 
 export interface CreateSkillInput {
@@ -1173,8 +1182,19 @@ export interface MultiremiTaskWithAgent extends MultiremiTask {
   projectDocs: MultiremiProjectDocsIndex | null;
   /** Full Wiki bodies used only to materialize the Issue workspace working copy. */
   projectWikiDocs?: MultiremiProjectDoc[];
+  repositoryWikiContexts?: MultiremiTaskRepositoryWikiContext[];
   projectContexts: MultiremiTaskProjectContext[];
   repos: MultiremiRepoData[];
+}
+
+export interface MultiremiTaskRepositoryWikiContext {
+  repository: {
+    id: string;
+    name: string;
+    url: string;
+    defaultBranch: string | null;
+  };
+  docs: MultiremiRepositoryWikiDoc[];
 }
 
 export interface MultiremiTaskProjectContext {
@@ -2208,6 +2228,105 @@ export interface MultiremiProjectDocRevision {
   contentSha256?: string | null;
   snapshotOid?: string | null;
   contentUri?: string | null;
+}
+
+export type MultiremiRepositoryWikiStatus =
+  | "unbuilt"
+  | "building"
+  | "healthy"
+  | "stale"
+  | "failed";
+
+/** Repository-scoped code facts. Bodies live in OpenViking in production. */
+export interface MultiremiRepositoryWikiDoc {
+  id: string;
+  repositoryId: string;
+  workspaceId: string;
+  path: string;
+  /** Legacy-friendly leaf reference; clients should prefer path. */
+  slug: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  tags: string[];
+  refs: MultiremiProjectDocRef[];
+  sourceTaskId: string | null;
+  sourceIssueId: string | null;
+  authorType: "member" | "agent" | null;
+  authorId: string | null;
+  updatedByType: "member" | "agent" | null;
+  updatedById: string | null;
+  sourceRevision: string | null;
+  status: MultiremiRepositoryWikiStatus;
+  statusMessage: string | null;
+  version: number;
+  storageBackend: "sql" | "openviking";
+  contentUri: string | null;
+  contentSha256: string | null;
+  syncStatus: "sql" | "pending" | "ready" | "failed" | "deleting";
+  syncError: string | null;
+  snapshotOid: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiRepositoryWikiDocRevision {
+  id: string;
+  docId: string;
+  version: number;
+  path: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  sourceRevision: string | null;
+  authorType: "member" | "agent" | null;
+  authorId: string | null;
+  contentUri: string | null;
+  contentSha256: string | null;
+  snapshotOid: string | null;
+  createdAt: string;
+}
+
+export interface CreateRepositoryWikiDocInput {
+  id?: string;
+  path?: string | null;
+  slug?: string | null;
+  title?: string;
+  summary?: string | null;
+  body?: string | null;
+  tags?: string[] | null;
+  refs?: MultiremiProjectDocRef[] | null;
+  sourceTaskId?: string | null;
+  source_task_id?: string | null;
+  sourceIssueId?: string | null;
+  source_issue_id?: string | null;
+  sourceRevision?: string | null;
+  source_revision?: string | null;
+  authorType?: "member" | "agent" | null;
+  author_type?: "member" | "agent" | null;
+  authorId?: string | null;
+  author_id?: string | null;
+}
+
+export interface UpdateRepositoryWikiDocInput {
+  path?: string | null;
+  slug?: string | null;
+  title?: string;
+  summary?: string | null;
+  body?: string | null;
+  tags?: string[] | null;
+  refs?: MultiremiProjectDocRef[] | null;
+  sourceRevision?: string | null;
+  source_revision?: string | null;
+  status?: MultiremiRepositoryWikiStatus;
+  statusMessage?: string | null;
+  status_message?: string | null;
+  expectedVersion?: number | null;
+  expected_version?: number | null;
+  updatedByType?: "member" | "agent" | null;
+  updated_by_type?: "member" | "agent" | null;
+  updatedById?: string | null;
+  updated_by_id?: string | null;
 }
 
 /** Workspace-wide doc listing entry: a doc plus its project's title for grouping. */

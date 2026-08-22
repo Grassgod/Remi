@@ -314,6 +314,7 @@ export interface SeedRefs {
   skillFileId: string;
   runtimeId: string;
   projectId: string;
+  repositoryId: string;
   projectResourceId: string;
   projectDocRef: string;
   squadId: string;
@@ -633,6 +634,7 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
     skillFileId: skillFile?.id ?? "skf_snapshot",
     runtimeId: runtime.id,
     projectId: project.id,
+    repositoryId: "repo_snapshot",
     projectResourceId: projectResource.id,
     projectDocRef: "spec",
     squadId: squad.id,
@@ -703,6 +705,7 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
   labelId: "labelId",
   memberId: "memberId",
   projectId: "projectId",
+  repositoryId: "repositoryId",
   resourceId: "projectResourceId",
   runId: "autopilotRunId",
   runtimeId: "runtimeId",

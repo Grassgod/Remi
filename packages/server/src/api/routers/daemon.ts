@@ -414,6 +414,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     let hydratedTask: typeof task;
     try {
       hydratedTask = await deps.projectKnowledge.hydrateTaskKnowledge(task);
+      hydratedTask = await deps.repositoryWiki.hydrateTaskWiki(hydratedTask);
     } catch (error) {
       store.failTask(task.id, {
         error: `Project knowledge unavailable before agent startup: ${safeProjectKnowledgeError(error)}`,

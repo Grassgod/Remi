@@ -10,6 +10,7 @@ import {
   FileQuestion,
   FileText,
   Files,
+  GitFork,
   Pin,
   Search,
 } from "lucide-react";
@@ -19,6 +20,8 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { projectDocListOptions } from "@multiremi/core/project-docs";
+import { projectResourcesOptions } from "@multiremi/core/projects";
+import { repositoryListOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
@@ -681,7 +684,17 @@ export function ProjectWikiSection({
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const docsQuery = useQuery(projectDocListOptions(wsId, projectId));
+  const resourcesQuery = useQuery(projectResourcesOptions(wsId, projectId));
+  const repositoriesQuery = useQuery(repositoryListOptions(wsId));
   const docs = docsQuery.data ?? [];
+  const projectRepositoryUrls = new Set((resourcesQuery.data ?? []).flatMap((resource) => {
+    if (resource.resource_type !== "github_repo") return [];
+    const url = (resource.resource_ref as { url?: unknown }).url;
+    return typeof url === "string" ? [canonicalRepositoryUrl(url)] : [];
+  }));
+  const projectRepositories = (repositoriesQuery.data?.repositories ?? []).filter((repository) =>
+    projectRepositoryUrls.has(canonicalRepositoryUrl(repository.url))
+  );
 
   const memoryDocs = docs.filter((doc) => doc.kind === "memory");
   // Wiki pages sort newest-first; the server sorts pinned-first, which is the
@@ -769,6 +782,27 @@ export function ProjectWikiSection({
           active={!selectedRef}
           href={paths.projectWiki(projectId)}
         />
+        {projectRepositories.length > 0 && (
+          <SidebarRow
+            icon={<GitFork className="h-4 w-4 shrink-0" />}
+            label={t(($) => $.wiki.repository_facts)}
+            count={projectRepositories.length}
+            active={false}
+            href={paths.repositoryWiki(projectRepositories[0]!.id)}
+            markCurrent={false}
+          />
+        )}
+        {projectRepositories.map((repository) => (
+          <SidebarRow
+            key={repository.id}
+            icon={<GitFork className="h-4 w-4 shrink-0" />}
+            label={repository.name}
+            active={false}
+            href={paths.repositoryWiki(repository.id)}
+            nested
+            markCurrent={false}
+          />
+        ))}
         <SidebarRow
           icon={<Files className="h-4 w-4 shrink-0" />}
           label={t(($) => $.wiki.pages_label)}
@@ -809,4 +843,16 @@ export function ProjectWikiSection({
       </div>
     </div>
   );
+}
+
+function canonicalRepositoryUrl(value: string): string {
+  const trimmed = value.trim();
+  const scp = trimmed.match(/^[^@\s]+@([^:\s]+):(.+)$/);
+  if (scp) return `${scp[1]}/${scp[2]}`.toLowerCase().replace(/\.git$/i, "").replace(/\/+$/, "");
+  try {
+    const url = new URL(trimmed);
+    return `${url.hostname}${url.pathname}`.toLowerCase().replace(/\.git$/i, "").replace(/\/+$/, "");
+  } catch {
+    return trimmed.toLowerCase().replace(/\.git$/i, "").replace(/\/+$/, "");
+  }
 }

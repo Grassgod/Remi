@@ -23,7 +23,33 @@ const refetchProjects = vi.hoisted(() => vi.fn());
 const refetchDocs = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: <T,>(options: T) => options,
+  useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
+  useMutation: () => ({ mutate: vi.fn(), isPending: false }),
   useQuery: (options: { queryKey: string[] }) => {
+    if (options.queryKey[0] === "repositories") {
+      if (options.queryKey[2] === "atlas") {
+        return {
+          data: {
+            state: "ready",
+            configured: true,
+            required_plugin: "code-to-wiki",
+            plugin_id: "apl-1",
+            plugin_bound: true,
+            agent_id: "agent-atlas",
+            repository_autopilot_id: "auto-repo",
+            repository_trigger_id: "trigger-repo",
+            project_autopilot_id: "auto-project",
+            project_trigger_id: "trigger-project",
+          },
+          isPending: false,
+          isError: false,
+          error: null,
+        };
+      }
+      const isWiki = options.queryKey[2] === "wiki-summaries";
+      return { data: isWiki ? [] : { repositories: [], total: 0 }, isPending: false, isError: false, error: null, refetch: vi.fn() };
+    }
     const isProjects = options.queryKey[0] === "projects";
     const pending = isProjects ? state.projectsPending : state.docsPending;
     const error = isProjects ? state.projectsError : state.docsError;
@@ -52,6 +78,10 @@ vi.mock("@multiremi/core/hooks", () => ({
 vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
     projectWiki: (id: string) => `/ws/projects/${id}/wiki`,
+    repositoryWiki: (id: string) => `/ws/repos/${id}/wiki`,
+    plugins: () => "/ws/plugins",
+    agentDetail: (id: string) => `/ws/agents/${id}`,
+    autopilotDetail: (id: string) => `/ws/autopilots/${id}`,
   }),
 }));
 

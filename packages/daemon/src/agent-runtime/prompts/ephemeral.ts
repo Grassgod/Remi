@@ -471,7 +471,8 @@ function appendProjectKnowledgeSections(sections: string[], projectId: string): 
   sections.push("Project Memory is not embedded in this prompt. Use the `remi memory` CLI only: first run `remi memory recall \"<query>\"`, then `remi memory read <slug-or-id>` for relevant hits before relying on them.");
   sections.push("Do not use an MCP server for Project Memory. The task environment already scopes these commands to the current project.");
   sections.push("");
-  sections.push("Wiki is materialized in `./wiki`. Edit files only in that directory; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+  sections.push("Project Wiki is materialized in `./wiki`. Repository code facts are materialized in `./wiki/repositories/<repository>/`. Edit files only below `./wiki`; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+  sections.push("Repository Wiki is shared by every Project that references the same repository. Keep code-level facts there; keep cross-repository decisions and synthesis in the Project Wiki.");
   sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
   sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory remember|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
 }

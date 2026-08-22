@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -41,6 +42,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
     ...actual,
     useQuery: (options: { queryKey?: readonly unknown[] }) => {
       if (options.queryKey?.[0] === "repositories") {
+        if (options.queryKey?.[2] === "wiki-summaries") return { data: [], isLoading: false };
         return {
           data: { repositories, total: repositories.length },
           isLoading: false,
@@ -89,6 +91,10 @@ vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "workspace-1",
 }));
 
+vi.mock("@multiremi/core/paths", () => ({
+  useWorkspacePaths: () => ({ repositoryWiki: (id: string) => `/workspace/repos/${id}/wiki` }),
+}));
+
 vi.mock("@multiremi/core/auth", () => ({
   useAuthStore: (selector: (state: { user: { id: string } }) => unknown) =>
     selector({ user: { id: "user-1" } }),
@@ -96,6 +102,10 @@ vi.mock("@multiremi/core/auth", () => ({
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("../navigation", () => ({
+  AppLink: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
 }));
 
 import { RepositoriesPage } from "./repositories-page";

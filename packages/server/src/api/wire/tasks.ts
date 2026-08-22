@@ -334,6 +334,32 @@ export function daemonTaskClaimResponse(
   if (task.projectWikiDocs?.length) {
     response.project_wiki_docs = task.projectWikiDocs.map(projectDocCompatibilityResponse);
   }
+  if (task.repositoryWikiContexts?.length) {
+    response.repository_wiki_contexts = task.repositoryWikiContexts.map((context) => ({
+      repository: {
+        id: context.repository.id,
+        name: context.repository.name,
+        url: context.repository.url,
+        default_branch: context.repository.defaultBranch,
+      },
+      docs: context.docs.map((doc) => ({
+        id: doc.id,
+        repository_id: doc.repositoryId,
+        workspace_id: doc.workspaceId,
+        path: doc.path,
+        slug: doc.slug,
+        title: doc.title,
+        summary: doc.summary,
+        body: doc.body,
+        tags: doc.tags,
+        refs: doc.refs,
+        source_revision: doc.sourceRevision,
+        status: doc.status,
+        version: doc.version,
+        updated_at: doc.updatedAt,
+      })),
+    }));
+  }
   if (task.projectContexts.length) {
     response.project_contexts = task.projectContexts.map((context) => ({
       project: projectCompatibilityResponse(context.project),

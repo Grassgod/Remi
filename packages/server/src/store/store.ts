@@ -20,6 +20,10 @@ import type {
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
+import {
+  RepositoryWikiRepo,
+  type RepositoryWikiWriteControl,
+} from "@multiremi/store/repos/repository-wiki-repo.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
@@ -116,6 +120,7 @@ import type {
   CreateLabelInput,
   CreatePinnedItemInput,
   CreateProjectDocInput,
+  CreateRepositoryWikiDocInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateRuntimeUpdateInput,
@@ -186,6 +191,8 @@ import type {
   MultiremiProject,
   MultiremiProjectDoc,
   MultiremiProjectDocRevision,
+  MultiremiRepositoryWikiDoc,
+  MultiremiRepositoryWikiDocRevision,
   MultiremiProjectDocsIndex,
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
@@ -260,6 +267,7 @@ import type {
   UpdateLabelInput,
   UpdateMultiremiUserInput,
   UpdateProjectDocInput,
+  UpdateRepositoryWikiDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
   UpdateRuntimeInput,
@@ -320,6 +328,7 @@ export class MultiremiStore {
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
   private projects: ProjectsRepo;
+  private repositoryWiki: RepositoryWikiRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
   private issues: IssuesRepo;
@@ -350,6 +359,7 @@ export class MultiremiStore {
     // context rather than through `resolveHost`.
     this.ctx.registerAnalytics(this.analytics);
     this.projects = new ProjectsRepo(this.ctx);
+    this.repositoryWiki = new RepositoryWikiRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
     this.issues = new IssuesRepo(this.ctx);
@@ -2506,6 +2516,43 @@ runMigrations(this.db);
 
   getProjectDocsIndex(projectId: string): MultiremiProjectDocsIndex {
     return this.projects.getProjectDocsIndex(projectId);
+  }
+
+  listRepositoryWikiDocs(workspaceId: string, repositoryId: string): MultiremiRepositoryWikiDoc[] {
+    return this.repositoryWiki.list(workspaceId, repositoryId);
+  }
+
+  listWorkspaceRepositoryWikiDocs(workspaceId: string): MultiremiRepositoryWikiDoc[] {
+    return this.repositoryWiki.listWorkspace(workspaceId);
+  }
+
+  getRepositoryWikiDocByRef(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc | null {
+    return this.repositoryWiki.getByRef(workspaceId, repositoryId, ref);
+  }
+
+  createRepositoryWikiDoc(
+    workspaceId: string,
+    repositoryId: string,
+    input: CreateRepositoryWikiDocInput,
+    control?: RepositoryWikiWriteControl,
+  ): MultiremiRepositoryWikiDoc {
+    return this.repositoryWiki.create(workspaceId, repositoryId, input, control);
+  }
+
+  updateRepositoryWikiDoc(
+    current: MultiremiRepositoryWikiDoc,
+    input: UpdateRepositoryWikiDocInput,
+    control?: RepositoryWikiWriteControl,
+  ): MultiremiRepositoryWikiDoc {
+    return this.repositoryWiki.replaceExact(current, input, control);
+  }
+
+  deleteRepositoryWikiDoc(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc {
+    return this.repositoryWiki.delete(workspaceId, repositoryId, ref);
+  }
+
+  listRepositoryWikiDocRevisions(docId: string): MultiremiRepositoryWikiDocRevision[] {
+    return this.repositoryWiki.revisions(docId);
   }
 
   createSquad(input: CreateSquadInput): MultiremiSquad {

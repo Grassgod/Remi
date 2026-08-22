@@ -11,7 +11,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { AgentTask, AgentTaskProjectDoc } from "@daemon/contracts/types.js";
+import type {
+  AgentTask,
+  AgentTaskProjectDoc,
+  AgentTaskRepositoryWikiDoc,
+} from "@daemon/contracts/types.js";
 
 export const ISSUE_WIKI_DIRECTORY = "wiki";
 export const ISSUE_WIKI_BASE_DIRECTORY = ".multiremi/wiki-base";
@@ -44,7 +48,16 @@ export interface IssueWikiManifest {
  */
 export async function prepareIssueWikiWorkspace(workDir: string, task: AgentTask): Promise<IssueWikiManifest | null> {
   const projectId = task.project?.id?.trim();
-  if (!projectId || task.issue?.issueKind === "intake") return null;
+  if (!projectId || task.issue?.issueKind === "intake") {
+    const contexts = task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? [];
+    if (contexts.length) {
+      return withIssueWikiLock(workDir, () => {
+        prepareRepositoryWikiWorkspaces(workDir, task);
+        return null;
+      });
+    }
+    return null;
+  }
   return withIssueWikiLock(workDir, () => prepareIssueWikiWorkspaceUnlocked(workDir, task, projectId));
 }
 
@@ -130,7 +143,127 @@ function prepareIssueWikiWorkspaceUnlocked(workDir: string, task: AgentTask, pro
     docs: nextEntries.sort((a, b) => a.slug.localeCompare(b.slug)),
   };
   writeJsonAtomic(workDir, manifestPath, manifest);
+  prepareRepositoryWikiWorkspaces(workDir, task);
   return manifest;
+}
+
+interface RepositoryWikiManifestEntry {
+  id: string;
+  repositoryId: string;
+  repositoryName: string;
+  path: string;
+  version: number;
+  sourceRevision: string | null;
+  sha256: string;
+  updatedAt: string;
+}
+
+interface RepositoryWikiManifestRepository {
+  id: string;
+  name: string;
+  directory: string;
+}
+
+interface RepositoryWikiManifest {
+  version: 1;
+  workspaceId: string;
+  pulledAt: string;
+  repositories: RepositoryWikiManifestRepository[];
+  docs: RepositoryWikiManifestEntry[];
+}
+
+function prepareRepositoryWikiWorkspaces(workDir: string, task: AgentTask): void {
+  const contexts = task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? [];
+  const wikiRoot = join(workDir, ISSUE_WIKI_DIRECTORY, "repositories");
+  const baseRoot = join(workDir, ISSUE_WIKI_BASE_DIRECTORY, "repositories");
+  const manifestPath = join(baseRoot, "manifest.json");
+  ensureSafeDirectory(workDir, wikiRoot);
+  ensureSafeDirectory(workDir, baseRoot);
+  const previous = readRepositoryManifest(workDir, manifestPath);
+  const previousById = new Map(previous?.docs.map((entry) => [entry.id, entry]) ?? []);
+  const next: RepositoryWikiManifestEntry[] = [];
+  const repositories: RepositoryWikiManifestRepository[] = [];
+
+  for (const context of contexts) {
+    const repositoryDirectory = `${safeSlug(context.repository.name)}-${safeSlug(context.repository.id).slice(-8)}`;
+    repositories.push({
+      id: context.repository.id,
+      name: context.repository.name,
+      directory: repositoryDirectory,
+    });
+    ensureSafeDirectory(workDir, join(wikiRoot, repositoryDirectory));
+    for (const doc of context.docs) {
+      const relativePath = validRepositoryManifestPath(doc.path) ? doc.path : null;
+      if (!relativePath) throw new Error(`Repository Wiki path is invalid: ${doc.path}`);
+      const path = join(repositoryDirectory, ...relativePath.split("/"));
+      const localPath = join(wikiRoot, path);
+      const basePath = join(baseRoot, "files", path);
+      const text = markdownFile(doc.body);
+      const prior = previousById.get(doc.id);
+      const entry = repositoryManifestEntry(context.repository.id, context.repository.name, doc, path, text);
+      const local = readRegularText(workDir, localPath, "Repository Wiki page");
+      const base = prior ? readRegularText(workDir, basePath, "Repository Wiki baseline") : null;
+      if (!prior || local === null || (base !== null && local === base)) {
+        writeTextAtomic(workDir, localPath, text);
+        writeReadOnlyText(workDir, basePath, text);
+        next.push(entry);
+      } else {
+        next.push(prior);
+      }
+    }
+  }
+
+  writeJsonAtomic(workDir, manifestPath, {
+    version: 1,
+    workspaceId: task.workspaceId,
+    pulledAt: new Date().toISOString(),
+    repositories: repositories.sort((left, right) => left.name.localeCompare(right.name)),
+    docs: next.sort((left, right) => left.path.localeCompare(right.path)),
+  } satisfies RepositoryWikiManifest);
+}
+
+function repositoryManifestEntry(
+  repositoryId: string,
+  repositoryName: string,
+  doc: AgentTaskRepositoryWikiDoc,
+  path: string,
+  text: string,
+): RepositoryWikiManifestEntry {
+  return {
+    id: doc.id,
+    repositoryId,
+    repositoryName,
+    path,
+    version: Math.max(1, Math.floor(Number(doc.version ?? 1))),
+    sourceRevision: doc.sourceRevision ?? null,
+    sha256: sha256(text),
+    updatedAt: doc.updatedAt,
+  };
+}
+
+function readRepositoryManifest(workDir: string, path: string): RepositoryWikiManifest | null {
+  const text = readRegularText(workDir, path, "Repository Wiki manifest");
+  if (text === null) return null;
+  const value = JSON.parse(text) as Partial<RepositoryWikiManifest>;
+  if (value.version !== 1 || !Array.isArray(value.docs)) throw new Error("Repository Wiki manifest is invalid");
+  if (value.repositories !== undefined && !Array.isArray(value.repositories)) throw new Error("Repository Wiki manifest repositories are invalid");
+  for (const repository of value.repositories ?? []) {
+    if (!repository?.id || !repository.name || !repository.directory || repository.directory.includes("/") || repository.directory.includes("\\")) {
+      throw new Error("Repository Wiki manifest contains an invalid repository");
+    }
+  }
+  for (const entry of value.docs) {
+    if (!entry?.id || !entry.repositoryId || !validRepositoryManifestPath(entry.path) || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
+      throw new Error("Repository Wiki manifest contains an invalid entry");
+    }
+  }
+  return { ...value, repositories: value.repositories ?? [] } as RepositoryWikiManifest;
+}
+
+function validRepositoryManifestPath(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 512 || !value.toLowerCase().endsWith(".md") || value.includes("\\") || value.includes("\0")) return false;
+  const parts = value.split("/");
+  return parts.every((part) => part !== "" && part !== "." && part !== "..");
 }
 
 function manifestEntry(doc: AgentTaskProjectDoc, path: string, text: string): IssueWikiManifestEntry {

@@ -42,8 +42,18 @@ import {
   SshMeshProbeConflictError,
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type {
+  CreateRepositoryWikiDocInput,
   CreateWorkspaceInput,
+  MultiremiAutopilot,
+  MultiremiAutopilotEventConfig,
+  MultiremiAutopilotExecutionMode,
+  MultiremiAutopilotTriggerKind,
+  MultiremiRepositoryWikiDoc,
+  MultiremiRepositoryWikiDocRevision,
+  UpdateRepositoryWikiDocInput,
 } from "@multiremi/contracts/types.js";
+import { listWorkspaceRepositories } from "../helpers/repositories.js";
+import { RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
 import {
   discoverGatewayModels,
   triggerGatewayDiscovery,
@@ -53,6 +63,11 @@ import {
   validateRelayFragment,
 } from "@multiremi/relay/fragment.js";
 import type { RouterDeps } from "./deps.js";
+import { createAgentFromTemplate, getAgentTemplate } from "../agent-templates.js";
+
+const ATLAS_AGENT_NAME = "Atlas · LLM Wiki";
+const ATLAS_REPOSITORY_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
+const ATLAS_PROJECT_AUTOPILOT_TITLE = "Atlas · Project Knowledge";
 
 export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
@@ -113,6 +128,253 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         return c.json({ error: error.message }, error.status);
       }
       throw error;
+    }
+  });
+  app.get("/api/workspaces/:id/repository-wikis", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    try {
+      const repositories = listWorkspaceRepositories(store, workspaceId);
+      const docs = await deps.repositoryWiki.listWorkspace(workspaceId);
+      const docsByRepository = new Map<string, MultiremiRepositoryWikiDoc[]>();
+      for (const doc of docs) {
+        const current = docsByRepository.get(doc.repositoryId) ?? [];
+        current.push(doc);
+        docsByRepository.set(doc.repositoryId, current);
+      }
+      return c.json({ repositories: repositories.map((repository) => {
+        const repositoryDocs = docsByRepository.get(repository.id) ?? [];
+        const latest = repositoryDocs.reduce<MultiremiRepositoryWikiDoc | null>(
+          (value, doc) => !value || doc.updatedAt > value.updatedAt ? doc : value,
+          null,
+        );
+        return {
+          repository_id: repository.id,
+          repository_name: repository.name,
+          status: latest?.status ?? "unbuilt",
+          status_message: latest?.statusMessage ?? null,
+          source_revision: latest?.sourceRevision ?? null,
+          page_count: repositoryDocs.length,
+          updated_at: latest?.updatedAt ?? null,
+        };
+      }) });
+    } catch (error) {
+      return repositoryWikiError(c, error);
+    }
+  });
+  app.get("/api/workspaces/:id/repository-wikis/atlas", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    return c.json(atlasSetupStatus(store, workspaceId));
+  });
+  app.post("/api/workspaces/:id/repository-wikis/atlas", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    const plugin = store.listAgentPlugins(workspaceId, { provider: "claude" })
+      .find((candidate) => candidate.name === "code-to-wiki");
+    if (!plugin) {
+      return c.json({
+        ...atlasSetupStatus(store, workspaceId),
+        error: "code-to-wiki plugin must be imported before Atlas can be configured",
+        code: "atlas_plugin_required",
+      }, 409);
+    }
+
+    let agent = store.getAgentByWorkspaceAndName(workspaceId, ATLAS_AGENT_NAME);
+    if (!agent) {
+      const created = await createAgentFromTemplate(store, {
+        templateSlug: "atlas-llm-wiki",
+        name: ATLAS_AGENT_NAME,
+        workspaceId,
+        ownerId: authenticatedRequestUserId(c) ?? "local",
+        visibility: "workspace",
+      });
+      agent = created.agent;
+    } else {
+      const template = getAgentTemplate("atlas-llm-wiki")!;
+      agent = store.updateAgent(agent.id, {
+        description: template.description,
+        instructions: template.instructions,
+        provider: template.recommendedProvider,
+        model: template.recommendedModel,
+        visibility: "workspace",
+      });
+      const bindings = store.listAgentPluginBindings(agent.id);
+      const existingBinding = bindings.find((binding) => binding.pluginId === plugin.id);
+      if (existingBinding && !existingBinding.enabled) {
+        store.updateAgentPluginBinding(agent.id, existingBinding.id, {
+          enabled: true,
+          versionPolicy: "follow_active",
+        });
+      } else if (!existingBinding) {
+        store.createAgentPluginBinding(agent.id, {
+          pluginId: plugin.id,
+          versionPolicy: "follow_active",
+          enabled: true,
+        });
+      }
+    }
+
+    const createdById = authenticatedRequestUserId(c) ?? "local";
+    const projectAutopilot = ensureAtlasAutopilot(store, {
+      workspaceId,
+      agentId: agent.id,
+      title: ATLAS_PROJECT_AUTOPILOT_TITLE,
+      description: "When an Issue is completed, inspect its sessions and code evidence, then maintain durable Project Wiki and Memory with the remi CLI.",
+      executionMode: "trigger_issue",
+      createdById,
+    });
+    ensureAtlasTrigger(store, projectAutopilot.id, "system_event", {
+      resource: "issue",
+      event: "status_changed",
+      conditions: [{ field: "status", operator: "becomes", value: "done" }],
+    });
+
+    const repositoryAutopilot = ensureAtlasAutopilot(store, {
+      workspaceId,
+      agentId: agent.id,
+      title: ATLAS_REPOSITORY_AUTOPILOT_TITLE,
+      description: "Use the canonical SCM event, checked-out target repository, and existing Repo Wiki to perform an incremental repository Wiki update with the remi CLI.",
+      executionMode: "run_only",
+      createdById,
+    });
+    let scmWarning: string | null = null;
+    try {
+      ensureAtlasTrigger(store, repositoryAutopilot.id, "scm_event", {
+        resource: "scm",
+        events: ["change.merged", "default_branch.updated"],
+      });
+    } catch (error) {
+      scmWarning = error instanceof Error ? error.message : String(error);
+    }
+    deps.scheduler?.sync();
+    return c.json({ ...atlasSetupStatus(store, workspaceId), scm_warning: scmWarning });
+  });
+  app.get("/api/workspaces/:id/repos/:repositoryId/wiki", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const missing = requireWorkspaceRepository(store, workspaceId, repositoryId);
+    if (missing) return c.json({ error: "repository not found" }, 404);
+    try {
+      const query = String(c.req.query("q") ?? "").trim();
+      const docs = query
+        ? await deps.repositoryWiki.search(workspaceId, repositoryId, query, Number(c.req.query("limit") ?? 20))
+        : await deps.repositoryWiki.list(workspaceId, repositoryId);
+      return c.json({ docs: docs.map(repositoryWikiDocResponse) });
+    } catch (error) {
+      return repositoryWikiError(c, error);
+    }
+  });
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const missing = requireWorkspaceRepository(store, workspaceId, repositoryId);
+    if (missing) return c.json({ error: "repository not found" }, 404);
+    const body = await readJsonStrict<CreateRepositoryWikiDocInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const doc = await deps.repositoryWiki.create(workspaceId, repositoryId, {
+        ...body,
+        authorType: body.authorType ?? body.author_type ?? "member",
+        authorId: body.authorId ?? body.author_id ?? authenticatedRequestUserId(c),
+      });
+      return c.json({ doc: repositoryWikiDocResponse(doc) }, 201);
+    } catch (error) {
+      return repositoryWikiError(c, error);
+    }
+  });
+  app.post("/api/workspaces/:id/repos/:repositoryId/wiki/build", (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (requireWorkspaceRepository(store, workspaceId, repositoryId)) {
+      return c.json({ error: "repository not found" }, 404);
+    }
+    const setup = atlasSetupStatus(store, workspaceId);
+    const autopilotId = typeof setup.repository_autopilot_id === "string"
+      ? setup.repository_autopilot_id
+      : null;
+    if (!setup.configured || !autopilotId) {
+      return c.json({ error: "Atlas must be configured before building a repository Wiki", code: "atlas_not_configured" }, 409);
+    }
+    const run = store.runAutopilot(autopilotId, {
+      source: "api",
+      prompt: "Bootstrap or refresh the target repository LLM Wiki from its checked-out default branch. Use the code-to-wiki plugin for analysis, preserve durable repository facts, resolve the checked-out HEAD revision, and publish changes with remi wiki push --source-revision <sha>.",
+      payload: { atlas_repository_id: repositoryId, atlas_mode: "bootstrap_repository" },
+    });
+    return c.json({ run_id: run.id, task_id: run.taskId, status: run.status }, 202);
+  });
+  app.get("/api/workspaces/:id/repos/:repositoryId/wiki/:ref", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    try {
+      const doc = await deps.repositoryWiki.get(workspaceId, repositoryId, c.req.param("ref"));
+      return doc ? c.json({ doc: repositoryWikiDocResponse(doc) }) : c.json({ error: "repository wiki doc not found" }, 404);
+    } catch (error) {
+      return repositoryWikiError(c, error);
+    }
+  });
+  app.put("/api/workspaces/:id/repos/:repositoryId/wiki/:ref", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    const body = await readJsonStrict<UpdateRepositoryWikiDocInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const doc = await deps.repositoryWiki.update(workspaceId, repositoryId, c.req.param("ref"), {
+        ...body,
+        updatedByType: body.updatedByType ?? body.updated_by_type ?? "member",
+        updatedById: body.updatedById ?? body.updated_by_id ?? authenticatedRequestUserId(c),
+      });
+      return c.json({ doc: repositoryWikiDocResponse(doc) });
+    } catch (error) {
+      return repositoryWikiError(c, error);
+    }
+  });
+  app.delete("/api/workspaces/:id/repos/:repositoryId/wiki/:ref", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    try {
+      const expectedVersion = c.req.query("expected_version");
+      const doc = await deps.repositoryWiki.delete(
+        workspaceId,
+        repositoryId,
+        c.req.param("ref"),
+        expectedVersion ? Number(expectedVersion) : null,
+      );
+      return c.json({ doc: repositoryWikiDocResponse(doc) });
+    } catch (error) {
+      return repositoryWikiError(c, error);
+    }
+  });
+  app.get("/api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions", async (c) => {
+    const workspaceId = c.req.param("id");
+    const repositoryId = c.req.param("repositoryId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    try {
+      const revisions = await deps.repositoryWiki.revisions(workspaceId, repositoryId, c.req.param("ref"));
+      return c.json({ revisions: revisions.map(repositoryWikiRevisionResponse) });
+    } catch (error) {
+      return repositoryWikiError(c, error);
     }
   });
   app.post("/api/workspaces/:id/repos/inspect", async (c) => {
@@ -494,8 +756,164 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/workspaces/:id/lark/installations/:installationId", (c) => c.body(null, 204));
 }
 
+function atlasSetupStatus(store: RouterDeps["store"], workspaceId: string): Record<string, unknown> {
+  const agent = store.getAgentByWorkspaceAndName(workspaceId, ATLAS_AGENT_NAME);
+  const plugin = store.listAgentPlugins(workspaceId, { provider: "claude" })
+    .find((candidate) => candidate.name === "code-to-wiki") ?? null;
+  const pluginBinding = agent && plugin
+    ? store.listAgentPluginBindings(agent.id).find((binding) => binding.pluginId === plugin.id && binding.enabled) ?? null
+    : null;
+  const autopilots = agent
+    ? store.listAutopilots(workspaceId).filter((autopilot) => autopilot.assigneeType === "agent" && autopilot.assigneeId === agent.id)
+    : [];
+  const projectAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_PROJECT_AUTOPILOT_TITLE) ?? null;
+  const repositoryAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_REPOSITORY_AUTOPILOT_TITLE) ?? null;
+  const projectTrigger = projectAutopilot
+    ? store.listAutopilotTriggers(projectAutopilot.id).find((trigger) => trigger.kind === "system_event" && trigger.enabled) ?? null
+    : null;
+  const repositoryTrigger = repositoryAutopilot
+    ? store.listAutopilotTriggers(repositoryAutopilot.id).find((trigger) => trigger.kind === "scm_event" && trigger.enabled) ?? null
+    : null;
+  const configured = Boolean(agent && pluginBinding && projectTrigger && repositoryTrigger);
+  const state = !plugin
+    ? "plugin_required"
+    : !agent
+      ? "not_configured"
+      : !repositoryTrigger
+        ? "scm_connection_required"
+        : !projectTrigger || !pluginBinding
+          ? "incomplete"
+          : "ready";
+  return {
+    state,
+    configured,
+    required_plugin: "code-to-wiki",
+    plugin_id: plugin?.id ?? null,
+    plugin_bound: Boolean(pluginBinding),
+    agent_id: agent?.id ?? null,
+    repository_autopilot_id: repositoryAutopilot?.id ?? null,
+    repository_trigger_id: repositoryTrigger?.id ?? null,
+    project_autopilot_id: projectAutopilot?.id ?? null,
+    project_trigger_id: projectTrigger?.id ?? null,
+  };
+}
+
+function ensureAtlasAutopilot(
+  store: RouterDeps["store"],
+  input: {
+    workspaceId: string;
+    agentId: string;
+    title: string;
+    description: string;
+    executionMode: MultiremiAutopilotExecutionMode;
+    createdById: string;
+  },
+): MultiremiAutopilot {
+  const existing = store.listAutopilots(input.workspaceId).find((autopilot) => autopilot.title === input.title);
+  if (existing) {
+    return store.updateAutopilot(existing.id, {
+      description: input.description,
+      assigneeType: "agent",
+      assigneeId: input.agentId,
+      status: "active",
+      executionMode: input.executionMode,
+      sessionPolicy: "new",
+    });
+  }
+  return store.createAutopilot({
+    title: input.title,
+    description: input.description,
+    workspaceId: input.workspaceId,
+    assigneeType: "agent",
+    assigneeId: input.agentId,
+    executionMode: input.executionMode,
+    sessionPolicy: "new",
+    status: "active",
+    createdByType: "member",
+    createdById: input.createdById,
+  });
+}
+
+function ensureAtlasTrigger(
+  store: RouterDeps["store"],
+  autopilotId: string,
+  kind: MultiremiAutopilotTriggerKind,
+  eventConfig: MultiremiAutopilotEventConfig,
+): void {
+  const existing = store.listAutopilotTriggers(autopilotId).find((trigger) => trigger.kind === kind);
+  if (existing) {
+    store.updateAutopilotTrigger(autopilotId, existing.id, { enabled: true, eventConfig });
+    return;
+  }
+  store.createAutopilotTrigger(autopilotId, { kind, enabled: true, eventConfig });
+}
+
 function hasOwn(value: unknown, key: string): boolean {
   return typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function requireWorkspaceRepository(store: RouterDeps["store"], workspaceId: string, repositoryId: string): boolean {
+  return !listWorkspaceRepositories(store, workspaceId).some((repository) => repository.id === repositoryId);
+}
+
+function repositoryWikiDocResponse(doc: MultiremiRepositoryWikiDoc): Record<string, unknown> {
+  return {
+    id: doc.id,
+    repository_id: doc.repositoryId,
+    workspace_id: doc.workspaceId,
+    path: doc.path,
+    slug: doc.slug,
+    title: doc.title,
+    summary: doc.summary,
+    body: doc.body,
+    tags: doc.tags,
+    refs: doc.refs,
+    source_task_id: doc.sourceTaskId,
+    source_issue_id: doc.sourceIssueId,
+    author_type: doc.authorType,
+    author_id: doc.authorId,
+    updated_by_type: doc.updatedByType,
+    updated_by_id: doc.updatedById,
+    source_revision: doc.sourceRevision,
+    status: doc.status,
+    status_message: doc.statusMessage,
+    version: doc.version,
+    storage_backend: doc.storageBackend,
+    content_uri: doc.contentUri,
+    content_sha256: doc.contentSha256,
+    sync_status: doc.syncStatus,
+    sync_error: doc.syncError,
+    snapshot_oid: doc.snapshotOid,
+    created_at: doc.createdAt,
+    updated_at: doc.updatedAt,
+  };
+}
+
+function repositoryWikiRevisionResponse(revision: MultiremiRepositoryWikiDocRevision): Record<string, unknown> {
+  return {
+    id: revision.id,
+    doc_id: revision.docId,
+    version: revision.version,
+    path: revision.path,
+    title: revision.title,
+    summary: revision.summary,
+    body: revision.body,
+    source_revision: revision.sourceRevision,
+    author_type: revision.authorType,
+    author_id: revision.authorId,
+    content_uri: revision.contentUri,
+    content_sha256: revision.contentSha256,
+    snapshot_oid: revision.snapshotOid,
+    created_at: revision.createdAt,
+  };
+}
+
+function repositoryWikiError(c: Context, error: unknown): Response {
+  const message = error instanceof Error ? error.message : "repository wiki request failed";
+  if (error instanceof RepositoryWikiUnavailableError) return c.json({ error: message }, 503);
+  if (message.includes("not found")) return c.json({ error: message }, 404);
+  if (message.includes("conflict") || message.includes("already exists")) return c.json({ error: message }, 409);
+  return c.json({ error: message }, 400);
 }
 
 function sshMeshErrorResponse(c: Context, error: unknown): Response {

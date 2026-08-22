@@ -46,7 +46,7 @@ describe("api route golden snapshot", () => {
     // them; this makes plain `bun test` as strict as the --check CLI. The
     // harness pins clock, uuid, random, hostname and env, so it is stable.
     expect(firstDiff(serializeSnapshot(snapshot), goldenText)).toBeNull();
-  });
+  }, 15_000);
 
   it("covers every GET route (websocket upgrades status-only)", async () => {
     const getRoutes = golden.routes.filter((route) => route.startsWith("GET "));

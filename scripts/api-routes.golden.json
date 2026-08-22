@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 567,
+    "routeCount": 577,
     "routeCountByPrefix": {
       "native": 191,
-      "compat": 363,
+      "compat": 373,
       "root": 13
     },
-    "getRoutes": 245,
-    "getRoutesWithBody": 242,
+    "getRoutes": 250,
+    "getRoutesWithBody": 247,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 322,
+    "mutationRoutes": 327,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -117,6 +117,7 @@
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
     "DELETE /api/workspaces/:id/repos/:repositoryId",
+    "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -351,6 +352,11 @@
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+    "GET /api/workspaces/:id/repository-wikis",
+    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -585,7 +591,10 @@
     "POST /api/workspaces/:id/members",
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
     "POST /api/workspaces/:id/repos",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/inspect",
+    "POST /api/workspaces/:id/repository-wikis/atlas",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
     "POST /api/workspaces/:workspaceId/scm/connections",
@@ -627,6 +636,7 @@
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
+    "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "PUT /api/workspaces/:id/session-archive",
     "PUT /api/workspaces/:id/ssh-mesh",
     "PUT /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId"
@@ -914,6 +924,11 @@
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+    "GET /api/workspaces/:id/repository-wikis",
+    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -1607,7 +1622,11 @@
         "importedSkillIds": [],
         "imported_skill_ids": [],
         "reusedSkillIds": [],
-        "reused_skill_ids": []
+        "reused_skill_ids": [],
+        "attachedPluginIds": [],
+        "attached_plugin_ids": [],
+        "missingPlugins": [],
+        "missing_plugins": []
       }
     },
     {
@@ -3751,6 +3770,17 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
@@ -3994,6 +4024,17 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
@@ -4162,6 +4203,17 @@
               "position": 0,
               "created_at": "<timestamp>",
               "created_by": null
+            }
+          ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
             }
           ],
           "repos": [
@@ -4714,6 +4766,17 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
@@ -5226,7 +5289,23 @@
           "category": "Engineering",
           "icon": "Scale",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
+        },
+        {
+          "slug": "atlas-llm-wiki",
+          "name": "Atlas · LLM Wiki",
+          "description": "Builds and incrementally maintains repository code facts and cross-repository Project Wiki synthesis.",
+          "category": "Engineering",
+          "icon": "LibraryBig",
+          "accent": "info",
+          "skills": [],
+          "recommendedProvider": "claude",
+          "recommendedModel": "opus5",
+          "requiredPlugins": [
+            "code-to-wiki"
+          ]
         },
         {
           "slug": "brainstormer",
@@ -5235,7 +5314,9 @@
           "category": "Writing",
           "icon": "Lightbulb",
           "accent": "primary",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "bug-fixer",
@@ -5253,7 +5334,9 @@
               "cachedDescription": "Systematically trace bugs backward through the call stack to find the original trigger.",
               "cached_description": "Systematically trace bugs backward through the call stack to find the original trigger."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "code-explainer",
@@ -5262,7 +5345,9 @@
           "category": "Engineering",
           "icon": "BookOpen",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "code-reviewer",
@@ -5280,7 +5365,9 @@
               "cachedDescription": "React and Next.js performance optimization guidelines from Vercel Engineering.",
               "cached_description": "React and Next.js performance optimization guidelines from Vercel Engineering."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "commit-message",
@@ -5289,7 +5376,9 @@
           "category": "Engineering",
           "icon": "GitCommit",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "email-reply",
@@ -5307,7 +5396,9 @@
               "cachedDescription": "Resources for writing internal communications in common company formats.",
               "cached_description": "Resources for writing internal communications in common company formats."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "frontend-builder",
@@ -5333,7 +5424,9 @@
               "cachedDescription": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui.",
               "cached_description": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "frontend-designer",
@@ -5359,7 +5452,9 @@
               "cachedDescription": "Review UI code for Web Interface Guidelines compliance.",
               "cached_description": "Review UI code for Web Interface Guidelines compliance."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "html-slides",
@@ -5385,7 +5480,9 @@
               "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
               "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "jd-writer",
@@ -5394,7 +5491,9 @@
           "category": "Team",
           "icon": "Briefcase",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "okr-drafter",
@@ -5403,7 +5502,9 @@
           "category": "Product",
           "icon": "Target",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "one-pager",
@@ -5429,7 +5530,9 @@
               "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
               "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "pr-description",
@@ -5438,7 +5541,9 @@
           "category": "Engineering",
           "icon": "GitPullRequest",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "prd-critic",
@@ -5447,7 +5552,9 @@
           "category": "Product",
           "icon": "Microscope",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "prd-drafter",
@@ -5456,7 +5563,9 @@
           "category": "Product",
           "icon": "ClipboardList",
           "accent": "primary",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "rca-writer",
@@ -5465,7 +5574,9 @@
           "category": "Engineering",
           "icon": "AlertTriangle",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "release-notes",
@@ -5474,7 +5585,9 @@
           "category": "Communication",
           "icon": "Megaphone",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "summarizer",
@@ -5483,7 +5596,9 @@
           "category": "Writing",
           "icon": "AlignLeft",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "translator-zh-en",
@@ -5492,7 +5607,9 @@
           "category": "Writing",
           "icon": "Languages",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "tutor",
@@ -5501,7 +5618,9 @@
           "category": "Writing",
           "icon": "GraduationCap",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "user-story-writer",
@@ -5510,7 +5629,9 @@
           "category": "Product",
           "icon": "UserRound",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "ux-copywriter",
@@ -5519,7 +5640,9 @@
           "category": "Design",
           "icon": "Type",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "webapp-tester",
@@ -5537,7 +5660,9 @@
               "cachedDescription": "Toolkit for testing local web applications with Playwright.",
               "cached_description": "Toolkit for testing local web applications with Playwright."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "writing-critic",
@@ -5546,7 +5671,9 @@
           "category": "Writing",
           "icon": "Highlighter",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         }
       ]
     },
@@ -5563,7 +5690,9 @@
         "icon": "Scale",
         "accent": "info",
         "instructions": "You write Architecture Decision Records. Reader: an engineer joining the team in a year who needs to understand why the system looks the way it does — not just what it does.\n\nFixed scaffold:\n\n```\n# ADR-NNN: <short title in present tense, e.g. \"Use sqlc for type-safe queries\">\n\n## Status\nProposed | Accepted | Superseded by ADR-XXX | Deprecated\n\n## Context\n2-4 sentences. The forces in play: what the system is doing today, what need has emerged, what constraints we must respect, why now. Not the answer — the question.\n\n## Decision\n1-3 sentences. The decision in active voice. \"We will use X\" — not \"Adoption of X is recommended\". Be specific enough that a reader can implement it without a follow-up meeting.\n\n## Alternatives considered\n- **Option B** — one-sentence rejection reason (e.g. \"adds runtime overhead we can't afford\")\n- **Option C** — one-sentence rejection reason\n\n## Consequences\n- **Positive:** what gets easier, faster, or possible\n- **Negative:** what gets harder, slower, or impossible (be honest — burying these is how teams build up resentment)\n- **Neutral / open:** assumptions we're making, things we'll need to revisit\n```\n\nDefaults:\n\n1. **One decision per ADR.** If you find yourself writing \"we also decided to ...\", stop — that's a second ADR.\n2. **Name 1-3 alternatives, no more.** An ADR with no rejected options reads like there was no real choice. An ADR comparing 8 options reads like a survey.\n3. **Consequences are not all positive.** Include the things this decision makes harder. The reader needs to know what they're trading away.\n4. **Keep it short.** Most ADRs fit on one screen. If yours is two pages, you're explaining the system, not the decision.\n5. **Match the repo's existing ADR numbering and prose style** if the user shows you prior ADRs.\n\nDo NOT: include code samples (link the implementation PR instead); write generic platitudes (\"this is good for maintainability\"); skip the Status field; use marketing language (\"best-in-class\", \"future-proof\"); leave alternatives blank to avoid awkward conversation.",
-        "skills": []
+        "skills": [],
+        "recommendedModel": null,
+        "requiredPlugins": []
       }
     },
     {
@@ -8913,7 +9042,23 @@
             "category": "Engineering",
             "icon": "Scale",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
+          },
+          {
+            "slug": "atlas-llm-wiki",
+            "name": "Atlas · LLM Wiki",
+            "description": "Builds and incrementally maintains repository code facts and cross-repository Project Wiki synthesis.",
+            "category": "Engineering",
+            "icon": "LibraryBig",
+            "accent": "info",
+            "skills": [],
+            "recommendedProvider": "claude",
+            "recommendedModel": "opus5",
+            "requiredPlugins": [
+              "code-to-wiki"
+            ]
           },
           {
             "slug": "brainstormer",
@@ -8922,7 +9067,9 @@
             "category": "Writing",
             "icon": "Lightbulb",
             "accent": "primary",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "bug-fixer",
@@ -8940,7 +9087,9 @@
                 "cachedDescription": "Systematically trace bugs backward through the call stack to find the original trigger.",
                 "cached_description": "Systematically trace bugs backward through the call stack to find the original trigger."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "code-explainer",
@@ -8949,7 +9098,9 @@
             "category": "Engineering",
             "icon": "BookOpen",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "code-reviewer",
@@ -8967,7 +9118,9 @@
                 "cachedDescription": "React and Next.js performance optimization guidelines from Vercel Engineering.",
                 "cached_description": "React and Next.js performance optimization guidelines from Vercel Engineering."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "commit-message",
@@ -8976,7 +9129,9 @@
             "category": "Engineering",
             "icon": "GitCommit",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "email-reply",
@@ -8994,7 +9149,9 @@
                 "cachedDescription": "Resources for writing internal communications in common company formats.",
                 "cached_description": "Resources for writing internal communications in common company formats."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "frontend-builder",
@@ -9020,7 +9177,9 @@
                 "cachedDescription": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui.",
                 "cached_description": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "frontend-designer",
@@ -9046,7 +9205,9 @@
                 "cachedDescription": "Review UI code for Web Interface Guidelines compliance.",
                 "cached_description": "Review UI code for Web Interface Guidelines compliance."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "html-slides",
@@ -9072,7 +9233,9 @@
                 "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
                 "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "jd-writer",
@@ -9081,7 +9244,9 @@
             "category": "Team",
             "icon": "Briefcase",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "okr-drafter",
@@ -9090,7 +9255,9 @@
             "category": "Product",
             "icon": "Target",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "one-pager",
@@ -9116,7 +9283,9 @@
                 "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
                 "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "pr-description",
@@ -9125,7 +9294,9 @@
             "category": "Engineering",
             "icon": "GitPullRequest",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "prd-critic",
@@ -9134,7 +9305,9 @@
             "category": "Product",
             "icon": "Microscope",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "prd-drafter",
@@ -9143,7 +9316,9 @@
             "category": "Product",
             "icon": "ClipboardList",
             "accent": "primary",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "rca-writer",
@@ -9152,7 +9327,9 @@
             "category": "Engineering",
             "icon": "AlertTriangle",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "release-notes",
@@ -9161,7 +9338,9 @@
             "category": "Communication",
             "icon": "Megaphone",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "summarizer",
@@ -9170,7 +9349,9 @@
             "category": "Writing",
             "icon": "AlignLeft",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "translator-zh-en",
@@ -9179,7 +9360,9 @@
             "category": "Writing",
             "icon": "Languages",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "tutor",
@@ -9188,7 +9371,9 @@
             "category": "Writing",
             "icon": "GraduationCap",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "user-story-writer",
@@ -9197,7 +9382,9 @@
             "category": "Product",
             "icon": "UserRound",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "ux-copywriter",
@@ -9206,7 +9393,9 @@
             "category": "Design",
             "icon": "Type",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "webapp-tester",
@@ -9224,7 +9413,9 @@
                 "cachedDescription": "Toolkit for testing local web applications with Playwright.",
                 "cached_description": "Toolkit for testing local web applications with Playwright."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "writing-critic",
@@ -9233,10 +9424,12 @@
             "category": "Writing",
             "icon": "Highlighter",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           }
         ],
-        "total": 25
+        "total": 26
       }
     },
     {
@@ -9253,7 +9446,9 @@
           "icon": "Scale",
           "accent": "info",
           "instructions": "You write Architecture Decision Records. Reader: an engineer joining the team in a year who needs to understand why the system looks the way it does — not just what it does.\n\nFixed scaffold:\n\n```\n# ADR-NNN: <short title in present tense, e.g. \"Use sqlc for type-safe queries\">\n\n## Status\nProposed | Accepted | Superseded by ADR-XXX | Deprecated\n\n## Context\n2-4 sentences. The forces in play: what the system is doing today, what need has emerged, what constraints we must respect, why now. Not the answer — the question.\n\n## Decision\n1-3 sentences. The decision in active voice. \"We will use X\" — not \"Adoption of X is recommended\". Be specific enough that a reader can implement it without a follow-up meeting.\n\n## Alternatives considered\n- **Option B** — one-sentence rejection reason (e.g. \"adds runtime overhead we can't afford\")\n- **Option C** — one-sentence rejection reason\n\n## Consequences\n- **Positive:** what gets easier, faster, or possible\n- **Negative:** what gets harder, slower, or impossible (be honest — burying these is how teams build up resentment)\n- **Neutral / open:** assumptions we're making, things we'll need to revisit\n```\n\nDefaults:\n\n1. **One decision per ADR.** If you find yourself writing \"we also decided to ...\", stop — that's a second ADR.\n2. **Name 1-3 alternatives, no more.** An ADR with no rejected options reads like there was no real choice. An ADR comparing 8 options reads like a survey.\n3. **Consequences are not all positive.** Include the things this decision makes harder. The reader needs to know what they're trading away.\n4. **Keep it short.** Most ADRs fit on one screen. If yours is two pages, you're explaining the system, not the decision.\n5. **Match the repo's existing ADR numbering and prose style** if the user shows you prior ADRs.\n\nDo NOT: include code samples (link the implementation PR instead); write generic platitudes (\"this is good for maintainability\"); skip the Status field; use marketing language (\"best-in-class\", \"future-proof\"); leave alternatives blank to avoid awkward conversation.",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         }
       }
     },
@@ -14617,6 +14812,88 @@
           }
         ],
         "total": 3
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki",
+      "status": 200,
+      "body": {
+        "docs": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec",
+      "status": 404,
+      "body": {
+        "error": "repository wiki doc not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec/revisions",
+      "status": 404,
+      "body": {
+        "error": "repository wiki doc not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repository-wikis",
+      "route": "GET /api/workspaces/:id/repository-wikis",
+      "path": "/api/workspaces/local/repository-wikis",
+      "status": 200,
+      "body": {
+        "repositories": [
+          {
+            "repository_id": "repo_snapshot",
+            "repository_name": "snapshot",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          },
+          {
+            "repository_id": "repo_snapshot_compat",
+            "repository_name": "compat",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          },
+          {
+            "repository_id": "repo_snapshot_native",
+            "repository_name": "native",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repository-wikis/atlas",
+      "route": "GET /api/workspaces/:id/repository-wikis/atlas",
+      "path": "/api/workspaces/local/repository-wikis/atlas",
+      "status": 200,
+      "body": {
+        "state": "plugin_required",
+        "configured": false,
+        "required_plugin": "code-to-wiki",
+        "plugin_id": null,
+        "plugin_bound": false,
+        "agent_id": null,
+        "repository_autopilot_id": null,
+        "repository_trigger_id": null,
+        "project_autopilot_id": null,
+        "project_trigger_id": null
       }
     },
     {

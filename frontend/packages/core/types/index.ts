@@ -80,6 +80,13 @@ export type {
   RepositoryInspectionResponse,
   UpdateWorkspaceRepositoryRequest,
   RepositoryMutationResponse,
+  RepositoryWikiStatus,
+  RepositoryWikiSummary,
+  RepositoryWikiDoc,
+  RepositoryWikiRevision,
+  AtlasWikiSetupState,
+  AtlasWikiSetupStatus,
+  RepositoryWikiBuildResponse,
 } from "./repository";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";

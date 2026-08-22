@@ -85,6 +85,52 @@ interface PushPlan {
   conflicts: Array<{ slug: string; path: string; reason: string; body?: string }>;
 }
 
+interface RepositoryWikiDoc {
+  id: string;
+  repositoryId: string;
+  path: string;
+  title: string;
+  body: string;
+  version: number;
+  sourceRevision: string | null;
+  updatedAt: string;
+}
+
+interface RepositoryWikiManifestRepository {
+  id: string;
+  name: string;
+  directory: string;
+}
+
+interface RepositoryWikiManifestEntry {
+  id: string;
+  repositoryId: string;
+  repositoryName: string;
+  path: string;
+  version: number;
+  sourceRevision: string | null;
+  sha256: string;
+  updatedAt: string;
+}
+
+interface RepositoryWikiManifest {
+  version: 1;
+  workspaceId: string;
+  pulledAt: string;
+  repositories: RepositoryWikiManifestRepository[];
+  docs: RepositoryWikiManifestEntry[];
+}
+
+type RepositoryPushAction =
+  | { kind: "create"; repositoryId: string; path: string; repositoryPath: string; body: string; localSnapshot: string }
+  | { kind: "update"; repositoryId: string; id: string; path: string; body: string; version: number; localSnapshot: string }
+  | { kind: "delete"; repositoryId: string; id: string; path: string; version: number; localSnapshot: null };
+
+interface RepositoryPushPlan {
+  actions: RepositoryPushAction[];
+  conflicts: Array<{ repository_id: string; path: string; reason: string; body?: string }>;
+}
+
 export async function wikiPull(options: CliOptions, projectId: string): Promise<void> {
   const paths = wikiPaths(options);
   await withWikiLock(paths, async () => {
@@ -100,17 +146,22 @@ export async function wikiPull(options: CliOptions, projectId: string): Promise<
   });
 }
 
-export async function wikiStatus(options: CliOptions, projectId: string): Promise<void> {
+export async function wikiStatus(options: CliOptions, projectId: string | null): Promise<void> {
   const paths = wikiPaths(options);
   await withWikiLock(paths, async () => {
-    const manifest = requireManifest(paths, projectId);
-    const remote = await fetchWikiDocs(projectId, options);
-    const changes = workingCopyStatus(paths, manifest, remote);
+    const manifest = projectId ? requireManifest(paths, projectId) : null;
+    const remote = projectId ? await fetchWikiDocs(projectId, options) : [];
+    const changes = manifest ? workingCopyStatus(paths, manifest, remote) : [];
+    const repositoryState = await repositoryWorkingCopyState(paths, options);
+    if (!manifest && !repositoryState.manifest) {
+      throw new Error("Wiki working copy is not initialized; specify --project or run inside an Issue workspace with Repository Wiki context");
+    }
     printJson({
       project_id: projectId,
       directory: paths.wiki,
-      clean: changes.every((change) => change.state === "unchanged"),
+      clean: changes.every((change) => change.state === "unchanged") && repositoryState.changes.length === 0,
       changes: changes.filter((change) => change.state !== "unchanged"),
+      repository_changes: repositoryState.changes,
     });
   });
 }
@@ -142,28 +193,45 @@ export async function wikiDiff(options: CliOptions, projectId: string): Promise<
   });
 }
 
-export async function wikiPush(options: CliOptions, projectId: string): Promise<void> {
+export async function wikiPush(options: CliOptions, projectId: string | null): Promise<void> {
   const paths = wikiPaths(options);
   await withWikiLock(paths, async () => {
-    const manifest = requireManifest(paths, projectId);
-    const remote = await fetchWikiDocs(projectId, options);
-    const plan = buildPushPlan(paths, manifest, remote);
+    const sourceRevision = rawStringOption(options, "source-revision", "sourceRevision")?.trim()
+      || process.env.MULTIREMI_SCM_REVISION?.trim()
+      || null;
+    const manifest = projectId ? requireManifest(paths, projectId) : null;
+    const remote = projectId ? await fetchWikiDocs(projectId, options) : [];
+    const plan = manifest
+      ? buildPushPlan(paths, manifest, remote)
+      : { actions: [], conflicts: [] } satisfies PushPlan;
+    const repositoryState = await repositoryWorkingCopyState(paths, options);
+    if (!manifest && !repositoryState.manifest) {
+      throw new Error("Wiki working copy is not initialized; specify --project or run inside an Issue workspace with Repository Wiki context");
+    }
+    const repositoryPlan = repositoryState.manifest
+      ? buildRepositoryPushPlan(paths, repositoryState.manifest, repositoryState.remoteByRepository)
+      : { actions: [], conflicts: [] } satisfies RepositoryPushPlan;
     clearConflicts(paths);
-    if (plan.conflicts.length) {
+    if (plan.conflicts.length || repositoryPlan.conflicts.length) {
       ensureSafeDirectory(paths.root, paths.conflicts);
       for (const conflict of plan.conflicts) {
         if (conflict.body !== undefined) writeAtomic(paths, join(paths.conflicts, conflict.path), conflict.body);
+      }
+      for (const conflict of repositoryPlan.conflicts) {
+        if (conflict.body !== undefined) writeAtomic(paths, join(paths.conflicts, "repositories", conflict.path), conflict.body);
       }
       printJson({
         pushed: false,
         project_id: projectId,
         conflicts: plan.conflicts,
+        repository_conflicts: repositoryPlan.conflicts,
         conflict_directory: paths.conflicts,
       });
       throw new Error("Wiki push stopped because the local and remote versions conflict; resolve the files and retry");
     }
 
     for (const action of plan.actions) {
+      if (!projectId) throw new Error("Project Wiki changes require --project");
       if (action.kind === "create") {
         const body: Record<string, unknown> = {
           kind: "wiki",
@@ -193,14 +261,53 @@ export async function wikiPush(options: CliOptions, projectId: string): Promise<
       );
     }
 
-    const refreshed = await fetchWikiDocs(projectId, options);
-    reconcileAfterPush(paths, projectId, refreshed, plan);
+    for (const action of repositoryPlan.actions) {
+      const root = `/api/workspaces/${encodeURIComponent(repositoryState.manifest!.workspaceId)}/repos/${encodeURIComponent(action.repositoryId)}/wiki`;
+      if (action.kind === "create") {
+        const body: Record<string, unknown> = {
+          path: action.repositoryPath,
+          title: wikiTitle(action.repositoryPath.replace(/\.md$/i, ""), action.body),
+          body: apiBody(action.body),
+          status: "healthy",
+        };
+        if (sourceRevision) body.source_revision = sourceRevision;
+        const taskId = process.env.MULTIREMI_TASK_ID?.trim();
+        if (taskId) body.source_task_id = taskId;
+        await multiremiApiRequest("POST", root, body, options);
+      } else if (action.kind === "update") {
+        await multiremiApiRequest("PUT", `${root}/${encodeURIComponent(action.id)}`, {
+          body: apiBody(action.body),
+          expected_version: action.version,
+          status: "healthy",
+          ...(sourceRevision ? { source_revision: sourceRevision } : {}),
+        }, options);
+      } else {
+        await multiremiApiRequest(
+          "DELETE",
+          `${root}/${encodeURIComponent(action.id)}?expected_version=${action.version}`,
+          undefined,
+          options,
+        );
+      }
+    }
+
+    if (projectId && manifest) {
+      const refreshed = await fetchWikiDocs(projectId, options);
+      reconcileAfterPush(paths, projectId, refreshed, plan);
+    }
+    if (repositoryState.manifest) {
+      const refreshedRepositories = await fetchRepositoryWikiDocs(repositoryState.manifest, options);
+      reconcileRepositoryAfterPush(paths, repositoryState.manifest, refreshedRepositories, repositoryPlan);
+    }
     printJson({
       pushed: true,
       project_id: projectId,
       created: plan.actions.filter((action) => action.kind === "create").length,
       updated: plan.actions.filter((action) => action.kind === "update").length,
       deleted: plan.actions.filter((action) => action.kind === "delete").length,
+      repository_created: repositoryPlan.actions.filter((action) => action.kind === "create").length,
+      repository_updated: repositoryPlan.actions.filter((action) => action.kind === "update").length,
+      repository_deleted: repositoryPlan.actions.filter((action) => action.kind === "delete").length,
     });
   });
 }
@@ -282,6 +389,199 @@ function buildPushPlan(paths: WikiPaths, manifest: WikiManifest, remoteDocs: Wik
     }
   }
   return { actions, conflicts };
+}
+
+async function repositoryWorkingCopyState(
+  paths: WikiPaths,
+  options: CliOptions,
+): Promise<{
+  manifest: RepositoryWikiManifest | null;
+  remoteByRepository: Map<string, RepositoryWikiDoc[]>;
+  changes: Array<{ repository_id: string; path: string; state: WikiChange["state"] }>;
+}> {
+  const manifest = readRepositoryWikiManifest(paths);
+  if (!manifest) return { manifest: null, remoteByRepository: new Map(), changes: [] };
+  const remoteByRepository = await fetchRepositoryWikiDocs(manifest, options);
+  const plan = buildRepositoryPushPlan(paths, manifest, remoteByRepository);
+  const changes: Array<{ repository_id: string; path: string; state: WikiChange["state"] }> = plan.actions.map((action) => ({
+    repository_id: action.repositoryId,
+    path: action.path,
+    state: action.kind === "create" ? "added" as const : action.kind === "delete" ? "deleted" as const : "modified" as const,
+  }));
+  changes.push(...plan.conflicts.map((conflict) => ({
+    repository_id: conflict.repository_id,
+    path: conflict.path,
+    state: "diverged" as const,
+  })));
+  return { manifest, remoteByRepository, changes: changes.sort((left, right) => left.path.localeCompare(right.path)) };
+}
+
+function buildRepositoryPushPlan(
+  paths: WikiPaths,
+  manifest: RepositoryWikiManifest,
+  remoteByRepository: Map<string, RepositoryWikiDoc[]>,
+): RepositoryPushPlan {
+  const remoteById = new Map([...remoteByRepository.values()].flat().map((doc) => [doc.id, doc]));
+  const trackedPaths = new Set(manifest.docs.map((entry) => entry.path));
+  const actions: RepositoryPushAction[] = [];
+  const conflicts: RepositoryPushPlan["conflicts"] = [];
+
+  for (const entry of manifest.docs) {
+    const base = readRepositoryBase(paths, entry);
+    const local = readRepositoryLocal(paths, entry.path);
+    const remote = remoteById.get(entry.id);
+    const remoteText = remote ? markdownFile(remote.body) : null;
+    if (local === base) continue;
+    if (local === null) {
+      if (remoteText === null) continue;
+      if (remoteText === base) {
+        actions.push({ kind: "delete", repositoryId: entry.repositoryId, id: entry.id, path: entry.path, version: remote!.version, localSnapshot: null });
+      } else {
+        conflicts.push({ repository_id: entry.repositoryId, path: entry.path, reason: "delete/modify" });
+      }
+      continue;
+    }
+    if (remoteText === local) continue;
+    if (remoteText === base && remote) {
+      actions.push({ kind: "update", repositoryId: entry.repositoryId, id: entry.id, path: entry.path, version: remote.version, body: local, localSnapshot: local });
+      continue;
+    }
+    if (remoteText === null) {
+      conflicts.push({ repository_id: entry.repositoryId, path: entry.path, reason: "modify/delete", body: conflictBody(local, base, "") });
+      continue;
+    }
+    const merged = mergeMarkdown(local, base, remoteText);
+    if (merged.conflicted) {
+      conflicts.push({ repository_id: entry.repositoryId, path: entry.path, reason: "content conflict", body: merged.body });
+    } else {
+      actions.push({ kind: "update", repositoryId: entry.repositoryId, id: entry.id, path: entry.path, version: remote!.version, body: merged.body, localSnapshot: local });
+    }
+  }
+
+  for (const path of repositoryMarkdownPaths(paths)) {
+    if (trackedPaths.has(path)) continue;
+    const repository = manifest.repositories.find((candidate) => path.startsWith(`${candidate.directory}/`));
+    if (!repository) continue;
+    const repositoryPath = path.slice(repository.directory.length + 1);
+    const local = readRepositoryLocal(paths, path) ?? "";
+    const remote = (remoteByRepository.get(repository.id) ?? []).find((doc) => doc.path === repositoryPath);
+    if (!remote) {
+      actions.push({ kind: "create", repositoryId: repository.id, path, repositoryPath, body: local, localSnapshot: local });
+    } else if (markdownFile(remote.body) !== local) {
+      conflicts.push({ repository_id: repository.id, path, reason: "add/add", body: conflictBody(local, "", markdownFile(remote.body)) });
+    }
+  }
+  return { actions, conflicts };
+}
+
+async function fetchRepositoryWikiDocs(
+  manifest: RepositoryWikiManifest,
+  options: CliOptions,
+): Promise<Map<string, RepositoryWikiDoc[]>> {
+  const entries = await Promise.all(manifest.repositories.map(async (repository) => {
+    const value = await multiremiApiRequest(
+      "GET",
+      `/api/workspaces/${encodeURIComponent(manifest.workspaceId)}/repos/${encodeURIComponent(repository.id)}/wiki`,
+      undefined,
+      options,
+    );
+    if (!isRecord(value) || !Array.isArray(value.docs)) throw new Error(`Repository Wiki response is invalid for ${repository.name}`);
+    return [repository.id, value.docs.map((doc) => parseRepositoryWikiDoc(doc, repository.id))] as const;
+  }));
+  return new Map(entries);
+}
+
+function parseRepositoryWikiDoc(value: unknown, repositoryId: string): RepositoryWikiDoc {
+  if (!isRecord(value)) throw new Error("Repository Wiki list contains an invalid document");
+  const id = field(value, "id");
+  const path = field(value, "path");
+  const title = field(value, "title");
+  if (!id || !path || !title || !validRepositoryRelativePath(path)) throw new Error("Repository Wiki document is missing id, path, or title");
+  return {
+    id,
+    repositoryId,
+    path,
+    title,
+    body: typeof value.body === "string" ? value.body : "",
+    version: Math.max(1, Math.floor(Number(value.version) || 1)),
+    sourceRevision: nullableField(value, "source_revision", "sourceRevision"),
+    updatedAt: field(value, "updated_at", "updatedAt"),
+  };
+}
+
+function reconcileRepositoryAfterPush(
+  paths: WikiPaths,
+  previous: RepositoryWikiManifest,
+  remoteByRepository: Map<string, RepositoryWikiDoc[]>,
+  plan: RepositoryPushPlan,
+): void {
+  const previousById = new Map(previous.docs.map((entry) => [entry.id, entry]));
+  const actionByPath = new Map(plan.actions.map((action) => [action.path, action]));
+  const next: RepositoryWikiManifestEntry[] = [];
+  const seen = new Set<string>();
+  const baseRoot = repositoryBaseRoot(paths);
+  const wikiRoot = repositoryWikiRoot(paths);
+  ensureSafeDirectory(paths.root, baseRoot);
+  ensureSafeDirectory(paths.root, wikiRoot);
+
+  for (const repository of previous.repositories) {
+    ensureSafeDirectory(paths.root, join(wikiRoot, repository.directory));
+    for (const doc of remoteByRepository.get(repository.id) ?? []) {
+      const path = `${repository.directory}/${doc.path}`;
+      const prior = previousById.get(doc.id);
+      const action = actionByPath.get(path);
+      const local = readRepositoryLocal(paths, path);
+      const remoteText = markdownFile(doc.body);
+      const entry = repositoryManifestEntry(repository, doc, path, remoteText);
+      if (!prior || (action && local === action.localSnapshot)) {
+        writeAtomic(paths, join(wikiRoot, path), remoteText);
+        writeReadOnly(paths, join(baseRoot, path), remoteText);
+        next.push(entry);
+      } else if (local === readRepositoryBase(paths, prior)) {
+        writeAtomic(paths, join(wikiRoot, path), remoteText);
+        writeReadOnly(paths, join(baseRoot, path), remoteText);
+        next.push(entry);
+      } else {
+        next.push(prior);
+      }
+      seen.add(doc.id);
+    }
+  }
+
+  for (const prior of previous.docs) {
+    if (seen.has(prior.id)) continue;
+    const action = actionByPath.get(prior.path);
+    if (action?.kind === "delete") {
+      if (readRepositoryLocal(paths, prior.path) === null) rmWritable(paths, join(wikiRoot, prior.path));
+      rmWritable(paths, join(baseRoot, prior.path));
+      continue;
+    }
+    next.push(prior);
+  }
+
+  writeAtomic(paths, repositoryManifestPath(paths), `${JSON.stringify({
+    ...previous,
+    pulledAt: new Date().toISOString(),
+    docs: next.sort((left, right) => left.path.localeCompare(right.path)),
+  }, null, 2)}\n`);
+}
+
+function repositoryManifestEntry(
+  repository: RepositoryWikiManifestRepository,
+  doc: RepositoryWikiDoc,
+  path: string,
+  text: string,
+): RepositoryWikiManifestEntry {
+  return {
+    id: doc.id,
+    repositoryId: repository.id,
+    repositoryName: repository.name,
+    path,
+    version: doc.version,
+    sourceRevision: doc.sourceRevision,
+    sha256: sha256(text),
+    updatedAt: doc.updatedAt,
+  };
 }
 
 function mergeMarkdown(local: string, base: string, remote: string): { body: string; conflicted: boolean } {
@@ -571,6 +871,118 @@ function readManifest(paths: WikiPaths): WikiManifest | null {
     idsSeen.add(entry.id);
   }
   return value as WikiManifest;
+}
+
+function repositoryWikiRoot(paths: WikiPaths): string {
+  return join(paths.wiki, "repositories");
+}
+
+function repositoryBaseRoot(paths: WikiPaths): string {
+  return join(paths.base, "repositories", "files");
+}
+
+function repositoryManifestPath(paths: WikiPaths): string {
+  return join(paths.base, "repositories", "manifest.json");
+}
+
+function readRepositoryWikiManifest(paths: WikiPaths): RepositoryWikiManifest | null {
+  const text = readRegularText(paths.root, repositoryManifestPath(paths), "Repository Wiki manifest");
+  if (text === null) return null;
+  let value: Partial<RepositoryWikiManifest>;
+  try {
+    value = JSON.parse(text) as Partial<RepositoryWikiManifest>;
+  } catch (error) {
+    throw new Error(`Repository Wiki manifest is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (value.version !== 1 || typeof value.workspaceId !== "string" || !value.workspaceId || !Array.isArray(value.repositories) || !Array.isArray(value.docs)) {
+    throw new Error("Repository Wiki manifest has an unsupported or incomplete schema");
+  }
+  const repositoryIds = new Set<string>();
+  const directories = new Set<string>();
+  for (const repository of value.repositories) {
+    if (!repository?.id || !repository.name || !validRepositoryDirectory(repository.directory)) {
+      throw new Error("Repository Wiki manifest contains an invalid repository");
+    }
+    if (repositoryIds.has(repository.id) || directories.has(repository.directory)) {
+      throw new Error("Repository Wiki manifest contains duplicate repositories or directories");
+    }
+    repositoryIds.add(repository.id);
+    directories.add(repository.directory);
+  }
+  const docIds = new Set<string>();
+  const docPaths = new Set<string>();
+  for (const entry of value.docs) {
+    if (
+      !entry?.id
+      || !repositoryIds.has(entry.repositoryId)
+      || !validRepositoryManifestPath(entry.path)
+      || !directories.has(entry.path.split("/")[0] ?? "")
+      || !/^[a-f0-9]{64}$/.test(entry.sha256)
+      || docIds.has(entry.id)
+      || docPaths.has(entry.path)
+    ) {
+      throw new Error("Repository Wiki manifest contains an invalid or duplicate document");
+    }
+    docIds.add(entry.id);
+    docPaths.add(entry.path);
+  }
+  return value as RepositoryWikiManifest;
+}
+
+function validRepositoryDirectory(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 200
+    && value !== "."
+    && value !== ".."
+    && !value.includes("/")
+    && !value.includes("\\")
+    && !value.includes("\0");
+}
+
+function validRepositoryRelativePath(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 4 || value.length > 512 || !value.toLowerCase().endsWith(".md") || value.includes("\\") || value.includes("\0")) return false;
+  return value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+function validRepositoryManifestPath(value: unknown): value is string {
+  if (!validRepositoryRelativePath(value)) return false;
+  const [directory, ...rest] = value.split("/");
+  return validRepositoryDirectory(directory) && rest.length > 0;
+}
+
+function readRepositoryLocal(paths: WikiPaths, path: string): string | null {
+  if (!validRepositoryManifestPath(path)) throw new Error(`Unsafe Repository Wiki path: ${path}`);
+  return readRegularText(paths.root, join(repositoryWikiRoot(paths), ...path.split("/")), "Repository Wiki page");
+}
+
+function readRepositoryBase(paths: WikiPaths, entry: RepositoryWikiManifestEntry): string {
+  const value = readRegularText(paths.root, join(repositoryBaseRoot(paths), ...entry.path.split("/")), "Repository Wiki baseline");
+  if (value === null) throw new Error(`Repository Wiki base is incomplete: ${entry.path}`);
+  if (sha256(value) !== entry.sha256) throw new Error(`Repository Wiki baseline checksum mismatch: ${entry.path}`);
+  return value;
+}
+
+function repositoryMarkdownPaths(paths: WikiPaths): string[] {
+  const root = repositoryWikiRoot(paths);
+  if (!existsSync(root)) return [];
+  assertSafeDirectory(paths.root, root);
+  const files: string[] = [];
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const target = join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`Repository Wiki path is a symbolic link: ${target}`);
+      if (entry.isDirectory()) {
+        visit(target);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md") && !entry.name.startsWith(".")) {
+        const path = relative(root, target).split("\\").join("/");
+        if (!validRepositoryManifestPath(path)) throw new Error(`Unsafe Repository Wiki path: ${path}`);
+        files.push(path);
+      }
+    }
+  };
+  visit(root);
+  return files.sort();
 }
 
 function validManifestPath(value: unknown): value is string {

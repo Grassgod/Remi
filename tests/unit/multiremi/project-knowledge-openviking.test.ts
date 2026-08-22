@@ -6,12 +6,14 @@ import {
   sha256Text,
 } from "@multiremi/project-knowledge/codec.js";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
+import { repositoryWikiDocUri } from "@multiremi/repository-wiki/codec.js";
+import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
 import type {
   OpenVikingClientContract,
   OpenVikingFindHit,
   OpenVikingSnapshotCommit,
 } from "@multiremi/project-knowledge/types.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -22,6 +24,7 @@ class FakeOpenViking implements OpenVikingClientContract {
   readonly commits: Array<{ oid: string; message: string; files: Map<string, string> }> = [];
   failWrites = 0;
   failCommits = 0;
+  failRemoves = 0;
   failHealth = false;
   findTargets: Array<string | string[]> = [];
 
@@ -44,7 +47,13 @@ class FakeOpenViking implements OpenVikingClientContract {
     if (sha256Text(current) !== baseHash) throw new Error("precondition failed");
     this.files.set(uri, content);
   }
-  async remove(uri: string): Promise<void> { this.files.delete(uri); }
+  async remove(uri: string): Promise<void> {
+    if (this.failRemoves > 0) {
+      this.failRemoves--;
+      throw new Error("planned OpenViking remove failure");
+    }
+    this.files.delete(uri);
+  }
   async setTags(uri: string, tags: string[]): Promise<void> { this.tags.set(uri, [...tags]); }
   async find(query: string, targetUri: string | string[], limit: number): Promise<OpenVikingFindHit[]> {
     this.findTargets.push(targetUri);
@@ -174,6 +183,144 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     await service.deleteProjectDoc(project.id, moved.slug, { expectedVersion: moved.version });
     expect(store.getProjectDoc(moved.id)).toBeNull();
     expect([...client.files.keys()].some((uri) => uri.endsWith("/release-runbook.md"))).toBe(false);
+  });
+});
+
+describe("RepositoryWikiService OpenViking mode", () => {
+  it("keeps repository bodies scoped in OpenViking and preserves generated document ids", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+
+    const first = await service.create("local", "repo_alpha", {
+      title: "Architecture",
+      path: "architecture/overview.md",
+      body: "Alpha service graph",
+      sourceRevision: "abc123",
+    });
+    await service.create("local", "repo_beta", {
+      title: "Architecture",
+      path: "architecture/overview.md",
+      body: "Beta service graph",
+      sourceRevision: "def456",
+    });
+
+    expect(first.id).toStartWith("rwdoc_");
+    expect(await service.get("local", "repo_alpha", first.id)).toMatchObject({
+      id: first.id,
+      body: "Alpha service graph",
+      sourceRevision: "abc123",
+    });
+    expect(client.files.get(repositoryWikiDocUri("local", "repo_alpha", "architecture/overview.md"))).toContain(`id: ${first.id}`);
+    expect((await service.search("local", "repo_alpha", "service graph")).map((doc) => doc.repositoryId)).toEqual(["repo_alpha"]);
+    expect(db!.query("SELECT body, storage_backend, sync_status FROM multiremi_repository_wiki_docs ORDER BY repository_id").all())
+      .toEqual([
+        { body: "", storage_backend: "openviking", sync_status: "ready" },
+        { body: "", storage_backend: "openviking", sync_status: "ready" },
+      ]);
+
+    const updated = await service.update("local", "repo_alpha", first.id, {
+      body: "Alpha graph v2",
+      expectedVersion: 1,
+    });
+    expect(updated.version).toBe(2);
+    await expect(service.update("local", "repo_alpha", first.id, { body: "stale", expectedVersion: 1 }))
+      .rejects.toThrow("repository wiki version conflict");
+    expect((await service.revisions("local", "repo_alpha", first.id)).map((revision) => revision.body))
+      .toEqual(["Alpha graph v2", "Alpha service graph"]);
+  });
+
+  it("hydrates an SCM automation task with its trusted repository checkout and Wiki", async () => {
+    const store = createLocalStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    store.updateWorkspace("local", {
+      repos: [{
+        id: "repo_atlas",
+        name: "atlas",
+        url: "git@github.com:example/atlas.git",
+        default_branch: "main",
+      }],
+    });
+    await service.create("local", "repo_atlas", {
+      title: "Architecture",
+      path: "architecture.md",
+      body: "Atlas architecture facts",
+    });
+    store.getScmCanonicalEvent = ((id: string) => id === "sce_atlas" ? ({
+      id,
+      workspaceId: "local",
+      repositoryId: "repo_atlas",
+    }) : null) as typeof store.getScmCanonicalEvent;
+
+    const hydrated = await service.hydrateTaskWiki({
+      workspaceId: "local",
+      assignmentSourceEventId: "sce_atlas",
+      project: null,
+      projectResources: [],
+      repos: [],
+    } as any);
+
+    expect(hydrated.repos).toEqual([{ url: "git@github.com:example/atlas.git" }]);
+    expect(hydrated.repositoryWikiContexts).toHaveLength(1);
+    expect(hydrated.repositoryWikiContexts?.[0]).toMatchObject({
+      repository: { id: "repo_atlas", name: "atlas", defaultBranch: "main" },
+      docs: [{ path: "architecture.md", body: "Atlas architecture facts" }],
+    });
+  });
+
+  it("keeps the new repository Wiki path readable when old-path cleanup fails", async () => {
+    const store = createLocalStore();
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const created = await service.create("local", "repo_alpha", {
+      title: "Architecture",
+      path: "architecture.md",
+      body: "Version one",
+    });
+
+    client.failRemoves = 1;
+    const moved = await service.update("local", "repo_alpha", created.id, {
+      path: "design/architecture.md",
+      body: "Version two",
+      expectedVersion: created.version,
+    });
+
+    expect(moved.path).toBe("design/architecture.md");
+    expect((await service.get("local", "repo_alpha", created.id))?.body).toBe("Version two");
+    expect(client.files.has(repositoryWikiDocUri("local", "repo_alpha", "design/architecture.md"))).toBeTrue();
+  });
+
+  it("hydrates a manual Atlas bootstrap run with only its workspace repository", async () => {
+    const store = createLocalStore();
+    const service = new RepositoryWikiService(store, new FakeOpenViking(), "openviking");
+    store.updateWorkspace("local", {
+      repos: [{ id: "repo_bootstrap", name: "bootstrap", url: "git@github.com:example/bootstrap.git" }],
+    });
+    store.getAutopilotRun = ((id: string) => id === "run_atlas" ? ({
+      id,
+      autopilotId: "auto_atlas",
+      payload: { atlas_repository_id: "repo_bootstrap" },
+    }) : null) as typeof store.getAutopilotRun;
+    store.getAutopilot = ((id: string) => id === "auto_atlas" ? ({
+      id,
+      workspaceId: "local",
+      title: "Atlas · Repository Wiki",
+    }) : null) as typeof store.getAutopilot;
+
+    const hydrated = await service.hydrateTaskWiki({
+      workspaceId: "local",
+      autopilotRunId: "run_atlas",
+      assignmentSourceEventId: null,
+      projectResources: [],
+      repos: [],
+    } as any);
+
+    expect(hydrated.repos).toEqual([{ url: "git@github.com:example/bootstrap.git" }]);
+    expect(hydrated.repositoryWikiContexts).toMatchObject([{
+      repository: { id: "repo_bootstrap", name: "bootstrap" },
+      docs: [],
+    }]);
   });
 });
 

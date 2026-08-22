@@ -176,6 +176,33 @@ export interface AgentTaskProjectContext {
   repos: AgentTaskRepo[];
 }
 
+export interface AgentTaskRepositoryWikiDoc {
+  id: string;
+  repositoryId?: string;
+  workspaceId?: string;
+  path: string;
+  slug: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  tags: string[];
+  refs?: Array<{ type: string; value: string }>;
+  sourceRevision?: string | null;
+  status?: string;
+  version?: number;
+  updatedAt: string;
+}
+
+export interface AgentTaskRepositoryWikiContext {
+  repository: {
+    id: string;
+    name: string;
+    url: string;
+    defaultBranch: string | null;
+  };
+  docs: AgentTaskRepositoryWikiDoc[];
+}
+
 export interface AgentTaskSquadContext {
   id: string;
   name: string;
@@ -234,6 +261,8 @@ export interface AgentTask {
   /** Full Wiki bodies transported outside the prompt for local workspace materialization. */
   projectWikiDocs?: AgentTaskProjectDoc[];
   project_wiki_docs?: AgentTaskProjectDoc[];
+  repositoryWikiContexts?: AgentTaskRepositoryWikiContext[];
+  repository_wiki_contexts?: AgentTaskRepositoryWikiContext[];
   projectContexts?: AgentTaskProjectContext[];
   project_contexts?: AgentTaskProjectContext[];
   squadContext?: AgentTaskSquadContext | null;

@@ -943,6 +943,62 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_project_doc_revisions_doc ON multiremi_project_doc_revisions(doc_id, version);
 
+    CREATE TABLE IF NOT EXISTS multiremi_repository_wiki_docs (
+      id TEXT PRIMARY KEY,
+      repository_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      path TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      body TEXT NOT NULL DEFAULT '',
+      tags TEXT NOT NULL DEFAULT '[]',
+      refs TEXT NOT NULL DEFAULT '[]',
+      source_task_id TEXT,
+      source_issue_id TEXT,
+      author_type TEXT,
+      author_id TEXT,
+      updated_by_type TEXT,
+      updated_by_id TEXT,
+      source_revision TEXT,
+      status TEXT NOT NULL DEFAULT 'healthy',
+      status_message TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      storage_backend TEXT NOT NULL DEFAULT 'sql',
+      content_uri TEXT,
+      content_sha256 TEXT,
+      sync_status TEXT NOT NULL DEFAULT 'sql',
+      sync_error TEXT,
+      snapshot_oid TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, repository_id, path)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_repository_wiki_scope
+      ON multiremi_repository_wiki_docs(workspace_id, repository_id, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_repository_wiki_doc_revisions (
+      id TEXT PRIMARY KEY,
+      doc_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      body TEXT NOT NULL DEFAULT '',
+      source_revision TEXT,
+      author_type TEXT,
+      author_id TEXT,
+      content_uri TEXT,
+      content_sha256 TEXT,
+      snapshot_oid TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(doc_id, version),
+      FOREIGN KEY(doc_id) REFERENCES multiremi_repository_wiki_docs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_repository_wiki_revisions_doc
+      ON multiremi_repository_wiki_doc_revisions(doc_id, version);
+
     CREATE TABLE IF NOT EXISTS multiremi_pinned_items (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
