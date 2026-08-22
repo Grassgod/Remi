@@ -23,6 +23,7 @@ export type { FeishuChannelConfig, GroupPolicy, FeishuDomainName } from "./confi
 export type { ParsedFeishuMessage, FeishuWSHandle } from "./receive.js";
 export { flushDedupCacheSync } from "./receive.js";
 export type { FeishuDomain, FeishuProbeResult } from "./types.js";
+export { FeishuMultiremiClient, shouldRouteFeishuMessageToMultiremi } from "./multiremi.js";
 
 // ── Streaming ─────────────────────────────────────────────────
 export { FeishuStreamingSession, buildFinalCard } from "./streaming.js";

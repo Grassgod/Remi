@@ -83,7 +83,15 @@ export class ConfigStore {
     const env = process.env;
 
     const provider = (data.provider ?? defaults.provider) as ProviderConfig;
-    const feishu = (data.feishu ?? defaults.feishu) as FeishuConfig;
+    const storedFeishu = (data.feishu ?? {}) as Partial<FeishuConfig>;
+    const feishu: FeishuConfig = {
+      ...defaults.feishu,
+      ...storedFeishu,
+      multiremi: {
+        ...defaults.feishu.multiremi,
+        ...(storedFeishu.multiremi ?? {}),
+      },
+    };
 
     if (env.REMI_PROVIDER) {
       provider.default = env.REMI_PROVIDER as "claude" | "codex";
@@ -100,6 +108,12 @@ export class ConfigStore {
     if (env.FEISHU_PORT) feishu.port = parseInt(env.FEISHU_PORT, 10);
     if (env.FEISHU_DOMAIN) feishu.domain = env.FEISHU_DOMAIN as FeishuConfig["domain"];
     if (env.FEISHU_USER_ACCESS_TOKEN) feishu.userAccessToken = env.FEISHU_USER_ACCESS_TOKEN;
+    if (env.FEISHU_MULTIREMI_ENABLED != null) {
+      feishu.multiremi.enabled = /^(1|true|yes|on)$/i.test(env.FEISHU_MULTIREMI_ENABLED.trim());
+    }
+    if (env.FEISHU_MULTIREMI_SERVER_URL) feishu.multiremi.serverUrl = env.FEISHU_MULTIREMI_SERVER_URL;
+    if (env.FEISHU_MULTIREMI_TOKEN) feishu.multiremi.token = env.FEISHU_MULTIREMI_TOKEN;
+    if (env.FEISHU_MULTIREMI_WORKSPACE_ID) feishu.multiremi.workspaceId = env.FEISHU_MULTIREMI_WORKSPACE_ID;
 
     const google = data.google as RemiConfig["google"] ?? defaults.google;
     if (google && env.GOOGLE_API_KEY) google.apiKey = env.GOOGLE_API_KEY;

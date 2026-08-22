@@ -1076,7 +1076,9 @@ function seed(options: CliOptions): void {
   const provider = stringOpt(options.provider, process.env.MULTIREMI_PROVIDER) ?? "claude";
   const store = new MultiremiStore();
   const agent = store.ensureDefaultAgent(provider);
+  const concierge = store.ensureConciergeAgent(agent.workspaceId, agent.ownerId, provider);
   console.log(`Default ${provider} agent: ${agent.id}`);
+  console.log(`Feishu concierge agent: ${concierge.id}`);
 }
 
 async function followLog(logPath: string, lines: number): Promise<void> {

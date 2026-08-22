@@ -2892,6 +2892,26 @@ export interface MultiremiChatMessage {
   createdAt: string;
 }
 
+export type MultiremiExternalChatSource = "feishu";
+
+export interface MultiremiChatLink {
+  id: string;
+  workspaceId: string;
+  source: MultiremiExternalChatSource;
+  externalChatId: string;
+  chatSessionId: string;
+  createdAt: string;
+}
+
+export interface ResolveExternalChatInput {
+  workspaceId: string;
+  source: MultiremiExternalChatSource;
+  externalChatId: string;
+  agentId: string;
+  creatorId: string;
+  title?: string | null;
+}
+
 export interface CreateChatSessionInput {
   id?: string;
   agentId?: string;

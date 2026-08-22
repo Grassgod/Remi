@@ -17,6 +17,7 @@ import type {
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateIssueSessionInput,
+  CreateChatSessionInput,
   CreateSkillInput,
   CreateTaskInput,
   ListIssuesInput,
@@ -273,6 +274,7 @@ export interface TasksSurface {
 }
 
 export interface ChatSurface {
+  createChatSession(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
   getChatMessage(id: string): MultiremiChatMessage | null;
 }

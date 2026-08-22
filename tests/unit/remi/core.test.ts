@@ -113,6 +113,12 @@ function makeConfig(tmpDir: string): RemiConfig {
       connectionMode: "websocket",
       userAccessToken: "",
       triggerUserIds: [],
+      multiremi: {
+        enabled: false,
+        serverUrl: "http://127.0.0.1:6120",
+        token: "",
+        workspaceId: "local",
+      },
     },
     tokenSync: [],
     cronJobs: [],

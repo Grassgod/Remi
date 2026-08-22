@@ -22,6 +22,7 @@ import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
+import { ChatLinksRepo } from "@multiremi/store/repos/chat-links-repo.js";
 import {
   IssuesRepo,
   type BeginIssueDeletionResult,
@@ -103,6 +104,7 @@ import type {
   CreateAutopilotTriggerInput,
   CreateCloudRuntimeNodeInput,
   CreateChatSessionInput,
+  ResolveExternalChatInput,
   CreateAttachmentInput,
   CreateFeedbackInput,
   CreateIssueDependencyInput,
@@ -322,6 +324,7 @@ export class MultiremiStore {
   private projects: ProjectsRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
+  private chatLinks: ChatLinksRepo;
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
@@ -352,6 +355,7 @@ export class MultiremiStore {
     this.projects = new ProjectsRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
+    this.chatLinks = new ChatLinksRepo(this.ctx);
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
@@ -787,6 +791,10 @@ runMigrations(this.db);
     options: { workspaceId?: string | null; ownerId?: string | null } = {},
   ): MultiremiAgent {
     return this.agents.ensureDefaultAgent(provider, options);
+  }
+
+  ensureConciergeAgent(workspaceId: string, ownerId: string, provider = "claude"): MultiremiAgent {
+    return this.agents.ensureConciergeAgent(workspaceId, ownerId, provider);
   }
 
   getDefaultAgent(workspaceId: string, provider: string, ownerId: string): MultiremiAgent | null {
@@ -2714,6 +2722,10 @@ runMigrations(this.db);
 
   createChatSession(input: CreateChatSessionInput): MultiremiChatSession {
     return this.chat.createChatSession(input);
+  }
+
+  getOrCreateChatSessionForExternalChat(input: ResolveExternalChatInput): MultiremiChatSession {
+    return this.chatLinks.getOrCreateChatSessionForExternalChat(input);
   }
 
   listChatSessions(workspaceId?: string | null, options: { creatorId?: string | null; includeArchived?: boolean } = {}): MultiremiChatSession[] {
