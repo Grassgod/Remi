@@ -40,10 +40,15 @@ function createDelegationFixture(): DelegationFixture {
     provider: "claude",
     runtimeId: qaRuntime.id,
   });
+  const squad = store.createSquad({
+    name: "Delivery Squad",
+    leaderId: leader.id,
+    memberIds: [qa.id],
+  });
   const issue = store.createIssue({
     title: "Delegated verification",
-    assigneeType: "agent",
-    assigneeId: leader.id,
+    assigneeType: "squad",
+    assigneeId: squad.id,
   });
   const leaderTask = store.createTask({
     agentId: leader.id,
@@ -85,7 +90,7 @@ function delegationTasks(fixture: DelegationFixture): MultiremiTask[] {
 }
 
 describe("task-level agent delegation return", () => {
-  it("marks only task-authored agent mentions as delegations", () => {
+  it("allows human rich mentions but rejects unlinked agent delegation", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
@@ -101,11 +106,50 @@ describe("task-level agent delegation return", () => {
       body: `Unlinked agent request [@QA](mention://agent/${qa.id})`,
     });
 
-    expect(store.listTasksForIssue(issue.id)).toHaveLength(2);
-    for (const task of store.listTasksForIssue(issue.id)) {
-      expect(task.delegationId).toBeNull();
-      expect(task.delegatedByAgentId).toBeNull();
-    }
+    const tasks = store.listTasksForIssue(issue.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      agentId: qa.id,
+      delegationId: null,
+      delegatedByAgentId: null,
+    });
+  });
+
+  it("lets only the assigned squad leader richly mention a squad teammate", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Leader", provider: "claude" });
+    const qa = store.createAgent({ name: "QA", provider: "claude" });
+    const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
+    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
+    const issue = store.createIssue({ title: "Leader delegation", assigneeType: "squad", assigneeId: squad.id });
+    const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
+
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: "I already asked @QA to verify this.",
+    });
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: `Please help [@Outsider](mention://agent/${outsider.id})`,
+    });
+    expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
+
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: `Please verify [@QA](mention://agent/${qa.id})`,
+    });
+
+    const tasks = store.listTasksForIssue(issue.id);
+    expect(tasks).toHaveLength(2);
+    const delegated = tasks.find((task) => task.agentId === qa.id)!;
+    expect(delegated).toMatchObject({ agentId: qa.id, delegatedByAgentId: leader.id });
+    expect(delegated.delegationId).toBeTruthy();
   });
 
   it("returns a completed child exactly once and does not bounce after the leader finishes", () => {
@@ -143,7 +187,7 @@ describe("task-level agent delegation return", () => {
       .filter((activity) => activity.type === "delegation_return_triggered")).toHaveLength(1);
   });
 
-  it("coalesces an explicit child @Leader report with the later terminal return", () => {
+  it("ignores a child rich mention and returns only when the child becomes terminal", () => {
     const fixture = createDelegationFixture();
     const report = fixture.store.createIssueComment(fixture.issue.id, {
       authorType: "agent",
@@ -153,8 +197,7 @@ describe("task-level agent delegation return", () => {
     });
 
     let returned = delegationTasks(fixture);
-    expect(returned).toHaveLength(2);
-    expect(returned.find((task) => task.agentId === fixture.leader.id)?.triggerCommentId).toBe(report.id);
+    expect(returned).toHaveLength(1);
 
     fixture.store.completeTask(fixture.childTask.id, {
       output: "QA finished successfully.",
@@ -175,13 +218,11 @@ describe("task-level agent delegation return", () => {
 
   it("creates a second delta return when the first leader task was dispatched before child completion", () => {
     const fixture = createDelegationFixture();
-    fixture.store.createIssueComment(fixture.issue.id, {
-      authorType: "agent",
-      authorId: fixture.qa.id,
-      taskId: fixture.childTask.id,
-      body: `[@Leader](mention://agent/${fixture.leader.id}) Intermediate QA report.`,
+    const wakeup = fixture.store.ensureDelegationWakeup({
+      sourceTaskId: fixture.childTask.id,
+      requiredEventSeq: 1_000_000,
     });
-    const firstReturn = delegationTasks(fixture).find((task) => task.agentId === fixture.leader.id)!;
+    const firstReturn = wakeup.task!;
     // Issue serialization normally keeps this queued while the child runs.
     // Model an already handed-off task defensively: once a daemon can hold the
     // old prompt, a terminal report must be delivered in a second Delta.
