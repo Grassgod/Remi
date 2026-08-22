@@ -215,8 +215,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       // checks, self-host release downloads (install-remi.sh runs unauthed),
       // and external webhooks (authed by their own path token).
       const path = c.req.path;
-      const hasCliShare = Boolean(c.req.header(CLI_SHARE_HEADER)?.trim())
-        && (path === "/api/cli/context" || path === "/api/cli/capabilities")
+      const shareCredential = c.req.header(CLI_SHARE_HEADER)?.trim() ?? "";
+      const sharePathMatch = path.match(/^\/api\/shares\/([^/]+)(?:\/attachments\/[^/]+\/content)?$/);
+      let matchingSharePath = false;
+      if (sharePathMatch) {
+        try {
+          matchingSharePath = decodeURIComponent(sharePathMatch[1]!) === shareCredential;
+        } catch {
+          matchingSharePath = false;
+        }
+      }
+      const hasCliShare = Boolean(shareCredential)
+        && ((path === "/api/cli/context" || path === "/api/cli/capabilities") || matchingSharePath)
         && c.req.method === "GET";
       if (
         path === "/" ||

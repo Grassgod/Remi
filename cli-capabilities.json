@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": "scripts/api-routes.golden.json",
-  "max_planned_routes": 417,
+  "max_planned_routes": 256,
   "domains": [
     "context",
     "workspace",
@@ -1436,6 +1436,1765 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.list": {
+      "command": "remi issue list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.get": {
+      "command": "remi issue get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.search": {
+      "command": "remi issue search",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.search",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.create": {
+      "command": "remi issue create",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.update": {
+      "command": "remi issue update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.assign": {
+      "command": "remi issue assign",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.assign",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.status": {
+      "command": "remi issue status",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.status",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.delete": {
+      "command": "remi issue delete",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.rerun": {
+      "command": "remi issue rerun",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.rerun",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.cancel": {
+      "command": "remi issue cancel-task",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.cancel",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.task-runs": {
+      "command": "remi issue runs",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.task-runs",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.messages": {
+      "command": "remi issue run-messages",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.messages",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment": {
+      "command": "remi comment",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.list": {
+      "command": "remi comment list",
+      "aliases": [
+        "remi issue comment list"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.add": {
+      "command": "remi comment add",
+      "aliases": [
+        "remi issue comment add"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.update": {
+      "command": "remi comment update",
+      "aliases": [
+        "remi issue comment update"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.delete": {
+      "command": "remi comment delete",
+      "aliases": [
+        "remi issue comment delete"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.resolve": {
+      "command": "remi comment resolve",
+      "aliases": [
+        "remi issue comment resolve"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.resolve",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.unresolve": {
+      "command": "remi comment unresolve",
+      "aliases": [
+        "remi issue comment unresolve"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.unresolve",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.reaction.list": {
+      "command": "remi comment reaction list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.reaction.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.reaction.add": {
+      "command": "remi comment reaction add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.reaction.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.reaction.remove": {
+      "command": "remi comment reaction remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.reaction.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "comment.attachment.list": {
+      "command": "remi comment attachment list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "comment.attachment.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session": {
+      "command": "remi session",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.list": {
+      "command": "remi session list",
+      "aliases": [
+        "remi issue session list"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.get": {
+      "command": "remi session get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.create": {
+      "command": "remi session create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.update": {
+      "command": "remi session update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.participant.list": {
+      "command": "remi session participant list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.participant.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.participant.add": {
+      "command": "remi session participant add",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.participant.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.participant.remove": {
+      "command": "remi session participant remove",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.participant.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.event.list": {
+      "command": "remi session event list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.event.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.message.create": {
+      "command": "remi session message create",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.message.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.task.list": {
+      "command": "remi session task list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.task.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.task.create": {
+      "command": "remi session task create",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.task.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.result.list": {
+      "command": "remi session result list",
+      "aliases": [
+        "remi issue session result list"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.result.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.result.publish": {
+      "command": "remi session result publish",
+      "aliases": [
+        "remi issue session result publish"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.result.publish",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.archive.list": {
+      "command": "remi session archive list",
+      "aliases": [
+        "remi issue archive list"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.archive.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.archive.status": {
+      "command": "remi session archive status",
+      "aliases": [
+        "remi issue archive status"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.archive.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.archive.verify": {
+      "command": "remi session archive verify",
+      "aliases": [
+        "remi issue archive verify"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.archive.verify",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.archive.retry": {
+      "command": "remi session archive retry",
+      "aliases": [
+        "remi issue archive retry"
+      ],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.archive.retry",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.config.get": {
+      "command": "remi session config get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.config.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "session.config.update": {
+      "command": "remi session config update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "session.config.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.grouped": {
+      "command": "remi issue grouped",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.grouped",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.children": {
+      "command": "remi issue children",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.children",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.child-progress": {
+      "command": "remi issue child-progress",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.child-progress",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.timeline": {
+      "command": "remi issue timeline",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.timeline",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.active-task": {
+      "command": "remi issue active-task",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.active-task",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.usage": {
+      "command": "remi issue usage",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.usage",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.workspace": {
+      "command": "remi issue workspace",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.workspace",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.dependency.list": {
+      "command": "remi issue dependency list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.dependency.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.dependency.add": {
+      "command": "remi issue dependency add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.dependency.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.dependency.remove": {
+      "command": "remi issue dependency remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.dependency.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.reaction.list": {
+      "command": "remi issue reaction list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.reaction.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.reaction.add": {
+      "command": "remi issue reaction add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.reaction.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.reaction.remove": {
+      "command": "remi issue reaction remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.reaction.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.label.list": {
+      "command": "remi issue label list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.label.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.label.add": {
+      "command": "remi issue label add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.label.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.label.remove": {
+      "command": "remi issue label remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.label.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.subscriber.list": {
+      "command": "remi issue subscriber list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.subscriber.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.subscriber.add": {
+      "command": "remi issue subscriber add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.subscriber.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.subscriber.remove": {
+      "command": "remi issue subscriber remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.subscriber.remove",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.metadata.list": {
+      "command": "remi issue metadata list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.metadata.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.metadata.get": {
+      "command": "remi issue metadata get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.metadata.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.metadata.set": {
+      "command": "remi issue metadata set",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.metadata.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.metadata.delete": {
+      "command": "remi issue metadata delete",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.metadata.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.attachment.list": {
+      "command": "remi issue attachment list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.attachment.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.attachment.get": {
+      "command": "remi issue attachment get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.attachment.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.attachment.download": {
+      "command": "remi issue attachment download",
+      "aliases": [
+        "remi attachment download"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.attachment.download",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.attachment.upload": {
+      "command": "remi issue attachment upload",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.attachment.upload",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.attachment.delete": {
+      "command": "remi issue attachment delete",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.attachment.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.batch-update": {
+      "command": "remi issue batch-update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.batch-update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.batch-delete": {
+      "command": "remi issue batch-delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.batch-delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.quick-create": {
+      "command": "remi issue quick-create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.quick-create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.squad-evaluated": {
+      "command": "remi issue squad-evaluated",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.squad-evaluated",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "share": {
+      "command": "remi share",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "share.get": {
+      "command": "remi share get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "share.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "share.create": {
+      "command": "remi share create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "share.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "share.extend": {
+      "command": "remi share extend",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "share.extend",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "share.delete": {
+      "command": "remi share delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "share.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "share.view": {
+      "command": "remi share view",
+      "aliases": [],
+      "auth": [
+        "human",
+        "share"
+      ],
+      "capability": "share.view",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "label": {
+      "command": "remi label",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "label.list": {
+      "command": "remi label list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "label.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "label.get": {
+      "command": "remi label get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "label.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "label.create": {
+      "command": "remi label create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "label.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "label.update": {
+      "command": "remi label update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "label.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "label.delete": {
+      "command": "remi label delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "label.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat": {
+      "command": "remi chat",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.list": {
+      "command": "remi chat list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.get": {
+      "command": "remi chat get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.create": {
+      "command": "remi chat create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.update": {
+      "command": "remi chat update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.delete": {
+      "command": "remi chat delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.message.list": {
+      "command": "remi chat message list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.message.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.message.create": {
+      "command": "remi chat message create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.message.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.pending": {
+      "command": "remi chat pending",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.pending",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "chat.read": {
+      "command": "remi chat read",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "chat.read",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task": {
+      "command": "remi task",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.list": {
+      "command": "remi task list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.get": {
+      "command": "remi task get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.create": {
+      "command": "remi task create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "task.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.cancel": {
+      "command": "remi task cancel",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.cancel",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.message.list": {
+      "command": "remi task message list",
+      "aliases": [
+        "remi task messages"
+      ],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.message.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.prompt": {
+      "command": "remi task prompt",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.prompt",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.request.list": {
+      "command": "remi task request list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.request.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.request.respond": {
+      "command": "remi task request respond",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.request.respond",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "legacy.start": {
       "command": "remi start",
       "aliases": [],
@@ -1687,6 +3446,96 @@
       "replacement": "remi memory migration retry",
       "hidden": false
     },
+    "remi issue comment list": {
+      "command": "comment.list",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi comment list",
+      "hidden": false
+    },
+    "remi issue comment add": {
+      "command": "comment.add",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi comment add",
+      "hidden": false
+    },
+    "remi issue comment update": {
+      "command": "comment.update",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi comment update",
+      "hidden": false
+    },
+    "remi issue comment delete": {
+      "command": "comment.delete",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi comment delete",
+      "hidden": false
+    },
+    "remi issue comment resolve": {
+      "command": "comment.resolve",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi comment resolve",
+      "hidden": false
+    },
+    "remi issue comment unresolve": {
+      "command": "comment.unresolve",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi comment unresolve",
+      "hidden": false
+    },
+    "remi issue session list": {
+      "command": "session.list",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session list",
+      "hidden": false
+    },
+    "remi issue session result list": {
+      "command": "session.result.list",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session result list",
+      "hidden": false
+    },
+    "remi issue session result publish": {
+      "command": "session.result.publish",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session result publish",
+      "hidden": false
+    },
+    "remi issue archive list": {
+      "command": "session.archive.list",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session archive list",
+      "hidden": false
+    },
+    "remi issue archive status": {
+      "command": "session.archive.status",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session archive status",
+      "hidden": false
+    },
+    "remi issue archive verify": {
+      "command": "session.archive.verify",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session archive verify",
+      "hidden": false
+    },
+    "remi issue archive retry": {
+      "command": "session.archive.retry",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi session archive retry",
+      "hidden": false
+    },
+    "remi attachment download": {
+      "command": "issue.attachment.download",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi issue attachment download",
+      "hidden": false
+    },
+    "remi task messages": {
+      "command": "task.message.list",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi task message list",
+      "hidden": false
+    },
     "remi multiremi": {
       "command": "legacy.multiremi",
       "deprecated_since": "0.3.0",
@@ -1696,8 +3545,7 @@
   },
   "routes": {
     "DELETE /api/attachments/:id": {
-      "planned_command": "attachment.delete",
-      "domain": "attachment"
+      "command": "issue.attachment.delete"
     },
     "DELETE /api/autopilots/:id": {
       "planned_command": "autopilot.delete",
@@ -1708,60 +3556,48 @@
       "domain": "autopilot"
     },
     "DELETE /api/chat/sessions/:sessionId": {
-      "planned_command": "chat.delete",
-      "domain": "chat"
+      "command": "chat.delete"
     },
     "DELETE /api/cloud-runtime/nodes": {
       "planned_command": "runtime.delete",
       "domain": "runtime"
     },
     "DELETE /api/comments/:id": {
-      "planned_command": "comment.delete",
-      "domain": "comment"
+      "command": "comment.delete"
     },
     "DELETE /api/comments/:id/reactions": {
-      "planned_command": "comment.delete",
-      "domain": "comment"
+      "command": "comment.reaction.remove"
     },
     "DELETE /api/comments/:id/resolve": {
-      "planned_command": "comment.delete",
-      "domain": "comment"
+      "command": "comment.unresolve"
     },
     "DELETE /api/issues/:id": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.delete"
     },
     "DELETE /api/issues/:id/dependencies/:dependencyId": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.dependency.remove"
     },
     "DELETE /api/issues/:id/labels/:labelId": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.label.remove"
     },
     "DELETE /api/issues/:id/metadata/:key": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.metadata.delete"
     },
     "DELETE /api/issues/:id/reactions": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.reaction.remove"
     },
     "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "session.participant.remove"
     },
     "DELETE /api/issues/:id/share": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "share.delete"
     },
     "DELETE /api/issues/:issueId/change-requests/:changeRequestId": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "planned_command": "scm.delete",
+      "domain": "scm"
     },
     "DELETE /api/labels/:id": {
-      "planned_command": "label.delete",
-      "domain": "label"
+      "command": "label.delete"
     },
     "DELETE /api/multiremi/agent-plugins/:id": {
       "planned_command": "plugin.delete",
@@ -1780,44 +3616,34 @@
       "domain": "autopilot"
     },
     "DELETE /api/multiremi/comments/:id": {
-      "planned_command": "comment.delete",
-      "domain": "comment"
+      "command": "comment.delete"
     },
     "DELETE /api/multiremi/comments/:id/reactions": {
-      "planned_command": "comment.delete",
-      "domain": "comment"
+      "command": "comment.reaction.remove"
     },
     "DELETE /api/multiremi/comments/:id/resolve": {
-      "planned_command": "comment.delete",
-      "domain": "comment"
+      "command": "comment.unresolve"
     },
     "DELETE /api/multiremi/issues/:id": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.delete"
     },
     "DELETE /api/multiremi/issues/:id/dependencies/:dependencyId": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.dependency.remove"
     },
     "DELETE /api/multiremi/issues/:id/labels/:labelId": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.label.remove"
     },
     "DELETE /api/multiremi/issues/:id/metadata/:key": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.metadata.delete"
     },
     "DELETE /api/multiremi/issues/:id/reactions": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.reaction.remove"
     },
     "DELETE /api/multiremi/issues/:id/subscribers/:memberId": {
-      "planned_command": "issue.delete",
-      "domain": "issue"
+      "command": "issue.subscriber.remove"
     },
     "DELETE /api/multiremi/labels/:id": {
-      "planned_command": "label.delete",
-      "domain": "label"
+      "command": "label.delete"
     },
     "DELETE /api/multiremi/members/:id": {
       "command": "member.delete"
@@ -1957,16 +3783,13 @@
       "domain": "dashboard"
     },
     "GET /api/attachments/:id": {
-      "planned_command": "attachment.get",
-      "domain": "attachment"
+      "command": "issue.attachment.get"
     },
     "GET /api/attachments/:id/content": {
-      "planned_command": "attachment.get",
-      "domain": "attachment"
+      "command": "issue.attachment.download"
     },
     "GET /api/attachments/:id/download": {
-      "planned_command": "attachment.get",
-      "domain": "attachment"
+      "command": "issue.attachment.download"
     },
     "GET /api/autopilots": {
       "planned_command": "autopilot.list",
@@ -1993,28 +3816,22 @@
       "domain": "autopilot"
     },
     "GET /api/chat/pending-tasks": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.pending"
     },
     "GET /api/chat/sessions": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.list"
     },
     "GET /api/chat/sessions/:sessionId": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.get"
     },
     "GET /api/chat/sessions/:sessionId/messages": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.message.list"
     },
     "GET /api/chat/sessions/:sessionId/messages/page": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.message.list"
     },
     "GET /api/chat/sessions/:sessionId/pending-task": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.pending"
     },
     "GET /api/cli/capabilities": {
       "command": "context.get"
@@ -2168,128 +3985,98 @@
       "command": "invite.get"
     },
     "GET /api/issues": {
-      "planned_command": "issue.list",
-      "domain": "issue"
+      "command": "issue.list"
     },
     "GET /api/issues/:id": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.get"
     },
     "GET /api/issues/:id/active-task": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.active-task"
     },
     "GET /api/issues/:id/attachments": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.attachment.list"
     },
     "GET /api/issues/:id/change-requests": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "planned_command": "scm.get",
+      "domain": "scm"
     },
     "GET /api/issues/:id/children": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.children"
     },
     "GET /api/issues/:id/comments": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "comment.list"
     },
     "GET /api/issues/:id/dependencies": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.dependency.list"
     },
     "GET /api/issues/:id/generated-issues": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.children"
     },
     "GET /api/issues/:id/labels": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.label.list"
     },
     "GET /api/issues/:id/metadata": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.metadata.list"
     },
     "GET /api/issues/:id/reactions": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.reaction.list"
     },
     "GET /api/issues/:id/session-results": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "session.result.list"
     },
     "GET /api/issues/:id/sessions": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "session.list"
     },
     "GET /api/issues/:id/sessions/:sessionId": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "session.get"
     },
     "GET /api/issues/:id/sessions/:sessionId/events": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "session.event.list"
     },
     "GET /api/issues/:id/sessions/:sessionId/participants": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "session.participant.list"
     },
     "GET /api/issues/:id/sessions/:sessionId/tasks": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "session.task.list"
     },
     "GET /api/issues/:id/share": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "share.get"
     },
     "GET /api/issues/:id/subscribers": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.subscriber.list"
     },
     "GET /api/issues/:id/task-runs": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.task-runs"
     },
     "GET /api/issues/:id/timeline": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.timeline"
     },
     "GET /api/issues/:id/usage": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.usage"
     },
     "GET /api/issues/:id/workspace": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.workspace"
     },
     "GET /api/issues/:issueId/session-archives": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "session.archive.list"
     },
     "GET /api/issues/child-progress": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.child-progress"
     },
     "GET /api/issues/children": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.children"
     },
     "GET /api/issues/grouped": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.grouped"
     },
     "GET /api/issues/search": {
-      "planned_command": "issue.search",
-      "domain": "issue"
+      "command": "issue.search"
     },
     "GET /api/labels": {
-      "planned_command": "label.list",
-      "domain": "label"
+      "command": "label.list"
     },
     "GET /api/labels/:id": {
-      "planned_command": "label.get",
-      "domain": "label"
+      "command": "label.get"
     },
     "GET /api/me": {
       "command": "member.get"
@@ -2359,8 +4146,7 @@
       "domain": "dashboard"
     },
     "GET /api/multiremi/attachments/:id": {
-      "planned_command": "attachment.get",
-      "domain": "attachment"
+      "command": "issue.attachment.get"
     },
     "GET /api/multiremi/autopilots": {
       "planned_command": "autopilot.list",
@@ -2383,24 +4169,19 @@
       "domain": "autopilot"
     },
     "GET /api/multiremi/chats": {
-      "planned_command": "chat.list",
-      "domain": "chat"
+      "command": "chat.list"
     },
     "GET /api/multiremi/chats/:id": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.get"
     },
     "GET /api/multiremi/chats/:id/messages": {
-      "planned_command": "chat.get",
-      "domain": "chat"
+      "command": "chat.message.list"
     },
     "GET /api/multiremi/comments/:id/attachments": {
-      "planned_command": "comment.get",
-      "domain": "comment"
+      "command": "comment.attachment.list"
     },
     "GET /api/multiremi/comments/:id/reactions": {
-      "planned_command": "comment.get",
-      "domain": "comment"
+      "command": "comment.reaction.list"
     },
     "GET /api/multiremi/daemons": {
       "planned_command": "daemon.list",
@@ -2427,72 +4208,55 @@
       "domain": "lark"
     },
     "GET /api/multiremi/issues": {
-      "planned_command": "issue.list",
-      "domain": "issue"
+      "command": "issue.list"
     },
     "GET /api/multiremi/issues/:id": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.get"
     },
     "GET /api/multiremi/issues/:id/attachments": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.attachment.list"
     },
     "GET /api/multiremi/issues/:id/children": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.children"
     },
     "GET /api/multiremi/issues/:id/comments": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "comment.list"
     },
     "GET /api/multiremi/issues/:id/dependencies": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.dependency.list"
     },
     "GET /api/multiremi/issues/:id/labels": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.label.list"
     },
     "GET /api/multiremi/issues/:id/metadata": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.metadata.list"
     },
     "GET /api/multiremi/issues/:id/reactions": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.reaction.list"
     },
     "GET /api/multiremi/issues/:id/subscribers": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.subscriber.list"
     },
     "GET /api/multiremi/issues/:id/timeline": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.timeline"
     },
     "GET /api/multiremi/issues/child-progress": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.child-progress"
     },
     "GET /api/multiremi/issues/children": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.children"
     },
     "GET /api/multiremi/issues/grouped": {
-      "planned_command": "issue.get",
-      "domain": "issue"
+      "command": "issue.grouped"
     },
     "GET /api/multiremi/issues/search": {
-      "planned_command": "issue.search",
-      "domain": "issue"
+      "command": "issue.search"
     },
     "GET /api/multiremi/labels": {
-      "planned_command": "label.list",
-      "domain": "label"
+      "command": "label.list"
     },
     "GET /api/multiremi/labels/:id": {
-      "planned_command": "label.get",
-      "domain": "label"
+      "command": "label.get"
     },
     "GET /api/multiremi/members": {
       "command": "member.list"
@@ -2613,20 +4377,16 @@
       "domain": "squad"
     },
     "GET /api/multiremi/tasks": {
-      "planned_command": "task.list",
-      "domain": "task"
+      "command": "task.list"
     },
     "GET /api/multiremi/tasks/:id": {
-      "planned_command": "task.get",
-      "domain": "task"
+      "command": "task.get"
     },
     "GET /api/multiremi/tasks/:id/human-requests": {
-      "planned_command": "task.get",
-      "domain": "task"
+      "command": "task.request.list"
     },
     "GET /api/multiremi/tasks/:id/messages": {
-      "planned_command": "task.get",
-      "domain": "task"
+      "command": "task.message.list"
     },
     "GET /api/multiremi/tokens": {
       "command": "token.list"
@@ -2746,12 +4506,10 @@
       "domain": "scm"
     },
     "GET /api/shares/:token": {
-      "planned_command": "share.get",
-      "domain": "share"
+      "command": "share.view"
     },
     "GET /api/shares/:token/attachments/:attachmentId/content": {
-      "planned_command": "share.get",
-      "domain": "share"
+      "command": "share.view"
     },
     "GET /api/skills": {
       "planned_command": "skill.list",
@@ -2786,16 +4544,13 @@
       "domain": "squad"
     },
     "GET /api/tasks/:id/human-requests": {
-      "planned_command": "task.get",
-      "domain": "task"
+      "command": "task.request.list"
     },
     "GET /api/tasks/:taskId/messages": {
-      "planned_command": "task.get",
-      "domain": "task"
+      "command": "task.message.list"
     },
     "GET /api/tasks/:taskId/prompt": {
-      "planned_command": "task.get",
-      "domain": "task"
+      "command": "task.prompt"
     },
     "GET /api/tokens": {
       "command": "token.list"
@@ -2830,8 +4585,7 @@
       "command": "repo.list"
     },
     "GET /api/workspaces/:id/session-archive": {
-      "planned_command": "session.get",
-      "domain": "session"
+      "command": "session.config.get"
     },
     "GET /api/workspaces/:id/ssh-mesh": {
       "command": "workspace.ssh-mesh.get"
@@ -2891,16 +4645,13 @@
       "domain": "autopilot"
     },
     "PATCH /api/chat/sessions/:sessionId": {
-      "planned_command": "chat.update",
-      "domain": "chat"
+      "command": "chat.update"
     },
     "PATCH /api/issues/:id": {
-      "planned_command": "issue.update",
-      "domain": "issue"
+      "command": "issue.update"
     },
     "PATCH /api/issues/:id/sessions/:sessionId": {
-      "planned_command": "issue.update",
-      "domain": "issue"
+      "command": "session.update"
     },
     "PATCH /api/me": {
       "command": "member.update"
@@ -2925,20 +4676,16 @@
       "domain": "autopilot"
     },
     "PATCH /api/multiremi/chats/:id": {
-      "planned_command": "chat.update",
-      "domain": "chat"
+      "command": "chat.update"
     },
     "PATCH /api/multiremi/comments/:id": {
-      "planned_command": "comment.update",
-      "domain": "comment"
+      "command": "comment.update"
     },
     "PATCH /api/multiremi/issues/:id": {
-      "planned_command": "issue.update",
-      "domain": "issue"
+      "command": "issue.update"
     },
     "PATCH /api/multiremi/labels/:id": {
-      "planned_command": "label.update",
-      "domain": "label"
+      "command": "label.update"
     },
     "PATCH /api/multiremi/members/:id": {
       "command": "member.update"
@@ -3039,16 +4786,13 @@
       "domain": "autopilot"
     },
     "POST /api/chat/sessions": {
-      "planned_command": "chat.sessions",
-      "domain": "chat"
+      "command": "chat.create"
     },
     "POST /api/chat/sessions/:sessionId/messages": {
-      "planned_command": "chat.messages",
-      "domain": "chat"
+      "command": "chat.message.create"
     },
     "POST /api/chat/sessions/:sessionId/read": {
-      "planned_command": "chat.read",
-      "domain": "chat"
+      "command": "chat.read"
     },
     "POST /api/cli-token": {
       "command": "token.create"
@@ -3086,12 +4830,10 @@
       "domain": "runtime"
     },
     "POST /api/comments/:id/reactions": {
-      "planned_command": "comment.reactions",
-      "domain": "comment"
+      "command": "comment.reaction.add"
     },
     "POST /api/comments/:id/resolve": {
-      "planned_command": "comment.resolve",
-      "domain": "comment"
+      "command": "comment.resolve"
     },
     "POST /api/contact-sales": {
       "cli_exempt": true,
@@ -3298,96 +5040,73 @@
       "command": "invite.decline"
     },
     "POST /api/issues": {
-      "planned_command": "issue.create",
-      "domain": "issue"
+      "command": "issue.create"
     },
     "POST /api/issues/:id/comments": {
-      "planned_command": "issue.comments",
-      "domain": "issue"
+      "command": "comment.add"
     },
     "POST /api/issues/:id/dependencies": {
-      "planned_command": "issue.dependencies",
-      "domain": "issue"
+      "command": "issue.dependency.add"
     },
     "POST /api/issues/:id/labels": {
-      "planned_command": "issue.labels",
-      "domain": "issue"
+      "command": "issue.label.add"
     },
     "POST /api/issues/:id/reactions": {
-      "planned_command": "issue.reactions",
-      "domain": "issue"
+      "command": "issue.reaction.add"
     },
     "POST /api/issues/:id/rerun": {
-      "planned_command": "issue.rerun",
-      "domain": "issue"
+      "command": "issue.rerun"
     },
     "POST /api/issues/:id/sessions": {
-      "planned_command": "issue.sessions",
-      "domain": "issue"
+      "command": "session.create"
     },
     "POST /api/issues/:id/sessions/:sessionId/messages": {
-      "planned_command": "issue.messages",
-      "domain": "issue"
+      "command": "session.message.create"
     },
     "POST /api/issues/:id/sessions/:sessionId/participants": {
-      "planned_command": "issue.participants",
-      "domain": "issue"
+      "command": "session.participant.add"
     },
     "POST /api/issues/:id/sessions/:sessionId/results": {
-      "planned_command": "issue.results",
-      "domain": "issue"
+      "command": "session.result.publish"
     },
     "POST /api/issues/:id/sessions/:sessionId/tasks": {
-      "planned_command": "issue.tasks",
-      "domain": "issue"
+      "command": "session.task.create"
     },
     "POST /api/issues/:id/share": {
-      "planned_command": "issue.share",
-      "domain": "issue"
+      "command": "share.create"
     },
     "POST /api/issues/:id/share/extend": {
-      "planned_command": "issue.extend",
-      "domain": "issue"
+      "command": "share.extend"
     },
     "POST /api/issues/:id/squad-evaluated": {
-      "planned_command": "issue.squad_evaluated",
-      "domain": "issue"
+      "command": "issue.squad-evaluated"
     },
     "POST /api/issues/:id/subscribe": {
-      "planned_command": "issue.subscribe",
-      "domain": "issue"
+      "command": "issue.subscriber.add"
     },
     "POST /api/issues/:id/tasks/:taskId/cancel": {
-      "planned_command": "issue.cancel",
-      "domain": "issue"
+      "command": "issue.cancel"
     },
     "POST /api/issues/:id/unsubscribe": {
-      "planned_command": "issue.unsubscribe",
-      "domain": "issue"
+      "command": "issue.subscriber.remove"
     },
     "POST /api/issues/:issueId/session-archives/:archiveId/retry": {
-      "planned_command": "issue.retry",
-      "domain": "issue"
+      "command": "session.archive.retry"
     },
     "POST /api/issues/:issueId/session-archives/:archiveId/verify": {
-      "planned_command": "issue.verify",
-      "domain": "issue"
+      "command": "session.archive.verify"
     },
     "POST /api/issues/batch-delete": {
-      "planned_command": "issue.batch_delete",
-      "domain": "issue"
+      "command": "issue.batch-delete"
     },
     "POST /api/issues/batch-update": {
-      "planned_command": "issue.batch_update",
-      "domain": "issue"
+      "command": "issue.batch-update"
     },
     "POST /api/issues/quick-create": {
-      "planned_command": "issue.quick_create",
-      "domain": "issue"
+      "command": "issue.quick-create"
     },
     "POST /api/labels": {
-      "planned_command": "label.create",
-      "domain": "label"
+      "command": "label.create"
     },
     "POST /api/lark/binding/redeem": {
       "planned_command": "lark.redeem",
@@ -3450,8 +5169,7 @@
       "domain": "agent"
     },
     "POST /api/multiremi/attachments": {
-      "planned_command": "attachment.create",
-      "domain": "attachment"
+      "command": "issue.attachment.upload"
     },
     "POST /api/multiremi/autopilots": {
       "planned_command": "autopilot.create",
@@ -3478,20 +5196,16 @@
       "domain": "autopilot"
     },
     "POST /api/multiremi/chats": {
-      "planned_command": "chat.create",
-      "domain": "chat"
+      "command": "chat.create"
     },
     "POST /api/multiremi/chats/:id/messages": {
-      "planned_command": "chat.messages",
-      "domain": "chat"
+      "command": "chat.message.create"
     },
     "POST /api/multiremi/comments/:id/reactions": {
-      "planned_command": "comment.reactions",
-      "domain": "comment"
+      "command": "comment.reaction.add"
     },
     "POST /api/multiremi/comments/:id/resolve": {
-      "planned_command": "comment.resolve",
-      "domain": "comment"
+      "command": "comment.resolve"
     },
     "POST /api/multiremi/daemons/:daemonId/retire": {
       "planned_command": "daemon.retire",
@@ -3514,52 +5228,40 @@
       "domain": "lark"
     },
     "POST /api/multiremi/issues": {
-      "planned_command": "issue.create",
-      "domain": "issue"
+      "command": "issue.create"
     },
     "POST /api/multiremi/issues/:id/assign": {
-      "planned_command": "issue.assign",
-      "domain": "issue"
+      "command": "issue.assign"
     },
     "POST /api/multiremi/issues/:id/attachments": {
-      "planned_command": "issue.attachments",
-      "domain": "issue"
+      "command": "issue.attachment.upload"
     },
     "POST /api/multiremi/issues/:id/comments": {
-      "planned_command": "issue.comments",
-      "domain": "issue"
+      "command": "comment.add"
     },
     "POST /api/multiremi/issues/:id/dependencies": {
-      "planned_command": "issue.dependencies",
-      "domain": "issue"
+      "command": "issue.dependency.add"
     },
     "POST /api/multiremi/issues/:id/labels": {
-      "planned_command": "issue.labels",
-      "domain": "issue"
+      "command": "issue.label.add"
     },
     "POST /api/multiremi/issues/:id/reactions": {
-      "planned_command": "issue.reactions",
-      "domain": "issue"
+      "command": "issue.reaction.add"
     },
     "POST /api/multiremi/issues/:id/subscribers": {
-      "planned_command": "issue.subscribers",
-      "domain": "issue"
+      "command": "issue.subscriber.add"
     },
     "POST /api/multiremi/issues/batch-delete": {
-      "planned_command": "issue.batch_delete",
-      "domain": "issue"
+      "command": "issue.batch-delete"
     },
     "POST /api/multiremi/issues/batch-update": {
-      "planned_command": "issue.batch_update",
-      "domain": "issue"
+      "command": "issue.batch-update"
     },
     "POST /api/multiremi/issues/quick-create": {
-      "planned_command": "issue.quick_create",
-      "domain": "issue"
+      "command": "issue.quick-create"
     },
     "POST /api/multiremi/labels": {
-      "planned_command": "label.create",
-      "domain": "label"
+      "command": "label.create"
     },
     "POST /api/multiremi/members": {
       "command": "member.create"
@@ -3627,16 +5329,13 @@
       "domain": "squad"
     },
     "POST /api/multiremi/tasks": {
-      "planned_command": "task.create",
-      "domain": "task"
+      "command": "task.create"
     },
     "POST /api/multiremi/tasks/:id/cancel": {
-      "planned_command": "task.cancel",
-      "domain": "task"
+      "command": "task.cancel"
     },
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond": {
-      "planned_command": "task.respond",
-      "domain": "task"
+      "command": "task.request.respond"
     },
     "POST /api/multiremi/tokens": {
       "command": "token.create"
@@ -3722,12 +5421,10 @@
       "domain": "squad"
     },
     "POST /api/tasks/:id/cancel": {
-      "planned_command": "task.cancel",
-      "domain": "task"
+      "command": "task.cancel"
     },
     "POST /api/tasks/:id/human-requests/:requestId/respond": {
-      "planned_command": "task.respond",
-      "domain": "task"
+      "command": "task.request.respond"
     },
     "POST /api/tokens": {
       "command": "token.create"
@@ -3736,8 +5433,7 @@
       "command": "token.renew"
     },
     "POST /api/upload-file": {
-      "planned_command": "attachment.create",
-      "domain": "attachment"
+      "command": "issue.attachment.upload"
     },
     "POST /api/webhooks/autopilots/:token": {
       "cli_exempt": true,
@@ -3828,8 +5524,7 @@
       "domain": "autopilot"
     },
     "PUT /api/comments/:id": {
-      "planned_command": "comment.update",
-      "domain": "comment"
+      "command": "comment.update"
     },
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content": {
       "cli_exempt": true,
@@ -3842,36 +5537,30 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "PUT /api/issues/:id": {
-      "planned_command": "issue.update",
-      "domain": "issue"
+      "command": "issue.update"
     },
     "PUT /api/issues/:id/metadata/:key": {
-      "planned_command": "issue.update",
-      "domain": "issue"
+      "command": "issue.metadata.set"
     },
     "PUT /api/issues/:issueId/change-requests/:changeRequestId": {
-      "planned_command": "issue.update",
-      "domain": "issue"
+      "planned_command": "scm.update",
+      "domain": "scm"
     },
     "PUT /api/labels/:id": {
-      "planned_command": "label.update",
-      "domain": "label"
+      "command": "label.update"
     },
     "PUT /api/multiremi/agents/:id/skills": {
       "planned_command": "agent.update",
       "domain": "agent"
     },
     "PUT /api/multiremi/comments/:id": {
-      "planned_command": "comment.update",
-      "domain": "comment"
+      "command": "comment.update"
     },
     "PUT /api/multiremi/issues/:id/metadata/:key": {
-      "planned_command": "issue.update",
-      "domain": "issue"
+      "command": "issue.metadata.set"
     },
     "PUT /api/multiremi/labels/:id": {
-      "planned_command": "label.update",
-      "domain": "label"
+      "command": "label.update"
     },
     "PUT /api/multiremi/notification-preferences": {
       "planned_command": "notification.update",
@@ -3935,8 +5624,7 @@
       "command": "workspace.relay.discovery"
     },
     "PUT /api/workspaces/:id/session-archive": {
-      "planned_command": "session.update",
-      "domain": "session"
+      "command": "session.config.update"
     },
     "PUT /api/workspaces/:id/ssh-mesh": {
       "command": "workspace.ssh-mesh.update"

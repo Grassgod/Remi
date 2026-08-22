@@ -295,6 +295,18 @@ export function denyTaskTokenCommentAccess(
   return null;
 }
 
+export function denyTaskTokenIssueMutation(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  if (!task || task.issueId !== issueId) return c.json({ error: "forbidden" }, 403);
+  return null;
+}
+
 export function denyTaskTokenTaskAccess(
   c: Context,
   requestedTask: MultiremiTask,

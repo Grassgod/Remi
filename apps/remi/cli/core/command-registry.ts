@@ -31,6 +31,8 @@ export interface CommandAlias {
   deprecatedSince?: string;
   replacement?: string;
   hidden?: boolean;
+  /** Keep the alias in help/manifest inventory while a legacy parent owns dispatch. */
+  dispatch?: boolean;
 }
 
 export interface CommandInvocation {
@@ -90,7 +92,7 @@ export class CommandRegistry {
     if (this.specs.has(spec.id)) throw new Error(`CLI command id already registered: ${spec.id}`);
     const entries: RegisteredPath[] = [
       { key: pathKey(spec.path), path: [...spec.path], spec, alias: null },
-      ...(spec.aliases ?? []).map((alias) => ({
+      ...(spec.aliases ?? []).filter((alias) => alias.dispatch !== false).map((alias) => ({
         key: pathKey(alias.path),
         path: [...alias.path],
         spec,

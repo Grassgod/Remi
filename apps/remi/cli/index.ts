@@ -8,6 +8,7 @@
 import { VERSION } from "@shared/version.js";
 import { CommandRegistry, type CommandInventoryEntry } from "./core/command-registry.js";
 import { contextCommandSpec } from "./commands/context.js";
+import { collaborationCommandSpecs } from "./commands/collaboration.js";
 import { inviteCommandSpecs } from "./commands/invite.js";
 import { knowledgeCommandSpecs } from "./commands/knowledge.js";
 import { memberCommandSpecs } from "./commands/member.js";
@@ -26,6 +27,7 @@ for (const spec of [
   ...projectCommandSpecs(),
   ...repoCommandSpecs(),
   ...knowledgeCommandSpecs(),
+  ...collaborationCommandSpecs(),
 ]) commandRegistry.register(spec);
 
 // Lazy-load commands to avoid importing heavy modules when not needed

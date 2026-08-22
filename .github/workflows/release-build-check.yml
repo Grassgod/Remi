@@ -76,7 +76,7 @@ jobs:
       - name: Verify CLI capability coverage and contracts
         run: |
           bun run cli:capabilities:check
-          bun test tests/unit/multiremi/cli-capabilities-manifest.test.ts tests/unit/multiremi/multiremi-api-cli.test.ts tests/unit/remi/cli-context.test.ts tests/unit/remi/cli-resources.test.ts
+          bun test tests/unit/multiremi/cli-capabilities-manifest.test.ts tests/unit/multiremi/multiremi-api-cli.test.ts tests/unit/multiremi/multiremi-cli-collaboration-auth.test.ts tests/unit/remi/cli-context.test.ts tests/unit/remi/cli-resources.test.ts tests/unit/remi/cli-collaboration.test.ts
 
       # This workflow path-filters on `frontend/**` but used to build only the
       # server/CLI, so a broken web app went green. These two steps are the

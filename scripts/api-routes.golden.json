@@ -6430,6 +6430,215 @@
         },
         "commands": [
           {
+            "id": "chat.create",
+            "command": "remi chat create",
+            "capability": "chat.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.delete",
+            "command": "remi chat delete",
+            "capability": "chat.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.get",
+            "command": "remi chat get",
+            "capability": "chat.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.list",
+            "command": "remi chat list",
+            "capability": "chat.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.message.create",
+            "command": "remi chat message create",
+            "capability": "chat.message.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.message.list",
+            "command": "remi chat message list",
+            "capability": "chat.message.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.pending",
+            "command": "remi chat pending",
+            "capability": "chat.pending",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.read",
+            "command": "remi chat read",
+            "capability": "chat.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.update",
+            "command": "remi chat update",
+            "capability": "chat.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.add",
+            "command": "remi comment add",
+            "capability": "comment.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.attachment.list",
+            "command": "remi comment attachment list",
+            "capability": "comment.attachment.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.delete",
+            "command": "remi comment delete",
+            "capability": "comment.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.list",
+            "command": "remi comment list",
+            "capability": "comment.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.reaction.add",
+            "command": "remi comment reaction add",
+            "capability": "comment.reaction.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.reaction.list",
+            "command": "remi comment reaction list",
+            "capability": "comment.reaction.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.reaction.remove",
+            "command": "remi comment reaction remove",
+            "capability": "comment.reaction.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.resolve",
+            "command": "remi comment resolve",
+            "capability": "comment.resolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.unresolve",
+            "command": "remi comment unresolve",
+            "capability": "comment.unresolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.update",
+            "command": "remi comment update",
+            "capability": "comment.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "context.get",
             "command": "remi context",
             "capability": "context.read",
@@ -6499,6 +6708,534 @@
             "id": "invite.revoke",
             "command": "remi invite revoke",
             "capability": "invite.revoke",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.active-task",
+            "command": "remi issue active-task",
+            "capability": "issue.active-task",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.assign",
+            "command": "remi issue assign",
+            "capability": "issue.assign",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.delete",
+            "command": "remi issue attachment delete",
+            "capability": "issue.attachment.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.download",
+            "command": "remi issue attachment download",
+            "capability": "issue.attachment.download",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.get",
+            "command": "remi issue attachment get",
+            "capability": "issue.attachment.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.list",
+            "command": "remi issue attachment list",
+            "capability": "issue.attachment.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.upload",
+            "command": "remi issue attachment upload",
+            "capability": "issue.attachment.upload",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.batch-delete",
+            "command": "remi issue batch-delete",
+            "capability": "issue.batch-delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.batch-update",
+            "command": "remi issue batch-update",
+            "capability": "issue.batch-update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.cancel",
+            "command": "remi issue cancel-task",
+            "capability": "issue.cancel",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.child-progress",
+            "command": "remi issue child-progress",
+            "capability": "issue.child-progress",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.children",
+            "command": "remi issue children",
+            "capability": "issue.children",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.create",
+            "command": "remi issue create",
+            "capability": "issue.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.delete",
+            "command": "remi issue delete",
+            "capability": "issue.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.dependency.add",
+            "command": "remi issue dependency add",
+            "capability": "issue.dependency.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.dependency.list",
+            "command": "remi issue dependency list",
+            "capability": "issue.dependency.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.dependency.remove",
+            "command": "remi issue dependency remove",
+            "capability": "issue.dependency.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.get",
+            "command": "remi issue get",
+            "capability": "issue.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.grouped",
+            "command": "remi issue grouped",
+            "capability": "issue.grouped",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.label.add",
+            "command": "remi issue label add",
+            "capability": "issue.label.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.label.list",
+            "command": "remi issue label list",
+            "capability": "issue.label.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.label.remove",
+            "command": "remi issue label remove",
+            "capability": "issue.label.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.list",
+            "command": "remi issue list",
+            "capability": "issue.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.delete",
+            "command": "remi issue metadata delete",
+            "capability": "issue.metadata.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.get",
+            "command": "remi issue metadata get",
+            "capability": "issue.metadata.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.list",
+            "command": "remi issue metadata list",
+            "capability": "issue.metadata.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.set",
+            "command": "remi issue metadata set",
+            "capability": "issue.metadata.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.quick-create",
+            "command": "remi issue quick-create",
+            "capability": "issue.quick-create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.reaction.add",
+            "command": "remi issue reaction add",
+            "capability": "issue.reaction.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.reaction.list",
+            "command": "remi issue reaction list",
+            "capability": "issue.reaction.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.reaction.remove",
+            "command": "remi issue reaction remove",
+            "capability": "issue.reaction.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.rerun",
+            "command": "remi issue rerun",
+            "capability": "issue.rerun",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.search",
+            "command": "remi issue search",
+            "capability": "issue.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.squad-evaluated",
+            "command": "remi issue squad-evaluated",
+            "capability": "issue.squad-evaluated",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.status",
+            "command": "remi issue status",
+            "capability": "issue.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.subscriber.add",
+            "command": "remi issue subscriber add",
+            "capability": "issue.subscriber.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.subscriber.list",
+            "command": "remi issue subscriber list",
+            "capability": "issue.subscriber.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.subscriber.remove",
+            "command": "remi issue subscriber remove",
+            "capability": "issue.subscriber.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.task-runs",
+            "command": "remi issue runs",
+            "capability": "issue.task-runs",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.timeline",
+            "command": "remi issue timeline",
+            "capability": "issue.timeline",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.update",
+            "command": "remi issue update",
+            "capability": "issue.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.usage",
+            "command": "remi issue usage",
+            "capability": "issue.usage",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.workspace",
+            "command": "remi issue workspace",
+            "capability": "issue.workspace",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.create",
+            "command": "remi label create",
+            "capability": "label.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.delete",
+            "command": "remi label delete",
+            "capability": "label.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.get",
+            "command": "remi label get",
+            "capability": "label.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.list",
+            "command": "remi label list",
+            "capability": "label.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.update",
+            "command": "remi label update",
+            "capability": "label.update",
             "outputs": [
               "table",
               "json",
@@ -6939,6 +7676,369 @@
             "id": "repo.update",
             "command": "remi repo update",
             "capability": "repo.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.list",
+            "command": "remi session archive list",
+            "capability": "session.archive.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.retry",
+            "command": "remi session archive retry",
+            "capability": "session.archive.retry",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.status",
+            "command": "remi session archive status",
+            "capability": "session.archive.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.verify",
+            "command": "remi session archive verify",
+            "capability": "session.archive.verify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.config.get",
+            "command": "remi session config get",
+            "capability": "session.config.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.config.update",
+            "command": "remi session config update",
+            "capability": "session.config.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.create",
+            "command": "remi session create",
+            "capability": "session.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.event.list",
+            "command": "remi session event list",
+            "capability": "session.event.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.get",
+            "command": "remi session get",
+            "capability": "session.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.list",
+            "command": "remi session list",
+            "capability": "session.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.message.create",
+            "command": "remi session message create",
+            "capability": "session.message.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.participant.add",
+            "command": "remi session participant add",
+            "capability": "session.participant.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.participant.list",
+            "command": "remi session participant list",
+            "capability": "session.participant.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.participant.remove",
+            "command": "remi session participant remove",
+            "capability": "session.participant.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.result.list",
+            "command": "remi session result list",
+            "capability": "session.result.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.result.publish",
+            "command": "remi session result publish",
+            "capability": "session.result.publish",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.task.create",
+            "command": "remi session task create",
+            "capability": "session.task.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.task.list",
+            "command": "remi session task list",
+            "capability": "session.task.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.update",
+            "command": "remi session update",
+            "capability": "session.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.create",
+            "command": "remi share create",
+            "capability": "share.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.delete",
+            "command": "remi share delete",
+            "capability": "share.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.extend",
+            "command": "remi share extend",
+            "capability": "share.extend",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.get",
+            "command": "remi share get",
+            "capability": "share.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.view",
+            "command": "remi share view",
+            "capability": "share.view",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.cancel",
+            "command": "remi task cancel",
+            "capability": "task.cancel",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.create",
+            "command": "remi task create",
+            "capability": "task.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.get",
+            "command": "remi task get",
+            "capability": "task.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.list",
+            "command": "remi task list",
+            "capability": "task.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.message.list",
+            "command": "remi task message list",
+            "capability": "task.message.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.messages",
+            "command": "remi issue run-messages",
+            "capability": "task.messages",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.prompt",
+            "command": "remi task prompt",
+            "capability": "task.prompt",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.request.list",
+            "command": "remi task request list",
+            "capability": "task.request.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.request.respond",
+            "command": "remi task request respond",
+            "capability": "task.request.respond",
             "outputs": [
               "table",
               "json",

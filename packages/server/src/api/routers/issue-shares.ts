@@ -75,8 +75,10 @@ export function registerIssueShareRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/shares/:token", (c) => {
-    if (!authenticatedRequestUserId(c)) return c.json({ error: "login required" }, 401);
-    const share = resolveActiveIssueShareToken(c.req.param("token"), store, shareSecret);
+    const token = c.req.param("token");
+    const signedCliRequest = c.req.header("X-Remi-Share")?.trim() === token;
+    if (!authenticatedRequestUserId(c) && !signedCliRequest) return c.json({ error: "login required" }, 401);
+    const share = resolveActiveIssueShareToken(token, store, shareSecret);
     if (!share) return c.json({ error: "share not found" }, 404);
     const issue = store.getIssueWithTasks(share.issueId);
     if (!issue || issue.workspaceId !== share.workspaceId) {
@@ -88,8 +90,10 @@ export function registerIssueShareRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/shares/:token/attachments/:attachmentId/content", async (c) => {
-    if (!authenticatedRequestUserId(c)) return c.json({ error: "login required" }, 401);
-    const share = resolveActiveIssueShareToken(c.req.param("token"), store, shareSecret);
+    const token = c.req.param("token");
+    const signedCliRequest = c.req.header("X-Remi-Share")?.trim() === token;
+    if (!authenticatedRequestUserId(c) && !signedCliRequest) return c.json({ error: "login required" }, 401);
+    const share = resolveActiveIssueShareToken(token, store, shareSecret);
     if (!share) return c.json({ error: "attachment not found" }, 404);
     const attachment = store.getAttachment(c.req.param("attachmentId"));
     if (!attachment || !attachmentBelongsToIssue(attachment.issueId, attachment.commentId, share.issueId, deps)) {

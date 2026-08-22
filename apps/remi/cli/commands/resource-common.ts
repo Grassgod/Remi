@@ -14,7 +14,8 @@ export const CONNECTION_OPTIONS: readonly CliOptionSpec[] = [
   { name: "json", type: "boolean", description: "Alias for --output json" },
   { name: "workspace", type: "string", valueName: "id", description: "Workspace ID" },
   { name: "server", aliases: ["server-url"], type: "string", valueName: "url", description: "Remi server URL" },
-  { name: "token", type: "string", valueName: "value", description: "Human or task credential" },
+  { name: "token", type: "string", valueName: "value", description: "Human or task credential", conflictsWith: ["share"] },
+  { name: "share", type: "string", valueName: "value", description: "Signed share credential", conflictsWith: ["token"] },
   { name: "timeout", type: "integer", valueName: "ms", description: "Request timeout in milliseconds" },
 ];
 
@@ -50,15 +51,19 @@ export function commandOptions(
 
 export async function clientFor(invocation: CommandInvocation): Promise<CliApiClient> {
   const config = loadMultiremiConfig();
+  const shareCredential = stringOption(invocation, "share");
   const client = new CliApiClient({
     serverUrl: stringOption(invocation, "server")
       ?? process.env.MULTIREMI_SERVER_URL?.trim()
       ?? config.server_url
       ?? "http://127.0.0.1:6120",
-    token: stringOption(invocation, "token")
-      ?? process.env.MULTIREMI_TOKEN?.trim()
-      ?? config.token
-      ?? null,
+    token: shareCredential
+      ? null
+      : stringOption(invocation, "token")
+        ?? process.env.MULTIREMI_TOKEN?.trim()
+        ?? config.token
+        ?? null,
+    shareToken: shareCredential,
     workspaceId: workspaceOption(invocation),
     timeoutMs: integerOption(invocation, "timeout") ?? 30_000,
   });

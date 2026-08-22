@@ -28,12 +28,12 @@ describe("CLI capabilities manifest", () => {
 
   it("keeps staged user routes visible as missing and records compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 89,
+      mapped: 250,
       exempt: 63,
-      missing: 417,
+      missing: 256,
       total: 569,
     });
-    expect(manifest.max_planned_routes).toBe(417);
+    expect(manifest.max_planned_routes).toBe(256);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);
     expect(manifest.routes["GET /api/cli/context"]).toEqual({ command: "context.get" });
     expect(manifest.routes["GET /api/cli/capabilities"]).toEqual({ command: "context.get" });
@@ -58,7 +58,7 @@ describe("CLI capabilities manifest", () => {
     const overBudget = structuredClone(manifest);
     overBudget.max_planned_routes--;
     expect(validateCliCapabilities(golden.routes, overBudget, cliCommandInventory())).toContain(
-      "planned route count 417 exceeds ratchet 416",
+      "planned route count 256 exceeds ratchet 255",
     );
   });
 });
