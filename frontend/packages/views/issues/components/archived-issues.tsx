@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Accordion } from "@base-ui/react/accordion";
 import { useQuery } from "@tanstack/react-query";
 import { Archive, ChevronRight, EyeOff, Loader2, RotateCcw } from "lucide-react";
@@ -166,9 +166,15 @@ export function ArchivedBoardColumn({
   const { t } = useT("issues");
   const rows = useArchivedIssueRows(true, sort);
   const hideLabel = t(($) => $.archive.hide_column);
+  const columnRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    columnRef.current?.scrollIntoView({ block: "nearest", inline: "end" });
+  }, []);
 
   return (
     <section
+      ref={columnRef}
       style={{ width: BOARD_COL_WIDTH }}
       className="flex shrink-0 flex-col rounded-lg bg-muted/40 p-2"
       aria-label={t(($) => $.archive.label)}
