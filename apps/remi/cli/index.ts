@@ -7,8 +7,10 @@
 
 import { VERSION } from "@shared/version.js";
 import { CommandRegistry, type CommandInventoryEntry } from "./core/command-registry.js";
+import { contextCommandSpec } from "./commands/context.js";
 
 const commandRegistry = new CommandRegistry();
+commandRegistry.register(contextCommandSpec());
 
 // Lazy-load commands to avoid importing heavy modules when not needed
 function register(name: string, description: string, loader: () => Promise<{ run: (args: string[]) => Promise<void> }>, hidden?: boolean): void {

@@ -1,14 +1,14 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 567,
+    "routeCount": 569,
     "routeCountByPrefix": {
       "native": 191,
-      "compat": 363,
+      "compat": 365,
       "root": 13
     },
-    "getRoutes": 245,
-    "getRoutesWithBody": 242,
+    "getRoutes": 247,
+    "getRoutesWithBody": 244,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
@@ -146,6 +146,8 @@
     "GET /api/chat/sessions/:sessionId/messages",
     "GET /api/chat/sessions/:sessionId/messages/page",
     "GET /api/chat/sessions/:sessionId/pending-task",
+    "GET /api/cli/capabilities",
+    "GET /api/cli/context",
     "GET /api/cloud-billing/balance",
     "GET /api/cloud-billing/batches",
     "GET /api/cloud-billing/checkout-sessions/:sessionId",
@@ -709,6 +711,8 @@
     "GET /api/chat/sessions/:sessionId/messages",
     "GET /api/chat/sessions/:sessionId/messages/page",
     "GET /api/chat/sessions/:sessionId/pending-task",
+    "GET /api/cli/capabilities",
+    "GET /api/cli/context",
     "GET /api/cloud-billing/balance",
     "GET /api/cloud-billing/batches",
     "GET /api/cloud-billing/checkout-sessions/:sessionId",
@@ -6401,6 +6405,119 @@
         "task_id": "tsk_qxjbfrxonmls",
         "status": "queued",
         "created_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/cli/capabilities",
+      "route": "GET /api/cli/capabilities",
+      "path": "/api/cli/capabilities",
+      "status": 200,
+      "body": {
+        "protocol_version": 1,
+        "manifest_version": "1",
+        "server_version": "<version>",
+        "identity": "human",
+        "features": {
+          "async_operations": true,
+          "capability_negotiation": true,
+          "jsonl_output": true,
+          "local_cwd_merge": true,
+          "resource_resolution": [
+            "full_id",
+            "unique_short_id",
+            "unique_name"
+          ]
+        },
+        "commands": [
+          {
+            "id": "context.get",
+            "command": "remi context",
+            "capability": "context.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/cli/context",
+      "route": "GET /api/cli/context",
+      "path": "/api/cli/context",
+      "status": 200,
+      "body": {
+        "protocol_version": 1,
+        "identity": {
+          "type": "human",
+          "member": {
+            "id": "mem_local_local",
+            "name": "Local User",
+            "role": "owner"
+          }
+        },
+        "workspace": {
+          "id": "local",
+          "name": "Local Workspace",
+          "description": null
+        },
+        "current": {
+          "agent": null,
+          "task": null,
+          "chat": null,
+          "issue": null,
+          "session": null,
+          "project": null,
+          "runtime": null,
+          "runtimes": []
+        },
+        "catalog": {
+          "projects": [
+            {
+              "id": "prj_snapshot",
+              "name": "Snapshot Project",
+              "description": "Project used by the snapshot",
+              "status": "in_progress",
+              "repository_ids": [
+                "repo_snapshot"
+              ]
+            }
+          ],
+          "repositories": [
+            {
+              "id": "repo_snapshot",
+              "name": "snapshot",
+              "url": "https://example.invalid/snapshot.git",
+              "description": null,
+              "default_branch": null
+            },
+            {
+              "id": "repo_snapshot_compat",
+              "name": "compat",
+              "url": "https://example.invalid/compat.git",
+              "description": null,
+              "default_branch": null
+            },
+            {
+              "id": "repo_snapshot_native",
+              "name": "native",
+              "url": "https://example.invalid/native.git",
+              "description": null,
+              "default_branch": null
+            }
+          ],
+          "next_cursor": null
+        },
+        "allowed_operations": [
+          "context.read",
+          "workspace.manage",
+          "project.manage",
+          "repo.manage",
+          "collaboration.manage",
+          "runtime.manage"
+        ]
       }
     },
     {

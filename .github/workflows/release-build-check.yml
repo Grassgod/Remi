@@ -7,6 +7,7 @@ on:
       - ".github/workflows/platform-release.yml"
       - ".github/workflows/release-build-check.yml"
       - "apps/**"
+      - "cli-capabilities.json"
       - "bin/**"
       - "bun.lock"
       - "bunfig.toml"
@@ -23,6 +24,7 @@ on:
       - ".github/workflows/platform-release.yml"
       - ".github/workflows/release-build-check.yml"
       - "apps/**"
+      - "cli-capabilities.json"
       - "bin/**"
       - "bun.lock"
       - "bunfig.toml"
@@ -70,6 +72,11 @@ jobs:
 
       - name: Build Multiremi daemon CLI release archives
         run: MULTIREMI_VERSION=v0.0.0-ci bun run build:multiremi
+
+      - name: Verify CLI capability coverage and contracts
+        run: |
+          bun run cli:capabilities:check
+          bun test tests/unit/multiremi/cli-capabilities-manifest.test.ts tests/unit/multiremi/multiremi-api-cli.test.ts tests/unit/remi/cli-context.test.ts
 
       # This workflow path-filters on `frontend/**` but used to build only the
       # server/CLI, so a broken web app went green. These two steps are the

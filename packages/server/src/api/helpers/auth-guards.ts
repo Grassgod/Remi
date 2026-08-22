@@ -44,6 +44,7 @@ export function isDaemonTokenAllowedRequest(request: Request): boolean {
   if (path === "/health" || path === "/healthz" || path === "/readyz" || path === "/api/multiremi/health") {
     return true;
   }
+  if ((path === "/api/cli/context" || path === "/api/cli/capabilities") && method === "GET") return true;
   if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;

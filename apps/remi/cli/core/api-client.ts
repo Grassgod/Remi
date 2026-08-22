@@ -42,6 +42,7 @@ export interface CliServerCapabilities {
 export interface CliApiClientOptions {
   serverUrl: string;
   token?: string | null;
+  shareToken?: string | null;
   workspaceId?: string | null;
   timeoutMs?: number;
   maxRetries?: number;
@@ -56,6 +57,7 @@ const RETRYABLE_STATUSES = new Set([408, 429, 502, 503, 504]);
 export class CliApiClient {
   private readonly serverUrl: string;
   private readonly token: string | null;
+  private readonly shareToken: string | null;
   private readonly workspaceId: string | null;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
@@ -68,6 +70,8 @@ export class CliApiClient {
     if (!/^https?:\/\//i.test(serverUrl)) throw new CliError("usage", "CLI server URL must use http or https");
     this.serverUrl = serverUrl;
     this.token = options.token?.trim() || null;
+    this.shareToken = options.shareToken?.trim() || null;
+    if (this.token && this.shareToken) throw new CliError("usage", "CLI access and share credentials cannot be combined");
     this.workspaceId = options.workspaceId?.trim() || null;
     this.timeoutMs = positiveInteger(options.timeoutMs ?? 30_000, "timeoutMs");
     this.maxRetries = nonNegativeInteger(options.maxRetries ?? 2, "maxRetries");
@@ -146,6 +150,7 @@ export class CliApiClient {
     const headers = new Headers(request.headers);
     headers.set("Accept", "application/json");
     if (this.token) headers.set("Authorization", `Bearer ${this.token}`);
+    if (this.shareToken) headers.set("X-Remi-Share", this.shareToken);
     if (this.workspaceId) headers.set("X-Workspace-ID", this.workspaceId);
     if (request.idempotencyKey) headers.set("Idempotency-Key", request.idempotencyKey);
     if (request.body !== undefined) headers.set("Content-Type", "application/json");

@@ -55,6 +55,7 @@ describe("remi CLI dispatcher", () => {
   it("registers every legacy top-level entry, including hidden multiremi compatibility", () => {
     const inventory = cliCommandInventory();
     expect(inventory.map((entry) => entry.path.join(" "))).toEqual([
+      "context",
       "start",
       "stop",
       "restart",

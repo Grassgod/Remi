@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remi.local/schemas/cli-capabilities.schema.json",
+  "title": "Remi CLI capabilities manifest",
+  "type": "object",
+  "required": ["schema_version", "generated_from", "max_planned_routes", "domains", "commands", "aliases", "routes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_from": { "const": "scripts/api-routes.golden.json" },
+    "max_planned_routes": { "type": "integer", "minimum": 0 },
+    "domains": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "commands": { "type": "object", "additionalProperties": { "$ref": "#/$defs/command" } },
+    "aliases": { "type": "object", "additionalProperties": { "$ref": "#/$defs/alias" } },
+    "routes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/route" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "command": {
+      "type": "object",
+      "required": ["command", "aliases", "auth", "capability", "mutation", "output", "hidden", "migration_status"],
+      "properties": {
+        "command": { "type": "string", "pattern": "^remi " },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "auth": { "type": "array", "items": { "enum": ["human", "task", "daemon", "share"] } },
+        "capability": { "type": ["string", "null"] },
+        "mutation": { "enum": ["read", "write", "destructive"] },
+        "output": { "type": "array", "items": { "enum": ["table", "json", "jsonl"] } },
+        "hidden": { "type": "boolean" },
+        "internal": { "type": "boolean" },
+        "migration_status": { "enum": ["native", "legacy_passthrough"] }
+      },
+      "additionalProperties": false
+    },
+    "alias": {
+      "type": "object",
+      "required": ["command", "deprecated_since", "replacement", "hidden"],
+      "properties": {
+        "command": { "type": "string" },
+        "deprecated_since": { "type": "string" },
+        "replacement": { "type": "string" },
+        "hidden": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "route": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["command"],
+          "properties": { "command": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["planned_command", "domain"],
+          "properties": { "planned_command": { "type": "string" }, "domain": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["cli_exempt", "category", "reason"],
+          "properties": {
+            "cli_exempt": { "const": true },
+            "category": {
+              "enum": [
+                "daemon_internal_protocol",
+                "oauth_or_webhook_callback",
+                "websocket_transport",
+                "pure_ui",
+                "stripe_internal_callback",
+                "platform_updater_internal",
+                "public_bootstrap_asset"
+              ]
+            },
+            "reason": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

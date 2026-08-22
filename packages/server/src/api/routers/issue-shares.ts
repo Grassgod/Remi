@@ -1,4 +1,3 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context, Hono } from "hono";
 import type {
   MultiremiIssue,
@@ -19,6 +18,10 @@ import {
   sessionResultCompatibilityResponse,
 } from "../wire/index.js";
 import { taskCompatibilityResponse } from "../wire/tasks.js";
+import {
+  resolveActiveIssueShareToken,
+  signIssueShareId,
+} from "../helpers/issue-share-tokens.js";
 import type { RouterDeps } from "./deps.js";
 
 const SHARE_DURATION_DAYS = 60;
@@ -73,7 +76,7 @@ export function registerIssueShareRoutes(app: Hono, deps: RouterDeps): void {
 
   app.get("/api/shares/:token", (c) => {
     if (!authenticatedRequestUserId(c)) return c.json({ error: "login required" }, 401);
-    const share = resolveActiveShare(c.req.param("token"), deps);
+    const share = resolveActiveIssueShareToken(c.req.param("token"), store, shareSecret);
     if (!share) return c.json({ error: "share not found" }, 404);
     const issue = store.getIssueWithTasks(share.issueId);
     if (!issue || issue.workspaceId !== share.workspaceId) {
@@ -86,7 +89,7 @@ export function registerIssueShareRoutes(app: Hono, deps: RouterDeps): void {
 
   app.get("/api/shares/:token/attachments/:attachmentId/content", async (c) => {
     if (!authenticatedRequestUserId(c)) return c.json({ error: "login required" }, 401);
-    const share = resolveActiveShare(c.req.param("token"), deps);
+    const share = resolveActiveIssueShareToken(c.req.param("token"), store, shareSecret);
     if (!share) return c.json({ error: "attachment not found" }, 404);
     const attachment = store.getAttachment(c.req.param("attachmentId"));
     if (!attachment || !attachmentBelongsToIssue(attachment.issueId, attachment.commentId, share.issueId, deps)) {
@@ -114,7 +117,7 @@ function denyIssueShareManagement(
 
 function managedShareResponse(share: MultiremiIssueShare, secret: string) {
   return {
-    token: signShareId(share.id, secret),
+    token: signIssueShareId(share.id, secret),
     expires_at: share.expiresAt,
     view_count: share.viewCount,
     last_viewed_at: share.lastViewedAt,
@@ -128,24 +131,6 @@ function publicShareResponse(share: MultiremiIssueShare) {
     view_count: share.viewCount,
     last_viewed_at: share.lastViewedAt,
   };
-}
-
-function signShareId(id: string, secret: string): string {
-  return `${id}.${createHmac("sha256", secret).update(id).digest("base64url")}`;
-}
-
-function resolveActiveShare(token: string, deps: RouterDeps): MultiremiIssueShare | null {
-  const separator = token.indexOf(".");
-  if (separator <= 0 || token.indexOf(".", separator + 1) !== -1) return null;
-  const id = token.slice(0, separator);
-  const suppliedSignature = token.slice(separator + 1);
-  const expectedSignature = createHmac("sha256", deps.shareSecret).update(id).digest("base64url");
-  const supplied = Buffer.from(suppliedSignature);
-  const expected = Buffer.from(expectedSignature);
-  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
-  const share = deps.store.getIssueShare(id);
-  if (!share || share.revokedAt || Date.parse(share.expiresAt) <= Date.now()) return null;
-  return share;
 }
 
 function buildSharedIssueBundle(

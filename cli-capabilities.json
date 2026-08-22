@@ -1,0 +1,2617 @@
+{
+  "schema_version": 1,
+  "generated_from": "scripts/api-routes.golden.json",
+  "max_planned_routes": 505,
+  "domains": [
+    "context",
+    "workspace",
+    "member",
+    "invite",
+    "token",
+    "project",
+    "repo",
+    "memory",
+    "wiki",
+    "issue",
+    "comment",
+    "session",
+    "share",
+    "label",
+    "attachment",
+    "chat",
+    "task",
+    "agent",
+    "squad",
+    "skill",
+    "plugin",
+    "runtime",
+    "daemon",
+    "autopilot",
+    "scm",
+    "inbox",
+    "notification",
+    "pin",
+    "dashboard",
+    "platform",
+    "billing",
+    "lark"
+  ],
+  "commands": {
+    "context.get": {
+      "command": "remi context",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task",
+        "daemon",
+        "share"
+      ],
+      "capability": "context.read",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "legacy.start": {
+      "command": "remi start",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.stop": {
+      "command": "remi stop",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.restart": {
+      "command": "remi restart",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.status": {
+      "command": "remi status",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.logs": {
+      "command": "remi logs",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.service": {
+      "command": "remi service",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.setup": {
+      "command": "remi setup",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.config": {
+      "command": "remi config",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.repo": {
+      "command": "remi repo",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.issue": {
+      "command": "remi issue",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.attachment": {
+      "command": "remi attachment",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.memory": {
+      "command": "remi memory",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.wiki": {
+      "command": "remi wiki",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.project": {
+      "command": "remi project",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.seed": {
+      "command": "remi seed",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.doctor": {
+      "command": "remi doctor",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.login": {
+      "command": "remi login",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.update": {
+      "command": "remi update",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.serve": {
+      "command": "remi serve",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.git-credential": {
+      "command": "remi git-credential",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "legacy_passthrough"
+    },
+    "legacy.multiremi": {
+      "command": "remi multiremi",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "legacy_passthrough",
+      "internal": true
+    }
+  },
+  "aliases": {
+    "remi multiremi": {
+      "command": "legacy.multiremi",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi <command>",
+      "hidden": true
+    }
+  },
+  "routes": {
+    "DELETE /api/attachments/:id": {
+      "planned_command": "attachment.delete",
+      "domain": "attachment"
+    },
+    "DELETE /api/autopilots/:id": {
+      "planned_command": "autopilot.delete",
+      "domain": "autopilot"
+    },
+    "DELETE /api/autopilots/:id/triggers/:triggerId": {
+      "planned_command": "autopilot.delete",
+      "domain": "autopilot"
+    },
+    "DELETE /api/chat/sessions/:sessionId": {
+      "planned_command": "chat.delete",
+      "domain": "chat"
+    },
+    "DELETE /api/cloud-runtime/nodes": {
+      "planned_command": "runtime.delete",
+      "domain": "runtime"
+    },
+    "DELETE /api/comments/:id": {
+      "planned_command": "comment.delete",
+      "domain": "comment"
+    },
+    "DELETE /api/comments/:id/reactions": {
+      "planned_command": "comment.delete",
+      "domain": "comment"
+    },
+    "DELETE /api/comments/:id/resolve": {
+      "planned_command": "comment.delete",
+      "domain": "comment"
+    },
+    "DELETE /api/issues/:id": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/issues/:id/dependencies/:dependencyId": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/issues/:id/labels/:labelId": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/issues/:id/metadata/:key": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/issues/:id/reactions": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/issues/:id/share": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/issues/:issueId/change-requests/:changeRequestId": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/labels/:id": {
+      "planned_command": "label.delete",
+      "domain": "label"
+    },
+    "DELETE /api/multiremi/agent-plugins/:id": {
+      "planned_command": "plugin.delete",
+      "domain": "plugin"
+    },
+    "DELETE /api/multiremi/agents/:id": {
+      "planned_command": "agent.delete",
+      "domain": "agent"
+    },
+    "DELETE /api/multiremi/agents/:id/plugins/:bindingId": {
+      "planned_command": "agent.delete",
+      "domain": "agent"
+    },
+    "DELETE /api/multiremi/autopilots/:id": {
+      "planned_command": "autopilot.delete",
+      "domain": "autopilot"
+    },
+    "DELETE /api/multiremi/comments/:id": {
+      "planned_command": "comment.delete",
+      "domain": "comment"
+    },
+    "DELETE /api/multiremi/comments/:id/reactions": {
+      "planned_command": "comment.delete",
+      "domain": "comment"
+    },
+    "DELETE /api/multiremi/comments/:id/resolve": {
+      "planned_command": "comment.delete",
+      "domain": "comment"
+    },
+    "DELETE /api/multiremi/issues/:id": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/multiremi/issues/:id/dependencies/:dependencyId": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/multiremi/issues/:id/labels/:labelId": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/multiremi/issues/:id/metadata/:key": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/multiremi/issues/:id/reactions": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/multiremi/issues/:id/subscribers/:memberId": {
+      "planned_command": "issue.delete",
+      "domain": "issue"
+    },
+    "DELETE /api/multiremi/labels/:id": {
+      "planned_command": "label.delete",
+      "domain": "label"
+    },
+    "DELETE /api/multiremi/members/:id": {
+      "planned_command": "member.delete",
+      "domain": "member"
+    },
+    "DELETE /api/multiremi/pins/:itemType/:itemId": {
+      "planned_command": "pin.delete",
+      "domain": "pin"
+    },
+    "DELETE /api/multiremi/projects/:id": {
+      "planned_command": "project.delete",
+      "domain": "project"
+    },
+    "DELETE /api/multiremi/projects/:id/resources/:resourceId": {
+      "planned_command": "project.delete",
+      "domain": "project"
+    },
+    "DELETE /api/multiremi/skills/:id": {
+      "planned_command": "skill.delete",
+      "domain": "skill"
+    },
+    "DELETE /api/multiremi/squads/:id": {
+      "planned_command": "squad.delete",
+      "domain": "squad"
+    },
+    "DELETE /api/multiremi/squads/:id/members": {
+      "planned_command": "squad.delete",
+      "domain": "squad"
+    },
+    "DELETE /api/multiremi/tokens/:id": {
+      "planned_command": "token.delete",
+      "domain": "token"
+    },
+    "DELETE /api/pins/:itemType/:itemId": {
+      "planned_command": "pin.delete",
+      "domain": "pin"
+    },
+    "DELETE /api/projects/:id": {
+      "planned_command": "project.delete",
+      "domain": "project"
+    },
+    "DELETE /api/projects/:id/docs/:ref": {
+      "planned_command": "project.delete",
+      "domain": "project"
+    },
+    "DELETE /api/projects/:id/resources/:resourceId": {
+      "planned_command": "project.delete",
+      "domain": "project"
+    },
+    "DELETE /api/runtimes/:id": {
+      "planned_command": "runtime.delete",
+      "domain": "runtime"
+    },
+    "DELETE /api/skills/:id": {
+      "planned_command": "skill.delete",
+      "domain": "skill"
+    },
+    "DELETE /api/skills/:id/files/:fileId": {
+      "planned_command": "skill.delete",
+      "domain": "skill"
+    },
+    "DELETE /api/squads/:id": {
+      "planned_command": "squad.delete",
+      "domain": "squad"
+    },
+    "DELETE /api/squads/:id/members": {
+      "planned_command": "squad.delete",
+      "domain": "squad"
+    },
+    "DELETE /api/tokens/:id": {
+      "planned_command": "token.delete",
+      "domain": "token"
+    },
+    "DELETE /api/workspaces/:id": {
+      "planned_command": "workspace.delete",
+      "domain": "workspace"
+    },
+    "DELETE /api/workspaces/:id/invitations/:invitationId": {
+      "planned_command": "workspace.delete",
+      "domain": "workspace"
+    },
+    "DELETE /api/workspaces/:id/lark/installations/:installationId": {
+      "planned_command": "workspace.delete",
+      "domain": "workspace"
+    },
+    "DELETE /api/workspaces/:id/members/:memberId": {
+      "planned_command": "workspace.delete",
+      "domain": "workspace"
+    },
+    "DELETE /api/workspaces/:id/repos/:repositoryId": {
+      "planned_command": "workspace.delete",
+      "domain": "workspace"
+    },
+    "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId": {
+      "planned_command": "workspace.delete",
+      "domain": "workspace"
+    },
+    "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId": {
+      "planned_command": "workspace.delete",
+      "domain": "workspace"
+    },
+    "GET /": {
+      "cli_exempt": true,
+      "category": "public_bootstrap_asset",
+      "reason": "Public service bootstrap asset has no user-side CLI operation."
+    },
+    "GET /api/agent-activity-30d": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/agent-run-counts": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/agent-task-snapshot": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/agent-templates": {
+      "planned_command": "agent.list",
+      "domain": "agent"
+    },
+    "GET /api/agent-templates/:slug": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/agents": {
+      "planned_command": "agent.list",
+      "domain": "agent"
+    },
+    "GET /api/agents/:id": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/agents/:id/env": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/agents/:id/skills": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/agents/:id/tasks": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/assignee-frequency": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/attachments/:id": {
+      "planned_command": "attachment.get",
+      "domain": "attachment"
+    },
+    "GET /api/attachments/:id/content": {
+      "planned_command": "attachment.get",
+      "domain": "attachment"
+    },
+    "GET /api/attachments/:id/download": {
+      "planned_command": "attachment.get",
+      "domain": "attachment"
+    },
+    "GET /api/autopilots": {
+      "planned_command": "autopilot.list",
+      "domain": "autopilot"
+    },
+    "GET /api/autopilots/:id": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/autopilots/:id/deliveries": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/autopilots/:id/deliveries/:deliveryId": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/autopilots/:id/runs": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/autopilots/:id/runs/:runId": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/chat/pending-tasks": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/chat/sessions": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/chat/sessions/:sessionId": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/chat/sessions/:sessionId/messages": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/chat/sessions/:sessionId/messages/page": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/chat/sessions/:sessionId/pending-task": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/cli/capabilities": {
+      "command": "context.get"
+    },
+    "GET /api/cli/context": {
+      "command": "context.get"
+    },
+    "GET /api/cloud-billing/balance": {
+      "planned_command": "billing.get",
+      "domain": "billing"
+    },
+    "GET /api/cloud-billing/batches": {
+      "planned_command": "billing.get",
+      "domain": "billing"
+    },
+    "GET /api/cloud-billing/checkout-sessions/:sessionId": {
+      "planned_command": "billing.get",
+      "domain": "billing"
+    },
+    "GET /api/cloud-billing/price-tiers": {
+      "planned_command": "billing.get",
+      "domain": "billing"
+    },
+    "GET /api/cloud-billing/topups": {
+      "planned_command": "billing.get",
+      "domain": "billing"
+    },
+    "GET /api/cloud-billing/transactions": {
+      "planned_command": "billing.get",
+      "domain": "billing"
+    },
+    "GET /api/cloud-runtime": {
+      "planned_command": "runtime.list",
+      "domain": "runtime"
+    },
+    "GET /api/cloud-runtime/healthz": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/cloud-runtime/nodes": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/cloud-runtime/readyz": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/config": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Browser bootstrap or presentation-only action has no meaningful CLI workflow."
+    },
+    "GET /api/daemon/agent-plugin-artifacts/:digest": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/autopilot-runs/:runId/gc-check": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/chat-sessions/:sessionId/gc-check": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/issues/:issueId/gc-check": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/runtimes/:runtimeId/tasks/pending": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/ssh-mesh/config": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/tasks/:taskId/gc-check": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/tasks/:taskId/human-requests/:requestId": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/tasks/:taskId/messages": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/tasks/:taskId/status": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/workspaces/:workspaceId/repos": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/ws": {
+      "cli_exempt": true,
+      "category": "websocket_transport",
+      "reason": "Long-lived WebSocket transport is outside the CLI command surface."
+    },
+    "GET /api/dashboard/agent-runtime": {
+      "planned_command": "dashboard.get",
+      "domain": "dashboard"
+    },
+    "GET /api/dashboard/runtime/daily": {
+      "planned_command": "dashboard.get",
+      "domain": "dashboard"
+    },
+    "GET /api/dashboard/usage/by-agent": {
+      "planned_command": "dashboard.get",
+      "domain": "dashboard"
+    },
+    "GET /api/dashboard/usage/daily": {
+      "planned_command": "dashboard.get",
+      "domain": "dashboard"
+    },
+    "GET /api/inbox": {
+      "planned_command": "inbox.list",
+      "domain": "inbox"
+    },
+    "GET /api/inbox/unread-count": {
+      "planned_command": "inbox.get",
+      "domain": "inbox"
+    },
+    "GET /api/invitations": {
+      "planned_command": "invite.list",
+      "domain": "invite"
+    },
+    "GET /api/invitations/:id": {
+      "planned_command": "invite.get",
+      "domain": "invite"
+    },
+    "GET /api/issues": {
+      "planned_command": "issue.list",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/active-task": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/attachments": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/change-requests": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/children": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/comments": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/dependencies": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/generated-issues": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/labels": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/metadata": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/reactions": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/session-results": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/sessions": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/sessions/:sessionId": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/sessions/:sessionId/events": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/sessions/:sessionId/participants": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/sessions/:sessionId/tasks": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/share": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/subscribers": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/task-runs": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/timeline": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/usage": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:id/workspace": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/:issueId/session-archives": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/child-progress": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/children": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/grouped": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/issues/search": {
+      "planned_command": "issue.search",
+      "domain": "issue"
+    },
+    "GET /api/labels": {
+      "planned_command": "label.list",
+      "domain": "label"
+    },
+    "GET /api/labels/:id": {
+      "planned_command": "label.get",
+      "domain": "label"
+    },
+    "GET /api/me": {
+      "planned_command": "member.list",
+      "domain": "member"
+    },
+    "GET /api/models": {
+      "planned_command": "runtime.list",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/agent-activity-30d": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/multiremi/agent-plugins": {
+      "planned_command": "plugin.list",
+      "domain": "plugin"
+    },
+    "GET /api/multiremi/agent-plugins/:id": {
+      "planned_command": "plugin.get",
+      "domain": "plugin"
+    },
+    "GET /api/multiremi/agent-plugins/:id/runtimes": {
+      "planned_command": "plugin.get",
+      "domain": "plugin"
+    },
+    "GET /api/multiremi/agent-plugins/:id/versions": {
+      "planned_command": "plugin.get",
+      "domain": "plugin"
+    },
+    "GET /api/multiremi/agent-run-counts": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/multiremi/agent-task-snapshot": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/multiremi/agent-templates": {
+      "planned_command": "agent.list",
+      "domain": "agent"
+    },
+    "GET /api/multiremi/agent-templates/:slug": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/multiremi/agents": {
+      "planned_command": "agent.list",
+      "domain": "agent"
+    },
+    "GET /api/multiremi/agents/:id": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/multiremi/agents/:id/plugins": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/multiremi/agents/:id/skills": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/multiremi/agents/:id/tasks": {
+      "planned_command": "agent.get",
+      "domain": "agent"
+    },
+    "GET /api/multiremi/assignee-frequency": {
+      "planned_command": "dashboard.list",
+      "domain": "dashboard"
+    },
+    "GET /api/multiremi/attachments/:id": {
+      "planned_command": "attachment.get",
+      "domain": "attachment"
+    },
+    "GET /api/multiremi/autopilots": {
+      "planned_command": "autopilot.list",
+      "domain": "autopilot"
+    },
+    "GET /api/multiremi/autopilots/:id": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/multiremi/autopilots/:id/deliveries": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/multiremi/autopilots/:id/deliveries/:deliveryId": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/multiremi/autopilots/:id/runs": {
+      "planned_command": "autopilot.get",
+      "domain": "autopilot"
+    },
+    "GET /api/multiremi/chats": {
+      "planned_command": "chat.list",
+      "domain": "chat"
+    },
+    "GET /api/multiremi/chats/:id": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/multiremi/chats/:id/messages": {
+      "planned_command": "chat.get",
+      "domain": "chat"
+    },
+    "GET /api/multiremi/comments/:id/attachments": {
+      "planned_command": "comment.get",
+      "domain": "comment"
+    },
+    "GET /api/multiremi/comments/:id/reactions": {
+      "planned_command": "comment.get",
+      "domain": "comment"
+    },
+    "GET /api/multiremi/daemons": {
+      "planned_command": "daemon.list",
+      "domain": "daemon"
+    },
+    "GET /api/multiremi/daemons/:daemonId/retirement-plan": {
+      "planned_command": "daemon.get",
+      "domain": "daemon"
+    },
+    "GET /api/multiremi/feedback": {
+      "planned_command": "platform.list",
+      "domain": "platform"
+    },
+    "GET /api/multiremi/health": {
+      "planned_command": "platform.status",
+      "domain": "platform"
+    },
+    "GET /api/multiremi/inbox": {
+      "planned_command": "inbox.list",
+      "domain": "inbox"
+    },
+    "GET /api/multiremi/install/daemon": {
+      "planned_command": "lark.get",
+      "domain": "lark"
+    },
+    "GET /api/multiremi/issues": {
+      "planned_command": "issue.list",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/attachments": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/children": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/comments": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/dependencies": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/labels": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/metadata": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/reactions": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/subscribers": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/:id/timeline": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/child-progress": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/children": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/grouped": {
+      "planned_command": "issue.get",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/issues/search": {
+      "planned_command": "issue.search",
+      "domain": "issue"
+    },
+    "GET /api/multiremi/labels": {
+      "planned_command": "label.list",
+      "domain": "label"
+    },
+    "GET /api/multiremi/labels/:id": {
+      "planned_command": "label.get",
+      "domain": "label"
+    },
+    "GET /api/multiremi/members": {
+      "planned_command": "member.list",
+      "domain": "member"
+    },
+    "GET /api/multiremi/members/:id": {
+      "planned_command": "member.get",
+      "domain": "member"
+    },
+    "GET /api/multiremi/models": {
+      "planned_command": "runtime.list",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/notification-preferences": {
+      "planned_command": "notification.list",
+      "domain": "notification"
+    },
+    "GET /api/multiremi/pins": {
+      "planned_command": "pin.list",
+      "domain": "pin"
+    },
+    "GET /api/multiremi/platform/operations": {
+      "planned_command": "platform.get",
+      "domain": "platform"
+    },
+    "GET /api/multiremi/platform/status": {
+      "planned_command": "platform.get",
+      "domain": "platform"
+    },
+    "GET /api/multiremi/projects": {
+      "planned_command": "project.list",
+      "domain": "project"
+    },
+    "GET /api/multiremi/projects/:id": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/multiremi/projects/:id/resources": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/multiremi/projects/search": {
+      "planned_command": "project.search",
+      "domain": "project"
+    },
+    "GET /api/multiremi/runtimes": {
+      "planned_command": "runtime.list",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/directory-scans/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/local-skills/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/local-skills/import/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/models": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/models/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/task-activity": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/update/:updateId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/usage": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/usage/by-agent": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:id/usage/by-hour": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/runtimes/:runtimeId/agent-plugins": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/multiremi/scheduler": {
+      "planned_command": "autopilot.list",
+      "domain": "autopilot"
+    },
+    "GET /api/multiremi/skills": {
+      "planned_command": "skill.list",
+      "domain": "skill"
+    },
+    "GET /api/multiremi/skills/:id": {
+      "planned_command": "skill.get",
+      "domain": "skill"
+    },
+    "GET /api/multiremi/skills/search": {
+      "planned_command": "skill.search",
+      "domain": "skill"
+    },
+    "GET /api/multiremi/squads": {
+      "planned_command": "squad.list",
+      "domain": "squad"
+    },
+    "GET /api/multiremi/squads/:id": {
+      "planned_command": "squad.get",
+      "domain": "squad"
+    },
+    "GET /api/multiremi/squads/:id/members": {
+      "planned_command": "squad.get",
+      "domain": "squad"
+    },
+    "GET /api/multiremi/tasks": {
+      "planned_command": "task.list",
+      "domain": "task"
+    },
+    "GET /api/multiremi/tasks/:id": {
+      "planned_command": "task.get",
+      "domain": "task"
+    },
+    "GET /api/multiremi/tasks/:id/human-requests": {
+      "planned_command": "task.get",
+      "domain": "task"
+    },
+    "GET /api/multiremi/tasks/:id/messages": {
+      "planned_command": "task.get",
+      "domain": "task"
+    },
+    "GET /api/multiremi/tokens": {
+      "planned_command": "token.list",
+      "domain": "token"
+    },
+    "GET /api/notification-preferences": {
+      "planned_command": "notification.list",
+      "domain": "notification"
+    },
+    "GET /api/pins": {
+      "planned_command": "pin.list",
+      "domain": "pin"
+    },
+    "GET /api/project-docs": {
+      "planned_command": "wiki.list",
+      "domain": "wiki"
+    },
+    "GET /api/project-knowledge/migration": {
+      "planned_command": "memory.get",
+      "domain": "memory"
+    },
+    "GET /api/projects": {
+      "planned_command": "project.list",
+      "domain": "project"
+    },
+    "GET /api/projects/:id": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/projects/:id/docs": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/projects/:id/docs/:ref": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/projects/:id/docs/:ref/backlinks": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/projects/:id/docs/:ref/revisions": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/projects/:id/knowledge/recall": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/projects/:id/resources": {
+      "planned_command": "project.get",
+      "domain": "project"
+    },
+    "GET /api/projects/search": {
+      "planned_command": "project.search",
+      "domain": "project"
+    },
+    "GET /api/realtime/ws": {
+      "cli_exempt": true,
+      "category": "websocket_transport",
+      "reason": "Long-lived WebSocket transport is outside the CLI command surface."
+    },
+    "GET /api/remi/releases/download/:tag/:filename": {
+      "planned_command": "platform.get",
+      "domain": "platform"
+    },
+    "GET /api/remi/releases/latest/:filename": {
+      "planned_command": "platform.get",
+      "domain": "platform"
+    },
+    "GET /api/remi/releases/latest/version": {
+      "planned_command": "platform.get",
+      "domain": "platform"
+    },
+    "GET /api/runtimes": {
+      "planned_command": "runtime.list",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/activity": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/directory-scans/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/local-skills/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/local-skills/import/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/models": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/models/:requestId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/task-activity": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/update/:updateId": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/usage": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/usage/by-agent": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/runtimes/:id/usage/by-hour": {
+      "planned_command": "runtime.get",
+      "domain": "runtime"
+    },
+    "GET /api/scm/capabilities": {
+      "planned_command": "scm.get",
+      "domain": "scm"
+    },
+    "GET /api/shares/:token": {
+      "planned_command": "share.get",
+      "domain": "share"
+    },
+    "GET /api/shares/:token/attachments/:attachmentId/content": {
+      "planned_command": "share.get",
+      "domain": "share"
+    },
+    "GET /api/skills": {
+      "planned_command": "skill.list",
+      "domain": "skill"
+    },
+    "GET /api/skills/:id": {
+      "planned_command": "skill.get",
+      "domain": "skill"
+    },
+    "GET /api/skills/:id/files": {
+      "planned_command": "skill.get",
+      "domain": "skill"
+    },
+    "GET /api/skills/search": {
+      "planned_command": "skill.search",
+      "domain": "skill"
+    },
+    "GET /api/squads": {
+      "planned_command": "squad.list",
+      "domain": "squad"
+    },
+    "GET /api/squads/:id": {
+      "planned_command": "squad.get",
+      "domain": "squad"
+    },
+    "GET /api/squads/:id/members": {
+      "planned_command": "squad.get",
+      "domain": "squad"
+    },
+    "GET /api/squads/:id/members/status": {
+      "planned_command": "squad.get",
+      "domain": "squad"
+    },
+    "GET /api/tasks/:id/human-requests": {
+      "planned_command": "task.get",
+      "domain": "task"
+    },
+    "GET /api/tasks/:taskId/messages": {
+      "planned_command": "task.get",
+      "domain": "task"
+    },
+    "GET /api/tasks/:taskId/prompt": {
+      "planned_command": "task.get",
+      "domain": "task"
+    },
+    "GET /api/tokens": {
+      "planned_command": "token.list",
+      "domain": "token"
+    },
+    "GET /api/workspaces": {
+      "planned_command": "workspace.list",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/env": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/invitations": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/lark/install/:sessionId/status": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/lark/installations": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/members": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/relay-config": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/repos": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/session-archive": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:id/ssh-mesh": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:workspaceId/scm/connections": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:workspaceId/scm/connections/:connectionId": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:workspaceId/scm/events": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /api/workspaces/:workspaceId/scm/events/:eventId": {
+      "planned_command": "workspace.get",
+      "domain": "workspace"
+    },
+    "GET /auth/lark/url": {
+      "planned_command": "context.get",
+      "domain": "context"
+    },
+    "GET /favicon.ico": {
+      "cli_exempt": true,
+      "category": "public_bootstrap_asset",
+      "reason": "Public service bootstrap asset has no user-side CLI operation."
+    },
+    "GET /health": {
+      "planned_command": "platform.status",
+      "domain": "platform"
+    },
+    "GET /health/realtime": {
+      "planned_command": "platform.status",
+      "domain": "platform"
+    },
+    "GET /healthz": {
+      "planned_command": "platform.status",
+      "domain": "platform"
+    },
+    "GET /readyz": {
+      "planned_command": "platform.status",
+      "domain": "platform"
+    },
+    "GET /ws": {
+      "cli_exempt": true,
+      "category": "websocket_transport",
+      "reason": "Long-lived WebSocket transport is outside the CLI command surface."
+    },
+    "PATCH /api/autopilots/:id": {
+      "planned_command": "autopilot.update",
+      "domain": "autopilot"
+    },
+    "PATCH /api/autopilots/:id/triggers/:triggerId": {
+      "planned_command": "autopilot.update",
+      "domain": "autopilot"
+    },
+    "PATCH /api/chat/sessions/:sessionId": {
+      "planned_command": "chat.update",
+      "domain": "chat"
+    },
+    "PATCH /api/issues/:id": {
+      "planned_command": "issue.update",
+      "domain": "issue"
+    },
+    "PATCH /api/issues/:id/sessions/:sessionId": {
+      "planned_command": "issue.update",
+      "domain": "issue"
+    },
+    "PATCH /api/me": {
+      "planned_command": "member.update",
+      "domain": "member"
+    },
+    "PATCH /api/me/onboarding": {
+      "planned_command": "member.update",
+      "domain": "member"
+    },
+    "PATCH /api/multiremi/agent-plugins/:id": {
+      "planned_command": "plugin.update",
+      "domain": "plugin"
+    },
+    "PATCH /api/multiremi/agents/:id": {
+      "planned_command": "agent.update",
+      "domain": "agent"
+    },
+    "PATCH /api/multiremi/agents/:id/plugins/:bindingId": {
+      "planned_command": "agent.update",
+      "domain": "agent"
+    },
+    "PATCH /api/multiremi/autopilots/:id": {
+      "planned_command": "autopilot.update",
+      "domain": "autopilot"
+    },
+    "PATCH /api/multiremi/chats/:id": {
+      "planned_command": "chat.update",
+      "domain": "chat"
+    },
+    "PATCH /api/multiremi/comments/:id": {
+      "planned_command": "comment.update",
+      "domain": "comment"
+    },
+    "PATCH /api/multiremi/issues/:id": {
+      "planned_command": "issue.update",
+      "domain": "issue"
+    },
+    "PATCH /api/multiremi/labels/:id": {
+      "planned_command": "label.update",
+      "domain": "label"
+    },
+    "PATCH /api/multiremi/members/:id": {
+      "planned_command": "member.update",
+      "domain": "member"
+    },
+    "PATCH /api/multiremi/platform/settings": {
+      "planned_command": "platform.update",
+      "domain": "platform"
+    },
+    "PATCH /api/multiremi/projects/:id": {
+      "planned_command": "project.update",
+      "domain": "project"
+    },
+    "PATCH /api/multiremi/projects/:id/resources/:resourceId": {
+      "planned_command": "project.update",
+      "domain": "project"
+    },
+    "PATCH /api/multiremi/runtimes/:id": {
+      "planned_command": "runtime.update",
+      "domain": "runtime"
+    },
+    "PATCH /api/multiremi/skills/:id": {
+      "planned_command": "skill.update",
+      "domain": "skill"
+    },
+    "PATCH /api/multiremi/squads/:id": {
+      "planned_command": "squad.update",
+      "domain": "squad"
+    },
+    "PATCH /api/multiremi/squads/:id/members": {
+      "planned_command": "squad.update",
+      "domain": "squad"
+    },
+    "PATCH /api/runtimes/:id": {
+      "planned_command": "runtime.update",
+      "domain": "runtime"
+    },
+    "PATCH /api/skills/:id": {
+      "planned_command": "skill.update",
+      "domain": "skill"
+    },
+    "PATCH /api/squads/:id/members/role": {
+      "planned_command": "squad.update",
+      "domain": "squad"
+    },
+    "PATCH /api/workspaces/:id": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PATCH /api/workspaces/:id/members/:memberId": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PATCH /api/workspaces/:id/repos/:repositoryId": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "POST /api/agents": {
+      "planned_command": "agent.create",
+      "domain": "agent"
+    },
+    "POST /api/agents/:id/archive": {
+      "planned_command": "agent.archive",
+      "domain": "agent"
+    },
+    "POST /api/agents/:id/cancel-tasks": {
+      "planned_command": "agent.cancel_tasks",
+      "domain": "agent"
+    },
+    "POST /api/agents/:id/restore": {
+      "planned_command": "agent.restore",
+      "domain": "agent"
+    },
+    "POST /api/agents/:id/skills/add": {
+      "planned_command": "agent.add",
+      "domain": "agent"
+    },
+    "POST /api/agents/from-template": {
+      "planned_command": "agent.from_template",
+      "domain": "agent"
+    },
+    "POST /api/autopilots": {
+      "planned_command": "autopilot.create",
+      "domain": "autopilot"
+    },
+    "POST /api/autopilots/:id/deliveries/:deliveryId/replay": {
+      "planned_command": "autopilot.replay",
+      "domain": "autopilot"
+    },
+    "POST /api/autopilots/:id/trigger": {
+      "planned_command": "autopilot.trigger",
+      "domain": "autopilot"
+    },
+    "POST /api/autopilots/:id/triggers": {
+      "planned_command": "autopilot.triggers",
+      "domain": "autopilot"
+    },
+    "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token": {
+      "planned_command": "autopilot.rotate_webhook_token",
+      "domain": "autopilot"
+    },
+    "POST /api/chat/sessions": {
+      "planned_command": "chat.sessions",
+      "domain": "chat"
+    },
+    "POST /api/chat/sessions/:sessionId/messages": {
+      "planned_command": "chat.messages",
+      "domain": "chat"
+    },
+    "POST /api/chat/sessions/:sessionId/read": {
+      "planned_command": "chat.read",
+      "domain": "chat"
+    },
+    "POST /api/cli-token": {
+      "planned_command": "token.create",
+      "domain": "token"
+    },
+    "POST /api/cloud-billing/checkout-sessions": {
+      "planned_command": "billing.checkout_sessions",
+      "domain": "billing"
+    },
+    "POST /api/cloud-billing/portal-sessions": {
+      "planned_command": "billing.portal_sessions",
+      "domain": "billing"
+    },
+    "POST /api/cloud-runtime/nodes": {
+      "planned_command": "runtime.nodes",
+      "domain": "runtime"
+    },
+    "POST /api/cloud-runtime/nodes/exec": {
+      "planned_command": "runtime.exec",
+      "domain": "runtime"
+    },
+    "POST /api/cloud-runtime/nodes/reboot": {
+      "planned_command": "runtime.reboot",
+      "domain": "runtime"
+    },
+    "POST /api/cloud-runtime/nodes/start": {
+      "planned_command": "runtime.start",
+      "domain": "runtime"
+    },
+    "POST /api/cloud-runtime/nodes/status": {
+      "planned_command": "runtime.status",
+      "domain": "runtime"
+    },
+    "POST /api/cloud-runtime/nodes/stop": {
+      "planned_command": "runtime.stop",
+      "domain": "runtime"
+    },
+    "POST /api/comments/:id/reactions": {
+      "planned_command": "comment.reactions",
+      "domain": "comment"
+    },
+    "POST /api/comments/:id/resolve": {
+      "planned_command": "comment.resolve",
+      "domain": "comment"
+    },
+    "POST /api/contact-sales": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Browser bootstrap or presentation-only action has no meaningful CLI workflow."
+    },
+    "POST /api/daemon/deregister": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/heartbeat": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/issues/:issueId/workspace/cleaned": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/register": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/local-skills/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/models/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/recover-orphans": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/tasks/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/update/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/scm/git-credentials": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/complete": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/fail": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/human-requests": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/messages": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/progress": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/prompt": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/session": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/start": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/usage": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/wait-local-directory": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/workspace": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/feedback": {
+      "planned_command": "platform.create",
+      "domain": "platform"
+    },
+    "POST /api/inbox/:id/archive": {
+      "planned_command": "inbox.archive",
+      "domain": "inbox"
+    },
+    "POST /api/inbox/:id/read": {
+      "planned_command": "inbox.read",
+      "domain": "inbox"
+    },
+    "POST /api/inbox/archive-all": {
+      "planned_command": "inbox.archive_all",
+      "domain": "inbox"
+    },
+    "POST /api/inbox/archive-all-read": {
+      "planned_command": "inbox.archive_all_read",
+      "domain": "inbox"
+    },
+    "POST /api/inbox/archive-completed": {
+      "planned_command": "inbox.archive_completed",
+      "domain": "inbox"
+    },
+    "POST /api/inbox/mark-all-read": {
+      "planned_command": "inbox.mark_all_read",
+      "domain": "inbox"
+    },
+    "POST /api/invitations/:id/accept": {
+      "planned_command": "invite.accept",
+      "domain": "invite"
+    },
+    "POST /api/invitations/:id/decline": {
+      "planned_command": "invite.decline",
+      "domain": "invite"
+    },
+    "POST /api/issues": {
+      "planned_command": "issue.create",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/comments": {
+      "planned_command": "issue.comments",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/dependencies": {
+      "planned_command": "issue.dependencies",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/labels": {
+      "planned_command": "issue.labels",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/reactions": {
+      "planned_command": "issue.reactions",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/rerun": {
+      "planned_command": "issue.rerun",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/sessions": {
+      "planned_command": "issue.sessions",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/sessions/:sessionId/messages": {
+      "planned_command": "issue.messages",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/sessions/:sessionId/participants": {
+      "planned_command": "issue.participants",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/sessions/:sessionId/results": {
+      "planned_command": "issue.results",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/sessions/:sessionId/tasks": {
+      "planned_command": "issue.tasks",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/share": {
+      "planned_command": "issue.share",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/share/extend": {
+      "planned_command": "issue.extend",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/squad-evaluated": {
+      "planned_command": "issue.squad_evaluated",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/subscribe": {
+      "planned_command": "issue.subscribe",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/tasks/:taskId/cancel": {
+      "planned_command": "issue.cancel",
+      "domain": "issue"
+    },
+    "POST /api/issues/:id/unsubscribe": {
+      "planned_command": "issue.unsubscribe",
+      "domain": "issue"
+    },
+    "POST /api/issues/:issueId/session-archives/:archiveId/retry": {
+      "planned_command": "issue.retry",
+      "domain": "issue"
+    },
+    "POST /api/issues/:issueId/session-archives/:archiveId/verify": {
+      "planned_command": "issue.verify",
+      "domain": "issue"
+    },
+    "POST /api/issues/batch-delete": {
+      "planned_command": "issue.batch_delete",
+      "domain": "issue"
+    },
+    "POST /api/issues/batch-update": {
+      "planned_command": "issue.batch_update",
+      "domain": "issue"
+    },
+    "POST /api/issues/quick-create": {
+      "planned_command": "issue.quick_create",
+      "domain": "issue"
+    },
+    "POST /api/labels": {
+      "planned_command": "label.create",
+      "domain": "label"
+    },
+    "POST /api/lark/binding/redeem": {
+      "planned_command": "lark.redeem",
+      "domain": "lark"
+    },
+    "POST /api/me/onboarding/cloud-waitlist": {
+      "planned_command": "member.cloud_waitlist",
+      "domain": "member"
+    },
+    "POST /api/me/onboarding/complete": {
+      "planned_command": "member.complete",
+      "domain": "member"
+    },
+    "POST /api/me/onboarding/no-runtime-bootstrap": {
+      "planned_command": "member.no_runtime_bootstrap",
+      "domain": "member"
+    },
+    "POST /api/me/onboarding/runtime-bootstrap": {
+      "planned_command": "member.runtime_bootstrap",
+      "domain": "member"
+    },
+    "POST /api/multiremi/agent-plugins/:id/activate": {
+      "planned_command": "plugin.activate",
+      "domain": "plugin"
+    },
+    "POST /api/multiremi/agent-plugins/:id/restore": {
+      "planned_command": "plugin.restore",
+      "domain": "plugin"
+    },
+    "POST /api/multiremi/agent-plugins/:id/rollback": {
+      "planned_command": "plugin.rollback",
+      "domain": "plugin"
+    },
+    "POST /api/multiremi/agent-plugins/:id/runtimes/retry": {
+      "planned_command": "plugin.retry",
+      "domain": "plugin"
+    },
+    "POST /api/multiremi/agent-plugins/:id/versions": {
+      "planned_command": "plugin.versions",
+      "domain": "plugin"
+    },
+    "POST /api/multiremi/agent-plugins/import": {
+      "planned_command": "plugin.import",
+      "domain": "plugin"
+    },
+    "POST /api/multiremi/agent-plugins/inspect": {
+      "planned_command": "plugin.inspect",
+      "domain": "plugin"
+    },
+    "POST /api/multiremi/agents": {
+      "planned_command": "agent.create",
+      "domain": "agent"
+    },
+    "POST /api/multiremi/agents/:id/plugins": {
+      "planned_command": "agent.plugins",
+      "domain": "agent"
+    },
+    "POST /api/multiremi/agents/default": {
+      "planned_command": "agent.default",
+      "domain": "agent"
+    },
+    "POST /api/multiremi/agents/from-template": {
+      "planned_command": "agent.from_template",
+      "domain": "agent"
+    },
+    "POST /api/multiremi/attachments": {
+      "planned_command": "attachment.create",
+      "domain": "attachment"
+    },
+    "POST /api/multiremi/autopilots": {
+      "planned_command": "autopilot.create",
+      "domain": "autopilot"
+    },
+    "POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay": {
+      "planned_command": "autopilot.replay",
+      "domain": "autopilot"
+    },
+    "POST /api/multiremi/autopilots/:id/run": {
+      "planned_command": "autopilot.run",
+      "domain": "autopilot"
+    },
+    "POST /api/multiremi/autopilots/:id/run-scheduled": {
+      "planned_command": "autopilot.run_scheduled",
+      "domain": "autopilot"
+    },
+    "POST /api/multiremi/autopilots/:id/trigger": {
+      "planned_command": "autopilot.trigger",
+      "domain": "autopilot"
+    },
+    "POST /api/multiremi/autopilots/:id/webhook": {
+      "planned_command": "autopilot.webhook",
+      "domain": "autopilot"
+    },
+    "POST /api/multiremi/chats": {
+      "planned_command": "chat.create",
+      "domain": "chat"
+    },
+    "POST /api/multiremi/chats/:id/messages": {
+      "planned_command": "chat.messages",
+      "domain": "chat"
+    },
+    "POST /api/multiremi/comments/:id/reactions": {
+      "planned_command": "comment.reactions",
+      "domain": "comment"
+    },
+    "POST /api/multiremi/comments/:id/resolve": {
+      "planned_command": "comment.resolve",
+      "domain": "comment"
+    },
+    "POST /api/multiremi/daemons/:daemonId/retire": {
+      "planned_command": "daemon.retire",
+      "domain": "daemon"
+    },
+    "POST /api/multiremi/feedback": {
+      "planned_command": "platform.create",
+      "domain": "platform"
+    },
+    "POST /api/multiremi/inbox/:id/archive": {
+      "planned_command": "inbox.archive",
+      "domain": "inbox"
+    },
+    "POST /api/multiremi/inbox/:id/read": {
+      "planned_command": "inbox.read",
+      "domain": "inbox"
+    },
+    "POST /api/multiremi/install/daemon": {
+      "planned_command": "lark.daemon",
+      "domain": "lark"
+    },
+    "POST /api/multiremi/issues": {
+      "planned_command": "issue.create",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/:id/assign": {
+      "planned_command": "issue.assign",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/:id/attachments": {
+      "planned_command": "issue.attachments",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/:id/comments": {
+      "planned_command": "issue.comments",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/:id/dependencies": {
+      "planned_command": "issue.dependencies",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/:id/labels": {
+      "planned_command": "issue.labels",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/:id/reactions": {
+      "planned_command": "issue.reactions",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/:id/subscribers": {
+      "planned_command": "issue.subscribers",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/batch-delete": {
+      "planned_command": "issue.batch_delete",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/batch-update": {
+      "planned_command": "issue.batch_update",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/issues/quick-create": {
+      "planned_command": "issue.quick_create",
+      "domain": "issue"
+    },
+    "POST /api/multiremi/labels": {
+      "planned_command": "label.create",
+      "domain": "label"
+    },
+    "POST /api/multiremi/members": {
+      "planned_command": "member.create",
+      "domain": "member"
+    },
+    "POST /api/multiremi/pins": {
+      "planned_command": "pin.create",
+      "domain": "pin"
+    },
+    "POST /api/multiremi/platform/operations": {
+      "planned_command": "platform.operations",
+      "domain": "platform"
+    },
+    "POST /api/multiremi/projects": {
+      "planned_command": "project.create",
+      "domain": "project"
+    },
+    "POST /api/multiremi/projects/:id/resources": {
+      "planned_command": "project.resources",
+      "domain": "project"
+    },
+    "POST /api/multiremi/projects/:id/restore": {
+      "planned_command": "project.restore",
+      "domain": "project"
+    },
+    "POST /api/multiremi/runtimes": {
+      "planned_command": "runtime.create",
+      "domain": "runtime"
+    },
+    "POST /api/multiremi/runtimes/:id/directory-scans": {
+      "planned_command": "runtime.directory_scans",
+      "domain": "runtime"
+    },
+    "POST /api/multiremi/runtimes/:id/heartbeat": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/multiremi/runtimes/:id/local-skills": {
+      "planned_command": "runtime.local_skills",
+      "domain": "runtime"
+    },
+    "POST /api/multiremi/runtimes/:id/local-skills/import": {
+      "planned_command": "runtime.import",
+      "domain": "runtime"
+    },
+    "POST /api/multiremi/runtimes/:id/models": {
+      "planned_command": "runtime.models",
+      "domain": "runtime"
+    },
+    "POST /api/multiremi/runtimes/:id/update": {
+      "planned_command": "runtime.update",
+      "domain": "runtime"
+    },
+    "POST /api/multiremi/skills": {
+      "planned_command": "skill.create",
+      "domain": "skill"
+    },
+    "POST /api/multiremi/skills/import": {
+      "planned_command": "skill.import",
+      "domain": "skill"
+    },
+    "POST /api/multiremi/squads": {
+      "planned_command": "squad.create",
+      "domain": "squad"
+    },
+    "POST /api/multiremi/squads/:id/members": {
+      "planned_command": "squad.members",
+      "domain": "squad"
+    },
+    "POST /api/multiremi/tasks": {
+      "planned_command": "task.create",
+      "domain": "task"
+    },
+    "POST /api/multiremi/tasks/:id/cancel": {
+      "planned_command": "task.cancel",
+      "domain": "task"
+    },
+    "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond": {
+      "planned_command": "task.respond",
+      "domain": "task"
+    },
+    "POST /api/multiremi/tokens": {
+      "planned_command": "token.create",
+      "domain": "token"
+    },
+    "POST /api/pins": {
+      "planned_command": "pin.create",
+      "domain": "pin"
+    },
+    "POST /api/platform-updater/heartbeat": {
+      "cli_exempt": true,
+      "category": "platform_updater_internal",
+      "reason": "Platform updater callback is an internal deployment control-plane protocol."
+    },
+    "POST /api/platform-updater/operations/:id/report": {
+      "cli_exempt": true,
+      "category": "platform_updater_internal",
+      "reason": "Platform updater callback is an internal deployment control-plane protocol."
+    },
+    "POST /api/platform-updater/operations/claim": {
+      "cli_exempt": true,
+      "category": "platform_updater_internal",
+      "reason": "Platform updater callback is an internal deployment control-plane protocol."
+    },
+    "POST /api/project-knowledge/migration/backfill": {
+      "planned_command": "memory.backfill",
+      "domain": "memory"
+    },
+    "POST /api/project-knowledge/migration/retry-failed": {
+      "planned_command": "memory.retry_failed",
+      "domain": "memory"
+    },
+    "POST /api/project-knowledge/migration/verify": {
+      "planned_command": "memory.verify",
+      "domain": "memory"
+    },
+    "POST /api/projects": {
+      "planned_command": "project.create",
+      "domain": "project"
+    },
+    "POST /api/projects/:id/docs": {
+      "planned_command": "project.docs",
+      "domain": "project"
+    },
+    "POST /api/projects/:id/resources": {
+      "planned_command": "project.resources",
+      "domain": "project"
+    },
+    "POST /api/projects/:id/restore": {
+      "planned_command": "project.restore",
+      "domain": "project"
+    },
+    "POST /api/runtimes/:id/archive-agents-and-delete": {
+      "planned_command": "runtime.archive_agents_and_delete",
+      "domain": "runtime"
+    },
+    "POST /api/runtimes/:id/directory-scans": {
+      "planned_command": "runtime.directory_scans",
+      "domain": "runtime"
+    },
+    "POST /api/runtimes/:id/local-skills": {
+      "planned_command": "runtime.local_skills",
+      "domain": "runtime"
+    },
+    "POST /api/runtimes/:id/local-skills/import": {
+      "planned_command": "runtime.import",
+      "domain": "runtime"
+    },
+    "POST /api/runtimes/:id/models": {
+      "planned_command": "runtime.models",
+      "domain": "runtime"
+    },
+    "POST /api/runtimes/:id/update": {
+      "planned_command": "runtime.update",
+      "domain": "runtime"
+    },
+    "POST /api/skills": {
+      "planned_command": "skill.create",
+      "domain": "skill"
+    },
+    "POST /api/skills/import": {
+      "planned_command": "skill.import",
+      "domain": "skill"
+    },
+    "POST /api/squads": {
+      "planned_command": "squad.create",
+      "domain": "squad"
+    },
+    "POST /api/squads/:id/members": {
+      "planned_command": "squad.members",
+      "domain": "squad"
+    },
+    "POST /api/tasks/:id/cancel": {
+      "planned_command": "task.cancel",
+      "domain": "task"
+    },
+    "POST /api/tasks/:id/human-requests/:requestId/respond": {
+      "planned_command": "task.respond",
+      "domain": "task"
+    },
+    "POST /api/tokens": {
+      "planned_command": "token.create",
+      "domain": "token"
+    },
+    "POST /api/tokens/current/renew": {
+      "planned_command": "token.renew",
+      "domain": "token"
+    },
+    "POST /api/upload-file": {
+      "planned_command": "attachment.create",
+      "domain": "attachment"
+    },
+    "POST /api/webhooks/autopilots/:token": {
+      "cli_exempt": true,
+      "category": "oauth_or_webhook_callback",
+      "reason": "External provider callback is authenticated and invoked by the provider, not a user command."
+    },
+    "POST /api/webhooks/scm/:connectionId": {
+      "cli_exempt": true,
+      "category": "oauth_or_webhook_callback",
+      "reason": "External provider callback is authenticated and invoked by the provider, not a user command."
+    },
+    "POST /api/webhooks/stripe": {
+      "cli_exempt": true,
+      "category": "oauth_or_webhook_callback",
+      "reason": "External provider callback is authenticated and invoked by the provider, not a user command."
+    },
+    "POST /api/workspaces": {
+      "planned_command": "workspace.create",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/lark/install/begin": {
+      "planned_command": "workspace.begin",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/leave": {
+      "planned_command": "workspace.leave",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/members": {
+      "planned_command": "workspace.members",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/relay-config/:engine/reveal": {
+      "planned_command": "workspace.reveal",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/repos": {
+      "planned_command": "workspace.repos",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/repos/inspect": {
+      "planned_command": "workspace.inspect",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/ssh-mesh/rotate": {
+      "planned_command": "workspace.rotate",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:id/ssh-mesh/test": {
+      "planned_command": "workspace.test",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:workspaceId/scm/connections": {
+      "planned_command": "workspace.connections",
+      "domain": "workspace"
+    },
+    "POST /api/workspaces/:workspaceId/scm/connections/:connectionId/verify": {
+      "planned_command": "workspace.verify",
+      "domain": "workspace"
+    },
+    "POST /auth/google": {
+      "planned_command": "context.google",
+      "domain": "context"
+    },
+    "POST /auth/lark/callback": {
+      "planned_command": "context.callback",
+      "domain": "context"
+    },
+    "POST /auth/logout": {
+      "planned_command": "context.logout",
+      "domain": "context"
+    },
+    "POST /auth/send-code": {
+      "planned_command": "context.send_code",
+      "domain": "context"
+    },
+    "POST /auth/verify-code": {
+      "planned_command": "context.verify_code",
+      "domain": "context"
+    },
+    "PUT /api/agents/:id": {
+      "planned_command": "agent.update",
+      "domain": "agent"
+    },
+    "PUT /api/agents/:id/env": {
+      "planned_command": "agent.update",
+      "domain": "agent"
+    },
+    "PUT /api/agents/:id/skills": {
+      "planned_command": "agent.update",
+      "domain": "agent"
+    },
+    "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret": {
+      "planned_command": "autopilot.update",
+      "domain": "autopilot"
+    },
+    "PUT /api/comments/:id": {
+      "planned_command": "comment.update",
+      "domain": "comment"
+    },
+    "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "PUT /api/daemon/runtimes/:runtimeId/models": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "PUT /api/issues/:id": {
+      "planned_command": "issue.update",
+      "domain": "issue"
+    },
+    "PUT /api/issues/:id/metadata/:key": {
+      "planned_command": "issue.update",
+      "domain": "issue"
+    },
+    "PUT /api/issues/:issueId/change-requests/:changeRequestId": {
+      "planned_command": "issue.update",
+      "domain": "issue"
+    },
+    "PUT /api/labels/:id": {
+      "planned_command": "label.update",
+      "domain": "label"
+    },
+    "PUT /api/multiremi/agents/:id/skills": {
+      "planned_command": "agent.update",
+      "domain": "agent"
+    },
+    "PUT /api/multiremi/comments/:id": {
+      "planned_command": "comment.update",
+      "domain": "comment"
+    },
+    "PUT /api/multiremi/issues/:id/metadata/:key": {
+      "planned_command": "issue.update",
+      "domain": "issue"
+    },
+    "PUT /api/multiremi/labels/:id": {
+      "planned_command": "label.update",
+      "domain": "label"
+    },
+    "PUT /api/multiremi/notification-preferences": {
+      "planned_command": "notification.update",
+      "domain": "notification"
+    },
+    "PUT /api/multiremi/pins/reorder": {
+      "planned_command": "pin.update",
+      "domain": "pin"
+    },
+    "PUT /api/multiremi/runtimes/:id/models": {
+      "planned_command": "runtime.update",
+      "domain": "runtime"
+    },
+    "PUT /api/multiremi/skills/:id": {
+      "planned_command": "skill.update",
+      "domain": "skill"
+    },
+    "PUT /api/notification-preferences": {
+      "planned_command": "notification.update",
+      "domain": "notification"
+    },
+    "PUT /api/pins/reorder": {
+      "planned_command": "pin.update",
+      "domain": "pin"
+    },
+    "PUT /api/projects/:id": {
+      "planned_command": "project.update",
+      "domain": "project"
+    },
+    "PUT /api/projects/:id/docs/:ref": {
+      "planned_command": "project.update",
+      "domain": "project"
+    },
+    "PUT /api/projects/:id/resources/:resourceId": {
+      "planned_command": "project.update",
+      "domain": "project"
+    },
+    "PUT /api/runtimes/:id/models": {
+      "planned_command": "runtime.update",
+      "domain": "runtime"
+    },
+    "PUT /api/skills/:id": {
+      "planned_command": "skill.update",
+      "domain": "skill"
+    },
+    "PUT /api/skills/:id/files": {
+      "planned_command": "skill.update",
+      "domain": "skill"
+    },
+    "PUT /api/squads/:id": {
+      "planned_command": "squad.update",
+      "domain": "squad"
+    },
+    "PUT /api/workspaces/:id": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PUT /api/workspaces/:id/env": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PUT /api/workspaces/:id/relay-config/:engine": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PUT /api/workspaces/:id/relay-config/discovery": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PUT /api/workspaces/:id/session-archive": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PUT /api/workspaces/:id/ssh-mesh": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    },
+    "PUT /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId": {
+      "planned_command": "workspace.update",
+      "domain": "workspace"
+    }
+  }
+}

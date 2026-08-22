@@ -48,6 +48,7 @@ import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
+import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -214,6 +215,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       // checks, self-host release downloads (install-remi.sh runs unauthed),
       // and external webhooks (authed by their own path token).
       const path = c.req.path;
+      const hasCliShare = Boolean(c.req.header(CLI_SHARE_HEADER)?.trim())
+        && (path === "/api/cli/context" || path === "/api/cli/capabilities")
+        && c.req.method === "GET";
       if (
         path === "/" ||
         path === "/favicon.ico" ||
@@ -222,7 +226,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         path.startsWith("/auth/") ||
         path.startsWith("/health") ||
         path.startsWith("/api/remi/releases/") ||
-        path.startsWith("/api/webhooks/")
+        path.startsWith("/api/webhooks/") ||
+        hasCliShare
       ) {
         await next();
         return;
@@ -332,6 +337,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     posthog_host: process.env.POSTHOG_HOST ?? "",
     analytics_environment: process.env.NODE_ENV ?? "development",
   }));
+  registerCliRoutes(app, deps);
   registerAuthRoutes(app, deps);
   app.get("/health/realtime", (c) => c.json({
     connections: realtimeState.connections,
