@@ -48,6 +48,7 @@ services:
       MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-1}
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
     volumes:
+      - ${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi
       - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads
       - ${REMI_SESSION_ARCHIVE_ROOT:?set REMI_SESSION_ARCHIVE_ROOT}:/srv/multiremi/session-archives
       - ${REMI_SSH_MESH_ROOT:?set REMI_SSH_MESH_ROOT}:/srv/multiremi/ssh-mesh
