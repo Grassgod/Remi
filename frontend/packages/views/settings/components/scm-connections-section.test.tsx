@@ -287,6 +287,35 @@ describe("ScmConnectionsSection", () => {
     expect(screen.getByText("可访问 2 / 3 个仓库")).toBeInTheDocument();
     expect(screen.getByText("一个仓库无权限")).toHaveClass("text-destructive");
   });
+
+  it("summarizes repository scope without listing repository names", () => {
+    connectionsRef.current = [connection({
+      verificationStatus: "valid",
+      verifiedRepositoryCount: 1,
+      verifiedRepositoryTotal: 1,
+      repositories: [{
+        id: "binding-1",
+        workspaceId: "workspace-1",
+        connectionId: "connection-1",
+        repositoryId: repository.id,
+        repositoryUrl: repository.url,
+        externalId: null,
+        owner: "Grassgod",
+        name: repository.name,
+        defaultBranch: "main",
+        enabled: true,
+        createdAt: "2026-08-22T00:00:00.000Z",
+        updatedAt: "2026-08-22T00:00:00.000Z",
+      }],
+    })];
+    render(<ScmConnectionsSection workspaceId="workspace-1" canManage />, {
+      wrapper: I18nWrapper,
+    });
+
+    expect(screen.getByText("全部仓库")).toBeInTheDocument();
+    expect(screen.getByText("可访问 1 / 1 个仓库")).toBeInTheDocument();
+    expect(screen.queryByText(repository.name)).not.toBeInTheDocument();
+  });
 });
 
 async function openCreateDialogAfterRender() {

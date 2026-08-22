@@ -5,7 +5,7 @@ import type {
   MultiremiScmVerificationResult,
   MultiremiScmVerificationStatus,
 } from "@multiremi/contracts/types.js";
-import { codebaseAuthHeaders } from "./access-token.js";
+import { codebaseAuthHeaders, parseCodebaseAccessToken } from "./access-token.js";
 
 export interface VerifyScmConnectionInput {
   connection: MultiremiScmConnection;
@@ -35,7 +35,7 @@ async function verifyScmConnection(
   try {
     const identity = input.connection.provider === "github"
       ? await verifyGitHubIdentity(input.connection, token, fetchImpl)
-      : await verifyCodebaseIdentity(input.connection, token, fetchImpl);
+      : await verifyCodebaseIdentity(input, token, fetchImpl);
     let repositoryCount = 0;
     let firstRepositoryError: VerificationProbeError | null = null;
     for (const binding of input.bindings) {
@@ -53,6 +53,15 @@ async function verifyScmConnection(
       }
     }
     if (repositoryCount < repositoryTotal) {
+      if (repositoryCount === 0 && firstRepositoryError?.status === "invalid") {
+        return failure(
+          "invalid",
+          verifiedAt,
+          repositoryTotal,
+          firstRepositoryError.code,
+          firstRepositoryError.publicMessage,
+        );
+      }
       return {
         status: "partial",
         verifiedAt,
@@ -114,11 +123,21 @@ async function verifyGitHubRepository(
 }
 
 async function verifyCodebaseIdentity(
-  connection: MultiremiScmConnection,
+  input: VerifyScmConnectionInput,
   token: string,
   fetchImpl: typeof fetch,
 ): Promise<string | null> {
-  const result = await codebaseAction(fetchImpl, connection.apiBaseUrl, token, "GetCurrentUser", {});
+  if (parseCodebaseAccessToken(token).kind === "bearer") {
+    if (input.bindings.length === 0) {
+      throw new VerificationProbeError(
+        "partial",
+        "repository_verification_required",
+        "至少需要一个仓库来验证 Codebase Access Token",
+      );
+    }
+    return null;
+  }
+  const result = await codebaseAction(fetchImpl, input.connection.apiBaseUrl, token, "GetCurrentUser", {});
   const user = recordValue(result, "User", "user", "CurrentUser", "current_user");
   return stringValue(user.Username)
     || stringValue(user.username)

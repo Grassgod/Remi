@@ -96,4 +96,83 @@ describe("SCM connection verification", () => {
     expect(actions).toEqual(["GetCurrentUser", "GetRepository"]);
     expect(headers).toEqual(["codebase-secret", "codebase-secret"]);
   });
+
+  it("verifies Codebase bearer PATs through repository access", async () => {
+    const actions: string[] = [];
+    const authorizations: Array<string | null> = [];
+    const verifier = createScmConnectionVerifier((async (input: FetchInput, init?: FetchInit) => {
+      const url = new URL(String(input));
+      actions.push(url.searchParams.get("Action") ?? "");
+      authorizations.push(new Headers(init?.headers).get("authorization"));
+      return Response.json({ ResponseMetadata: {}, Result: { Repository: { Id: "repo-1" } } });
+    }) as unknown as typeof fetch);
+
+    const result = await verifier({
+      connection: scmConnection({
+        provider: "codebase",
+        baseUrl: "https://code.byted.org",
+        apiBaseUrl: "https://codebase-api.byted.org/v2",
+      }),
+      credential: { accessToken: "code_pat_secret", webhookSecret: null },
+      bindings: [scmBinding({ repositoryUrl: "git@code.byted.org:acme/widgets.git" })],
+    });
+
+    expect(result).toMatchObject({
+      status: "valid",
+      identity: null,
+      repositoryCount: 1,
+      repositoryTotal: 1,
+    });
+    expect(actions).toEqual(["GetRepository"]);
+    expect(authorizations).toEqual(["Bearer code_pat_secret"]);
+  });
+
+  it("rejects a Codebase bearer PAT when every repository denies authentication", async () => {
+    const verifier = createScmConnectionVerifier(
+      (async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch,
+    );
+
+    const result = await verifier({
+      connection: scmConnection({
+        provider: "codebase",
+        baseUrl: "https://code.byted.org",
+        apiBaseUrl: "https://codebase-api.byted.org/v2",
+      }),
+      credential: { accessToken: "bad-codebase-pat", webhookSecret: null },
+      bindings: [scmBinding({ repositoryUrl: "git@code.byted.org:acme/widgets.git" })],
+    });
+
+    expect(result).toMatchObject({
+      status: "invalid",
+      errorCode: "authentication_failed",
+      repositoryCount: 0,
+      repositoryTotal: 1,
+    });
+  });
+
+  it("does not report an untested Codebase bearer PAT as valid", async () => {
+    let called = false;
+    const verifier = createScmConnectionVerifier((async () => {
+      called = true;
+      throw new Error("unexpected request");
+    }) as unknown as typeof fetch);
+
+    const result = await verifier({
+      connection: scmConnection({
+        provider: "codebase",
+        baseUrl: "https://code.byted.org",
+        apiBaseUrl: "https://codebase-api.byted.org/v2",
+      }),
+      credential: { accessToken: "code_pat_secret", webhookSecret: null },
+      bindings: [],
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      errorCode: "repository_verification_required",
+      repositoryCount: 0,
+      repositoryTotal: 0,
+    });
+    expect(called).toBe(false);
+  });
 });

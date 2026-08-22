@@ -537,15 +537,6 @@ function ConnectionCard({
             {connection.verificationError && (
               <p className="max-w-xl text-xs text-destructive">{connection.verificationError}</p>
             )}
-            {connection.repositories.length > 0 && (
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                {connection.repositories.slice(0, 5).map((repository) => (
-                  <span key={repository.id} className="inline-flex items-center gap-1">
-                    <GitBranch className="size-3" />{repository.name}
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
         </div>
         {canManage && (
