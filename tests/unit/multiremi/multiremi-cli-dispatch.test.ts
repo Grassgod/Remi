@@ -12,7 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { delimiter, join } from "node:path";
-import { dispatch } from "../../../apps/remi/cli/index.js";
+import { cliCommandInventory, dispatch } from "../../../apps/remi/cli/index.js";
 import { detectMultiremiProviders } from "../../../apps/remi/cli/multiremi.js";
 
 interface DispatchResult {
@@ -52,6 +52,35 @@ async function runDispatch(args: string[]): Promise<DispatchResult> {
 }
 
 describe("remi CLI dispatcher", () => {
+  it("registers every legacy top-level entry, including hidden multiremi compatibility", () => {
+    const inventory = cliCommandInventory();
+    expect(inventory.map((entry) => entry.path.join(" "))).toEqual([
+      "start",
+      "stop",
+      "restart",
+      "status",
+      "logs",
+      "service",
+      "setup",
+      "config",
+      "repo",
+      "issue",
+      "attachment",
+      "memory",
+      "wiki",
+      "project",
+      "seed",
+      "doctor",
+      "login",
+      "update",
+      "serve",
+      "git-credential",
+      "multiremi",
+    ]);
+    expect(inventory.find((entry) => entry.path[0] === "multiremi"))
+      .toMatchObject({ hidden: true, id: "legacy.multiremi" });
+  });
+
   it("routes `remi project` into the multiremi project command", async () => {
     const result = await runDispatch(["project"]);
 

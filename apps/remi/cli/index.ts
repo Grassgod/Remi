@@ -6,25 +6,23 @@
  */
 
 import { VERSION } from "@shared/version.js";
+import { CommandRegistry, type CommandInventoryEntry } from "./core/command-registry.js";
 
-interface Command {
-  run: (args: string[]) => Promise<void>;
-  description: string;
-  hidden?: boolean;
-}
-
-const COMMANDS: Record<string, Command> = {};
+const commandRegistry = new CommandRegistry();
 
 // Lazy-load commands to avoid importing heavy modules when not needed
 function register(name: string, description: string, loader: () => Promise<{ run: (args: string[]) => Promise<void> }>, hidden?: boolean): void {
-  COMMANDS[name] = {
+  commandRegistry.register({
+    id: `legacy.${name}`,
+    path: [name],
     description,
     hidden,
-    run: async (args: string[]) => {
+    parse: "passthrough",
+    run: async (invocation) => {
       const mod = await loader();
-      await mod.run(args);
+      await mod.run([...invocation.rawArgs]);
     },
-  };
+  });
 }
 
 // Forward a `remi <name> …` command into the multiremi command layer (worker /
@@ -101,9 +99,9 @@ function showHelp(): void {
   console.log(`\nRemi v${VERSION} — Personal AI Assistant\n`);
   console.log("Usage: remi <command> [options]\n");
   console.log("Commands:");
-  for (const [name, cmd] of Object.entries(COMMANDS)) {
+  for (const cmd of commandRegistry.topLevelCommands()) {
     if (cmd.hidden) continue;
-    console.log(`  ${name.padEnd(12)} ${cmd.description}`);
+    console.log(`  ${cmd.path[0]!.padEnd(12)} ${cmd.description}`);
   }
   console.log("");
 }
@@ -113,13 +111,17 @@ function loadPluginCommands(): void {
   try {
     const { loadConfig } = require("@shared/config.js");
     const { PluginRegistry } = require("@daemon/agent-runtime/plugins/registry.js");
-    const builtins = new Set(Object.keys(COMMANDS));
+    const builtins = new Set(commandRegistry.topLevelCommands().map((entry) => entry.path[0]!));
     // Guard: a plugin must not shadow a built-in command.
     const safeRegister: typeof register = (name, description, loader, hidden) => {
       if (builtins.has(name)) {
         console.error(`[plugins] command "${name}" conflicts with a built-in command, ignored`);
         return;
       }
+      // Help/unknown-command dispatch may probe plugins more than once in one
+      // process. The historical table simply replaced the same entry; keep the
+      // operation idempotent now that duplicate Registry paths are rejected.
+      if (commandRegistry.hasPath([name])) return;
       register(name, description, loader, hidden);
     };
     new PluginRegistry().load(loadConfig()).dispatchCli(safeRegister);
@@ -143,19 +145,22 @@ export async function dispatch(args: string[]): Promise<void> {
   // unknown command (might be plugin-provided). Skip the scan for known built-in
   // commands so `remi serve`/`status`/etc. don't run external plugin code.
   const isHelp = cmd === "--help" || cmd === "-h" || cmd === "help";
-  if (isHelp || !COMMANDS[cmd]) loadPluginCommands();
+  if (isHelp || !commandRegistry.hasPath([cmd])) loadPluginCommands();
 
   if (isHelp) {
     showHelp();
     return;
   }
 
-  const command = COMMANDS[cmd];
-  if (!command) {
+  if (!commandRegistry.resolve(args)) {
     console.error(`Unknown command: ${cmd}`);
     showHelp();
     process.exit(1);
   }
 
-  await command.run(cmdArgs);
+  await commandRegistry.execute([cmd, ...cmdArgs]);
+}
+
+export function cliCommandInventory(): readonly CommandInventoryEntry[] {
+  return commandRegistry.inventory();
 }
