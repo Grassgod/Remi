@@ -47,7 +47,9 @@ services:
       MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
     volumes:
-      - ${REMI_STATE_ROOT:?set REMI_STATE_ROOT}:/srv/multiremi
+      - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads
+      - ${REMI_SESSION_ARCHIVE_ROOT:?set REMI_SESSION_ARCHIVE_ROOT}:/srv/multiremi/session-archives
+      - ${REMI_SSH_MESH_ROOT:?set REMI_SSH_MESH_ROOT}:/srv/multiremi/ssh-mesh
     depends_on:
       postgres:
         condition: service_healthy

@@ -40,9 +40,9 @@ data-service networks; it never creates, replaces, or deletes data containers.
 2. Create an API env file outside Git. Change the database hostname to the
    existing network alias (`postgres` by default). Do not copy secrets into the
    Compose env file.
-3. Copy the existing uploads, session archives, and SSH Mesh directories under
-   `REMI_STATE_ROOT`, preserving ownership and mode. Set `REMI_RUNTIME_UID` and
-   `REMI_RUNTIME_GID` to that owner.
+3. Bind the existing uploads, session archives, and SSH Mesh directories with
+   `REMI_UPLOAD_DIR`, `REMI_SESSION_ARCHIVE_ROOT`, and `REMI_SSH_MESH_ROOT`.
+   Set `REMI_RUNTIME_UID` and `REMI_RUNTIME_GID` to their owner.
 4. Start on the staging ports (`16120` and `13000`) with
    `REMI_SSH_MESH_CONTROL_PLANE=0`. Verify API, Web, login, database-backed
    counts, OpenViking readiness, attachments, and WebSockets.
