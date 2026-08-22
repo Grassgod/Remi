@@ -446,6 +446,13 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
           <span className="text-muted-foreground shrink-0">{t(($) => $.agent_live.tool_count, { count: toolCount })}</span>
         )}
       </div>
+      {/* LLM progress summary — a human-readable one-liner refreshed while the
+          task runs. `basis-full` wraps it onto its own line inside the flex row. */}
+      {!isParked && task.progress_summary && (
+        <div className="basis-full min-w-0 pl-7 text-xs text-muted-foreground truncate" title={task.progress_summary}>
+          {task.progress_summary}
+        </div>
+      )}
       <div className="ml-auto flex items-center gap-1 shrink-0">
         {!isParked && (
           <TranscriptButton

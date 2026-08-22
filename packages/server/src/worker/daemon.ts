@@ -139,6 +139,12 @@ import {
   MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
+import {
+  resolveProgressSummaryConfig,
+  resolveSummarizerCredentials,
+  TaskProgressSummarizer,
+  type ProgressRunOutcome,
+} from "./progress-summarizer.js";
 
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
@@ -1841,6 +1847,7 @@ export class MultiremiDaemon {
     let providerEnv: Record<string, string> | undefined;
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
+    let progressSummarizer: TaskProgressSummarizer | null = null;
 
     try {
       this.assertWorkspaceRootOwner();
@@ -1935,7 +1942,8 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "start", {});
       this.enqueueTaskReport(task.id, "progress", { summary: "Agent execution started", step: 1, total: 3 });
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv);
+      progressSummarizer = this.createTaskProgressSummarizer(task, providerEnv);
+      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       const poisonedReason = classifyPoisonedOutput(summary.output);
       if (poisonedReason) {
         if (summary.usage.length) this.enqueueTaskReport(task.id, "usage", { usage: summary.usage });
@@ -1946,6 +1954,7 @@ export class MultiremiDaemon {
           failureReason: poisonedReason,
         });
         log.warn(`Failed task ${task.id} with poisoned output: ${poisonedReason}`);
+        this.finalizeTaskProgress(progressSummarizer, "failed", poisonedReason);
         await this.awaitTaskReportDrain(task.id);
         return;
       }
@@ -1957,6 +1966,7 @@ export class MultiremiDaemon {
         workDir: summary.workDir,
       });
       log.info(`Completed task ${task.id}`);
+      this.finalizeTaskProgress(progressSummarizer, "completed", summary.output);
       // The provider is already closed; waiting here only keeps the local
       // concurrency slot occupied until the server has truly recorded the
       // terminal event, keeping daemon and server active-task views aligned.
@@ -1965,6 +1975,7 @@ export class MultiremiDaemon {
       const error = timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
       if (!timedOut && abort.signal.aborted && await this.wasTaskCancelledByServer(task.id)) {
         log.info(`Task ${task.id} was cancelled by the server`);
+        this.finalizeTaskProgress(progressSummarizer, "cancelled");
         return;
       }
       const failureReason = err instanceof LocalDirectoryError
@@ -1977,6 +1988,7 @@ export class MultiremiDaemon {
         failureReason,
       });
       log.error(`Failed task ${task.id}: ${error}`);
+      this.finalizeTaskProgress(progressSummarizer, "failed", error);
       await this.awaitTaskReportDrain(task.id);
     } finally {
       if (pluginRuntimeBase && !task.issueId && !task.chatSessionId) {
@@ -2386,6 +2398,49 @@ export class MultiremiDaemon {
     }
   }
 
+  /**
+   * Per-task LLM progress summarizer (MUL-67). Reuses the task's own provider
+   * credentials; returns null when the feature is disabled or no usable
+   * credential exists, in which case the run proceeds without summaries.
+   */
+  private createTaskProgressSummarizer(
+    task: MultiremiTaskWithAgent,
+    providerEnv?: Record<string, string>,
+  ): TaskProgressSummarizer | null {
+    try {
+      const config = resolveProgressSummaryConfig();
+      if (!config.enabled) return null;
+      const credentials = resolveSummarizerCredentials(providerEnv);
+      if (!credentials) {
+        log.info(`Progress summaries unavailable for task ${task.id}: no Anthropic-style credential`);
+        return null;
+      }
+      return new TaskProgressSummarizer({
+        config,
+        credentials,
+        taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
+        taskPrompt: task.prompt ?? "",
+        report: async (result, { final }) => {
+          await this.client.reportProgress(task.id, result.summary, result.step, result.total, { final });
+        },
+      });
+    } catch (err) {
+      log.warn(`Progress summarizer setup failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /** Terminal summary, detached from the task lifecycle — never blocks or fails it. */
+  private finalizeTaskProgress(
+    summarizer: TaskProgressSummarizer | null,
+    outcome: ProgressRunOutcome,
+    detail?: string,
+  ): void {
+    summarizer?.finalize(outcome, detail).catch((err) => {
+      log.warn(`Final progress summary failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
   private async runAgent(
     task: MultiremiTaskWithAgent,
     signal: AbortSignal,
@@ -2393,6 +2448,7 @@ export class MultiremiDaemon {
     pluginRuntime?: PreparedAgentPluginRuntime,
     providerHome?: IssueSessionProviderHome | null,
     providerEnv?: Record<string, string>,
+    progressSummarizer?: TaskProgressSummarizer | null,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -2486,7 +2542,10 @@ export class MultiremiDaemon {
         }
         // Enqueue-only: a transient API outage must never unwind this loop and
         // close the provider mid-session. The outbox delivers in seq order.
-        if (emitted.length) this.enqueueTaskReport(task.id, "messages", { messages: emitted });
+        if (emitted.length) {
+          this.enqueueTaskReport(task.id, "messages", { messages: emitted });
+          progressSummarizer?.onMessages(emitted);
+        }
       }
       const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
       finalSessionId = last?.sessionId ?? finalSessionId;

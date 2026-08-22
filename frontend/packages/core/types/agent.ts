@@ -92,6 +92,11 @@ export interface AgentTask {
     | "failed"
     | "cancelled";
   priority: number;
+  /** LLM-generated one-line progress for the run; refreshed while running and
+   * finalized with a terminal summary when the run ends. */
+  progress_summary?: string | null;
+  progress_step?: number | null;
+  progress_total?: number | null;
   dispatched_at: string | null;
   started_at: string | null;
   completed_at: string | null;

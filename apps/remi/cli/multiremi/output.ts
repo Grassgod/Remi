@@ -117,10 +117,20 @@ export function printTaskRuns(value: unknown, options: CliOptions): void {
     { header: "ID", value: (row) => displayTaskId(field(row, "id"), Boolean(options["full-id"] ?? options.fullId)), maxWidth: Boolean(options["full-id"] ?? options.fullId) ? 0 : 12 },
     { header: "AGENT", value: (row) => field(row, "agent_id", "agentId"), maxWidth: 18 },
     { header: "STATUS", value: (row) => field(row, "status") },
+    { header: "PROGRESS", value: (row) => taskRunProgress(row), maxWidth: 44 },
     { header: "STARTED", value: (row) => shortDate(field(row, "started_at", "startedAt", "created_at", "createdAt")) },
     { header: "COMPLETED", value: (row) => shortDate(field(row, "completed_at", "completedAt", "updated_at", "updatedAt")) },
     { header: "ERROR", value: (row) => field(row, "error", "error_message", "errorMessage"), maxWidth: 50 },
   ], "No task runs found.");
+}
+
+function taskRunProgress(row: Record<string, unknown>): string {
+  const summary = field(row, "progress_summary", "progressSummary");
+  if (!summary) return "";
+  const step = field(row, "progress_step", "progressStep");
+  const total = field(row, "progress_total", "progressTotal");
+  const ratio = step != null && total != null ? `[${step}/${total}] ` : "";
+  return `${ratio}${String(summary)}`;
 }
 
 export function printTaskMessages(value: unknown, options: CliOptions): void {

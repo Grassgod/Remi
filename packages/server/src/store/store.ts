@@ -2959,8 +2959,8 @@ runMigrations(this.db);
     return this.tasks.expireTaskHumanRequest(requestId, status);
   }
 
-  reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null): MultiremiTask {
-    return this.tasks.reportProgress(taskId, summary, step, total);
+  reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {
+    return this.tasks.reportProgress(taskId, summary, step, total, options);
   }
 
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {

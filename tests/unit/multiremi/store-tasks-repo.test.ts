@@ -62,6 +62,23 @@ describe("TasksRepo", () => {
     expect(repo.claimTask(runtime.id)).toBeNull();
   });
 
+  it("rejects progress on terminal tasks unless the write is a final summary", () => {
+    const repo = createRepo();
+    const runtime = store!.registerRuntime({ id: "rt_worker", name: "Worker box", provider: "claude", workspaceId: "local" });
+    const agent = store!.createAgent({ name: "Worker", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
+    const task = repo.createTask({ agentId: agent.id, prompt: "ship it" });
+    repo.claimTask(runtime.id);
+    repo.startTask(task.id);
+    repo.completeTask(task.id, { output: "shipped" });
+
+    expect(() => repo.reportProgress(task.id, "late", 1, 2)).toThrow("Task not found or terminal");
+    const updated = repo.reportProgress(task.id, "任务已完成：交付成功", 3, 3, { allowTerminal: true });
+    expect(updated.progressSummary).toBe("任务已完成：交付成功");
+    expect(updated.status).toBe("completed");
+    expect(() => repo.reportProgress("tsk_missing", "x", null, null, { allowTerminal: true }))
+      .toThrow("Task not found or terminal");
+  });
+
   it("appends task messages and notifies the context listeners", () => {
     const repo = createRepo();
     const agent = store!.createAgent({ name: "Chatty", provider: "claude", workspaceId: "local" });
