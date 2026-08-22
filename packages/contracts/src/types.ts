@@ -1290,6 +1290,12 @@ export type MultiremiAssigneeType = "agent" | "member" | "squad";
 
 export type MultiremiIssueKind = "execution" | "intake";
 
+export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_TTL_MS = 72 * 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MAX_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MIN_SWEEP_INTERVAL_MS = 60 * 1000;
+
 export interface MultiremiIssue {
   id: string;
   key: string;
@@ -1313,6 +1319,8 @@ export interface MultiremiIssue {
   metadata: Record<string, string | number | boolean>;
   labels: MultiremiLabel[];
   createdBy: string | null;
+  completedAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1701,6 +1709,10 @@ export interface ListIssuesInput {
   metadata?: Record<string, string | number | boolean> | null;
   includeNoAssignee?: boolean;
   includeNoProject?: boolean;
+  includeArchived?: boolean;
+  include_archived?: boolean;
+  archivedOnly?: boolean;
+  archived_only?: boolean;
   limit?: number;
   offset?: number;
 }

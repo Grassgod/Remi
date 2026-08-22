@@ -58,6 +58,8 @@ export interface Issue {
   metadata: IssueMetadata;
   reactions?: IssueReaction[];
   labels?: Label[];
+  completed_at: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }

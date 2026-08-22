@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 567,
+    "routeCount": 571,
     "routeCountByPrefix": {
-      "native": 191,
-      "compat": 363,
+      "native": 192,
+      "compat": 366,
       "root": 13
     },
-    "getRoutes": 245,
-    "getRoutesWithBody": 242,
+    "getRoutes": 246,
+    "getRoutesWithBody": 243,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 322,
+    "mutationRoutes": 325,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -346,6 +346,7 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
@@ -468,6 +469,7 @@
     "POST /api/issues/:id/labels",
     "POST /api/issues/:id/reactions",
     "POST /api/issues/:id/rerun",
+    "POST /api/issues/:id/restore",
     "POST /api/issues/:id/sessions",
     "POST /api/issues/:id/sessions/:sessionId/messages",
     "POST /api/issues/:id/sessions/:sessionId/participants",
@@ -524,6 +526,7 @@
     "POST /api/multiremi/issues/:id/dependencies",
     "POST /api/multiremi/issues/:id/labels",
     "POST /api/multiremi/issues/:id/reactions",
+    "POST /api/multiremi/issues/:id/restore",
     "POST /api/multiremi/issues/:id/subscribers",
     "POST /api/multiremi/issues/batch-delete",
     "POST /api/multiremi/issues/batch-update",
@@ -625,6 +628,7 @@
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
+    "PUT /api/workspaces/:id/issue-archive",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
     "PUT /api/workspaces/:id/session-archive",
@@ -909,6 +913,7 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
@@ -3657,6 +3662,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -3920,6 +3927,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -4090,6 +4099,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -4620,6 +4631,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -6915,6 +6928,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -6989,6 +7004,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7014,6 +7031,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7039,6 +7058,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7064,6 +7085,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -7100,6 +7123,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7134,6 +7159,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {
@@ -7298,6 +7325,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -7390,6 +7419,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {
@@ -7416,6 +7447,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {}
@@ -8153,6 +8186,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8198,6 +8233,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8232,6 +8269,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -8258,6 +8297,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -8284,6 +8325,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8320,6 +8363,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8345,6 +8390,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8370,6 +8417,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8395,6 +8444,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -8423,6 +8474,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -10436,6 +10489,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -10514,6 +10569,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
@@ -10543,6 +10600,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -10572,6 +10631,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -10612,6 +10673,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 2,
@@ -10641,13 +10704,16 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
             "latestTaskStatus": null,
             "latestTaskId": null
           }
-        ]
+        ],
+        "total": 5
       }
     },
     {
@@ -10690,6 +10756,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
           "tasks": [
@@ -10854,6 +10922,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -10904,6 +10974,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -10930,6 +11002,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -10961,6 +11035,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11011,6 +11087,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11037,6 +11115,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11243,6 +11323,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11363,6 +11445,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11389,6 +11473,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11708,6 +11794,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11753,6 +11841,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11787,6 +11877,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -11813,6 +11905,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -11839,6 +11933,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11878,6 +11974,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -11905,6 +12003,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -11932,6 +12032,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -11970,6 +12072,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title",
@@ -11998,6 +12102,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -13231,6 +13337,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -14509,6 +14617,18 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/issue-archive",
+      "route": "GET /api/workspaces/:id/issue-archive",
+      "path": "/api/workspaces/local/issue-archive",
+      "status": 200,
+      "body": {
+        "config": {
+          "ttl_ms": 0,
+          "sweep_interval_ms": 0
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/lark/install/:sessionId/status",
       "route": "GET /api/workspaces/:id/lark/install/:sessionId/status",
       "path": "/api/workspaces/local/lark/install/lark_snapshot_session/status",
@@ -14881,6 +15001,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -14939,6 +15061,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -14998,6 +15122,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15058,6 +15184,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15217,6 +15345,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -15243,6 +15373,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {}
@@ -15406,6 +15538,8 @@
             },
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -15432,6 +15566,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -15722,6 +15858,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -15752,6 +15890,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -15782,6 +15922,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -15814,6 +15956,8 @@
           "position": 0,
           "start_date": null,
           "due_date": null,
+          "completed_at": null,
+          "archived_at": null,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "metadata": {}
@@ -15900,6 +16044,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -15946,6 +16092,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -15991,6 +16139,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -16089,6 +16239,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },

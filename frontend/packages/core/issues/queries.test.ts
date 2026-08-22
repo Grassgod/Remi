@@ -6,6 +6,8 @@ import type { ApiClient } from "../api/client";
 import type { Issue, ListIssuesParams, ListIssuesResponse } from "../types";
 import {
   CHILDREN_BY_PARENTS_CHUNK_SIZE,
+  archivedIssueCountOptions,
+  archivedIssueListOptions,
   PROJECT_GANTT_MAX_ISSUES,
   PROJECT_GANTT_PAGE_LIMIT,
   childrenByParentsOptions,
@@ -37,6 +39,8 @@ function makeIssue(idx: number): Issue {
     due_date: null,
     labels: [],
     metadata: {},
+    completed_at: null,
+    archived_at: null,
     created_at: "2025-01-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
   };
@@ -46,6 +50,30 @@ function makeIssue(idx: number): Issue {
 function installFakeApi(listIssues: (params?: ListIssuesParams) => Promise<ListIssuesResponse>) {
   setApiInstance({ listIssues } as unknown as ApiClient);
 }
+
+describe("archived issue queries", () => {
+  it("uses a one-row request for the hidden-column count and a separate list page", async () => {
+    const listIssues = vi
+      .fn<(params?: ListIssuesParams) => Promise<ListIssuesResponse>>()
+      .mockResolvedValue({ issues: [makeIssue(1)], total: 7 });
+    installFakeApi(listIssues);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    expect(await qc.fetchQuery(archivedIssueCountOptions(WS_ID))).toBe(7);
+    expect(await qc.fetchQuery(archivedIssueListOptions(WS_ID))).toMatchObject({ total: 7 });
+    expect(listIssues).toHaveBeenNthCalledWith(1, {
+      archived_only: true,
+      limit: 1,
+      offset: 0,
+    });
+    expect(listIssues).toHaveBeenNthCalledWith(2, {
+      archived_only: true,
+      limit: 50,
+      offset: 0,
+    });
+    qc.clear();
+  });
+});
 
 function installFakeChildrenApi(
   listChildrenByParents: (parentIds: string[]) => Promise<{ issues: Issue[] }>,

@@ -7,6 +7,7 @@ import {
   addIssueToBuckets,
   findIssueLocation,
   patchIssueInBuckets,
+  removeIssueFromBuckets,
 } from "./cache-helpers";
 import { cleanupDeletedIssueCaches } from "./delete-cache";
 import type { Issue, IssueLabelsResponse, IssueMetadata, Label } from "../types";
@@ -61,7 +62,19 @@ export function onIssueUpdated(
     issue.parent_issue_id !== undefined && newParentId !== oldParentId;
 
   for (const [key, data] of listQueries) {
-    if (data) qc.setQueryData<ListIssuesCache>(key, patchIssueInBuckets(data, issue.id, issue));
+    if (!data) continue;
+    qc.setQueryData<ListIssuesCache>(
+      key,
+      issue.archived_at
+        ? removeIssueFromBuckets(data, issue.id)
+        : patchIssueInBuckets(data, issue.id, issue),
+    );
+  }
+  if (issue.archived_at !== undefined) {
+    qc.invalidateQueries({ queryKey: issueKeys.archivedAll(wsId) });
+    if (issue.archived_at === null) {
+      qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
+    }
   }
   if (issue.position !== undefined) {
     qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });

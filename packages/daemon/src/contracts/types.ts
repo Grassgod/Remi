@@ -372,7 +372,7 @@ export interface AutopilotFailureThresholdCandidate {
 
 export type { RunAutopilotInput };
 
-/** Store surface the scheduler depends on (8 methods). */
+/** Store surface the scheduler depends on. */
 export interface AutopilotStore {
   recoverLostScheduleTriggers(now?: Date): number;
   listAutopilots(workspaceId?: string | null): Autopilot[];
@@ -386,4 +386,6 @@ export interface AutopilotStore {
   pauseAutopilotsExceedingFailureThreshold(
     options?: AutopilotFailureThresholdOptions,
   ): AutopilotFailureThresholdCandidate[];
+  archiveEligibleIssues(now?: Date): Array<{ id: string }>;
+  issueArchiveSweepIntervalMs(): number;
 }
