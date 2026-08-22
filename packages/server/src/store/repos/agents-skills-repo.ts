@@ -27,6 +27,19 @@ import type {
 
 type Row = Record<string, unknown>;
 
+export const CONCIERGE_AGENT_INSTRUCTIONS = `你是飞书里的任务管家（concierge），服务对象是贺华杰。你的职责是在对话里帮他查任务进度、传达补充意见、创建新需求。权威数据都在 multiremi（用 remi CLI 访问），你自己不保存状态。
+
+意图路由：
+1. 查进度（如「MUL-63 咋样了」）：定位目标 issue → remi issue get <ref> --output json 和 remi issue runs <ref> --output json（读 progress_summary）→ 必要时 remi issue comment list <ref> --recent 5 --summary、remi issue session result list <ref> → 用一两句人话概括当前进展与下一步，不要转述执行流水。
+2. 补充意见 / 改方向（如「补充一点：用中文写」）：定位目标 issue → remi issue comment add 代发评论（注明来自飞书转达）→ 告知已传达、将在当前运行结束后被处理。
+3. 要求立即出结论（如「先给结论」）：当前版本尚不支持中途打断，如实说明，并代发评论请求执行 agent 尽快收尾。
+4. 新需求（如「帮我调研 X」）：remi issue create --title … --description … 创建 issue → 回传 issue key 和链接。
+5. 闲聊/其它：正常简短回答。
+
+issue 识别：优先显式 issue key（MUL-N）或链接；没有显式引用时，结合本会话最近提过的 issue 和 remi issue list 里最近活跃的 issue 推断；有歧义时先反问确认，宁可多问一句也不要猜错目标。
+
+回复风格：中文、简短、直接给结论；进度回答以一句话为主，需要时再展开。`;
+
 export class AgentsSkillsRepo {
   constructor(private ctx: StoreContext) {}
 
@@ -593,6 +606,50 @@ export class AgentsSkillsRepo {
     });
   }
 
+  ensureConciergeAgent(workspaceId: string, ownerId: string, provider = "claude"): MultiremiAgent {
+    const normalizedWorkspaceId = cleanOptionalString(workspaceId) ?? "local";
+    const normalizedOwnerId = cleanOptionalString(ownerId) ?? "local";
+    const existing = this.getConciergeAgent(normalizedWorkspaceId);
+    if (existing) {
+      if (existing.archivedAt) {
+        this.ctx.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [nowIso(), existing.id]);
+        return this.getAgent(existing.id)!;
+      }
+      return existing;
+    }
+
+    const base = `agt_concierge_${safeIdSegment(normalizedWorkspaceId)}`;
+    let id = base;
+    for (let n = 2; this.getAgent(id); n += 1) id = `${base}_${n}`;
+    try {
+      return this.createAgent({
+        id,
+        name: "飞书管家",
+        description: "Workspace Feishu concierge",
+        provider,
+        workspaceId: normalizedWorkspaceId,
+        ownerId: normalizedOwnerId,
+        visibility: "workspace",
+        maxConcurrentTasks: 20,
+        instructions: CONCIERGE_AGENT_INSTRUCTIONS,
+      });
+    } catch (error) {
+      if (!isUniqueError(error)) throw error;
+      const raced = this.getConciergeAgent(normalizedWorkspaceId);
+      if (!raced) throw error;
+      return raced;
+    }
+  }
+
+  getConciergeAgent(workspaceId: string): MultiremiAgent | null {
+    const row = this.ctx.db.query(
+      `SELECT * FROM multiremi_agents
+       WHERE id LIKE 'agt_concierge_%' AND workspace_id = ?
+       ORDER BY archived_at IS NOT NULL, created_at ASC LIMIT 1`,
+    ).get(workspaceId) as Row | null;
+    return row ? this.hydrateAgent(toAgent(row)) : null;
+  }
+
   /**
    * Find a member's default agent for a provider. Matches legacy ids too
    * (`agt_default_<provider>`, `agt_default_<ws>_<provider>`) so pre-pool
@@ -740,6 +797,11 @@ function normalizeAgentVisibility(value: unknown): MultiremiAgent["visibility"] 
 
 function safeIdSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "local";
+}
+
+function isUniqueError(error: unknown): boolean {
+  const message = String((error as Error)?.message ?? error).toLowerCase();
+  return message.includes("unique constraint") || message.includes("duplicate key");
 }
 
 export function toAgent(row: Row): MultiremiAgent {

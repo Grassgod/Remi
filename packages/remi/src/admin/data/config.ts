@@ -19,6 +19,9 @@ export class ConfigData {
       if (redacted.encryptKey) redacted.encryptKey = "***";
       if (redacted.verificationToken) redacted.verificationToken = "***";
       if (redacted.userAccessToken) redacted.userAccessToken = "***";
+      if (redacted.multiremi?.token) {
+        redacted.multiremi = { ...redacted.multiremi, token: "***" };
+      }
       config.feishu = redacted;
     }
     return config;

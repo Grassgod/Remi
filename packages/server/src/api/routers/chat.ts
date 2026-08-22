@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import {
+  canCurrentUserAccessAgent,
   canCurrentUserAccessChatSessionAgent,
   denyCurrentUserWorkspaceAccess,
   loadChatSessionForCurrentUser,
@@ -11,7 +12,10 @@ import {
 import {
   chatMessageCompatibilityResponse,
   chatSessionCompatibilityResponse,
+  cleanString,
+  currentAccessToken,
   currentRequestUserId,
+  currentTaskAccessToken,
   sendChatMessageCompatibilityResponse,
   taskPublicResponse,
 } from "../wire/index.js";
@@ -24,6 +28,44 @@ import type { RouterDeps } from "./deps.js";
 
 export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
+
+  app.post("/api/chat/external/resolve", async (c) => {
+    if (currentTaskAccessToken(c)) return c.json({ error: "member token required" }, 403);
+    const body = await readJson<{ source?: string; external_chat_id?: string; agent_id?: string }>(c);
+    const source = cleanString(body.source);
+    if (source !== "feishu") return c.json({ error: "source must be feishu" }, 400);
+    const externalChatId = cleanString(body.external_chat_id);
+    if (!externalChatId) return c.json({ error: "external_chat_id is required" }, 400);
+
+    const workspaceId = cleanString(c.req.query("workspace_id"))
+      ?? cleanString(c.req.query("workspaceId"))
+      ?? currentAccessToken(c)?.workspaceId
+      ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+
+    const creatorId = currentRequestUserId(c);
+    const requestedAgentId = cleanString(body.agent_id);
+    const agent = requestedAgentId
+      ? store.getAgent(requestedAgentId)
+      : store.ensureConciergeAgent(workspaceId, creatorId);
+    if (!agent || agent.archivedAt || agent.workspaceId !== workspaceId) {
+      return c.json({ error: "agent not found" }, 404);
+    }
+    if (!canCurrentUserAccessAgent(c, store, agent)) {
+      return c.json({ error: "you do not have access to this agent" }, 403);
+    }
+
+    const session = store.getOrCreateChatSessionForExternalChat({
+      workspaceId,
+      source,
+      externalChatId,
+      agentId: agent.id,
+      creatorId,
+      title: `飞书私聊 · ${externalChatId}`,
+    });
+    return c.json(chatSessionCompatibilityResponse(session));
+  });
 
   app.get("/api/multiremi/chats", (c) => {
     const workspaceId = requestedChatWorkspaceId(c);

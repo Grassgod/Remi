@@ -64,6 +64,12 @@ describe("ConfigStore", () => {
     expect(loaded.logLevel).toBe("WARN");
     expect(loaded.provider.default).toBe("claude");
     expect(loaded.feishu.port).toBe(9000);
+    expect(loaded.feishu.multiremi).toEqual({
+      enabled: false,
+      serverUrl: "http://127.0.0.1:6120",
+      token: "",
+      workspaceId: "local",
+    });
   });
 
   it("respects env overrides on load", () => {
@@ -74,6 +80,30 @@ describe("ConfigStore", () => {
       expect(loaded.provider.default).toBe("codex");
     } finally {
       delete process.env.REMI_PROVIDER;
+    }
+  });
+
+  it("merges legacy Feishu config and applies Multiremi env overrides", () => {
+    store.setSection("feishu", { appId: "legacy-app" });
+    process.env.FEISHU_MULTIREMI_ENABLED = "true";
+    process.env.FEISHU_MULTIREMI_SERVER_URL = "http://multiremi.internal:6120";
+    process.env.FEISHU_MULTIREMI_TOKEN = "member-token";
+    process.env.FEISHU_MULTIREMI_WORKSPACE_ID = "ws_team";
+    try {
+      const loaded = store.load();
+      expect(loaded.feishu.appId).toBe("legacy-app");
+      expect(loaded.feishu.appSecret).toBe("");
+      expect(loaded.feishu.multiremi).toEqual({
+        enabled: true,
+        serverUrl: "http://multiremi.internal:6120",
+        token: "member-token",
+        workspaceId: "ws_team",
+      });
+    } finally {
+      delete process.env.FEISHU_MULTIREMI_ENABLED;
+      delete process.env.FEISHU_MULTIREMI_SERVER_URL;
+      delete process.env.FEISHU_MULTIREMI_TOKEN;
+      delete process.env.FEISHU_MULTIREMI_WORKSPACE_ID;
     }
   });
 

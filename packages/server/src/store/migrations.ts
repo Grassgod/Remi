@@ -1381,6 +1381,20 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_workspace ON multiremi_chat_sessions(workspace_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_agent ON multiremi_chat_sessions(agent_id);
 
+    CREATE TABLE IF NOT EXISTS multiremi_chat_links (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      source TEXT NOT NULL CHECK(source = 'feishu'),
+      external_chat_id TEXT NOT NULL,
+      chat_session_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(workspace_id, source, external_chat_id),
+      FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_chat_links_session
+      ON multiremi_chat_links(chat_session_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_chat_messages (
       id TEXT PRIMARY KEY,
       chat_session_id TEXT NOT NULL,

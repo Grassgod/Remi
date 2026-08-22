@@ -24,6 +24,7 @@ import {
 } from "./sdk.js";
 import { createFeishuClient } from "./sdk.js";
 import { createAdapter } from "./sdk.js";
+import { FeishuMultiremiClient, shouldRouteFeishuMessageToMultiremi } from "./multiremi.js";
 
 const log = createLogger("feishu");
 
@@ -54,6 +55,7 @@ export class FeishuConnector implements Connector {
   private _groupPolicy: GroupPolicy;
   private _handler: MessageHandler | null = null;
   private _streamHandler: StreamingHandler | null = null;
+  private _multiremiClient: FeishuMultiremiClient | null;
 
   constructor(
     config: FeishuConfig & { domain?: string; connectionMode?: string },
@@ -71,6 +73,9 @@ export class FeishuConnector implements Connector {
     // connector never reaches up into the remi product for its store.
     this._groupPolicy = groupPolicy ?? { getByChatId: () => null };
     this._channel.setGroupPolicy(this._groupPolicy);
+    this._multiremiClient = config.multiremi?.enabled
+      ? new FeishuMultiremiClient(config.multiremi)
+      : null;
   }
 
   setAbortHandler(handler: (sessionKey: string) => Promise<void>): void {
@@ -195,6 +200,11 @@ export class FeishuConnector implements Connector {
       const cancelled = this._channel.cancelPendingInteractions(msg.chatId);
       if (cancelled > 0) _log.info(`Cancelled ${cancelled} pending action(s) for session "${sessionKey}"`);
 
+      if (shouldRouteFeishuMessageToMultiremi(this._config.multiremi, msg.chatType)) {
+        await this._handleMultiremiMessage(msg.chatId, incoming.text, _log);
+        return;
+      }
+
       const groupConfig = this._groupPolicy.getByChatId(msg.chatId);
       const replyInThread = msg.chatType === "p2p" ? false : (groupConfig ? groupConfig.replyMode === "thread" : true);
       const replyToId = replyInThread ? msg.messageId : undefined;
@@ -214,6 +224,22 @@ export class FeishuConnector implements Connector {
       if (thinkingReactionId) {
         await this._channel.removeReaction(msg.messageId, thinkingReactionId);
       }
+    }
+  }
+
+  private async _handleMultiremiMessage(
+    chatId: string,
+    text: string,
+    _log: ReturnType<typeof log.child>,
+  ): Promise<void> {
+    await this._channel.sendText(chatId, "已收到，处理中…");
+    try {
+      const response = await this._multiremiClient!.sendMessage(chatId, text);
+      await this._channel.sendText(chatId, response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      _log.error(`Multiremi chat forwarding failed: ${message}`);
+      await this._channel.sendText(chatId, `处理失败：${message}`);
     }
   }
 

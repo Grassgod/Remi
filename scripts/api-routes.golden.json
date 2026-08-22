@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 567,
+    "routeCount": 568,
     "routeCountByPrefix": {
       "native": 191,
-      "compat": 363,
+      "compat": 364,
       "root": 13
     },
     "getRoutes": 245,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 322,
+    "mutationRoutes": 323,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -405,6 +405,7 @@
     "POST /api/autopilots/:id/trigger",
     "POST /api/autopilots/:id/triggers",
     "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
+    "POST /api/chat/external/resolve",
     "POST /api/chat/sessions",
     "POST /api/chat/sessions/:sessionId/messages",
     "POST /api/chat/sessions/:sessionId/read",

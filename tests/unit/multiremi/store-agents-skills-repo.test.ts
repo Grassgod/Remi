@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
-import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
+import {
+  AgentsSkillsRepo,
+  CONCIERGE_AGENT_INSTRUCTIONS,
+} from "@multiremi/store/repos/agents-skills-repo.js";
 
 let db: Database | null = null;
 
@@ -57,5 +60,21 @@ describe("AgentsSkillsRepo", () => {
     expect(attached.map((entry) => entry.id)).toEqual([skillId]);
     expect(repo.listAgentSkills(agent.id)[0]!.files?.map((file) => file.path)).toEqual(["checklist.md"]);
     expect(repo.listSkillFiles(skillId).map((file) => file.content)).toEqual(["- read the diff"]);
+  });
+
+  it("ensures one workspace concierge agent with the canonical instructions", () => {
+    const repo = createRepo();
+
+    const first = repo.ensureConciergeAgent("local", "alice", "codex");
+    const second = repo.ensureConciergeAgent("local", "bob", "claude");
+
+    expect(second.id).toBe(first.id);
+    expect(first.id).toBe("agt_concierge_local");
+    expect(first.name).toBe("飞书管家");
+    expect(first.provider).toBe("codex");
+    expect(first.ownerId).toBe("alice");
+    expect(first.visibility).toBe("workspace");
+    expect(first.maxConcurrentTasks).toBe(20);
+    expect(first.instructions).toBe(CONCIERGE_AGENT_INSTRUCTIONS);
   });
 });

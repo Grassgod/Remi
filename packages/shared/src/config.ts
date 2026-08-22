@@ -46,6 +46,14 @@ export interface FeishuConfig {
   userAccessToken: string;
   /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
   triggerUserIds: string[];
+  multiremi: FeishuMultiremiConfig;
+}
+
+export interface FeishuMultiremiConfig {
+  enabled: boolean;
+  serverUrl: string;
+  token: string;
+  workspaceId: string;
 }
 
 /**
@@ -259,6 +267,12 @@ function defaultFeishuConfig(): FeishuConfig {
     connectionMode: "websocket",
     userAccessToken: "",
     triggerUserIds: [],
+    multiremi: {
+      enabled: false,
+      serverUrl: "http://127.0.0.1:6120",
+      token: "",
+      workspaceId: "local",
+    },
   };
 }
 
