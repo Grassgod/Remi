@@ -56,6 +56,9 @@ describe("store migrations", () => {
       "multiremi_scm_repository_bindings",
       "multiremi_scm_sync_cursors",
       "multiremi_scm_entity_snapshots",
+      "multiremi_scm_change_requests",
+      "multiremi_scm_issue_links",
+      "multiremi_scm_effects",
       "multiremi_scm_events",
       "multiremi_scm_event_evidence",
       "multiremi_scm_event_deliveries",
@@ -68,6 +71,8 @@ describe("store migrations", () => {
       expect(tables).toContain(table);
     }
     expect(tables.some((name) => name.startsWith("multica_"))).toBe(false);
+    expect(tables).not.toContain("multiremi_github_settings");
+    expect(tables).not.toContain("multiremi_github_pull_requests");
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
     expect(columnNames(database, "multiremi_autopilots")).toEqual(expect.arrayContaining([
@@ -98,6 +103,93 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
       "source_revision", "sha256", "relative_path", "status", "uploaded_size_bytes",
     ]));
+  });
+
+  it("migrates legacy GitHub PR projections and settings without dual-writing", () => {
+    const database = freshDb();
+    migrate(database);
+    const now = "2026-08-22T00:00:00.000Z";
+    database.exec(`
+      CREATE TABLE multiremi_github_settings (
+        workspace_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, pr_sidebar INTEGER NOT NULL,
+        co_author INTEGER NOT NULL, auto_link_prs INTEGER NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE multiremi_github_pull_requests (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, issue_id TEXT,
+        repo_owner TEXT NOT NULL, repo_name TEXT NOT NULL, number INTEGER NOT NULL,
+        title TEXT NOT NULL, state TEXT NOT NULL, html_url TEXT NOT NULL, branch TEXT,
+        author_login TEXT, author_avatar_url TEXT, merged_at TEXT, closed_at TEXT,
+        pr_created_at TEXT NOT NULL, pr_updated_at TEXT NOT NULL, mergeable_state TEXT,
+        checks_conclusion TEXT, checks_passed INTEGER NOT NULL DEFAULT 0,
+        checks_failed INTEGER NOT NULL DEFAULT 0, checks_pending INTEGER NOT NULL DEFAULT 0,
+        additions INTEGER NOT NULL DEFAULT 0, deletions INTEGER NOT NULL DEFAULT 0,
+        changed_files INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+    `);
+    database.run(
+      `INSERT INTO multiremi_workspaces (
+        id, name, slug, description, context, settings, repos, issue_prefix, created_at, updated_at
+      ) VALUES ('local', 'Local', 'local', NULL, NULL, '{}', '[]', 'MUL', ?, ?)`,
+      [now, now],
+    );
+    database.run(
+      `INSERT INTO multiremi_issues (
+        id, issue_number, issue_key, title, status, workspace_id, created_at, updated_at
+      ) VALUES ('iss_legacy', 1, 'MUL-1', 'Legacy issue', 'todo', 'local', ?, ?)`,
+      [now, now],
+    );
+    database.run(
+      `INSERT INTO multiremi_scm_connections (
+        id, workspace_id, name, provider, mode, base_url, api_base_url, enabled,
+        poll_interval_seconds, created_at, updated_at
+      ) VALUES ('scm_legacy', 'local', 'GitHub', 'github', 'poll',
+        'https://github.com', 'https://api.github.com', 1, 60, ?, ?)`,
+      [now, now],
+    );
+    database.run(
+      `INSERT INTO multiremi_scm_repository_bindings (
+        id, workspace_id, connection_id, repository_id, repository_url, owner, name,
+        enabled, created_at, updated_at
+      ) VALUES ('srb_legacy', 'local', 'scm_legacy', 'repo_legacy',
+        'git@github.com:acme/widgets.git', 'acme', 'widgets', 1, ?, ?)`,
+      [now, now],
+    );
+    database.run(
+      `INSERT INTO multiremi_github_settings (
+        workspace_id, enabled, pr_sidebar, co_author, auto_link_prs, updated_at
+      ) VALUES ('local', 1, 0, 0, 1, ?)`,
+      [now],
+    );
+    database.run(
+      `INSERT INTO multiremi_github_pull_requests (
+        id, workspace_id, issue_id, repo_owner, repo_name, number, title, state,
+        html_url, branch, pr_created_at, pr_updated_at, created_at, updated_at
+      ) VALUES ('ghp_legacy', 'local', 'iss_legacy', 'acme', 'widgets', 7,
+        'MUL-1 migrated', 'open', 'https://github.com/acme/widgets/pull/7',
+        'feature/migrate', ?, ?, ?, ?)`,
+      [now, now, now, now],
+    );
+
+    migrate(database);
+    expect(database.query(
+      "SELECT provider, number, source_branch FROM multiremi_scm_change_requests WHERE repository_id = 'repo_legacy'",
+    ).get()).toEqual({ provider: "github", number: 7, source_branch: "feature/migrate" });
+    expect(database.query(
+      "SELECT issue_id, source, active FROM multiremi_scm_issue_links WHERE issue_id = 'iss_legacy'",
+    ).get()).toEqual({ issue_id: "iss_legacy", source: "legacy", active: 1 });
+    const settings = JSON.parse(String((database.query(
+      "SELECT settings FROM multiremi_workspaces WHERE id = 'local'",
+    ).get() as { settings: string }).settings));
+    expect(settings).toMatchObject({
+      scm_change_sidebar_enabled: false,
+      scm_auto_link_enabled: true,
+      scm_complete_issue_on_merge_enabled: false,
+      co_authored_by_enabled: false,
+    });
+
+    migrate(database);
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_scm_change_requests").get()).toEqual({ count: 1 });
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_scm_issue_links").get()).toEqual({ count: 1 });
   });
 
   it("upgrades legacy SSH Mesh daemon state rows as runtime nodes", () => {

@@ -13,11 +13,13 @@ import type {
   MultiremiScmCanonicalEventType,
   MultiremiScmConnection,
   MultiremiScmConnectionCredential,
+  MultiremiScmChangeRequest,
   MultiremiScmEntitySnapshot,
   MultiremiScmEntityType,
   MultiremiScmEventEvidence,
   MultiremiScmEventDelivery,
   MultiremiScmEventSource,
+  MultiremiScmIssueLink,
   MultiremiScmProvider,
   MultiremiScmRepositoryAssignmentOrigin,
   MultiremiScmRepositoryBinding,
@@ -292,6 +294,13 @@ export class ScmRepo {
       if (Number(eventCount?.count ?? 0) > 0) {
         throw new Error("SCM connection has event history; disable it instead of deleting it");
       }
+      this.ctx.db.run(
+        `DELETE FROM multiremi_scm_issue_links WHERE change_request_id IN (
+          SELECT id FROM multiremi_scm_change_requests WHERE connection_id = ?
+        )`,
+        [id],
+      );
+      this.ctx.db.run("DELETE FROM multiremi_scm_change_requests WHERE connection_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ?", [id]);
@@ -507,14 +516,7 @@ export class ScmRepo {
          WHERE connection_id = ? AND repository_id = ? RETURNING id`,
       ).get(connectionId, repositoryId) as Row | null;
       if (!binding) return false;
-      this.ctx.db.run(
-        "DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ? AND repository_id = ?",
-        [connectionId, repositoryId],
-      );
-      this.ctx.db.run(
-        "DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ? AND repository_id = ?",
-        [connectionId, repositoryId],
-      );
+      this.deleteRepositorySyncStateLocked(connectionId, repositoryId);
       return this.ctx.db.run(
         "DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ? AND repository_id = ?",
         [connectionId, repositoryId],
@@ -675,8 +677,11 @@ export class ScmRepo {
     const revisionAt = normalizeIsoTimestamp(input.revisionAt ?? observedAt, "snapshot revision time");
     const contentHash = requiredString(input.contentHash, "snapshot content hash");
     const revision = requiredString(input.revision ?? cleanOptionalString(input.version) ?? contentHash, "snapshot revision");
-    return this.ctx.db.transaction(() => {
-      this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
+    let projected: { changeRequestId: string; issueIds: string[] } | null = null;
+    let projectedWorkspaceId: string | null = null;
+    const result = this.ctx.db.transaction(() => {
+      const { connection, binding } = this.lockConnectionAndBinding(input.connectionId, input.repositoryId);
+      projectedWorkspaceId = connection.workspaceId;
       const values = [
         input.connectionId,
         input.repositoryId,
@@ -699,7 +704,12 @@ export class ScmRepo {
         ON CONFLICT(connection_id, repository_id, entity_type, external_id) DO NOTHING
         RETURNING *`,
       ).get(...values) as Row | null;
-      if (inserted) return { applied: true, previous: null, snapshot: toEntitySnapshot(inserted) };
+      if (inserted) {
+        if (input.entityType === "change_request") {
+          projected = this.upsertChangeRequestProjectionLocked(connection, binding, input.externalId, input.payload, now);
+        }
+        return { applied: true, previous: null, snapshot: toEntitySnapshot(inserted) };
+      }
 
       // A no-op UPDATE is portable across SQLite/Postgres and holds the entity
       // row lock until this transaction commits. The returned row is therefore
@@ -737,8 +747,82 @@ export class ScmRepo {
         input.externalId,
       ) as Row | null;
       if (!updated) throw new Error("SCM snapshot compare-and-set lost its locked row");
+      if (input.entityType === "change_request") {
+        projected = this.upsertChangeRequestProjectionLocked(connection, binding, input.externalId, input.payload, now);
+      }
       return { applied: true, previous, snapshot: toEntitySnapshot(updated) };
     })();
+    if (projected && projectedWorkspaceId) this.emitChangeRequestUpdated(projectedWorkspaceId, projected);
+    return result;
+  }
+
+  getChangeRequest(id: string): MultiremiScmChangeRequest | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_scm_change_requests WHERE id = ?").get(id) as Row | null;
+    return row ? toChangeRequest(row) : null;
+  }
+
+  listChangeRequestsForIssue(issueId: string): MultiremiScmChangeRequest[] | null {
+    const issue = this.ctx.issues().getIssue(issueId);
+    if (!issue) return null;
+    return (this.ctx.db.query(
+      `SELECT cr.* FROM multiremi_scm_change_requests cr
+       JOIN multiremi_scm_issue_links l ON l.change_request_id = cr.id
+       WHERE l.issue_id = ? AND l.active = 1 AND cr.workspace_id = ?
+       ORDER BY COALESCE(cr.provider_updated_at, cr.updated_at) DESC, cr.id ASC`,
+    ).all(issueId, issue.workspaceId) as Row[]).map(toChangeRequest);
+  }
+
+  linkChangeRequestToIssue(issueId: string, changeRequestId: string): {
+    changeRequest: MultiremiScmChangeRequest;
+    link: MultiremiScmIssueLink;
+  } {
+    const result = this.ctx.db.transaction(() => {
+      const issue = this.ctx.issues().getIssue(issueId);
+      if (!issue) throw new Error(`Issue not found: ${issueId}`);
+      const changeRequest = this.getChangeRequest(changeRequestId);
+      if (!changeRequest) throw new Error(`SCM change request not found: ${changeRequestId}`);
+      if (changeRequest.workspaceId !== issue.workspaceId) throw new Error("SCM change request belongs to another workspace");
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_scm_issue_links (
+          id, workspace_id, change_request_id, issue_id, source, active,
+          linked_at, unlinked_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'manual', 1, ?, NULL, ?, ?)
+        ON CONFLICT(change_request_id, issue_id) DO UPDATE SET
+          source = 'manual', active = 1, linked_at = excluded.linked_at,
+          unlinked_at = NULL, updated_at = excluded.updated_at`,
+        [createId("sil"), issue.workspaceId, changeRequestId, issueId, now, now, now],
+      );
+      const linkRow = this.ctx.db.query(
+        "SELECT * FROM multiremi_scm_issue_links WHERE change_request_id = ? AND issue_id = ?",
+      ).get(changeRequestId, issueId) as Row;
+      return { changeRequest, link: toIssueLink(linkRow) };
+    })();
+    this.emitChangeRequestUpdated(result.changeRequest.workspaceId, {
+      changeRequestId: result.changeRequest.id,
+      issueIds: this.activeIssueIds(result.changeRequest.id),
+    });
+    return result;
+  }
+
+  unlinkChangeRequestFromIssue(issueId: string, changeRequestId: string): boolean {
+    const changeRequest = this.getChangeRequest(changeRequestId);
+    if (!changeRequest) return false;
+    const issue = this.ctx.issues().getIssue(issueId);
+    if (!issue || issue.workspaceId !== changeRequest.workspaceId) return false;
+    const changed = this.ctx.db.transaction(() => this.ctx.db.run(
+      `UPDATE multiremi_scm_issue_links SET
+         source = 'manual', active = 0, unlinked_at = ?, updated_at = ?
+       WHERE change_request_id = ? AND issue_id = ? AND active = 1`,
+      [nowIso(), nowIso(), changeRequestId, issueId],
+    ).changes > 0)();
+    if (changed) {
+      this.emitChangeRequestUpdated(changeRequest.workspaceId, {
+        changeRequestId,
+        issueIds: this.activeIssueIds(changeRequestId),
+      });
+    }
+    return changed;
   }
 
   recordCanonicalEvent(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {
@@ -808,9 +892,13 @@ export class ScmRepo {
         ],
       );
       evidenceCreated = evidenceInsert.changes > 0;
-      if (created) this.ensureEventDeliveriesInitialized(canonical, observedAt);
+      if (created) {
+        this.ensureEventDeliveriesInitialized(canonical, observedAt);
+        this.scheduleLinkedIssueMergeEffectsLocked(canonical);
+      }
       return this.getCanonicalEvent(canonical.id)!;
     })();
+    this.processPendingMergeEffects(event);
     return { event, created, evidenceCreated };
   }
 
@@ -910,6 +998,7 @@ export class ScmRepo {
   dispatchPendingEvents(now: Date = new Date(), limit = 25): MultiremiAutopilotRun[] {
     const runs: MultiremiAutopilotRun[] = [];
     for (const event of this.claimPendingEvents(now, limit)) {
+      this.processPendingMergeEffects(event);
       this.ctx.db.transaction(() => this.ensureEventDeliveriesInitialized(event, now.toISOString()))();
       let deliveries = this.listEventDeliveries(event.id);
 
@@ -981,13 +1070,22 @@ export class ScmRepo {
       }
 
       deliveries = this.listEventDeliveries(event.id);
-      const hasPending = deliveries.some((delivery) => delivery.status === "pending" || delivery.status === "processing");
+      const pendingEffect = this.ctx.db.query(
+        `SELECT last_error FROM multiremi_scm_effects
+         WHERE event_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+      ).get(event.id) as Row | null;
+      const hasPending = Boolean(pendingEffect)
+        || deliveries.some((delivery) => delivery.status === "pending" || delivery.status === "processing");
       const hasFailed = deliveries.some((delivery) => delivery.status === "failed");
       if (hasPending) {
         this.ctx.db.run(
           `UPDATE multiremi_scm_events SET status = 'pending', available_at = ?, lease_until = NULL,
            last_error = ? WHERE id = ? AND status = 'processing'`,
-          [new Date(now.getTime() + retryDelayMs(event.attemptCount)).toISOString(), "one or more deliveries are pending", event.id],
+          [
+            new Date(now.getTime() + retryDelayMs(event.attemptCount)).toISOString(),
+            pendingEffect?.last_error ?? "one or more deliveries are pending",
+            event.id,
+          ],
         );
       } else {
         this.ctx.db.run(
@@ -1138,6 +1236,16 @@ export class ScmRepo {
 
   private deleteRepositorySyncStateLocked(connectionId: string, repositoryId: string): void {
     this.ctx.db.run(
+      `DELETE FROM multiremi_scm_issue_links WHERE change_request_id IN (
+        SELECT id FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?
+      )`,
+      [connectionId, repositoryId],
+    );
+    this.ctx.db.run(
+      "DELETE FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?",
+      [connectionId, repositoryId],
+    );
+    this.ctx.db.run(
       "DELETE FROM multiremi_scm_sync_cursors WHERE connection_id = ? AND repository_id = ?",
       [connectionId, repositoryId],
     );
@@ -1145,6 +1253,200 @@ export class ScmRepo {
       "DELETE FROM multiremi_scm_entity_snapshots WHERE connection_id = ? AND repository_id = ?",
       [connectionId, repositoryId],
     );
+  }
+
+  private upsertChangeRequestProjectionLocked(
+    connection: MultiremiScmConnection,
+    binding: MultiremiScmRepositoryBinding,
+    externalId: string,
+    payload: Record<string, unknown>,
+    now: string,
+  ): { changeRequestId: string; issueIds: string[] } {
+    const number = finiteInteger(payload.number);
+    const draft = payload.draft === true;
+    const state = normalizeChangeRequestState(payload.state, draft);
+    const existingByNumber = number == null ? null : this.ctx.db.query(
+      `SELECT id FROM multiremi_scm_change_requests
+       WHERE connection_id = ? AND repository_id = ? AND number = ?
+       ORDER BY updated_at DESC LIMIT 1`,
+    ).get(connection.id, binding.repositoryId, number) as Row | null;
+    const projectionId = existingByNumber ? String(existingByNumber.id) : createId("scr");
+    if (!existingByNumber) this.ctx.db.run(
+      `INSERT INTO multiremi_scm_change_requests (
+        id, workspace_id, connection_id, repository_id, provider, external_id,
+        number, title, body, state, draft, url, source_branch, target_branch,
+        head_sha, base_sha, author, provider_created_at, provider_updated_at,
+        closed_at, merged_at, merge_sha, mergeable_state, checks_conclusion,
+        checks_passed, checks_failed, checks_pending, additions, deletions,
+        changed_files, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(connection_id, repository_id, external_id) DO UPDATE SET
+        number = excluded.number,
+        title = excluded.title,
+        body = excluded.body,
+        state = excluded.state,
+        draft = excluded.draft,
+        url = excluded.url,
+        source_branch = excluded.source_branch,
+        target_branch = excluded.target_branch,
+        head_sha = excluded.head_sha,
+        base_sha = excluded.base_sha,
+        author = excluded.author,
+        provider_created_at = excluded.provider_created_at,
+        provider_updated_at = excluded.provider_updated_at,
+        closed_at = excluded.closed_at,
+        merged_at = excluded.merged_at,
+        merge_sha = excluded.merge_sha,
+        mergeable_state = excluded.mergeable_state,
+        checks_conclusion = excluded.checks_conclusion,
+        checks_passed = excluded.checks_passed,
+        checks_failed = excluded.checks_failed,
+        checks_pending = excluded.checks_pending,
+        additions = excluded.additions,
+        deletions = excluded.deletions,
+        changed_files = excluded.changed_files,
+        updated_at = excluded.updated_at`,
+      [
+        projectionId, connection.workspaceId, connection.id, binding.repositoryId, connection.provider,
+        requiredString(externalId, "external change request ID"), number,
+        stringField(payload.title), nullableField(payload.body), state, draft ? 1 : 0,
+        nullableField(payload.url), nullableField(payload.source_branch), nullableField(payload.target_branch),
+        nullableField(payload.head_sha), nullableField(payload.base_sha), nullableField(payload.author),
+        nullableField(payload.created_at), nullableField(payload.updated_at), nullableField(payload.closed_at),
+        nullableField(payload.merged_at), nullableField(payload.merge_sha), nullableField(payload.mergeable_state),
+        nullableField(payload.checks_conclusion ?? payload.check_status), nonNegativeInteger(payload.checks_passed),
+        nonNegativeInteger(payload.checks_failed), nonNegativeInteger(payload.checks_pending),
+        nonNegativeInteger(payload.additions), nonNegativeInteger(payload.deletions),
+        nonNegativeInteger(payload.changed_files), now, now,
+      ],
+    );
+    if (existingByNumber) {
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_change_requests SET
+          external_id = ?, title = ?, body = ?, state = ?, draft = ?, url = ?,
+          source_branch = ?, target_branch = ?, head_sha = ?, base_sha = ?, author = ?,
+          provider_created_at = ?, provider_updated_at = ?, closed_at = ?, merged_at = ?,
+          merge_sha = ?, mergeable_state = ?, checks_conclusion = ?, checks_passed = ?,
+          checks_failed = ?, checks_pending = ?, additions = ?, deletions = ?, changed_files = ?,
+          updated_at = ? WHERE id = ?`,
+        [
+          externalId, stringField(payload.title), nullableField(payload.body), state, draft ? 1 : 0,
+          nullableField(payload.url), nullableField(payload.source_branch), nullableField(payload.target_branch),
+          nullableField(payload.head_sha), nullableField(payload.base_sha), nullableField(payload.author),
+          nullableField(payload.created_at), nullableField(payload.updated_at), nullableField(payload.closed_at),
+          nullableField(payload.merged_at), nullableField(payload.merge_sha), nullableField(payload.mergeable_state),
+          nullableField(payload.checks_conclusion ?? payload.check_status), nonNegativeInteger(payload.checks_passed),
+          nonNegativeInteger(payload.checks_failed), nonNegativeInteger(payload.checks_pending),
+          nonNegativeInteger(payload.additions), nonNegativeInteger(payload.deletions),
+          nonNegativeInteger(payload.changed_files), now, projectionId,
+        ],
+      );
+    }
+    const row = this.ctx.db.query(
+      `SELECT * FROM multiremi_scm_change_requests
+       WHERE connection_id = ? AND repository_id = ?
+         AND (external_id = ? OR (? IS NOT NULL AND number = ?))
+       ORDER BY updated_at DESC LIMIT 1`,
+    ).get(connection.id, binding.repositoryId, externalId, number, number) as Row | null;
+    if (!row) throw new Error("SCM change request projection could not be read after upsert");
+    const changeRequest = toChangeRequest(row);
+    if (this.ctx.workspaces().getWorkspace(connection.workspaceId)?.settings.scm_auto_link_enabled !== false) {
+      const haystack = [changeRequest.title, changeRequest.sourceBranch ?? "", changeRequest.body ?? ""].join("\n");
+      for (const issue of this.ctx.issues().listIssues({ workspaceId: connection.workspaceId })) {
+        if (!issue.key || !new RegExp(`\\b${escapeRegExp(issue.key)}\\b`, "i").test(haystack)) continue;
+        this.ctx.db.run(
+          `INSERT INTO multiremi_scm_issue_links (
+            id, workspace_id, change_request_id, issue_id, source, active,
+            linked_at, unlinked_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'auto', 1, ?, NULL, ?, ?)
+          ON CONFLICT(change_request_id, issue_id) DO NOTHING`,
+          [createId("sil"), connection.workspaceId, changeRequest.id, issue.id, now, now, now],
+        );
+      }
+    }
+    return { changeRequestId: changeRequest.id, issueIds: this.activeIssueIds(changeRequest.id) };
+  }
+
+  private scheduleLinkedIssueMergeEffectsLocked(event: MultiremiScmCanonicalEvent): void {
+    if (event.type !== "change.merged" || event.subjectType !== "change_request") return;
+    const workspace = this.ctx.workspaces().getWorkspace(event.workspaceId);
+    if (workspace?.settings.scm_complete_issue_on_merge_enabled !== true) return;
+    const rows = this.ctx.db.query(
+      `SELECT i.id FROM multiremi_scm_change_requests cr
+       JOIN multiremi_scm_issue_links l ON l.change_request_id = cr.id AND l.active = 1
+       JOIN multiremi_issues i ON i.id = l.issue_id
+       WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?
+         AND i.workspace_id = ? AND i.status <> 'done'`,
+    ).all(event.connectionId, event.repositoryId, event.subjectId, event.workspaceId) as Row[];
+    for (const row of rows) {
+      const issueId = String(row.id);
+      this.ctx.db.run(
+        `INSERT OR IGNORE INTO multiremi_scm_effects (
+          id, event_id, issue_id, effect_type, status, applied_at, last_error, created_at
+        ) VALUES (?, ?, ?, 'complete_issue_on_merge', 'pending', NULL, NULL, ?)`,
+        [createId("sfx"), event.id, issueId, nowIso()],
+      );
+    }
+  }
+
+  private processPendingMergeEffects(event: MultiremiScmCanonicalEvent): void {
+    // The pending row is committed with the canonical event. Retrying after a
+    // crash is safe: updateIssue emits status automation only on a real change.
+    const rows = this.ctx.db.query(
+      `SELECT id, issue_id FROM multiremi_scm_effects
+       WHERE event_id = ? AND effect_type = 'complete_issue_on_merge' AND status = 'pending'
+       ORDER BY created_at ASC, id ASC`,
+    ).all(event.id) as Row[];
+    for (const row of rows) {
+      const effectId = String(row.id);
+      const issueId = String(row.issue_id);
+      try {
+        const current = this.ctx.issues().getIssue(issueId);
+        const updated = current && current.status !== "done"
+          ? this.ctx.issues().updateIssue(issueId, { status: "done" })
+          : null;
+        this.ctx.db.run(
+          "UPDATE multiremi_scm_effects SET status = 'applied', applied_at = ?, last_error = NULL WHERE id = ? AND status = 'pending'",
+          [nowIso(), effectId],
+        );
+        if (updated) {
+          this.ctx.emitWorkspaceEvent({
+            type: "issue:updated",
+            workspaceId: updated.workspaceId,
+            actorType: "system",
+            actorId: null,
+            payload: { issue: updated },
+          });
+        }
+      } catch (error) {
+        this.ctx.db.run(
+          "UPDATE multiremi_scm_effects SET last_error = ? WHERE id = ? AND status = 'pending'",
+          [(error instanceof Error ? error.message : String(error)).slice(0, 1_000), effectId],
+        );
+      }
+    }
+  }
+
+  private activeIssueIds(changeRequestId: string): string[] {
+    return (this.ctx.db.query(
+      "SELECT issue_id FROM multiremi_scm_issue_links WHERE change_request_id = ? AND active = 1 ORDER BY issue_id ASC",
+    ).all(changeRequestId) as Row[]).map((row) => String(row.issue_id));
+  }
+
+  private emitChangeRequestUpdated(
+    workspaceId: string,
+    input: { changeRequestId: string; issueIds: string[] },
+  ): void {
+    this.ctx.emitWorkspaceEvent({
+      type: "change_request:updated",
+      workspaceId,
+      actorType: "system",
+      actorId: null,
+      payload: {
+        change_request_id: input.changeRequestId,
+        issue_ids: input.issueIds,
+      },
+    });
   }
 
   private lockConnectionAndBinding(
@@ -1246,6 +1548,58 @@ function toEntitySnapshot(row: Row): MultiremiScmEntitySnapshot {
     contentHash: String(row.content_hash),
     payload: parseJson(String(row.payload ?? "{}"), {}),
     observedAt: String(row.observed_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toChangeRequest(row: Row): MultiremiScmChangeRequest {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    connectionId: String(row.connection_id),
+    repositoryId: String(row.repository_id),
+    provider: normalizeProvider(row.provider),
+    externalId: String(row.external_id),
+    number: row.number == null ? null : Number(row.number),
+    title: String(row.title ?? ""),
+    body: nullableString(row.body),
+    state: normalizeChangeRequestState(row.state, Boolean(Number(row.draft ?? 0))),
+    draft: Boolean(Number(row.draft ?? 0)),
+    url: nullableString(row.url),
+    sourceBranch: nullableString(row.source_branch),
+    targetBranch: nullableString(row.target_branch),
+    headSha: nullableString(row.head_sha),
+    baseSha: nullableString(row.base_sha),
+    author: nullableString(row.author),
+    providerCreatedAt: nullableString(row.provider_created_at),
+    providerUpdatedAt: nullableString(row.provider_updated_at),
+    closedAt: nullableString(row.closed_at),
+    mergedAt: nullableString(row.merged_at),
+    mergeSha: nullableString(row.merge_sha),
+    mergeableState: nullableString(row.mergeable_state),
+    checksConclusion: nullableString(row.checks_conclusion),
+    checksPassed: nonNegativeInteger(row.checks_passed),
+    checksFailed: nonNegativeInteger(row.checks_failed),
+    checksPending: nonNegativeInteger(row.checks_pending),
+    additions: nonNegativeInteger(row.additions),
+    deletions: nonNegativeInteger(row.deletions),
+    changedFiles: nonNegativeInteger(row.changed_files),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toIssueLink(row: Row): MultiremiScmIssueLink {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    changeRequestId: String(row.change_request_id),
+    issueId: String(row.issue_id),
+    source: row.source === "manual" || row.source === "legacy" ? row.source : "auto",
+    active: Boolean(Number(row.active ?? 1)),
+    linkedAt: String(row.linked_at),
+    unlinkedAt: nullableString(row.unlinked_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -1496,6 +1850,34 @@ function requiredString(value: unknown, label: string): string {
   const clean = cleanOptionalString(value);
   if (!clean) throw new Error(`${label} is required`);
   return clean;
+}
+
+function stringField(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function nullableField(value: unknown): string | null {
+  return cleanOptionalString(value);
+}
+
+function finiteInteger(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) : null;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return Math.max(0, finiteInteger(value) ?? 0);
+}
+
+function normalizeChangeRequestState(value: unknown, draft: boolean): MultiremiScmChangeRequest["state"] {
+  if (value === "merged" || value === "closed") return value;
+  if (draft || value === "draft") return "draft";
+  return "open";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function optionalSecret(value: unknown, label: string): string | null {

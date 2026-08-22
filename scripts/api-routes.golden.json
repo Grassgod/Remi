@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 568,
+    "routeCount": 559,
     "routeCountByPrefix": {
-      "native": 193,
-      "compat": 362,
+      "native": 187,
+      "compat": 359,
       "root": 13
     },
-    "getRoutes": 249,
-    "getRoutesWithBody": 246,
+    "getRoutes": 243,
+    "getRoutesWithBody": 240,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 319,
-    "mutationRoutesCovered": 277,
+    "mutationRoutes": 316,
+    "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -78,6 +78,7 @@
     "DELETE /api/issues/:id/reactions",
     "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
     "DELETE /api/issues/:id/share",
+    "DELETE /api/issues/:issueId/change-requests/:changeRequestId",
     "DELETE /api/labels/:id",
     "DELETE /api/multiremi/agent-plugins/:id",
     "DELETE /api/multiremi/agents/:id",
@@ -112,7 +113,6 @@
     "DELETE /api/squads/:id/members",
     "DELETE /api/tokens/:id",
     "DELETE /api/workspaces/:id",
-    "DELETE /api/workspaces/:id/github/installations/:installationId",
     "DELETE /api/workspaces/:id/invitations/:invitationId",
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
@@ -175,7 +175,6 @@
     "GET /api/dashboard/runtime/daily",
     "GET /api/dashboard/usage/by-agent",
     "GET /api/dashboard/usage/daily",
-    "GET /api/github/setup",
     "GET /api/inbox",
     "GET /api/inbox/unread-count",
     "GET /api/invitations",
@@ -184,13 +183,13 @@
     "GET /api/issues/:id",
     "GET /api/issues/:id/active-task",
     "GET /api/issues/:id/attachments",
+    "GET /api/issues/:id/change-requests",
     "GET /api/issues/:id/children",
     "GET /api/issues/:id/comments",
     "GET /api/issues/:id/dependencies",
     "GET /api/issues/:id/generated-issues",
     "GET /api/issues/:id/labels",
     "GET /api/issues/:id/metadata",
-    "GET /api/issues/:id/pull-requests",
     "GET /api/issues/:id/reactions",
     "GET /api/issues/:id/session-results",
     "GET /api/issues/:id/sessions",
@@ -242,8 +241,6 @@
     "GET /api/multiremi/daemons",
     "GET /api/multiremi/daemons/:daemonId/retirement-plan",
     "GET /api/multiremi/feedback",
-    "GET /api/multiremi/github/pull-requests",
-    "GET /api/multiremi/github/settings",
     "GET /api/multiremi/health",
     "GET /api/multiremi/inbox",
     "GET /api/multiremi/install/daemon",
@@ -255,7 +252,6 @@
     "GET /api/multiremi/issues/:id/dependencies",
     "GET /api/multiremi/issues/:id/labels",
     "GET /api/multiremi/issues/:id/metadata",
-    "GET /api/multiremi/issues/:id/pull-requests",
     "GET /api/multiremi/issues/:id/reactions",
     "GET /api/multiremi/issues/:id/subscribers",
     "GET /api/multiremi/issues/:id/timeline",
@@ -347,8 +343,6 @@
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
-    "GET /api/workspaces/:id/github/connect",
-    "GET /api/workspaces/:id/github/installations",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
@@ -517,8 +511,6 @@
     "POST /api/multiremi/comments/:id/resolve",
     "POST /api/multiremi/daemons/:daemonId/retire",
     "POST /api/multiremi/feedback",
-    "POST /api/multiremi/github/pull-requests",
-    "POST /api/multiremi/github/webhook",
     "POST /api/multiremi/inbox/:id/archive",
     "POST /api/multiremi/inbox/:id/read",
     "POST /api/multiremi/install/daemon",
@@ -578,7 +570,6 @@
     "POST /api/tokens/current/renew",
     "POST /api/upload-file",
     "POST /api/webhooks/autopilots/:token",
-    "POST /api/webhooks/github",
     "POST /api/webhooks/scm/:connectionId",
     "POST /api/webhooks/stripe",
     "POST /api/workspaces",
@@ -605,10 +596,10 @@
     "PUT /api/daemon/runtimes/:runtimeId/models",
     "PUT /api/issues/:id",
     "PUT /api/issues/:id/metadata/:key",
+    "PUT /api/issues/:issueId/change-requests/:changeRequestId",
     "PUT /api/labels/:id",
     "PUT /api/multiremi/agents/:id/skills",
     "PUT /api/multiremi/comments/:id",
-    "PUT /api/multiremi/github/settings",
     "PUT /api/multiremi/issues/:id/metadata/:key",
     "PUT /api/multiremi/labels/:id",
     "PUT /api/multiremi/notification-preferences",
@@ -680,7 +671,6 @@
     "DELETE /api/squads/:id/members",
     "DELETE /api/tokens/:id",
     "DELETE /api/workspaces/:id",
-    "DELETE /api/workspaces/:id/github/installations/:installationId",
     "DELETE /api/workspaces/:id/invitations/:invitationId",
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
@@ -740,7 +730,6 @@
     "GET /api/dashboard/runtime/daily",
     "GET /api/dashboard/usage/by-agent",
     "GET /api/dashboard/usage/daily",
-    "GET /api/github/setup",
     "GET /api/inbox",
     "GET /api/inbox/unread-count",
     "GET /api/invitations",
@@ -749,13 +738,13 @@
     "GET /api/issues/:id",
     "GET /api/issues/:id/active-task",
     "GET /api/issues/:id/attachments",
+    "GET /api/issues/:id/change-requests",
     "GET /api/issues/:id/children",
     "GET /api/issues/:id/comments",
     "GET /api/issues/:id/dependencies",
     "GET /api/issues/:id/generated-issues",
     "GET /api/issues/:id/labels",
     "GET /api/issues/:id/metadata",
-    "GET /api/issues/:id/pull-requests",
     "GET /api/issues/:id/reactions",
     "GET /api/issues/:id/session-results",
     "GET /api/issues/:id/sessions",
@@ -807,8 +796,6 @@
     "GET /api/multiremi/daemons",
     "GET /api/multiremi/daemons/:daemonId/retirement-plan",
     "GET /api/multiremi/feedback",
-    "GET /api/multiremi/github/pull-requests",
-    "GET /api/multiremi/github/settings",
     "GET /api/multiremi/health",
     "GET /api/multiremi/inbox",
     "GET /api/multiremi/install/daemon",
@@ -820,7 +807,6 @@
     "GET /api/multiremi/issues/:id/dependencies",
     "GET /api/multiremi/issues/:id/labels",
     "GET /api/multiremi/issues/:id/metadata",
-    "GET /api/multiremi/issues/:id/pull-requests",
     "GET /api/multiremi/issues/:id/reactions",
     "GET /api/multiremi/issues/:id/subscribers",
     "GET /api/multiremi/issues/:id/timeline",
@@ -912,8 +898,6 @@
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
-    "GET /api/workspaces/:id/github/connect",
-    "GET /api/workspaces/:id/github/installations",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
@@ -1061,8 +1045,6 @@
     "POST /api/multiremi/comments/:id/resolve",
     "POST /api/multiremi/daemons/:daemonId/retire",
     "POST /api/multiremi/feedback",
-    "POST /api/multiremi/github/pull-requests",
-    "POST /api/multiremi/github/webhook",
     "POST /api/multiremi/inbox/:id/archive",
     "POST /api/multiremi/inbox/:id/read",
     "POST /api/multiremi/install/daemon",
@@ -1117,7 +1099,6 @@
     "POST /api/tokens/current/renew",
     "POST /api/upload-file",
     "POST /api/webhooks/autopilots/:token",
-    "POST /api/webhooks/github",
     "POST /api/webhooks/stripe",
     "POST /api/workspaces",
     "POST /api/workspaces/:id/lark/install/begin",
@@ -1140,7 +1121,6 @@
     "PUT /api/labels/:id",
     "PUT /api/multiremi/agents/:id/skills",
     "PUT /api/multiremi/comments/:id",
-    "PUT /api/multiremi/github/settings",
     "PUT /api/multiremi/issues/:id/metadata/:key",
     "PUT /api/multiremi/labels/:id",
     "PUT /api/multiremi/notification-preferences",
@@ -6841,16 +6821,6 @@
       ]
     },
     {
-      "key": "get-sweep GET /api/github/setup",
-      "route": "GET /api/github/setup",
-      "path": "/api/github/setup",
-      "status": 200,
-      "body": {
-        "configured": true,
-        "error": "missing_params"
-      }
-    },
-    {
       "key": "get-sweep GET /api/inbox",
       "route": "GET /api/inbox",
       "path": "/api/inbox?member_id=mem_local_local",
@@ -7248,6 +7218,16 @@
       "body": []
     },
     {
+      "key": "get-sweep GET /api/issues/:id/change-requests",
+      "route": "GET /api/issues/:id/change-requests",
+      "path": "/api/issues/iss_snapshot/change-requests",
+      "status": 200,
+      "body": {
+        "changeRequests": [],
+        "total": 0
+      }
+    },
+    {
       "key": "get-sweep GET /api/issues/:id/children",
       "route": "GET /api/issues/:id/children",
       "path": "/api/issues/iss_snapshot/children",
@@ -7440,61 +7420,6 @@
       "status": 200,
       "body": {
         "snapshot_key": "snapshot_value"
-      }
-    },
-    {
-      "key": "get-sweep GET /api/issues/:id/pull-requests",
-      "route": "GET /api/issues/:id/pull-requests",
-      "path": "/api/issues/iss_snapshot/pull-requests",
-      "status": 200,
-      "body": {
-        "pull_requests": [
-          {
-            "id": "ghp_snapshot",
-            "workspaceId": "local",
-            "issueId": "iss_snapshot",
-            "repoOwner": "snapshot",
-            "repoName": "repo",
-            "number": 7,
-            "title": "Snapshot PR",
-            "state": "open",
-            "htmlUrl": "https://github.com/snapshot/repo/pull/7",
-            "branch": "feat/snapshot",
-            "authorLogin": null,
-            "authorAvatarUrl": null,
-            "mergedAt": null,
-            "closedAt": null,
-            "prCreatedAt": "<timestamp>",
-            "prUpdatedAt": "<timestamp>",
-            "mergeableState": null,
-            "checksConclusion": null,
-            "checksPassed": 0,
-            "checksFailed": 0,
-            "checksPending": 0,
-            "additions": 0,
-            "deletions": 0,
-            "changedFiles": 0,
-            "createdAt": "<timestamp>",
-            "updatedAt": "<timestamp>",
-            "workspace_id": "local",
-            "issue_id": "iss_snapshot",
-            "repo_owner": "snapshot",
-            "repo_name": "repo",
-            "html_url": "https://github.com/snapshot/repo/pull/7",
-            "author_login": null,
-            "author_avatar_url": null,
-            "merged_at": null,
-            "closed_at": null,
-            "pr_created_at": "<timestamp>",
-            "pr_updated_at": "<timestamp>",
-            "mergeable_state": null,
-            "checks_conclusion": null,
-            "checks_passed": 0,
-            "checks_failed": 0,
-            "checks_pending": 0,
-            "changed_files": 0
-          }
-        ]
       }
     },
     {
@@ -10407,61 +10332,6 @@
       }
     },
     {
-      "key": "get-sweep GET /api/multiremi/github/pull-requests",
-      "route": "GET /api/multiremi/github/pull-requests",
-      "path": "/api/multiremi/github/pull-requests",
-      "status": 200,
-      "body": {
-        "pullRequests": [
-          {
-            "id": "ghp_snapshot",
-            "workspaceId": "local",
-            "issueId": "iss_snapshot",
-            "repoOwner": "snapshot",
-            "repoName": "repo",
-            "number": 7,
-            "title": "Snapshot PR",
-            "state": "open",
-            "htmlUrl": "https://github.com/snapshot/repo/pull/7",
-            "branch": "feat/snapshot",
-            "authorLogin": null,
-            "authorAvatarUrl": null,
-            "mergedAt": null,
-            "closedAt": null,
-            "prCreatedAt": "<timestamp>",
-            "prUpdatedAt": "<timestamp>",
-            "mergeableState": null,
-            "checksConclusion": null,
-            "checksPassed": 0,
-            "checksFailed": 0,
-            "checksPending": 0,
-            "additions": 0,
-            "deletions": 0,
-            "changedFiles": 0,
-            "createdAt": "<timestamp>",
-            "updatedAt": "<timestamp>"
-          }
-        ],
-        "total": 1
-      }
-    },
-    {
-      "key": "get-sweep GET /api/multiremi/github/settings",
-      "route": "GET /api/multiremi/github/settings",
-      "path": "/api/multiremi/github/settings",
-      "status": 200,
-      "body": {
-        "settings": {
-          "workspaceId": "local",
-          "enabled": true,
-          "prSidebar": true,
-          "coAuthor": true,
-          "autoLinkPRs": true,
-          "updatedAt": null
-        }
-      }
-    },
-    {
       "key": "get-sweep GET /api/multiremi/health",
       "route": "GET /api/multiremi/health",
       "path": "/api/multiremi/health",
@@ -11515,61 +11385,6 @@
         "metadata": {
           "snapshot_key": "snapshot_value"
         }
-      }
-    },
-    {
-      "key": "get-sweep GET /api/multiremi/issues/:id/pull-requests",
-      "route": "GET /api/multiremi/issues/:id/pull-requests",
-      "path": "/api/multiremi/issues/iss_snapshot/pull-requests",
-      "status": 200,
-      "body": {
-        "pull_requests": [
-          {
-            "id": "ghp_snapshot",
-            "workspaceId": "local",
-            "issueId": "iss_snapshot",
-            "repoOwner": "snapshot",
-            "repoName": "repo",
-            "number": 7,
-            "title": "Snapshot PR",
-            "state": "open",
-            "htmlUrl": "https://github.com/snapshot/repo/pull/7",
-            "branch": "feat/snapshot",
-            "authorLogin": null,
-            "authorAvatarUrl": null,
-            "mergedAt": null,
-            "closedAt": null,
-            "prCreatedAt": "<timestamp>",
-            "prUpdatedAt": "<timestamp>",
-            "mergeableState": null,
-            "checksConclusion": null,
-            "checksPassed": 0,
-            "checksFailed": 0,
-            "checksPending": 0,
-            "additions": 0,
-            "deletions": 0,
-            "changedFiles": 0,
-            "createdAt": "<timestamp>",
-            "updatedAt": "<timestamp>",
-            "workspace_id": "local",
-            "issue_id": "iss_snapshot",
-            "repo_owner": "snapshot",
-            "repo_name": "repo",
-            "html_url": "https://github.com/snapshot/repo/pull/7",
-            "author_login": null,
-            "author_avatar_url": null,
-            "merged_at": null,
-            "closed_at": null,
-            "pr_created_at": "<timestamp>",
-            "pr_updated_at": "<timestamp>",
-            "mergeable_state": null,
-            "checks_conclusion": null,
-            "checks_passed": 0,
-            "checks_failed": 0,
-            "checks_pending": 0,
-            "changed_files": 0
-          }
-        ]
       }
     },
     {
@@ -14554,27 +14369,6 @@
       }
     },
     {
-      "key": "get-sweep GET /api/workspaces/:id/github/connect",
-      "route": "GET /api/workspaces/:id/github/connect",
-      "path": "/api/workspaces/local/github/connect",
-      "status": 200,
-      "body": {
-        "configured": true,
-        "url": "https://github.com/apps/snapshot-app/installations/new?state=local.000000000000400080000000.02b2183616e9e005def8574ae2db97a63a7a0f38007cf8d69d731f8db35e18fc"
-      }
-    },
-    {
-      "key": "get-sweep GET /api/workspaces/:id/github/installations",
-      "route": "GET /api/workspaces/:id/github/installations",
-      "path": "/api/workspaces/local/github/installations",
-      "status": 200,
-      "body": {
-        "installations": [],
-        "configured": true,
-        "can_manage": true
-      }
-    },
-    {
       "key": "get-sweep GET /api/workspaces/:id/invitations",
       "route": "GET /api/workspaces/:id/invitations",
       "path": "/api/workspaces/local/invitations",
@@ -17442,75 +17236,23 @@
       }
     },
     {
-      "key": "settings-misc#002 PUT /api/multiremi/github/settings",
-      "route": "PUT /api/multiremi/github/settings",
-      "path": "/api/multiremi/github/settings",
-      "status": 200,
-      "body": {
-        "settings": {
-          "workspaceId": "local",
-          "enabled": true,
-          "prSidebar": true,
-          "coAuthor": true,
-          "autoLinkPRs": true,
-          "updatedAt": "<timestamp>"
-        }
-      }
-    },
-    {
-      "key": "settings-misc#003 POST /api/multiremi/github/pull-requests",
-      "route": "POST /api/multiremi/github/pull-requests",
-      "path": "/api/multiremi/github/pull-requests",
-      "status": 201,
-      "body": {
-        "pullRequest": {
-          "id": "ghp_nwk7j7pg419m",
-          "workspaceId": "local",
-          "issueId": "iss_snapshot",
-          "repoOwner": "snapshot",
-          "repoName": "repo",
-          "number": 9,
-          "title": "Snapshot PR 9",
-          "state": "open",
-          "htmlUrl": "https://github.com/snapshot/repo/pull/9",
-          "branch": null,
-          "authorLogin": null,
-          "authorAvatarUrl": null,
-          "mergedAt": null,
-          "closedAt": null,
-          "prCreatedAt": "<timestamp>",
-          "prUpdatedAt": "<timestamp>",
-          "mergeableState": null,
-          "checksConclusion": null,
-          "checksPassed": 0,
-          "checksFailed": 0,
-          "checksPending": 0,
-          "additions": 0,
-          "deletions": 0,
-          "changedFiles": 0,
-          "createdAt": "<timestamp>",
-          "updatedAt": "<timestamp>"
-        }
-      }
-    },
-    {
-      "key": "settings-misc#004 POST /api/feedback",
+      "key": "settings-misc#002 POST /api/feedback",
       "route": "POST /api/feedback",
       "path": "/api/feedback",
       "status": 201,
       "body": {
-        "id": "fdb_vfs9viv2ilj6",
+        "id": "fdb_nwk7j7pg419m",
         "created_at": "<timestamp>"
       }
     },
     {
-      "key": "settings-misc#005 POST /api/multiremi/feedback",
+      "key": "settings-misc#003 POST /api/multiremi/feedback",
       "route": "POST /api/multiremi/feedback",
       "path": "/api/multiremi/feedback",
       "status": 201,
       "body": {
         "feedback": {
-          "id": "fdb_mmcj3uiam2jc",
+          "id": "fdb_vfs9viv2ilj6",
           "workspaceId": "local",
           "userId": "local",
           "memberId": null,
@@ -17526,12 +17268,12 @@
       }
     },
     {
-      "key": "settings-misc#006 POST /api/contact-sales",
+      "key": "settings-misc#004 POST /api/contact-sales",
       "route": "POST /api/contact-sales",
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600232",
+        "id": "local-contact-1767225600230",
         "status": "received",
         "mode": "local",
         "request": {
@@ -17541,7 +17283,7 @@
       }
     },
     {
-      "key": "settings-misc#007 POST /api/multiremi/install/daemon",
+      "key": "settings-misc#005 POST /api/multiremi/install/daemon",
       "route": "POST /api/multiremi/install/daemon",
       "path": "/api/multiremi/install/daemon",
       "status": 201,
@@ -17552,7 +17294,7 @@
         "workspaceId": "local",
         "provider": "claude",
         "token": "mdt_0000000000004000800000000000000400000000000040008000000000000005",
-        "tokenId": "dtk_wk1mrnyfwl4x",
+        "tokenId": "dtk_mmcj3uiam2jc",
         "daemonId": "dmn_00000000000040008000000000000003",
         "installScriptUrl": "https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh",
         "releaseArtifactPattern": "multiremi-${version}-${os}-${arch}.tar.gz",
@@ -18636,27 +18378,7 @@
       }
     },
     {
-      "key": "webhooks#001 POST /api/webhooks/github",
-      "route": "POST /api/webhooks/github",
-      "path": "/api/webhooks/github",
-      "status": 202,
-      "body": {
-        "ok": true,
-        "ignored": true
-      }
-    },
-    {
-      "key": "webhooks#002 POST /api/multiremi/github/webhook",
-      "route": "POST /api/multiremi/github/webhook",
-      "path": "/api/multiremi/github/webhook",
-      "status": 202,
-      "body": {
-        "ok": true,
-        "ignored": true
-      }
-    },
-    {
-      "key": "webhooks#003 POST /api/webhooks/stripe",
+      "key": "webhooks#001 POST /api/webhooks/stripe",
       "route": "POST /api/webhooks/stripe",
       "path": "/api/webhooks/stripe",
       "status": 202,
@@ -18847,14 +18569,7 @@
       "body": ""
     },
     {
-      "key": "workspaces#012 DELETE /api/workspaces/:id/github/installations/:installationId",
-      "route": "DELETE /api/workspaces/:id/github/installations/:installationId",
-      "path": "/api/workspaces/ws_nwk7j7pg419m/github/installations/inst_snapshot",
-      "status": 204,
-      "body": ""
-    },
-    {
-      "key": "workspaces#013 POST /api/workspaces/:id/leave",
+      "key": "workspaces#012 POST /api/workspaces/:id/leave",
       "route": "POST /api/workspaces/:id/leave",
       "path": "/api/workspaces/ws_nwk7j7pg419m/leave",
       "status": 400,
@@ -18863,7 +18578,7 @@
       }
     },
     {
-      "key": "workspaces#014 DELETE /api/workspaces/:id",
+      "key": "workspaces#013 DELETE /api/workspaces/:id",
       "route": "DELETE /api/workspaces/:id",
       "path": "/api/workspaces/ws_nwk7j7pg419m",
       "status": 204,

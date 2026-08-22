@@ -2,10 +2,8 @@ import type { Context, Hono } from "hono";
 import {
   backfillWorkspaceRepositoryDefaultBranches,
   denyCurrentUserWorkspaceAccess,
-  githubConnectResponse,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
-  isGitHubAppConfigured,
   isJsonApiError,
   loadCurrentWorkspaceMember,
   mergeAgentEnv,
@@ -465,13 +463,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     return c.body(null, 204);
   });
 
-  app.get("/api/workspaces/:id/github/connect", (c) => c.json(githubConnectResponse(c.req.param("id"))));
-  app.get("/api/workspaces/:id/github/installations", (c) => c.json({
-    installations: [],
-    configured: isGitHubAppConfigured(),
-    can_manage: true,
-  }));
-  app.delete("/api/workspaces/:id/github/installations/:installationId", (c) => c.body(null, 204));
   app.get("/api/workspaces/:id/lark/installations", (c) => c.json({
     installations: [],
     configured: false,

@@ -19,6 +19,38 @@ import type { RouterDeps } from "./deps.js";
 export function registerScmRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
+  app.get("/api/issues/:id/change-requests", (c) => {
+    const issue = store.getIssue(c.req.param("id"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const changeRequests = store.listScmChangeRequestsForIssue(issue.id) ?? [];
+    return c.json({ changeRequests, total: changeRequests.length });
+  });
+
+  app.put("/api/issues/:issueId/change-requests/:changeRequestId", (c) => {
+    const issue = store.getIssue(c.req.param("issueId"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    try {
+      return c.json(store.linkScmChangeRequestToIssue(issue.id, c.req.param("changeRequestId")));
+    } catch (error) {
+      return scmErrorResponse(c, error);
+    }
+  });
+
+  app.delete("/api/issues/:issueId/change-requests/:changeRequestId", (c) => {
+    const issue = store.getIssue(c.req.param("issueId"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    if (!store.unlinkScmChangeRequestFromIssue(issue.id, c.req.param("changeRequestId"))) {
+      return c.json({ error: "SCM change request link not found" }, 404);
+    }
+    return c.body(null, 204);
+  });
+
   app.get("/api/workspaces/:workspaceId/scm/connections", (c) => {
     const workspaceId = c.req.param("workspaceId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);

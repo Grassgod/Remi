@@ -391,6 +391,7 @@ function normalizeCodebaseMergeRequest(value: Record<string, unknown>): Record<s
     id: nullableString(valuePick(value, "Id", "id")),
     number: numberPick(value, "Number", "number"),
     title: stringPick(value, "Title", "title"),
+    body: nullableString(valuePick(value, "Description", "description", "Body", "body")),
     state: normalizeCodebaseChangeState(status),
     draft: valuePick(value, "Draft", "draft") === true,
     url: nullableString(valuePick(value, "URL", "url")),
@@ -399,6 +400,7 @@ function normalizeCodebaseMergeRequest(value: Record<string, unknown>): Record<s
     head_sha: stringPick(sourceCommit, "Id", "id", "Sha", "sha")
       || nullableString(valuePick(latestVersion, "SourceCommitId", "source_commit_id"))
       || nullableString(valuePick(value, "SourceCommitId", "source_commit_id")),
+    base_sha: nullableString(valuePick(value, "TargetCommitId", "target_commit_id", "BaseCommitId", "base_commit_id")),
     author: stringPick(recordPick(value, "CreatedBy", "created_by", "author"), "Username", "username") || null,
     created_at: nullableString(valuePick(value, "CreatedAt", "created_at")),
     updated_at: nullableString(valuePick(value, "UpdatedAt", "updated_at")),
@@ -407,6 +409,14 @@ function normalizeCodebaseMergeRequest(value: Record<string, unknown>): Record<s
     merge_sha: nullableString(valuePick(value, "MergeCommitId", "merge_commit_id")),
     review_status: valuePick(value, "ReviewStatus", "review_status") ?? null,
     check_status: nullableString(valuePick(value, "CheckRunSummaryStatus", "check_run_summary_status")),
+    mergeable_state: nullableString(valuePick(value, "MergeableState", "mergeable_state")),
+    checks_conclusion: nullableString(valuePick(value, "CheckRunSummaryStatus", "check_run_summary_status")),
+    checks_passed: numberPick(value, "ChecksPassed", "checks_passed"),
+    checks_failed: numberPick(value, "ChecksFailed", "checks_failed"),
+    checks_pending: numberPick(value, "ChecksPending", "checks_pending"),
+    additions: numberPick(value, "Additions", "additions"),
+    deletions: numberPick(value, "Deletions", "deletions"),
+    changed_files: numberPick(value, "ChangedFiles", "changed_files"),
   };
 }
 

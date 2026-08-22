@@ -268,6 +268,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "multiremi_access_tokens",
       "multiremi_users",
       "multiremi_daemon_ssh_mesh_states",
+      "multiremi_scm_change_requests",
+      "multiremi_scm_issue_links",
+      "multiremi_scm_effects",
     ]) {
       expect(tables).toContain(t);
     }
@@ -552,6 +555,59 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(i1.number).toBe(1);
     expect(i2.number).toBe(2);
     expect(store.getIssue(i1.id)?.title).toBe("One");
+  });
+
+  it("projects and links provider-neutral change requests on Postgres", () => {
+    const ws = freshWorkspace();
+    const repositoryId = `repo_pg_scm_${wsCounter}`;
+    store.updateWorkspace(ws, {
+      repos: [{
+        id: repositoryId,
+        name: "widgets",
+        url: "git@github.com:acme/widgets.git",
+        source: "github",
+        default_branch: "main",
+      }],
+    });
+    const connection = store.createScmConnection({
+      workspaceId: ws,
+      name: "PG GitHub",
+      provider: "github",
+      mode: "poll",
+      repositoryIds: [repositoryId],
+    });
+    const issue = store.createIssue({ title: "PG change request", workspaceId: ws });
+
+    expect(store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId,
+      entityType: "change_request",
+      externalId: "9001",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v1",
+      contentHash: "open-v1",
+      payload: {
+        number: 42,
+        title: "PG projection",
+        body: `Resolves ${issue.key}`,
+        state: "open",
+        source_branch: "feature/pg",
+        target_branch: "main",
+      },
+    }).applied).toBe(true);
+
+    const projected = store.listScmChangeRequestsForIssue(issue.id)!;
+    expect(projected).toEqual([
+      expect.objectContaining({
+        externalId: "9001",
+        number: 42,
+        body: `Resolves ${issue.key}`,
+        sourceBranch: "feature/pg",
+      }),
+    ]);
+    expect(store.unlinkScmChangeRequestFromIssue(issue.id, projected[0]!.id)).toBe(true);
+    expect(store.listScmChangeRequestsForIssue(issue.id)).toEqual([]);
+    expect(store.linkScmChangeRequestToIssue(issue.id, projected[0]!.id).link.source).toBe("manual");
   });
 
   it("persists Issue Sessions, agent lanes, projections, and explicit results", () => {

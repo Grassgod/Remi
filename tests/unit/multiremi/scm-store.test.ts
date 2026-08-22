@@ -207,6 +207,27 @@ describe("SCM connection and canonical event store", () => {
       contentHash: "old",
       payload: { head_sha: "old" },
     });
+    const issue = store.createIssue({ title: "Transferred projection", workspaceId: "local" });
+    store.upsertScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "41",
+      contentHash: "change-old",
+      payload: {
+        number: 41,
+        title: `${issue.key} transferred projection`,
+        state: "open",
+        source_branch: "feature/transfer",
+        target_branch: "main",
+      },
+    });
+    expect((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?",
+    ).get(connection.id, "repo_widgets") as { count: number }).count).toBe(1);
+    expect((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_issue_links WHERE issue_id = ?",
+    ).get(issue.id) as { count: number }).count).toBe(1);
 
     const move = {
       workspaceId: "local",
@@ -226,6 +247,12 @@ describe("SCM connection and canonical event store", () => {
     expect(transferred.assignmentOrigin).toBe("explicit");
     expect(store.getScmSyncCursor(connection.id, "repo_widgets", "default_branch")).toBeNull();
     expect(store.getScmEntitySnapshot(connection.id, "repo_widgets", "ref", "main")).toBeNull();
+    expect((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ?",
+    ).get(connection.id, "repo_widgets") as { count: number }).count).toBe(0);
+    expect((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_issue_links WHERE issue_id = ?",
+    ).get(issue.id) as { count: number }).count).toBe(0);
   });
 
   it("moves only default-origin bindings when selecting a new default connection", () => {
@@ -403,6 +430,7 @@ describe("SCM connection and canonical event store", () => {
 
   it("explicitly cleans baseline state when deleting a connection without event history", () => {
     const { store, connection } = seedConnection();
+    const issue = store.createIssue({ title: "Delete projection", workspaceId: "local" });
     expect(store.deleteScmRepositoryBinding(connection.id, "repo_missing")).toBe(false);
     store.upsertScmSyncCursor({
       connectionId: connection.id,
@@ -418,10 +446,20 @@ describe("SCM connection and canonical event store", () => {
       contentHash: "hash",
       payload: { head_sha: "abc" },
     });
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "delete-1",
+      contentHash: "delete-projection",
+      payload: { number: 1, title: `${issue.key} cleanup`, state: "open" },
+    });
+    expect(store.listScmChangeRequestsForIssue(issue.id)).toHaveLength(1);
     expect(store.deleteScmConnection(connection.id)).toBe(true);
     expect(store.getScmSyncCursor(connection.id, "repo_widgets", "default_branch")).toBeNull();
     expect(store.getScmEntitySnapshot(connection.id, "repo_widgets", "ref", "main")).toBeNull();
     expect(store.listScmRepositoryBindings({ connectionId: connection.id })).toEqual([]);
+    expect(store.listScmChangeRequestsForIssue(issue.id)).toEqual([]);
   });
 
   it("claims polling streams with fencing tokens and rejects stale owners", () => {
@@ -507,6 +545,186 @@ describe("SCM connection and canonical event store", () => {
     expect(newer.applied).toBe(true);
     expect(stale.applied).toBe(false);
     expect(stale.snapshot.payload.state).toBe("merged");
+  });
+
+  it("projects baseline change requests and auto-links issue keys from title, branch, or body", () => {
+    const { store, connection } = seedConnection();
+    const issue = store.createIssue({ title: "Projection target", workspaceId: "local" });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    store.onWorkspaceEvent((event) => events.push(event));
+
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "42",
+      version: "v1",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v1",
+      contentHash: "open-v1",
+      payload: {
+        number: 42,
+        title: "Update projection",
+        body: `Resolves ${issue.key}`,
+        state: "open",
+        source_branch: "feature/projection",
+        target_branch: "main",
+        author: "octocat",
+        updated_at: "2026-08-21T10:00:00.000Z",
+      },
+    });
+
+    expect(store.listScmChangeRequestsForIssue(issue.id)).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        externalId: "42",
+        number: 42,
+        body: `Resolves ${issue.key}`,
+        sourceBranch: "feature/projection",
+        targetBranch: "main",
+        author: "octocat",
+      }),
+    ]);
+    expect(events.filter((event) => event.type === "change_request:updated")).toHaveLength(1);
+    expect(events.find((event) => event.type === "change_request:updated")?.payload).toMatchObject({
+      issue_ids: [issue.id],
+    });
+  });
+
+  it("keeps a manual unlink suppressed across later auto-link projection updates", () => {
+    const { store, connection } = seedConnection();
+    const issue = store.createIssue({ title: "Manual unlink", workspaceId: "local" });
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "42",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v1",
+      contentHash: "v1",
+      payload: { number: 42, title: `${issue.key} first`, state: "open" },
+    });
+    const changeRequest = store.listScmChangeRequestsForIssue(issue.id)![0]!;
+    expect(store.unlinkScmChangeRequestFromIssue(issue.id, changeRequest.id)).toBe(true);
+
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "42",
+      revisionAt: "2026-08-21T10:01:00.000Z",
+      revision: "v2",
+      contentHash: "v2",
+      payload: { number: 42, title: `${issue.key} still present`, state: "open" },
+    });
+    expect(store.listScmChangeRequestsForIssue(issue.id)).toEqual([]);
+    expect(store.linkScmChangeRequestToIssue(issue.id, changeRequest.id).link.source).toBe("manual");
+    expect(store.listScmChangeRequestsForIssue(issue.id)).toHaveLength(1);
+  });
+
+  it("completes linked issues through the standard lifecycle once when enabled", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const issue = store.createIssue({ title: "Complete after merge", workspaceId: "local" });
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "42",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v1",
+      contentHash: "v1",
+      payload: { number: 42, title: `${issue.key} merge`, state: "merged" },
+    });
+
+    const first = recordChange(store, connection.id, { logicalKey: "change.merged:42:lifecycle" });
+    const duplicate = recordChange(store, connection.id, {
+      logicalKey: "change.merged:42:lifecycle",
+      source: "webhook",
+      fidelity: "exact",
+    });
+    expect(first.created).toBe(true);
+    expect(duplicate.created).toBe(false);
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expect(db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_system_events WHERE resource_id = ? AND event = 'status_changed'",
+    ).get(issue.id)).toEqual({ count: 1 });
+    expect(db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id = ? AND status = 'applied'",
+    ).get(issue.id)).toEqual({ count: 1 });
+  });
+
+  it("keeps merge completion retryable after a transient lifecycle failure", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const issue = store.createIssue({ title: "Retry merge completion", workspaceId: "local" });
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "42",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v1",
+      contentHash: "v1",
+      payload: { number: 42, title: `${issue.key} retry merge`, state: "merged" },
+    });
+    db!.exec(`
+      CREATE TRIGGER fail_merge_completion
+      BEFORE UPDATE OF status ON multiremi_issues
+      WHEN NEW.status = 'done'
+      BEGIN
+        SELECT RAISE(ABORT, 'transient merge completion failure');
+      END
+    `);
+
+    const recorded = recordChange(store, connection.id, { logicalKey: "change.merged:42:retry" });
+    const firstDispatchAt = new Date(Date.now() + 1_000);
+    expect(store.dispatchPendingScmEvents(firstDispatchAt)).toEqual([]);
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(store.getScmCanonicalEvent(recorded.event.id)?.status).toBe("pending");
+    expect(db!.query(
+      "SELECT status, last_error FROM multiremi_scm_effects WHERE event_id = ?",
+    ).get(recorded.event.id)).toEqual({
+      status: "pending",
+      last_error: "transient merge completion failure",
+    });
+
+    db!.exec("DROP TRIGGER fail_merge_completion");
+    expect(store.dispatchPendingScmEvents(new Date(firstDispatchAt.getTime() + 60_000))).toEqual([]);
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expect(store.getScmCanonicalEvent(recorded.event.id)?.status).toBe("processed");
+  });
+
+  it("does not replay merge completion when the setting is enabled after event history exists", () => {
+    const { store, connection } = seedConnection();
+    const issue = store.createIssue({ title: "Historical merge", workspaceId: "local" });
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "42",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v1",
+      contentHash: "v1",
+      payload: { number: 42, title: `${issue.key} history`, state: "merged" },
+    });
+    recordChange(store, connection.id, { logicalKey: "change.merged:42:history" });
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    recordChange(store, connection.id, {
+      logicalKey: "change.merged:42:history",
+      source: "webhook",
+      fidelity: "exact",
+    });
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_effects").get()).toEqual({ count: 0 });
   });
 
   it("deduplicates poll and webhook evidence into one canonical event", () => {
@@ -818,6 +1036,69 @@ describe("SCM connection and canonical event store", () => {
       verifiedRepositoryCount: 0,
       verifiedRepositoryTotal: 0,
     });
+  });
+
+  it("serves camelCase issue change requests and supports manual link and unlink", async () => {
+    const { store, connection } = seedConnection();
+    const issue = store.createIssue({ title: "Manual API link", workspaceId: "local" });
+    store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      entityType: "change_request",
+      externalId: "99",
+      revisionAt: "2026-08-21T10:00:00.000Z",
+      revision: "v1",
+      contentHash: "api-v1",
+      payload: {
+        number: 99,
+        title: "No automatic issue key",
+        body: "API test",
+        state: "open",
+        source_branch: "feature/api",
+        target_branch: "main",
+      },
+    });
+    const changeRequest = db!.query(
+      "SELECT id FROM multiremi_scm_change_requests WHERE external_id = '99'",
+    ).get() as { id: string };
+    const app = createMultiremiApp({ store });
+
+    const linked = await app.request(
+      `/api/issues/${issue.id}/change-requests/${changeRequest.id}`,
+      { method: "PUT" },
+    );
+    expect(linked.status).toBe(200);
+    const listed = await app.request(`/api/issues/${issue.id}/change-requests`);
+    expect(listed.status).toBe(200);
+    const listedBody = await listed.json() as { changeRequests: Array<Record<string, unknown>>; total: number };
+    expect(listedBody.total).toBe(1);
+    expect(listedBody.changeRequests[0]).toMatchObject({
+      externalId: "99",
+      sourceBranch: "feature/api",
+      targetBranch: "main",
+    });
+    expect(listedBody.changeRequests[0]).not.toHaveProperty("source_branch");
+
+    expect((await app.request(
+      `/api/issues/${issue.id}/change-requests/${changeRequest.id}`,
+      { method: "DELETE" },
+    )).status).toBe(204);
+    expect((await (await app.request(`/api/issues/${issue.id}/change-requests`)).json() as { total: number }).total).toBe(0);
+  });
+
+  it("does not register the legacy GitHub App, webhook, settings, or pull-request APIs", async () => {
+    const { store } = seedConnection();
+    const app = createMultiremiApp({ store });
+    const paths = [
+      "/api/github/setup",
+      "/api/webhooks/github",
+      "/api/multiremi/github/settings",
+      "/api/multiremi/github/pull-requests",
+      "/api/issues/missing/pull-requests",
+      "/api/workspaces/local/github/connect",
+      "/api/workspaces/local/github/installations",
+    ];
+    for (const path of paths) expect((await app.request(path)).status).toBe(404);
   });
 
   it("returns a client error when connection API mutations leave webhook mode without a secret", async () => {

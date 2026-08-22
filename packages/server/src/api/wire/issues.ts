@@ -5,7 +5,6 @@ import type {
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   MultiremiCommentReaction,
-  MultiremiGitHubPullRequest,
   MultiremiIssue,
   MultiremiIssueComment,
   MultiremiIssueDependency,
@@ -326,50 +325,6 @@ export function issueCommentListErrorResponse(c: Context, err: unknown): Respons
   return c.json({ error: "failed to list comments" }, 500);
 }
 
-export function issuePullRequestsResponse(pullRequests: MultiremiGitHubPullRequest[]): {
-  pull_requests: Array<MultiremiGitHubPullRequest & {
-    workspace_id: string;
-    issue_id: string | null;
-    repo_owner: string;
-    repo_name: string;
-    html_url: string;
-    author_login: string | null;
-    author_avatar_url: string | null;
-    merged_at: string | null;
-    closed_at: string | null;
-    pr_created_at: string;
-    pr_updated_at: string;
-    mergeable_state: string | null;
-    checks_conclusion: string | null;
-    checks_passed: number;
-    checks_failed: number;
-    checks_pending: number;
-    changed_files: number;
-  }>;
-} {
-  return {
-    pull_requests: pullRequests.map((pr) => ({
-      ...pr,
-      workspace_id: pr.workspaceId,
-      issue_id: pr.issueId,
-      repo_owner: pr.repoOwner,
-      repo_name: pr.repoName,
-      html_url: pr.htmlUrl,
-      author_login: pr.authorLogin,
-      author_avatar_url: pr.authorAvatarUrl,
-      merged_at: pr.mergedAt,
-      closed_at: pr.closedAt,
-      pr_created_at: pr.prCreatedAt,
-      pr_updated_at: pr.prUpdatedAt,
-      mergeable_state: pr.mergeableState,
-      checks_conclusion: pr.checksConclusion,
-      checks_passed: pr.checksPassed,
-      checks_failed: pr.checksFailed,
-      checks_pending: pr.checksPending,
-      changed_files: pr.changedFiles,
-    })),
-  };
-}
 
 export function issueTimelineResponse(
   store: MultiremiStore,

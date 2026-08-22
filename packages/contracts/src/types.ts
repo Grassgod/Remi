@@ -3186,6 +3186,59 @@ export interface AdvanceScmEntitySnapshotResult {
   snapshot: MultiremiScmEntitySnapshot;
 }
 
+export type MultiremiScmChangeRequestState = "open" | "closed" | "merged" | "draft";
+
+/** Provider-neutral current-state projection used by issue surfaces. */
+export interface MultiremiScmChangeRequest {
+  id: string;
+  workspaceId: string;
+  connectionId: string;
+  repositoryId: string;
+  provider: MultiremiScmProvider;
+  externalId: string;
+  number: number | null;
+  title: string;
+  body: string | null;
+  state: MultiremiScmChangeRequestState;
+  draft: boolean;
+  url: string | null;
+  sourceBranch: string | null;
+  targetBranch: string | null;
+  headSha: string | null;
+  baseSha: string | null;
+  author: string | null;
+  providerCreatedAt: string | null;
+  providerUpdatedAt: string | null;
+  closedAt: string | null;
+  mergedAt: string | null;
+  mergeSha: string | null;
+  mergeableState: string | null;
+  checksConclusion: string | null;
+  checksPassed: number;
+  checksFailed: number;
+  checksPending: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MultiremiScmIssueLinkSource = "auto" | "manual" | "legacy";
+
+export interface MultiremiScmIssueLink {
+  id: string;
+  workspaceId: string;
+  changeRequestId: string;
+  issueId: string;
+  source: MultiremiScmIssueLinkSource;
+  active: boolean;
+  linkedAt: string;
+  unlinkedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MultiremiScmCanonicalEvent {
   id: string;
   workspaceId: string;
@@ -3303,50 +3356,6 @@ export interface MultiremiWebhookDeliveryResult {
   duplicate: boolean;
   delivery: MultiremiWebhookDelivery;
   run: MultiremiAutopilotRun | null;
-}
-
-// ─── GitHub integration ──────────────────────────────────────────────────────────────────────────
-
-export type MultiremiGitHubPullRequestState = "open" | "closed" | "merged" | "draft";
-
-export type MultiremiGitHubChecksConclusion = "passed" | "failed" | "pending" | null;
-
-export interface MultiremiGitHubSettings {
-  workspaceId: string;
-  enabled: boolean;
-  prSidebar: boolean;
-  coAuthor: boolean;
-  autoLinkPRs: boolean;
-  updatedAt: string | null;
-}
-
-export interface MultiremiGitHubPullRequest {
-  id: string;
-  workspaceId: string;
-  issueId: string | null;
-  repoOwner: string;
-  repoName: string;
-  number: number;
-  title: string;
-  state: MultiremiGitHubPullRequestState;
-  htmlUrl: string;
-  branch: string | null;
-  authorLogin: string | null;
-  authorAvatarUrl: string | null;
-  mergedAt: string | null;
-  closedAt: string | null;
-  prCreatedAt: string;
-  prUpdatedAt: string;
-  mergeableState: string | null;
-  checksConclusion: MultiremiGitHubChecksConclusion;
-  checksPassed: number;
-  checksFailed: number;
-  checksPending: number;
-  additions: number;
-  deletions: number;
-  changedFiles: number;
-  createdAt: string;
-  updatedAt: string;
 }
 
 // ─── Usage, analytics & metrics ──────────────────────────────────────────────────────────────────

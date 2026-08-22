@@ -11,6 +11,7 @@ const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 
 export function runMigrations(db: SqlDatabase): void {
   renameLegacyMulticaObjects(db);
+  const legacyGithubTables = existingTableNames(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS multiremi_agents (
       id TEXT PRIMARY KEY,
@@ -530,48 +531,6 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_feedback_user_created ON multiremi_feedback(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_multiremi_feedback_workspace_created ON multiremi_feedback(workspace_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS multiremi_github_settings (
-      workspace_id TEXT PRIMARY KEY,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      pr_sidebar INTEGER NOT NULL DEFAULT 1,
-      co_author INTEGER NOT NULL DEFAULT 1,
-      auto_link_prs INTEGER NOT NULL DEFAULT 1,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS multiremi_github_pull_requests (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL DEFAULT 'local',
-      issue_id TEXT,
-      repo_owner TEXT NOT NULL,
-      repo_name TEXT NOT NULL,
-      number INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      state TEXT NOT NULL,
-      html_url TEXT NOT NULL,
-      branch TEXT,
-      author_login TEXT,
-      author_avatar_url TEXT,
-      merged_at TEXT,
-      closed_at TEXT,
-      pr_created_at TEXT NOT NULL,
-      pr_updated_at TEXT NOT NULL,
-      mergeable_state TEXT,
-      checks_conclusion TEXT,
-      checks_passed INTEGER NOT NULL DEFAULT 0,
-      checks_failed INTEGER NOT NULL DEFAULT 0,
-      checks_pending INTEGER NOT NULL DEFAULT 0,
-      additions INTEGER NOT NULL DEFAULT 0,
-      deletions INTEGER NOT NULL DEFAULT 0,
-      changed_files INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE(workspace_id, repo_owner, repo_name, number)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_multiremi_github_prs_issue ON multiremi_github_pull_requests(issue_id, pr_updated_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_github_prs_workspace ON multiremi_github_pull_requests(workspace_id, pr_updated_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_issues (
       id TEXT PRIMARY KEY,
@@ -1246,6 +1205,69 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_scm_entity_snapshots_observed
       ON multiremi_scm_entity_snapshots(connection_id, repository_id, entity_type, observed_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_scm_change_requests (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      connection_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      number INTEGER,
+      title TEXT NOT NULL,
+      body TEXT,
+      state TEXT NOT NULL,
+      draft INTEGER NOT NULL DEFAULT 0,
+      url TEXT,
+      source_branch TEXT,
+      target_branch TEXT,
+      head_sha TEXT,
+      base_sha TEXT,
+      author TEXT,
+      provider_created_at TEXT,
+      provider_updated_at TEXT,
+      closed_at TEXT,
+      merged_at TEXT,
+      merge_sha TEXT,
+      mergeable_state TEXT,
+      checks_conclusion TEXT,
+      checks_passed INTEGER NOT NULL DEFAULT 0,
+      checks_failed INTEGER NOT NULL DEFAULT 0,
+      checks_pending INTEGER NOT NULL DEFAULT 0,
+      additions INTEGER NOT NULL DEFAULT 0,
+      deletions INTEGER NOT NULL DEFAULT 0,
+      changed_files INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(connection_id, repository_id, external_id),
+      FOREIGN KEY(connection_id) REFERENCES multiremi_scm_connections(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_change_requests_workspace
+      ON multiremi_scm_change_requests(workspace_id, provider_updated_at, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_change_requests_repository
+      ON multiremi_scm_change_requests(repository_id, provider_updated_at, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_change_requests_number
+      ON multiremi_scm_change_requests(connection_id, repository_id, number);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_issue_links (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      change_request_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      linked_at TEXT NOT NULL,
+      unlinked_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(change_request_id, issue_id),
+      FOREIGN KEY(change_request_id) REFERENCES multiremi_scm_change_requests(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_scm_issue_links_issue
+      ON multiremi_scm_issue_links(issue_id, active, updated_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_scm_events (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1277,6 +1299,20 @@ export function runMigrations(db: SqlDatabase): void {
       ON multiremi_scm_events(status, available_at, lease_until, observed_at);
     CREATE INDEX IF NOT EXISTS idx_multiremi_scm_events_repository
       ON multiremi_scm_events(workspace_id, repository_id, observed_at, id);
+
+    CREATE TABLE IF NOT EXISTS multiremi_scm_effects (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      effect_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      applied_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(event_id, issue_id, effect_type),
+      FOREIGN KEY(event_id) REFERENCES multiremi_scm_events(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
 
     CREATE TABLE IF NOT EXISTS multiremi_scm_event_evidence (
       id TEXT PRIMARY KEY,
@@ -1785,6 +1821,103 @@ export function runMigrations(db: SqlDatabase): void {
   // is cleared, which is the invariant the pool model needs.
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
+  migrateLegacyGithubProjection(db, legacyGithubTables);
+}
+
+function migrateLegacyGithubProjection(db: SqlDatabase, legacyTables: Set<string>): void {
+  const now = new Date().toISOString();
+  const settingsRows = legacyTables.has("multiremi_github_settings")
+    ? db.query("SELECT * FROM multiremi_github_settings").all() as Array<Record<string, unknown>>
+    : [];
+  for (const row of settingsRows) {
+    const workspaceId = String(row.workspace_id ?? "local");
+    const workspace = db.query("SELECT settings FROM multiremi_workspaces WHERE id = ?").get(workspaceId) as { settings?: unknown } | null;
+    if (!workspace) continue;
+    let settings: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(String(workspace.settings ?? "{}"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) settings = parsed;
+    } catch {
+      settings = {};
+    }
+    if (!("scm_change_sidebar_enabled" in settings)) settings.scm_change_sidebar_enabled = Boolean(Number(row.pr_sidebar ?? 1));
+    if (!("scm_auto_link_enabled" in settings)) settings.scm_auto_link_enabled = Boolean(Number(row.auto_link_prs ?? 1));
+    if (!("scm_complete_issue_on_merge_enabled" in settings)) settings.scm_complete_issue_on_merge_enabled = false;
+    if (!("co_authored_by_enabled" in settings)) settings.co_authored_by_enabled = Boolean(Number(row.co_author ?? 1));
+    db.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = ?", [JSON.stringify(settings), workspaceId]);
+  }
+
+  if (!legacyTables.has("multiremi_github_pull_requests")) return;
+  const rows = db.query(
+    `SELECT p.*, b.connection_id, b.repository_id
+     FROM multiremi_github_pull_requests p
+     JOIN multiremi_scm_repository_bindings b
+       ON b.workspace_id = p.workspace_id
+      AND LOWER(b.name) = LOWER(p.repo_name)
+      AND LOWER(COALESCE(b.owner, '')) = LOWER(p.repo_owner)
+     JOIN multiremi_scm_connections c
+       ON c.id = b.connection_id AND c.provider = 'github'`,
+  ).all() as Array<Record<string, unknown>>;
+  for (const row of rows) {
+    const legacyId = String(row.id);
+    const changeRequestId = `scr_legacy_${legacyId}`;
+    db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_change_requests (
+        id, workspace_id, connection_id, repository_id, provider, external_id,
+        number, title, body, state, draft, url, source_branch, target_branch,
+        head_sha, base_sha, author, provider_created_at, provider_updated_at,
+        closed_at, merged_at, merge_sha, mergeable_state, checks_conclusion,
+        checks_passed, checks_failed, checks_pending, additions, deletions,
+        changed_files, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'github', ?, ?, ?, NULL, ?, ?, ?, ?, NULL,
+        NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        changeRequestId,
+        String(row.workspace_id ?? "local"),
+        String(row.connection_id),
+        String(row.repository_id),
+        `legacy-number:${String(row.number)}`,
+        Number(row.number),
+        String(row.title ?? ""),
+        String(row.state ?? "open"),
+        row.state === "draft" ? 1 : 0,
+        row.html_url == null ? null : String(row.html_url),
+        row.branch == null ? null : String(row.branch),
+        row.author_login == null ? null : String(row.author_login),
+        row.pr_created_at == null ? null : String(row.pr_created_at),
+        row.pr_updated_at == null ? null : String(row.pr_updated_at),
+        row.closed_at == null ? null : String(row.closed_at),
+        row.merged_at == null ? null : String(row.merged_at),
+        row.mergeable_state == null ? null : String(row.mergeable_state),
+        row.checks_conclusion == null ? null : String(row.checks_conclusion),
+        Number(row.checks_passed ?? 0),
+        Number(row.checks_failed ?? 0),
+        Number(row.checks_pending ?? 0),
+        Number(row.additions ?? 0),
+        Number(row.deletions ?? 0),
+        Number(row.changed_files ?? 0),
+        String(row.created_at ?? now),
+        String(row.updated_at ?? now),
+      ],
+    );
+    const projected = db.query(
+      "SELECT id FROM multiremi_scm_change_requests WHERE connection_id = ? AND repository_id = ? AND number = ?",
+    ).get(String(row.connection_id), String(row.repository_id), Number(row.number)) as { id?: unknown } | null;
+    const issueId = row.issue_id == null ? null : String(row.issue_id);
+    if (!projected?.id || !issueId) continue;
+    const issue = db.query("SELECT id FROM multiremi_issues WHERE id = ? AND workspace_id = ?").get(
+      issueId,
+      String(row.workspace_id ?? "local"),
+    );
+    if (!issue) continue;
+    db.run(
+      `INSERT OR IGNORE INTO multiremi_scm_issue_links (
+        id, workspace_id, change_request_id, issue_id, source, active,
+        linked_at, unlinked_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'legacy', 1, ?, NULL, ?, ?)`,
+      [`sil_legacy_${legacyId}`, String(row.workspace_id ?? "local"), String(projected.id), issueId, now, now, now],
+    );
+  }
 }
 
 function normalizeSquadLeaderRoles(db: SqlDatabase): void {
@@ -1922,6 +2055,14 @@ function renameLegacyMulticaObjects(db: SqlDatabase): void {
       db.exec(`DROP INDEX IF EXISTS "${name}"`);
     }
   }
+}
+
+function existingTableNames(db: SqlDatabase): Set<string> {
+  return new Set((db
+    .query("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'index')")
+    .all() as Array<{ name: string; type: string }>)
+    .filter((entry) => entry.type === "table")
+    .map((entry) => entry.name));
 }
 
 function addColumnIfMissing(db: SqlDatabase, table: string, definition: string): boolean {

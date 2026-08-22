@@ -183,7 +183,7 @@ export function webhookSignatureStatus(
   rawBody: string,
   signingSecret?: string | null,
 ): MultiremiWebhookSignatureStatus {
-  const secret = signingSecret === undefined ? process.env.MULTIREMI_WEBHOOK_SECRET ?? process.env.GITHUB_WEBHOOK_SECRET ?? "" : signingSecret ?? "";
+  const secret = signingSecret === undefined ? process.env.MULTIREMI_WEBHOOK_SECRET ?? "" : signingSecret ?? "";
   if (!secret) return "not_required";
   const signature = headers["x-hub-signature-256"] ?? "";
   if (!signature) return "missing";

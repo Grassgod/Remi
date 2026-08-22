@@ -7,7 +7,6 @@ import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
 import { AgentPluginsRepo } from "@multiremi/store/repos/agent-plugins-repo.js";
-import { GitHubRepo } from "@multiremi/store/repos/github-repo.js";
 import {
   ScmRepo,
   type RecordScmCanonicalEventResult,
@@ -169,9 +168,6 @@ import type {
   MultiremiIssueAssigneeGroup,
   MultiremiIssueSearchResult,
   MultiremiFeedback,
-  MultiremiGitHubPullRequest,
-  MultiremiGitHubPullRequestState,
-  MultiremiGitHubSettings,
   MultiremiLabel,
   MultiremiNotificationPreferences,
   MultiremiNotificationPreferenceResponse,
@@ -272,12 +268,14 @@ import type {
   CreateScmConnectionInput,
   MultiremiScmCanonicalEvent,
   MultiremiScmCanonicalEventType,
+  MultiremiScmChangeRequest,
   MultiremiScmConnection,
   MultiremiScmConnectionCredential,
   MultiremiScmVerificationResult,
   MultiremiScmEntitySnapshot,
   MultiremiScmEntityType,
   MultiremiScmEventEvidence,
+  MultiremiScmIssueLink,
   MultiremiScmProvider,
   MultiremiScmRepositoryBinding,
   MultiremiScmSyncCursor,
@@ -304,7 +302,6 @@ export class MultiremiStore {
   private agents: AgentsSkillsRepo;
   private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
-  private github: GitHubRepo;
   private scm: ScmRepo;
   private usage: UsageRepo;
   private squads: SquadsRepo;
@@ -331,7 +328,6 @@ export class MultiremiStore {
     this.agents = new AgentsSkillsRepo(this.ctx);
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
-    this.github = new GitHubRepo(this.ctx);
     this.scm = new ScmRepo(this.ctx);
     this.usage = new UsageRepo(this.ctx);
     this.squads = new SquadsRepo(this.ctx);
@@ -1050,57 +1046,6 @@ runMigrations(this.db);
     return this.feedback.countRecentFeedbackByUser(userId, since);
   }
 
-  getGitHubSettings(workspaceId = "local"): MultiremiGitHubSettings {
-    return this.github.getGitHubSettings(workspaceId);
-  }
-
-  updateGitHubSettings(input: {
-    workspaceId?: string | null;
-    enabled?: boolean;
-    prSidebar?: boolean;
-    coAuthor?: boolean;
-    autoLinkPRs?: boolean;
-  }): MultiremiGitHubSettings {
-    return this.github.updateGitHubSettings(input);
-  }
-
-  listGitHubPullRequests(input: { workspaceId?: string | null; issueId?: string | null } = {}): MultiremiGitHubPullRequest[] {
-    return this.github.listGitHubPullRequests(input);
-  }
-
-  listGitHubPullRequestsForIssue(issueId: string): MultiremiGitHubPullRequest[] | null {
-    return this.github.listGitHubPullRequestsForIssue(issueId);
-  }
-
-  upsertGitHubPullRequest(input: {
-    id?: string;
-    workspaceId?: string | null;
-    issueId?: string | null;
-    repoOwner: string;
-    repoName: string;
-    number: number;
-    title: string;
-    state?: MultiremiGitHubPullRequestState | string;
-    htmlUrl?: string | null;
-    branch?: string | null;
-    authorLogin?: string | null;
-    authorAvatarUrl?: string | null;
-    mergedAt?: string | null;
-    closedAt?: string | null;
-    prCreatedAt?: string | null;
-    prUpdatedAt?: string | null;
-    mergeableState?: string | null;
-    checksConclusion?: string | null;
-    checksPassed?: number;
-    checksFailed?: number;
-    checksPending?: number;
-    additions?: number;
-    deletions?: number;
-    changedFiles?: number;
-  }): MultiremiGitHubPullRequest {
-    return this.github.upsertGitHubPullRequest(input);
-  }
-
   listScmConnections(input: {
     workspaceId?: string | null;
     provider?: MultiremiScmProvider | null;
@@ -1224,6 +1169,25 @@ runMigrations(this.db);
 
   recordScmCanonicalEvent(input: RecordScmCanonicalEventInput): RecordScmCanonicalEventResult {
     return this.scm.recordCanonicalEvent(input);
+  }
+
+  getScmChangeRequest(id: string): MultiremiScmChangeRequest | null {
+    return this.scm.getChangeRequest(id);
+  }
+
+  listScmChangeRequestsForIssue(issueId: string): MultiremiScmChangeRequest[] | null {
+    return this.scm.listChangeRequestsForIssue(issueId);
+  }
+
+  linkScmChangeRequestToIssue(issueId: string, changeRequestId: string): {
+    changeRequest: MultiremiScmChangeRequest;
+    link: MultiremiScmIssueLink;
+  } {
+    return this.scm.linkChangeRequestToIssue(issueId, changeRequestId);
+  }
+
+  unlinkScmChangeRequestFromIssue(issueId: string, changeRequestId: string): boolean {
+    return this.scm.unlinkChangeRequestFromIssue(issueId, changeRequestId);
   }
 
   getScmCanonicalEvent(id: string): MultiremiScmCanonicalEvent | null {

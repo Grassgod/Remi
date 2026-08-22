@@ -33,6 +33,7 @@ describe("SCM provider adapters", () => {
         id: 9001,
         number: 42,
         title: "Ship it",
+        body: "Closes MUL-42",
         state: "open",
         draft: false,
         html_url: "https://github.com/acme/widgets/pull/42",
@@ -50,7 +51,14 @@ describe("SCM provider adapters", () => {
     });
     expect(result.done).toBe(true);
     expect(result.observations).toHaveLength(1);
-    expect(result.observations[0]?.payload).toMatchObject({ state: "open", source_branch: "feature", target_branch: "main" });
+    expect(result.observations[0]?.payload).toMatchObject({
+      body: "Closes MUL-42",
+      state: "open",
+      source_branch: "feature",
+      target_branch: "main",
+      head_sha: "abc",
+      base_sha: "def",
+    });
     expect(requests[0]?.url).toContain("/repos/acme/widgets/pulls");
     expect(requests[0]?.url).toContain("per_page=100");
     expect(requests[0]?.authorization).toBe("Bearer token");
@@ -237,9 +245,11 @@ describe("SCM provider adapters", () => {
             Id: "mr-9",
             Number: 9,
             Title: "Codebase change",
+            Description: "Fixes MUL-9",
             Status: "merged",
             SourceBranchName: "feature",
             TargetBranchName: "main",
+            TargetCommitId: "base-commit",
             UpdatedAt: "2026-08-21T07:58:00.000Z",
             MergedAt: "2026-08-21T07:58:00.000Z",
             MergeCommitId: "abc",
@@ -282,7 +292,15 @@ describe("SCM provider adapters", () => {
       heartbeat: () => { heartbeats += 1; },
     };
     const result = await new CodebaseScmProviderAdapter().poll(codebaseContext);
-    expect(result.observations[0]?.payload).toMatchObject({ state: "merged", merge_sha: "abc", head_sha: "commit-3" });
+    expect(result.observations[0]?.payload).toMatchObject({
+      body: "Fixes MUL-9",
+      state: "merged",
+      source_branch: "feature",
+      target_branch: "main",
+      head_sha: "commit-3",
+      base_sha: "base-commit",
+      merge_sha: "abc",
+    });
     expect(requests[0]?.action).toBe("ListRepoMergeRequests");
     expect(requests[0]?.body.TargetRepoId).toBe("repo-101");
     expect(requests[0]?.body.Since).toBe("2026-08-21T07:53:00.000Z");

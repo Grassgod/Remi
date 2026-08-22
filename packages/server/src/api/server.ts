@@ -13,7 +13,6 @@ import {
 import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
-import { registerGithubRoutes } from "./routers/github.js";
 import { registerWebhookRoutes } from "./routers/webhooks.js";
 import { registerScmWebhookRoutes } from "@multiremi/scm/router.js";
 import { registerRemiReleaseRoutes } from "./routers/remi-releases.js";
@@ -320,7 +319,6 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     enabled: realtimeState.enabled,
     transport: "websocket",
   }));
-  registerGithubRoutes(app, deps);
   registerWebhookRoutes(app, deps);
   registerScmWebhookRoutes(app, deps);
   app.get("/api/multiremi/health", (c) => c.json({ ok: true }));

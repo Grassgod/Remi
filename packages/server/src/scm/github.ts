@@ -378,6 +378,7 @@ function normalizeGitHubPull(pull: Record<string, unknown>): Record<string, unkn
     id: nullableString(pull.id),
     number: numberValue(pull.number),
     title: stringValue(pull.title),
+    body: nullableString(pull.body),
     state: pull.merged === true || nullableString(pull.merged_at) ? "merged" : stringValue(pull.state) || "open",
     draft: pull.draft === true,
     url: nullableString(pull.html_url),
@@ -391,6 +392,14 @@ function normalizeGitHubPull(pull: Record<string, unknown>): Record<string, unkn
     closed_at: nullableString(pull.closed_at),
     merged_at: nullableString(pull.merged_at),
     merge_sha: nullableString(pull.merge_commit_sha),
+    mergeable_state: nullableString(pull.mergeable_state),
+    checks_conclusion: nullableString(pull.checks_conclusion),
+    checks_passed: numberValue(pull.checks_passed),
+    checks_failed: numberValue(pull.checks_failed),
+    checks_pending: numberValue(pull.checks_pending),
+    additions: numberValue(pull.additions),
+    deletions: numberValue(pull.deletions),
+    changed_files: numberValue(pull.changed_files),
   };
 }
 

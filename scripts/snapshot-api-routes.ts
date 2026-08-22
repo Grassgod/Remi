@@ -159,9 +159,7 @@ function installDeterminism(): () => void {
   setEnv("MULTIREMI_LARK_APP_ID", "cli_snapshot");
   setEnv("MULTIREMI_LARK_APP_SECRET", "snapshot-lark-secret");
   setEnv("MULTIREMI_LARK_DOMAIN", "https://open.feishu.cn");
-  setEnv("GITHUB_APP_SLUG", "snapshot-app");
-  setEnv("GITHUB_WEBHOOK_SECRET", "snapshot-webhook-secret");
-  setEnv("MULTIREMI_WEBHOOK_SECRET", undefined);
+  setEnv("MULTIREMI_WEBHOOK_SECRET", "snapshot-webhook-secret");
   setEnv("GOOGLE_CLIENT_ID", "snapshot-google-client");
   setEnv("POSTHOG_API_KEY", undefined);
   setEnv("POSTHOG_HOST", undefined);
@@ -595,18 +593,6 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
   const invitation = store.createWorkspaceInvitation(workspaceId, { email: "invitee@snapshot.invalid", role: "member" });
 
   store.createFeedback({ id: "fbk_snapshot", message: "Snapshot feedback", workspaceId, userId: user.id, memberId: member.id });
-  store.upsertGitHubPullRequest({
-    id: "ghp_snapshot",
-    workspaceId,
-    issueId: issue.id,
-    repoOwner: "snapshot",
-    repoName: "repo",
-    number: 7,
-    title: "Snapshot PR",
-    state: "open",
-    branch: "feat/snapshot",
-  });
-
   // Assigning to the local user is what fills the inbox the API reads for an
   // unauthenticated request (compatibilityInboxMemberId -> "local").
   store.assignIssue(blockedIssue.id, { assigneeType: "member", assigneeId: "local" } as any);
@@ -1202,8 +1188,6 @@ flow("autopilots-native", async (rec, refs) => {
 
 flow("webhooks", async (rec, refs) => {
   await rec.json("POST", `/api/webhooks/autopilots/${refs.webhookToken}`, { action: "opened" });
-  await rec.json("POST", "/api/webhooks/github", { action: "opened", repository: { full_name: "snapshot/repo" } });
-  await rec.json("POST", "/api/multiremi/github/webhook", { action: "opened", repository: { full_name: "snapshot/repo" } });
   await rec.json("POST", "/api/webhooks/stripe", { type: "checkout.session.completed" });
 });
 
@@ -1429,7 +1413,6 @@ flow("workspaces", async (rec, refs) => {
   await rec.json("PUT", `/api/workspaces/${id}/relay-config/discovery`, { enabled: true });
   await rec.json("POST", `/api/workspaces/${id}/lark/install/begin`, {});
   await rec.call("DELETE", `/api/workspaces/${id}/lark/installations/inst_snapshot`);
-  await rec.call("DELETE", `/api/workspaces/${id}/github/installations/inst_snapshot`);
   await rec.json("POST", `/api/workspaces/${id}/leave`, {});
   await rec.call("DELETE", `/api/workspaces/${id}`);
 });
@@ -1493,15 +1476,6 @@ flow("attachments", async (rec, refs) => {
 flow("settings-misc", async (rec, refs) => {
   await rec.json("PUT", "/api/notification-preferences", { email_enabled: false });
   await rec.json("PUT", "/api/multiremi/notification-preferences", { emailEnabled: true });
-  await rec.json("PUT", "/api/multiremi/github/settings", { installationId: "inst_snapshot", repositories: ["snapshot/repo"] });
-  await rec.json("POST", "/api/multiremi/github/pull-requests", {
-    issueId: refs.issueId,
-    repoOwner: "snapshot",
-    repoName: "repo",
-    number: 9,
-    title: "Snapshot PR 9",
-    state: "open",
-  });
   await rec.json("POST", "/api/feedback", { message: "Compat feedback" });
   await rec.json("POST", "/api/multiremi/feedback", { message: "Native feedback" });
   await rec.json("POST", "/api/contact-sales", { email: "sales@snapshot.invalid", message: "hi" });
