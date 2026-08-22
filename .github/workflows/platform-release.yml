@@ -1,6 +1,12 @@
 name: Platform release
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing formal SemVer tag and GitHub Release
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -16,6 +22,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+
+concurrency:
+  group: platform-release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -65,47 +75,116 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Refuse reused image tags
+      - name: Plan API image publication
+        id: api-plan
         env:
           TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.validate.outputs.sha }}
         run: |
           set -euo pipefail
-          API_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/remi-api:$TAG"
-          WEB_IMAGE="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/remi-web:$TAG"
-          ! docker buildx imagetools inspect "$API_IMAGE" >/dev/null 2>&1
-          ! docker buildx imagetools inspect "$WEB_IMAGE" >/dev/null 2>&1
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          VERSION_IMAGE="${REGISTRY}/${OWNER}/remi-api:$TAG"
+          SOURCE_IMAGE="${REGISTRY}/${OWNER}/remi-api:sha-$SHA"
+          version_digest="$(docker buildx imagetools inspect "$VERSION_IMAGE" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest' || true)"
+          source_digest="$(docker buildx imagetools inspect "$SOURCE_IMAGE" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest' || true)"
+          if [[ -z "$version_digest" && -z "$source_digest" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$version_digest" && "$version_digest" = "$source_digest" ]]; then
+            echo "Reusing $VERSION_IMAGE at $version_digest"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Refusing ambiguous API image state for $TAG: version and source tags must both exist at the same digest" >&2
+            exit 1
+          fi
+
+      - name: Plan Web image publication
+        id: web-plan
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          VERSION_IMAGE="${REGISTRY}/${OWNER}/remi-web:$TAG"
+          SOURCE_IMAGE="${REGISTRY}/${OWNER}/remi-web:sha-$SHA"
+          version_digest="$(docker buildx imagetools inspect "$VERSION_IMAGE" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest' || true)"
+          source_digest="$(docker buildx imagetools inspect "$SOURCE_IMAGE" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest' || true)"
+          if [[ -z "$version_digest" && -z "$source_digest" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$version_digest" && "$version_digest" = "$source_digest" ]]; then
+            echo "Reusing $VERSION_IMAGE at $version_digest"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Refusing ambiguous Web image state for $TAG: version and source tags must both exist at the same digest" >&2
+            exit 1
+          fi
 
       - name: Build and publish API image
         id: api
+        if: steps.api-plan.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/docker/Dockerfile.api
           platforms: linux/amd64
           push: true
-          tags: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-api:${{ inputs.tag }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-api:${{ inputs.tag }}
+            ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-api:sha-${{ needs.validate.outputs.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=platform-api
           cache-to: type=gha,scope=platform-api,mode=max
 
       - name: Build and publish Web image
         id: web
+        if: steps.web-plan.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/docker/Dockerfile.web
           platforms: linux/amd64
           push: true
-          tags: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-web:${{ inputs.tag }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-web:${{ inputs.tag }}
+            ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-web:sha-${{ needs.validate.outputs.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=platform-web
           cache-to: type=gha,scope=platform-web,mode=max
+
+      - name: Verify published image identity
+        id: images
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          verify_image() {
+            local name="$1"
+            local version_image="${REGISTRY}/${OWNER}/${name}:$TAG"
+            local source_image="${REGISTRY}/${OWNER}/${name}:sha-$SHA"
+            local version_digest source_digest
+            version_digest="$(docker buildx imagetools inspect "$version_image" --format '{{json .Manifest}}' | jq -er '.digest')"
+            source_digest="$(docker buildx imagetools inspect "$source_image" --format '{{json .Manifest}}' | jq -er '.digest')"
+            test "$version_digest" = "$source_digest"
+            printf '%s\n' "$version_digest"
+          }
+          echo "api_digest=$(verify_image remi-api)" >> "$GITHUB_OUTPUT"
+          echo "web_digest=$(verify_image remi-web)" >> "$GITHUB_OUTPUT"
 
       - name: Build deployment manifest
         env:
           TAG: ${{ inputs.tag }}
           VERSION: ${{ needs.validate.outputs.version }}
           SHA: ${{ needs.validate.outputs.sha }}
-          API_DIGEST: ${{ steps.api.outputs.digest }}
-          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          API_DIGEST: ${{ steps.images.outputs.api_digest }}
+          WEB_DIGEST: ${{ steps.images.outputs.web_digest }}
         run: |
           set -euo pipefail
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"
@@ -131,18 +210,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-        run: gh release upload "$TAG" platform-release.json "platform-systemd-$TAG.tar.gz"
+        run: gh release upload "$TAG" platform-release.json "platform-systemd-$TAG.tar.gz" --clobber
 
       - name: Attest API image
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-api
-          subject-digest: ${{ steps.api.outputs.digest }}
+          subject-digest: ${{ steps.images.outputs.api_digest }}
           push-to-registry: true
 
       - name: Attest Web image
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ needs.validate.outputs.owner }}/remi-web
-          subject-digest: ${{ steps.web.outputs.digest }}
+          subject-digest: ${{ steps.images.outputs.web_digest }}
           push-to-registry: true
