@@ -22,6 +22,11 @@ export type {
   SessionArchiveVerifyResponse,
   WorkspaceSessionArchiveStatus,
 } from "./schemas/session-archives";
+export type {
+  TaskSteerListResponse,
+  TaskSteerMessage,
+  TaskSteerResponse,
+} from "./schemas/tasks";
 export { WSClient } from "./ws-client";
 
 import type { ApiClient as ApiClientType } from "./client";

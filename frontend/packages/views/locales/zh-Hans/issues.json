@@ -462,6 +462,26 @@
     "stop_tooltip": "停止智能体",
     "cancel_failed": "取消 task 失败"
   },
+  "task_steer": {
+    "steer_button": "转向",
+    "steer_tooltip": "发送新的执行指令",
+    "force_answer_button": "立即交付",
+    "force_answer_tooltip": "基于当前进展立即给出结果",
+    "steer_title": "转向 task",
+    "steer_description": "向这个进行中的 task 发送一条新指令。",
+    "steer_content_label": "新指令",
+    "steer_content_placeholder": "希望智能体调整什么，或补充考虑什么？",
+    "steer_submit": "发送指令",
+    "force_answer_title": "立即交付",
+    "force_answer_description": "让智能体停止继续探索，基于当前进展给出最佳结果并收尾。",
+    "force_answer_note_label": "附言（可选）",
+    "force_answer_note_placeholder": "补充最后的限制或重点",
+    "force_answer_submit": "要求交付",
+    "cancel": "取消",
+    "steer_sent": "指令已发送",
+    "force_answer_sent": "已要求立即交付",
+    "send_failed": "干预 task 失败"
+  },
   "execution_log": {
     "section": "执行日志",
     "show_past": "显示历史运行（{{count}}）",

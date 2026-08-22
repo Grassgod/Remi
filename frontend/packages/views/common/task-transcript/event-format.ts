@@ -5,7 +5,7 @@ import type { TimelineItem, UsageSnapshot } from "./build-timeline";
 // how an event is coloured, labelled and summarised, plus the small value
 // formatters the rows print.
 
-export type EventColor = "agent" | "thinking" | "tool" | "result" | "error";
+export type EventColor = "agent" | "thinking" | "tool" | "result" | "steer" | "error";
 
 export function getEventColor(item: TimelineItem): EventColor {
   switch (item.type) {
@@ -17,6 +17,8 @@ export function getEventColor(item: TimelineItem): EventColor {
       return "tool";
     case "tool_result":
       return "result";
+    case "steer":
+      return "steer";
     case "error":
       return "error";
     default:
@@ -29,6 +31,7 @@ export const colorClasses: Record<EventColor, { bg: string; bgActive: string; la
   thinking: { bg: "bg-violet-400/60", bgActive: "bg-violet-500", label: "bg-violet-500/20 text-violet-700 dark:text-violet-300" },
   tool: { bg: "bg-blue-400/60", bgActive: "bg-blue-500", label: "bg-blue-500/20 text-blue-700 dark:text-blue-300" },
   result: { bg: "bg-slate-300/60 dark:bg-slate-600/60", bgActive: "bg-slate-400 dark:bg-slate-500", label: "bg-muted text-muted-foreground" },
+  steer: { bg: "bg-amber-400/60", bgActive: "bg-amber-500", label: "bg-amber-500/20 text-amber-800 dark:text-amber-300" },
   error: { bg: "bg-red-400/60", bgActive: "bg-red-500", label: "bg-red-500/20 text-red-700 dark:text-red-300" },
 };
 
@@ -44,6 +47,8 @@ export function getEventLabel(item: TimelineItem): string {
       return item.tool ?? "Tool";
     case "tool_result":
       return item.tool ? `${item.tool}` : "Result";
+    case "steer":
+      return item.meta?.steer_kind === "force_answer" ? "Deliver now" : "User steer";
     case "error":
       return "Error";
     case "permission_request":
@@ -95,6 +100,8 @@ export function getEventSummary(item: TimelineItem): string {
       return item.output?.slice(0, 200) ?? "";
     case "error":
       return item.content ?? "";
+    case "steer":
+      return item.content?.split("\n").find((line) => line.trim().length > 0) ?? "";
     case "permission_request":
     case "question_request": {
       // daemon already writes a human-readable line into content
@@ -182,4 +189,3 @@ export function usageSnapshotFromTask(task: AgentTask): UsageSnapshot | null {
   }
   return any ? acc : null;
 }
-

@@ -24,6 +24,7 @@ describe("getEventColor", () => {
     expect(getEventColor(item({ type: "thinking" }))).toBe("thinking");
     expect(getEventColor(item({ type: "tool_use" }))).toBe("tool");
     expect(getEventColor(item({ type: "tool_result" }))).toBe("result");
+    expect(getEventColor(item({ type: "steer" }))).toBe("steer");
     expect(getEventColor(item({ type: "error" }))).toBe("error");
   });
 
@@ -41,6 +42,13 @@ describe("getEventLabel", () => {
 
   it("renders an unknown kind as spaced words rather than 'Event'", () => {
     expect(getEventLabel(item({ type: "plan_update" as TimelineItem["type"] }))).toBe("plan update");
+  });
+
+  it("distinguishes a user steer from a force-answer request", () => {
+    expect(getEventLabel(item({ type: "steer", meta: { steer_kind: "steer" } })))
+      .toBe("User steer");
+    expect(getEventLabel(item({ type: "steer", meta: { steer_kind: "force_answer" } })))
+      .toBe("Deliver now");
   });
 });
 

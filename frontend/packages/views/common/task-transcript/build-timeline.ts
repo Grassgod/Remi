@@ -9,6 +9,7 @@ export interface TimelineItem {
     | "tool_result"
     | "thinking"
     | "text"
+    | "steer"
     | "error"
     | "permission_request"
     | "permission_response"
