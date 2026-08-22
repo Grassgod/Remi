@@ -14,6 +14,18 @@ function projectRefResource(projectId: string) {
   return { resourceType: "project_ref", resourceRef: { projectId } } as const;
 }
 
+function importRepositories(store: MultiremiStore, urls: string[]): void {
+  store.ensureLocalWorkspace();
+  store.updateWorkspace("local", {
+    repos: urls.map((url, index) => ({
+      id: `repo_project_ref_${index}`,
+      name: url.split("/").pop() ?? `repo-${index}`,
+      url,
+      source: "github",
+    })),
+  });
+}
+
 // Exercises the private resolveTaskRepos via getTaskWithAgent().repos.
 function taskReposForProject(store: MultiremiStore, projectId: string): MultiremiRepoData[] {
   const agent = store.createAgent({ name: `agent-${projectId}`, provider: "codex" });
@@ -169,6 +181,7 @@ describe("Bun Multiremi project_ref resource", () => {
 
   it("expands referenced project github repos", () => {
     const store = createStore();
+    importRepositories(store, ["https://github.com/acme/lib", "https://github.com/acme/main"]);
     const lib = store.createProject({
       title: "Lib",
       resources: [githubResource("https://github.com/acme/lib")],
@@ -187,6 +200,7 @@ describe("Bun Multiremi project_ref resource", () => {
 
   it("walks nested project references", () => {
     const store = createStore();
+    importRepositories(store, ["https://github.com/acme/leaf", "https://github.com/acme/main"]);
     const leaf = store.createProject({ title: "Leaf", resources: [githubResource("https://github.com/acme/leaf")] });
     const mid = store.createProject({ title: "Mid", resources: [projectRefResource(leaf.id)] });
     const main = store.createProject({
@@ -202,6 +216,7 @@ describe("Bun Multiremi project_ref resource", () => {
 
   it("dedupes repo urls that appear across references", () => {
     const store = createStore();
+    importRepositories(store, ["https://github.com/acme/shared", "https://github.com/acme/unique"]);
     const other = store.createProject({
       title: "Other",
       resources: [githubResource("https://github.com/acme/shared"), githubResource("https://github.com/acme/unique")],
@@ -219,6 +234,10 @@ describe("Bun Multiremi project_ref resource", () => {
 
   it("caps project_ref expansion at a fixed depth", () => {
     const store = createStore();
+    importRepositories(
+      store,
+      Array.from({ length: 7 }, (_, index) => `https://github.com/acme/p${index}`),
+    );
     // Chain p0 → p1 → … → p6, each carrying its own github repo.
     const projects = Array.from({ length: 7 }, (_, i) => store.createProject({
       title: `P${i}`,
@@ -241,8 +260,7 @@ describe("Bun Multiremi project_ref resource", () => {
 
   it("falls back to workspace repos only when the expansion is empty", () => {
     const store = createStore();
-    store.ensureLocalWorkspace();
-    store.updateWorkspace("local", { repos: [{ url: "https://github.com/acme/workspace" }] });
+    importRepositories(store, ["https://github.com/acme/workspace", "https://github.com/acme/lib"]);
 
     // Non-empty expansion → workspace repos are NOT mixed in.
     const lib = store.createProject({ title: "Lib", resources: [githubResource("https://github.com/acme/lib")] });
@@ -258,11 +276,13 @@ describe("Bun Multiremi project_ref resource", () => {
     expect(store.getProject(ghost.id)).toBeNull();
     expect(taskReposForProject(store, dangling.id).map((repo) => repo.url)).toEqual([
       "https://github.com/acme/workspace",
+      "https://github.com/acme/lib",
     ]);
   });
 
   it("terminates on a cycle forced into the database at resolution time", () => {
     const store = createStore();
+    importRepositories(store, ["https://github.com/acme/a", "https://github.com/acme/b"]);
     const a = store.createProject({ title: "A", resources: [githubResource("https://github.com/acme/a")] });
     const b = store.createProject({ title: "B", resources: [githubResource("https://github.com/acme/b")] });
     // A → B is validated normally; B → A is forced in directly to bypass write-time cycle

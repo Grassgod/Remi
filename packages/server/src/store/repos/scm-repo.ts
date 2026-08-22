@@ -111,10 +111,6 @@ export class ScmRepo {
 
   createConnection(input: CreateScmConnectionInput): ScmConnectionWithRepositories {
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
-    const workspace = workspaceId === "local"
-      ? this.ctx.workspaces().getWorkspace("local")
-      : this.ctx.workspaces().getWorkspace(workspaceId);
-    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
     const provider = normalizeProvider(input.provider);
     const mode = normalizeMode(input.mode ?? "poll");
     const name = requiredString(input.name, "SCM connection name");
@@ -131,6 +127,7 @@ export class ScmRepo {
     let repositoryScope: MultiremiScmRepositoryScope = "selected";
 
     this.ctx.db.transaction(() => {
+      const workspace = this.lockWorkspace(workspaceId);
       const existingAtOrigin = this.listConnections({ workspaceId, provider })
         .filter((connection) => connection.baseUrl === baseUrl);
       repositoryScope = requestedScope === undefined
@@ -167,6 +164,9 @@ export class ScmRepo {
           now,
         ],
       );
+      this.lockConnections(
+        this.listConnections({ workspaceId }).map((connection) => connection.id),
+      );
       for (const repositoryId of repositoryIds) {
         const repository = findWorkspaceRepository(workspace.repos, repositoryId);
         if (!repository) throw new Error(`Repository not found in workspace: ${repositoryId}`);
@@ -179,6 +179,7 @@ export class ScmRepo {
           name: repository.name,
           defaultBranch: repository.defaultBranch,
           assignmentOrigin: "explicit",
+          transfer: true,
         });
       }
       if (repositoryScope === "all") {
@@ -191,6 +192,12 @@ export class ScmRepo {
   updateConnection(id: string, input: UpdateScmConnectionInput): ScmConnectionWithRepositories {
     const current = this.getConnection(id);
     if (!current) throw new Error(`SCM connection not found: ${id}`);
+    const replaceRepositoryIds = input.repositoryIds !== undefined || input.repository_ids !== undefined;
+    const repositoryIdsInput = input.repositoryIds ?? input.repository_ids;
+    if (replaceRepositoryIds && !Array.isArray(repositoryIdsInput)) {
+      throw new Error("SCM repositoryIds must be an array");
+    }
+    const repositoryIds = uniqueStrings(repositoryIdsInput ?? []);
     const replaceAccessToken = input.accessToken !== undefined || input.access_token !== undefined;
     const clearAccessToken = Boolean(input.clearAccessToken ?? input.clear_access_token);
     const webhookSecretInput = input.webhookSecret ?? input.webhook_secret;
@@ -205,36 +212,62 @@ export class ScmRepo {
     const webhookSecret = replaceWebhookSecret
       ? requiredSecret(webhookSecretInput, "webhook secret")
       : null;
-    const nextMode = input.mode === undefined ? current.mode : normalizeMode(input.mode);
-    assertWebhookSecretForMode(nextMode, replaceWebhookSecret || (!clearWebhookSecret && current.webhookSecretSet));
-    const baseUrl = input.baseUrl !== undefined || input.base_url !== undefined
-      ? normalizeBaseUrl(input.baseUrl ?? input.base_url, current.provider)
-      : current.baseUrl;
-    const apiBaseUrl = input.apiBaseUrl !== undefined || input.api_base_url !== undefined
-      ? normalizeApiBaseUrl(input.apiBaseUrl ?? input.api_base_url, current.provider, baseUrl)
-      : current.apiBaseUrl;
-    const repositoryScope = input.repositoryScope === undefined && input.repository_scope === undefined
-      ? current.repositoryScope
-      : normalizeRepositoryScope(input.repositoryScope ?? input.repository_scope);
-    const workspace = this.ctx.workspaces().getWorkspace(current.workspaceId);
-    if (!workspace) throw new Error(`Workspace not found: ${current.workspaceId}`);
-    const resetVerification = replaceAccessToken
-      || clearAccessToken
-      || baseUrl !== current.baseUrl
-      || apiBaseUrl !== current.apiBaseUrl
-      || repositoryScope !== current.repositoryScope;
-    const now = nowIso();
     this.ctx.db.transaction(() => {
-      this.lockConnection(id);
+      // Repository-list writes lock the workspace before touching bindings and
+      // connections. Keep this order identical so Postgres cannot deadlock a
+      // connection edit against an import/update/delete.
+      const workspace = this.lockWorkspace(current.workspaceId);
+      const lockedConnections = this.lockConnections(
+        this.listConnections({ workspaceId: current.workspaceId }).map((connection) => connection.id),
+      );
+      const lockedCurrent = lockedConnections.get(id);
+      if (!lockedCurrent) throw new Error(`SCM connection not found: ${id}`);
+      if (lockedCurrent.workspaceId !== current.workspaceId) {
+        throw new Error("SCM connection belongs to another workspace");
+      }
+      const nextMode = input.mode === undefined ? lockedCurrent.mode : normalizeMode(input.mode);
+      assertWebhookSecretForMode(
+        nextMode,
+        replaceWebhookSecret || (!clearWebhookSecret && lockedCurrent.webhookSecretSet),
+      );
+      const baseUrl = input.baseUrl !== undefined || input.base_url !== undefined
+        ? normalizeBaseUrl(input.baseUrl ?? input.base_url, lockedCurrent.provider)
+        : lockedCurrent.baseUrl;
+      const apiBaseUrl = input.apiBaseUrl !== undefined || input.api_base_url !== undefined
+        ? normalizeApiBaseUrl(input.apiBaseUrl ?? input.api_base_url, lockedCurrent.provider, baseUrl)
+        : lockedCurrent.apiBaseUrl;
+      const repositoryScope = input.repositoryScope === undefined && input.repository_scope === undefined
+        ? lockedCurrent.repositoryScope
+        : normalizeRepositoryScope(input.repositoryScope ?? input.repository_scope);
+      if (repositoryScope === "all" && replaceRepositoryIds) {
+        throw new Error("SCM repositoryIds can only be replaced for selected repository scope");
+      }
+      const resetVerification = replaceAccessToken
+        || clearAccessToken
+        || baseUrl !== lockedCurrent.baseUrl
+        || apiBaseUrl !== lockedCurrent.apiBaseUrl
+        || repositoryScope !== lockedCurrent.repositoryScope;
+      const now = nowIso();
+      const desiredRepositories = repositoryIds.map((repositoryId) => {
+        const repository = findWorkspaceRepository(workspace.repos, repositoryId);
+        if (!repository) throw new Error(`Repository not found in workspace: ${repositoryId}`);
+        if (repository.source !== "unknown" && repository.source !== lockedCurrent.provider) {
+          throw new Error(`Repository source ${repository.source} does not match SCM connection provider ${lockedCurrent.provider}`);
+        }
+        assertScmRepositoryMatchesConnection(repository.url, baseUrl);
+        return repository;
+      });
+      const desiredRepositoryIds = new Set(repositoryIds);
       for (const binding of this.listRepositoryBindings({ connectionId: id })) {
+        if (replaceRepositoryIds && !desiredRepositoryIds.has(binding.repositoryId)) continue;
         assertScmRepositoryMatchesConnection(binding.repositoryUrl, baseUrl);
       }
 
       if (repositoryScope === "all") {
-        const previousDefault = this.listConnections({ workspaceId: current.workspaceId, provider: current.provider })
+        const previousDefault = this.listConnections({ workspaceId: lockedCurrent.workspaceId, provider: lockedCurrent.provider })
           .find((connection) => connection.id !== id && connection.baseUrl === baseUrl && connection.isDefault);
         if (previousDefault) this.demoteAndTransferDefaultBindingsLocked(previousDefault.id, id, now);
-      } else if (current.isDefault) {
+      } else if (lockedCurrent.isDefault) {
         this.ctx.db.run(
           `UPDATE multiremi_scm_repository_bindings
            SET assignment_origin = 'explicit', updated_at = ?
@@ -263,24 +296,24 @@ export class ScmRepo {
           updated_at = ?
          WHERE id = ?`,
         [
-          input.name === undefined ? current.name : requiredString(input.name, "SCM connection name"),
+          input.name === undefined ? lockedCurrent.name : requiredString(input.name, "SCM connection name"),
           nextMode,
           baseUrl,
           apiBaseUrl,
-          input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
+          input.enabled === undefined ? (lockedCurrent.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
           input.pollIntervalSeconds === undefined && input.poll_interval_seconds === undefined
-            ? current.pollIntervalSeconds
+            ? lockedCurrent.pollIntervalSeconds
             : normalizePollInterval(input.pollIntervalSeconds ?? input.poll_interval_seconds),
           repositoryScope,
           repositoryScope === "all" ? 1 : 0,
           replaceAccessToken ? 1 : 0,
-          accessToken ? encryptScmCredential(accessToken, { workspaceId: current.workspaceId, connectionId: id, field: "access_token" }) : null,
+          accessToken ? encryptScmCredential(accessToken, { workspaceId: lockedCurrent.workspaceId, connectionId: id, field: "access_token" }) : null,
           clearAccessToken ? 1 : 0,
           replaceAccessToken ? 1 : 0,
           secretHint(accessToken),
           clearAccessToken ? 1 : 0,
           replaceWebhookSecret ? 1 : 0,
-          webhookSecret ? encryptScmCredential(webhookSecret, { workspaceId: current.workspaceId, connectionId: id, field: "webhook_secret" }) : null,
+          webhookSecret ? encryptScmCredential(webhookSecret, { workspaceId: lockedCurrent.workspaceId, connectionId: id, field: "webhook_secret" }) : null,
           clearWebhookSecret ? 1 : 0,
           replaceWebhookSecret ? 1 : 0,
           secretHint(webhookSecret),
@@ -290,7 +323,31 @@ export class ScmRepo {
           id,
         ],
       );
-      if (repositoryScope === "all") this.reconcileDefaultBindingsLocked(id, workspace.repos);
+      if (repositoryScope === "all") {
+        this.reconcileDefaultBindingsLocked(id, workspace.repos);
+      } else if (replaceRepositoryIds) {
+        for (const repository of desiredRepositories) {
+          this.upsertRepositoryBindingLocked({
+            workspaceId: lockedCurrent.workspaceId,
+            connectionId: id,
+            repositoryId: repository.id,
+            repositoryUrl: repository.url,
+            repositorySource: repository.source,
+            name: repository.name,
+            defaultBranch: repository.defaultBranch,
+            assignmentOrigin: "explicit",
+            transfer: true,
+          });
+        }
+        for (const binding of this.listRepositoryBindings({ connectionId: id })) {
+          if (desiredRepositoryIds.has(binding.repositoryId)) continue;
+          this.deleteRepositorySyncStateLocked(id, binding.repositoryId);
+          this.ctx.db.run(
+            "DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ? AND repository_id = ?",
+            [id, binding.repositoryId],
+          );
+        }
+      }
     })();
     return this.getConnectionWithRepositories(id)!;
   }
@@ -379,7 +436,26 @@ export class ScmRepo {
   }
 
   upsertRepositoryBinding(input: UpsertScmRepositoryBindingInput): MultiremiScmRepositoryBinding {
-    return this.ctx.db.transaction(() => this.upsertRepositoryBindingLocked(input))();
+    return this.ctx.db.transaction(() => {
+      const workspace = this.lockWorkspace(input.workspaceId);
+      const repository = findWorkspaceRepository(workspace.repos, input.repositoryId);
+      if (!repository) throw new Error(`Repository not found in workspace: ${input.repositoryId}`);
+      const connection = this.getConnection(input.connectionId);
+      if (!connection) throw new Error(`SCM connection not found: ${input.connectionId}`);
+      if (connection.workspaceId !== input.workspaceId) {
+        throw new Error("SCM connection belongs to another workspace");
+      }
+      this.lockConnections(
+        this.listConnections({ workspaceId: input.workspaceId }).map((connection) => connection.id),
+      );
+      return this.upsertRepositoryBindingLocked({
+        ...input,
+        repositoryUrl: repository.url,
+        repositorySource: repository.source,
+        name: repository.name,
+        defaultBranch: repository.defaultBranch,
+      });
+    })();
   }
 
   private upsertRepositoryBindingLocked(input: UpsertScmRepositoryBindingInput): MultiremiScmRepositoryBinding {
@@ -458,19 +534,66 @@ export class ScmRepo {
     return this.getRepositoryBinding(input.connectionId, repositoryId)!;
   }
 
-  reconcileRepositoryBindings(workspaceId: string, repositories: unknown[]): MultiremiScmRepositoryBinding[] {
+  reconcileRepositoryBindings(workspaceId: string): MultiremiScmRepositoryBinding[] {
     return this.ctx.db.transaction(() => {
-      for (const connection of this.listConnections({ workspaceId })) {
-        if (connection.isDefault && connection.repositoryScope === "all") {
-          this.reconcileDefaultBindingsLocked(connection.id, repositories);
-        }
-      }
-      return this.listRepositoryBindings({ workspaceId });
+      const workspace = this.lockWorkspace(workspaceId);
+      return this.reconcileRepositoryBindingsWithinTransaction(workspaceId, workspace.repos);
     })();
+  }
+
+  /** Caller already owns the transaction that wrote the workspace repository list. */
+  reconcileRepositoryBindingsWithinTransaction(
+    workspaceId: string,
+    repositories: unknown[],
+  ): MultiremiScmRepositoryBinding[] {
+    const connections = new Map(
+      this.listConnections({ workspaceId })
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((connection) => {
+          const locked = this.lockConnection(connection.id);
+          return [locked.id, locked] as const;
+        }),
+    );
+    for (const binding of this.listRepositoryBindings({ workspaceId })) {
+      const repository = findWorkspaceRepository(repositories, binding.repositoryId);
+      if (!repository) {
+        this.deleteRepositorySyncStateLocked(binding.connectionId, binding.repositoryId);
+        this.ctx.db.run(
+          "DELETE FROM multiremi_scm_repository_bindings WHERE connection_id = ? AND repository_id = ?",
+          [binding.connectionId, binding.repositoryId],
+        );
+        continue;
+      }
+      const connection = connections.get(binding.connectionId);
+      if (!connection) throw new Error(`SCM connection not found: ${binding.connectionId}`);
+      if (repository.source !== "unknown" && repository.source !== connection.provider) {
+        throw new Error(`Repository source ${repository.source} does not match SCM connection provider ${connection.provider}`);
+      }
+      assertScmRepositoryMatchesConnection(repository.url, connection.baseUrl);
+      this.ctx.db.run(
+        `UPDATE multiremi_scm_repository_bindings
+         SET repository_url = ?, name = ?, default_branch = ?, updated_at = ?
+         WHERE connection_id = ? AND repository_id = ?`,
+        [repository.url, repository.name, repository.defaultBranch, nowIso(), binding.connectionId, binding.repositoryId],
+      );
+      if (binding.repositoryUrl !== repository.url || binding.name !== repository.name) {
+        this.invalidateConnectionVerificationLocked(binding.connectionId);
+      }
+    }
+    for (const connection of connections.values()) {
+      if (connection.isDefault && connection.repositoryScope === "all") {
+        this.reconcileDefaultBindingsLocked(connection.id, repositories);
+      }
+    }
+    return this.listRepositoryBindings({ workspaceId });
   }
 
   deleteRepositoryBindingsForWorkspaceRepository(workspaceId: string, repositoryId: string): number {
     return this.ctx.db.transaction(() => {
+      this.lockWorkspace(workspaceId);
+      this.lockConnections(
+        this.listConnections({ workspaceId }).map((connection) => connection.id),
+      );
       const bindings = this.listRepositoryBindings({ workspaceId })
         .filter((binding) => binding.repositoryId === repositoryId);
       for (const binding of bindings) {
@@ -538,11 +661,14 @@ export class ScmRepo {
   }
 
   deleteRepositoryBinding(connectionId: string, repositoryId: string): boolean {
+    const current = this.getConnection(connectionId);
+    if (!current) return false;
     return this.ctx.db.transaction(() => {
-      const connection = this.ctx.db.query(
-        "UPDATE multiremi_scm_connections SET updated_at = updated_at WHERE id = ? RETURNING id",
-      ).get(connectionId) as Row | null;
-      if (!connection) return false;
+      this.lockWorkspace(current.workspaceId);
+      const connections = this.lockConnections(
+        this.listConnections({ workspaceId: current.workspaceId }).map((connection) => connection.id),
+      );
+      if (!connections.has(connectionId)) return false;
       const binding = this.ctx.db.query(
         `UPDATE multiremi_scm_repository_bindings SET updated_at = updated_at
          WHERE connection_id = ? AND repository_id = ? RETURNING id`,
@@ -1565,12 +1691,33 @@ export class ScmRepo {
     return { connection, binding: toRepositoryBinding(bindingRow) };
   }
 
+  private lockWorkspace(workspaceId: string) {
+    const row = this.ctx.db.query(
+      "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ? RETURNING id",
+    ).get(workspaceId) as Row | null;
+    if (!row) throw new Error(`Workspace not found: ${workspaceId}`);
+    const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
+    return workspace;
+  }
+
   private lockConnection(connectionId: string): MultiremiScmConnection {
     const row = this.ctx.db.query(
       "UPDATE multiremi_scm_connections SET updated_at = updated_at WHERE id = ? RETURNING *",
     ).get(connectionId) as Row | null;
     if (!row) throw new Error(`SCM connection not found: ${connectionId}`);
     return toScmConnection(row);
+  }
+
+  private lockConnections(connectionIds: string[]): Map<string, MultiremiScmConnection> {
+    return new Map(
+      [...new Set(connectionIds)]
+        .sort((left, right) => left.localeCompare(right))
+        .map((connectionId) => {
+          const connection = this.lockConnection(connectionId);
+          return [connection.id, connection] as const;
+        }),
+    );
   }
 }
 

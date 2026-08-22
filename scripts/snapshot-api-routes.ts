@@ -350,6 +350,28 @@ export interface SeedRefs {
 async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
   const workspaceId = "local";
   store.ensureLocalWorkspace();
+  store.updateWorkspace(workspaceId, {
+    repos: [
+      {
+        id: "repo_snapshot",
+        name: "snapshot",
+        url: "https://example.invalid/snapshot.git",
+        source: "github",
+      },
+      {
+        id: "repo_snapshot_compat",
+        name: "compat",
+        url: "https://example.invalid/compat.git",
+        source: "github",
+      },
+      {
+        id: "repo_snapshot_native",
+        name: "native",
+        url: "https://example.invalid/native.git",
+        source: "github",
+      },
+    ],
+  });
   const other = store.createWorkspace({ id: "ws_snapshot", name: "Snapshot Workspace", slug: "snapshot", issuePrefix: "SNAP" });
   const user = store.getCurrentUser();
 

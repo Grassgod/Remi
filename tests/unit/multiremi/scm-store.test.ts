@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createHmac } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
 import { reconcileObservation } from "@multiremi/scm/reconcile.js";
 import { scmIngestionStore } from "@multiremi/scm/store.js";
+import { ScmWebhookIngestor } from "@multiremi/scm/webhook.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 const previousScmKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
@@ -181,7 +183,7 @@ describe("SCM connection and canonical event store", () => {
         { id: "repo_future", name: "future", url: "git@github.com:acme/future.git", source: "github", default_branch: "main" },
       ],
     });
-    store.reconcileScmRepositoryBindings("local", store.getWorkspace("local")!.repos);
+    store.reconcileScmRepositoryBindings("local");
     expect(store.getScmRepositoryBinding(defaultConnection.id, "repo_future")?.assignmentOrigin).toBe("default");
     expect(store.getScmRepositoryBinding(selectedConnection.id, "repo_future")).toBeNull();
   });
@@ -279,6 +281,104 @@ describe("SCM connection and canonical event store", () => {
     expect((db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_scm_issue_links WHERE issue_id = ?",
     ).get(issue.id) as { count: number }).count).toBe(1);
+  });
+
+  it("atomically transfers explicitly selected repositories while creating a connection", () => {
+    const { store, connection } = seedConnection();
+
+    const selected = store.createScmConnection({
+      workspaceId: "local",
+      name: "GitHub selected",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+      repositoryIds: ["repo_widgets"],
+    });
+
+    expect(selected.repositories).toContainEqual(
+      expect.objectContaining({
+        repositoryId: "repo_widgets",
+        assignmentOrigin: "explicit",
+      }),
+    );
+    expect(store.getScmRepositoryBinding(connection.id, "repo_widgets")).toBeNull();
+    expect(store.getScmRepositoryBinding(selected.id, "repo_widgets")?.connectionId).toBe(selected.id);
+  });
+
+  it("atomically replaces selected repository bindings and transfers ownership", () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 35).toString("base64");
+    const store = createLocalStore();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_one", name: "one", url: "git@github.com:acme/one.git", source: "github", default_branch: "main" },
+        { id: "repo_two", name: "two", url: "git@github.com:acme/two.git", source: "github", default_branch: "main" },
+      ],
+    });
+    const first = store.createScmConnection({
+      workspaceId: "local",
+      name: "First selected",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+      repositoryIds: ["repo_one"],
+    });
+    const second = store.createScmConnection({
+      workspaceId: "local",
+      name: "Second selected",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+      repositoryIds: ["repo_two"],
+    });
+    store.upsertScmSyncCursor({
+      connectionId: second.id,
+      repositoryId: "repo_two",
+      stream: "change_requests",
+      baselineCompletedAt: "2026-08-21T00:00:00.000Z",
+    });
+
+    const updated = store.updateScmConnection(second.id, { repositoryIds: ["repo_one"] });
+
+    expect(updated.repositories.map((binding) => binding.repositoryId)).toEqual(["repo_one"]);
+    expect(updated.repositories[0]?.assignmentOrigin).toBe("explicit");
+    expect(store.getScmRepositoryBinding(first.id, "repo_one")).toBeNull();
+    expect(store.getScmRepositoryBinding(second.id, "repo_two")).toBeNull();
+    expect(store.getScmSyncCursor(second.id, "repo_two", "change_requests")).toBeNull();
+  });
+
+  it("rolls back the whole connection update when selected binding replacement fails", () => {
+    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 36).toString("base64");
+    const store = createLocalStore();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_one", name: "one", url: "git@github.com:acme/one.git", source: "github", default_branch: "main" },
+        { id: "repo_two", name: "two", url: "git@github.com:acme/two.git", source: "github", default_branch: "main" },
+      ],
+    });
+    const connection = store.createScmConnection({
+      workspaceId: "local",
+      name: "Stable selected",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+      repositoryIds: ["repo_one"],
+    });
+    db!.exec(`
+      CREATE TRIGGER fail_selected_binding_replace
+      BEFORE INSERT ON multiremi_scm_repository_bindings
+      WHEN NEW.repository_id = 'repo_two'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected selected binding failure');
+      END
+    `);
+
+    expect(() => store.updateScmConnection(connection.id, {
+      name: "Must roll back",
+      repositoryIds: ["repo_one", "repo_two"],
+    })).toThrow("injected selected binding failure");
+    expect(store.getScmConnection(connection.id)?.name).toBe("Stable selected");
+    expect(store.listScmRepositoryBindings({ connectionId: connection.id }).map((binding) => binding.repositoryId))
+      .toEqual(["repo_one"]);
   });
 
   it("moves only default-origin bindings when selecting a new default connection", () => {
@@ -410,11 +510,19 @@ describe("SCM connection and canonical event store", () => {
   it("binds unknown-source repositories only when their remote matches the connection", () => {
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 14).toString("base64");
     const store = createLocalStore();
+    store.updateWorkspace("local", {
+      repos: [
+        { id: "repo_https", name: "https", url: "https://github.com/acme/https.git", source: "unknown" },
+        { id: "repo_ssh", name: "ssh", url: "git@github.com:acme/ssh.git", source: "unknown" },
+        { id: "repo_evil", name: "evil", url: "https://evil.example/acme/widgets.git", source: "unknown" },
+      ],
+    });
     const connection = store.createScmConnection({
       workspaceId: "local",
       name: "GitHub",
       provider: "github",
       mode: "poll",
+      repositoryScope: "selected",
     });
 
     expect(store.upsertScmRepositoryBinding({
@@ -629,6 +737,62 @@ describe("SCM connection and canonical event store", () => {
       "SELECT COUNT(*) AS count FROM multiremi_scm_change_requests WHERE connection_id = ? AND external_id = ?",
     ).get(connection.id, "atomic-42")).toEqual({ count: 1 });
     expect(workspaceEvents).toEqual(["change_request:updated"]);
+  });
+
+  it("atomically rolls back webhook snapshots and deduplicates a retried delivery", () => {
+    const { store, connection } = seedConnection();
+    const ingestor = new ScmWebhookIngestor(scmIngestionStore(store));
+    const body = {
+      action: "opened",
+      repository: { id: 101, name: "widgets", owner: { login: "acme" }, default_branch: "main" },
+      pull_request: {
+        id: 9001,
+        number: 42,
+        title: "Atomic webhook",
+        state: "open",
+        merged: false,
+        created_at: "2026-08-21T10:00:00.000Z",
+        updated_at: "2026-08-21T10:00:00.000Z",
+        head: { ref: "feature/atomic-webhook", sha: "abc" },
+        base: { ref: "main", sha: "def" },
+      },
+    };
+    const rawBody = JSON.stringify(body);
+    const signature = createHmac("sha256", "webhook-private-secret").update(rawBody).digest("hex");
+    const delivery = {
+      connectionId: connection.id,
+      headers: {
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-atomic-42",
+        "x-hub-signature-256": `sha256=${signature}`,
+      },
+      rawBody,
+      body,
+      observedAt: "2026-08-21T10:00:01.000Z",
+    };
+    db!.exec(`
+      CREATE TRIGGER fail_atomic_webhook_event
+      BEFORE INSERT ON multiremi_scm_events
+      BEGIN
+        SELECT RAISE(ABORT, 'injected webhook event failure');
+      END
+    `);
+
+    expect(() => ingestor.ingest(delivery)).toThrow("injected webhook event failure");
+    expect(store.getScmEntitySnapshot(connection.id, "repo_widgets", "change_request", "9001")).toBeNull();
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_change_requests").get()).toEqual({ count: 0 });
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_events").get()).toEqual({ count: 0 });
+
+    db!.exec("DROP TRIGGER fail_atomic_webhook_event");
+    const first = ingestor.ingest(delivery);
+    const duplicate = ingestor.ingest(delivery);
+    expect(first.events[0]).toMatchObject({ created: true, evidenceCreated: true });
+    expect(duplicate.events[0]).toMatchObject({ created: false, evidenceCreated: false });
+    expect(store.getScmEntitySnapshot(connection.id, "repo_widgets", "change_request", "9001")?.payload)
+      .toMatchObject({ title: "Atomic webhook", state: "open" });
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_entity_snapshots").get()).toEqual({ count: 1 });
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_events").get()).toEqual({ count: 1 });
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_event_evidence").get()).toEqual({ count: 1 });
   });
 
   it("projects baseline change requests and auto-links issue keys from title, branch, or body", () => {
@@ -1147,7 +1311,7 @@ describe("SCM connection and canonical event store", () => {
         },
       ],
     });
-    store.reconcileScmRepositoryBindings("local", store.getWorkspace("local")!.repos);
+    store.reconcileScmRepositoryBindings("local");
     expect(() => store.recordScmConnectionVerification(connection.id, {
       status: "valid",
       verifiedAt: "2026-08-22T04:02:00.000Z",

@@ -3056,6 +3056,9 @@ export interface UpdateScmConnectionInput {
   enabled?: boolean;
   repositoryScope?: MultiremiScmRepositoryScope;
   repository_scope?: MultiremiScmRepositoryScope;
+  /** When present for selected scope, atomically replaces the complete binding set. */
+  repositoryIds?: string[];
+  repository_ids?: string[];
 }
 
 export interface MultiremiScmRepositoryBinding {

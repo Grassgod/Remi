@@ -835,6 +835,31 @@ runMigrations(this.db);
     return this.workspaces.updateWorkspace(id, input);
   }
 
+  mutateWorkspaceRepositories<TResult>(
+    id: string,
+    mutate: (repositories: unknown[]) => { repositories: unknown[]; result: TResult },
+  ): { workspace: MultiremiWorkspace; result: TResult } {
+    return this.db.transaction(() => {
+      const locked = this.db.query(
+        "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ? RETURNING id",
+      ).get(id) as { id?: string } | null;
+      if (!locked) throw new Error(`Workspace not found: ${id}`);
+      const current = this.workspaces.getWorkspace(id);
+      if (!current) throw new Error(`Workspace not found: ${id}`);
+      const next = mutate([...current.repos]);
+      const workspace = this.workspaces.updateWorkspace(id, { repos: next.repositories });
+      this.scm.reconcileRepositoryBindingsWithinTransaction(id, workspace.repos);
+      return { workspace, result: next.result };
+    })();
+  }
+
+  updateWorkspaceRepositories(id: string, repositories: unknown[]): MultiremiWorkspace {
+    return this.mutateWorkspaceRepositories(id, () => ({
+      repositories,
+      result: undefined,
+    })).workspace;
+  }
+
   deleteWorkspace(id: string): boolean {
     return this.workspaces.deleteWorkspace(id);
   }
@@ -1114,8 +1139,8 @@ runMigrations(this.db);
     return this.scm.deleteRepositoryBinding(connectionId, repositoryId);
   }
 
-  reconcileScmRepositoryBindings(workspaceId: string, repositories: unknown[]): MultiremiScmRepositoryBinding[] {
-    return this.scm.reconcileRepositoryBindings(workspaceId, repositories);
+  reconcileScmRepositoryBindings(workspaceId: string): MultiremiScmRepositoryBinding[] {
+    return this.scm.reconcileRepositoryBindings(workspaceId);
   }
 
   deleteScmRepositoryBindingsForWorkspaceRepository(workspaceId: string, repositoryId: string): number {

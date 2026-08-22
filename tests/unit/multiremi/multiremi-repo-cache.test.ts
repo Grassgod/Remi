@@ -523,9 +523,94 @@ describe("Multiremi repo cache", () => {
       workDir,
       agentName: "Codex",
       taskId: "tsk_hook",
+      reuseExisting: true,
       coAuthoredByEnabled: false,
     });
     expect(existsSync(hookPath)).toBe(false);
+  });
+
+  it("upgrades a legacy hook while reusing an existing worktree", async () => {
+    const source = createRepo("main", "legacy hook repo");
+    const cacheRoot = tempDir("multiremi-repo-legacy-hook-");
+    const workDir = tempDir("multiremi-repo-legacy-hook-work-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    await cache.sync("local", [{ url: source }]);
+    const result = await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_legacy_hook",
+      coAuthoredByEnabled: false,
+    });
+    const hookPath = prepareCommitMsgHookPath(result.path);
+    writeFileSync(hookPath, `#!/bin/sh
+# multimira:prepare-commit-msg:co-authored-by
+# Installed by the Multimira daemon.
+git interpret-trailers --in-place --trailer "Co-authored-by: Multimira Agent <github@multimira.ai>" "$1"
+`, { mode: 0o755 });
+
+    const reused = await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_legacy_hook",
+      reuseExisting: true,
+      coAuthoredByEnabled: true,
+    });
+
+    expect(reused.created).toBe(false);
+    const upgraded = readFileSync(hookPath, "utf8");
+    expect(upgraded).toContain("Co-authored-by: Remi <remi@openremi.fun>");
+    expect(upgraded).not.toContain("Multimira Agent");
+  });
+
+  it("chains and restores an existing user prepare-commit-msg hook", async () => {
+    const source = createRepo("main", "chained hook repo");
+    const cacheRoot = tempDir("multiremi-repo-chained-hook-");
+    const workDir = tempDir("multiremi-repo-chained-hook-work-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    await cache.sync("local", [{ url: source }]);
+    const result = await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_chained_hook",
+      coAuthoredByEnabled: false,
+    });
+    const hookPath = prepareCommitMsgHookPath(result.path);
+    const userHook = `#!/bin/sh
+git interpret-trailers --in-place --trailer "User-Hook: preserved" "$1"
+`;
+    writeFileSync(hookPath, userHook, { mode: 0o755 });
+
+    await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_chained_hook",
+      reuseExisting: true,
+      coAuthoredByEnabled: true,
+    });
+    const managed = readFileSync(hookPath, "utf8");
+    expect(managed).toContain("# multiremi:chained-hook-suffix=");
+    git(result.path, ["config", "user.email", "agent@example.test"]);
+    git(result.path, ["config", "user.name", "Agent"]);
+    writeFileSync(join(result.path, "chain.txt"), "chain\n");
+    git(result.path, ["add", "chain.txt"]);
+    git(result.path, ["commit", "-m", "chained hooks"]);
+    const message = git(result.path, ["log", "-1", "--format=%B"]);
+    expect(message).toContain("User-Hook: preserved");
+    expect(message).toContain("Co-authored-by: Remi <remi@openremi.fun>");
+
+    await cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      taskId: "tsk_chained_hook",
+      reuseExisting: true,
+      coAuthoredByEnabled: false,
+    });
+    expect(readFileSync(hookPath, "utf8")).toBe(userHook);
   });
 
   it("preserves user prepare-commit-msg hooks when co-authored-by is disabled", async () => {

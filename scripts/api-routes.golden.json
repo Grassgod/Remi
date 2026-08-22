@@ -2920,7 +2920,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600231",
+        "order_id": "local-1767225600232",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -3812,6 +3812,17 @@
             ],
             "max_concurrent_tasks": 6
           },
+          "repos": [
+            {
+              "url": "https://example.invalid/snapshot.git"
+            },
+            {
+              "url": "https://example.invalid/compat.git"
+            },
+            {
+              "url": "https://example.invalid/native.git"
+            }
+          ],
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
           "auth_token": "mat_a6fb5d92bb4ab5920d4959679498a484831d3e7f"
@@ -4478,8 +4489,18 @@
             "updated_at": "<timestamp>"
           }
         ],
-        "repos": [],
-        "repos_version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "repos": [
+          {
+            "url": "https://example.invalid/snapshot.git"
+          },
+          {
+            "url": "https://example.invalid/compat.git"
+          },
+          {
+            "url": "https://example.invalid/native.git"
+          }
+        ],
+        "repos_version": "85b03a0055bc807ac0319f17a14dd0b8d49ec2e9161e818519282037922f21ea",
         "settings": {},
         "relay": {
           "claude": null,
@@ -6736,8 +6757,18 @@
       "status": 200,
       "body": {
         "workspace_id": "local",
-        "repos": [],
-        "repos_version": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "repos": [
+          {
+            "url": "https://example.invalid/snapshot.git"
+          },
+          {
+            "url": "https://example.invalid/compat.git"
+          },
+          {
+            "url": "https://example.invalid/native.git"
+          }
+        ],
+        "repos_version": "85b03a0055bc807ac0319f17a14dd0b8d49ec2e9161e818519282037922f21ea",
         "settings": {},
         "relay": {
           "claude": null,
@@ -14313,7 +14344,26 @@
           "description": null,
           "context": null,
           "settings": {},
-          "repos": [],
+          "repos": [
+            {
+              "id": "repo_snapshot",
+              "name": "snapshot",
+              "url": "https://example.invalid/snapshot.git",
+              "source": "github"
+            },
+            {
+              "id": "repo_snapshot_compat",
+              "name": "compat",
+              "url": "https://example.invalid/compat.git",
+              "source": "github"
+            },
+            {
+              "id": "repo_snapshot_native",
+              "name": "native",
+              "url": "https://example.invalid/native.git",
+              "source": "github"
+            }
+          ],
           "issuePrefix": "MUL",
           "issue_prefix": "MUL",
           "createdAt": "<timestamp>",
@@ -14350,7 +14400,26 @@
         "description": null,
         "context": null,
         "settings": {},
-        "repos": [],
+        "repos": [
+          {
+            "id": "repo_snapshot",
+            "name": "snapshot",
+            "url": "https://example.invalid/snapshot.git",
+            "source": "github"
+          },
+          {
+            "id": "repo_snapshot_compat",
+            "name": "compat",
+            "url": "https://example.invalid/compat.git",
+            "source": "github"
+          },
+          {
+            "id": "repo_snapshot_native",
+            "name": "native",
+            "url": "https://example.invalid/native.git",
+            "source": "github"
+          }
+        ],
         "issuePrefix": "MUL",
         "issue_prefix": "MUL",
         "createdAt": "<timestamp>",
@@ -14478,8 +14547,39 @@
       "path": "/api/workspaces/local/repos",
       "status": 200,
       "body": {
-        "repositories": [],
-        "total": 0
+        "repositories": [
+          {
+            "id": "repo_snapshot",
+            "name": "snapshot",
+            "url": "https://example.invalid/snapshot.git",
+            "source": "github",
+            "description": null,
+            "default_branch": null,
+            "imported_at": null,
+            "updated_at": null
+          },
+          {
+            "id": "repo_snapshot_compat",
+            "name": "compat",
+            "url": "https://example.invalid/compat.git",
+            "source": "github",
+            "description": null,
+            "default_branch": null,
+            "imported_at": null,
+            "updated_at": null
+          },
+          {
+            "id": "repo_snapshot_native",
+            "name": "native",
+            "url": "https://example.invalid/native.git",
+            "source": "github",
+            "description": null,
+            "default_branch": null,
+            "imported_at": null,
+            "updated_at": null
+          }
+        ],
+        "total": 3
       }
     },
     {
@@ -17274,7 +17374,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600232",
+        "id": "local-contact-1767225600233",
         "status": "received",
         "mode": "local",
         "request": {
@@ -18552,7 +18652,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600239",
+        "session_id": "local-lark-1767225600240",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

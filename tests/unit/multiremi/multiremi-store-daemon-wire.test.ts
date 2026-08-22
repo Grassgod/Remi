@@ -92,6 +92,16 @@ describe("Multiremi store — Go daemon wire shapes", () => {
 
   it("serves daemon claim responses in Go wire shape and normalizes them for the Bun daemon", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [{
+        id: "repo_claim_shape",
+        name: "claim-shape",
+        url: "https://github.com/example/claim-shape",
+        source: "github",
+        default_branch: "main",
+      }],
+    });
     // The runtime IS the machine that holds the project's local_directory
     // (daemon-claim), so the directory affinity resolves to it.
     const runtime = store.registerRuntime({ id: "rt_claim_shape", name: "claim shape", provider: "codex", workspaceId: "local", ownerId: "local", daemonId: "daemon-claim", maxConcurrency: 2 });
@@ -312,7 +322,15 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       name: "Local Alice",
       profileDescription: "Prefers concise updates with verification notes.",
     });
-    store.updateWorkspace("local", { context: "Use the workspace TypeScript conventions." });
+    store.updateWorkspace("local", {
+      context: "Use the workspace TypeScript conventions.",
+      repos: [{
+        id: "repo_claim_context",
+        name: "claim-context",
+        url: "https://github.com/example/claim-context",
+        source: "github",
+      }],
+    });
     const runtime = store.registerRuntime({
       id: "rt_claim_context",
       name: "claim context",

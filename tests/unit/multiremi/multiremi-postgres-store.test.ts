@@ -675,6 +675,48 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.linkScmChangeRequestToIssue(issue.id, projected[0]!.id).link.source).toBe("manual");
   });
 
+  it("atomically reconciles workspace repositories and selected bindings on Postgres", () => {
+    const ws = freshWorkspace();
+    const firstId = `repo_pg_atomic_first_${wsCounter}`;
+    const secondId = `repo_pg_atomic_second_${wsCounter}`;
+    const repositories = [
+      { id: firstId, name: "first", url: "git@github.com:acme/first.git", source: "github", default_branch: "main" },
+      { id: secondId, name: "second", url: "git@github.com:acme/second.git", source: "github", default_branch: "main" },
+    ];
+    store.updateWorkspaceRepositories(ws, repositories);
+    const connection = store.createScmConnection({
+      workspaceId: ws,
+      name: "PG selected",
+      provider: "github",
+      mode: "poll",
+      repositoryScope: "selected",
+      repositoryIds: [firstId],
+    });
+
+    const replaced = store.updateScmConnection(connection.id, {
+      repositoryIds: [secondId],
+    });
+    expect(replaced.repositories.map((binding) => binding.repositoryId)).toEqual([secondId]);
+
+    expect(() => store.updateScmConnection(connection.id, {
+      name: "Must roll back",
+      repositoryIds: [secondId, "repo_missing"],
+    })).toThrow("Repository not found in workspace");
+    expect(store.getScmConnection(connection.id)?.name).toBe("PG selected");
+    expect(store.listScmRepositoryBindings({ connectionId: connection.id }).map((binding) => binding.repositoryId))
+      .toEqual([secondId]);
+
+    expect(() => store.updateWorkspaceRepositories(ws, [
+      repositories[0]!,
+      { ...repositories[1]!, url: "git@gitlab.example.test:acme/second.git" },
+    ])).toThrow();
+    expect(store.getWorkspace(ws)?.repos).toContainEqual(
+      expect.objectContaining({ id: secondId, url: "git@github.com:acme/second.git" }),
+    );
+    expect(store.getScmRepositoryBinding(connection.id, secondId)?.repositoryUrl)
+      .toBe("git@github.com:acme/second.git");
+  });
+
   it("persists Issue Sessions, agent lanes, projections, and explicit results", () => {
     const ws = freshWorkspace();
     const runtime = store.registerRuntime({
@@ -1228,6 +1270,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   it("runs transactions (createProject with nested resource) atomically", () => {
     const ws = freshWorkspace();
+    store.updateWorkspaceRepositories(ws, [{
+      id: `repo_pg_nested_${wsCounter}`,
+      name: "repo",
+      url: "https://github.com/owner/repo",
+      source: "github",
+    }]);
     const project = store.createProject({
       title: "With resources",
       workspaceId: ws,
@@ -1345,6 +1393,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   it("resolves project_ref expansion and rejects duplicate refs via the UNIQUE index", () => {
     const ws = freshWorkspace();
+    store.updateWorkspaceRepositories(ws, [
+      { id: `repo_pg_ref_lib_${wsCounter}`, name: "lib", url: "https://github.com/acme/lib", source: "github" },
+      { id: `repo_pg_ref_main_${wsCounter}`, name: "main", url: "https://github.com/acme/main", source: "github" },
+    ]);
     const lib = store.createProject({ title: "Lib", workspaceId: ws, resources: [{ resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/lib" } }] });
     const main = store.createProject({
       title: "Main",

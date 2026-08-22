@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { parseGitRemoteMetadata } from "@multiremi/api/helpers/repositories.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import {
+  importWorkspaceRepository,
+  parseGitRemoteMetadata,
+  removeWorkspaceRepository,
+  updateWorkspaceRepository,
+} from "@multiremi/api/helpers/repositories.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -17,6 +22,14 @@ const inspectGitRemoteRepository = async (url: string) => {
   }
   return { default_branch: "trunk", branches: ["trunk"] };
 };
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
 
 describe("Multiremi API - workspace repositories", () => {
   it("rejects repository writes through generic workspace update routes", async () => {
@@ -74,6 +87,189 @@ describe("Multiremi API - workspace repositories", () => {
         assignmentOrigin: "default",
       }),
     );
+  });
+
+  it("removes orphaned bindings when repository reconciliation repairs an interrupted write", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspace(workspace.id, {
+      repos: [{
+        id: "repo_orphaned",
+        name: "orphaned",
+        url: "git@github.com:acme/orphaned.git",
+        source: "github",
+        default_branch: "main",
+      }],
+    });
+    const connection = store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+    expect(store.getScmRepositoryBinding(connection.id, "repo_orphaned")).not.toBeNull();
+
+    // Simulate the old two-step writer crashing after the workspace JSON write.
+    store.updateWorkspace(workspace.id, { repos: [] });
+    const app = createMultiremiApp({ store, inspectGitRemoteRepository });
+    const response = await app.request(`/api/workspaces/${workspace.id}/repos`);
+
+    expect(response.status).toBe(200);
+    expect(store.listScmRepositoryBindings({ connectionId: connection.id })).toEqual([]);
+  });
+
+  it("rolls back repository import, update, and deletion when binding persistence fails", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    const connection = store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+
+    db!.exec(`
+      CREATE TRIGGER fail_repository_binding_insert
+      BEFORE INSERT ON multiremi_scm_repository_bindings
+      BEGIN
+        SELECT RAISE(ABORT, 'injected binding insert failure');
+      END
+    `);
+    await expect(importWorkspaceRepository(
+      store,
+      workspace.id,
+      { url: "git@github.com:acme/atomic.git" },
+      inspectGitRemoteRepository,
+    )).rejects.toThrow("injected binding insert failure");
+    expect(store.getWorkspace(workspace.id)?.repos).toEqual([]);
+    expect(store.listScmRepositoryBindings({ connectionId: connection.id })).toEqual([]);
+    db!.exec("DROP TRIGGER fail_repository_binding_insert");
+
+    const imported = await importWorkspaceRepository(
+      store,
+      workspace.id,
+      { url: "git@github.com:acme/atomic.git" },
+      inspectGitRemoteRepository,
+    );
+    const repositoryId = imported.repository.id;
+    expect(store.getScmRepositoryBinding(connection.id, repositoryId)?.defaultBranch).toBe("main");
+
+    db!.exec(`
+      CREATE TRIGGER fail_repository_binding_update
+      BEFORE UPDATE ON multiremi_scm_repository_bindings
+      BEGIN
+        SELECT RAISE(ABORT, 'injected binding update failure');
+      END
+    `);
+    await expect(updateWorkspaceRepository(
+      store,
+      workspace.id,
+      repositoryId,
+      { default_branch: "release" },
+      inspectGitRemoteRepository,
+    )).rejects.toThrow("injected binding update failure");
+    expect(store.getWorkspace(workspace.id)?.repos).toContainEqual(
+      expect.objectContaining({ id: repositoryId, default_branch: "main" }),
+    );
+    expect(store.getScmRepositoryBinding(connection.id, repositoryId)?.defaultBranch).toBe("main");
+    db!.exec("DROP TRIGGER fail_repository_binding_update");
+
+    db!.exec(`
+      CREATE TRIGGER fail_repository_binding_delete
+      BEFORE DELETE ON multiremi_scm_repository_bindings
+      BEGIN
+        SELECT RAISE(ABORT, 'injected binding delete failure');
+      END
+    `);
+    expect(() => removeWorkspaceRepository(store, workspace.id, repositoryId))
+      .toThrow("injected binding delete failure");
+    expect(store.getWorkspace(workspace.id)?.repos).toContainEqual(
+      expect.objectContaining({ id: repositoryId }),
+    );
+    expect(store.getScmRepositoryBinding(connection.id, repositoryId)).not.toBeNull();
+  });
+
+  it("merges concurrent repository imports instead of replacing a stale workspace snapshot", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const releaseSecond = deferred<void>();
+    let inspections = 0;
+    const inspect = async () => {
+      inspections += 1;
+      if (inspections === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      } else {
+        secondStarted.resolve();
+        await releaseSecond.promise;
+      }
+      return { default_branch: "main", branches: ["main"] };
+    };
+
+    const first = importWorkspaceRepository(
+      store,
+      "local",
+      { url: "https://github.com/acme/first.git" },
+      inspect,
+    );
+    await firstStarted.promise;
+    const second = importWorkspaceRepository(
+      store,
+      "local",
+      { url: "https://github.com/acme/second.git" },
+      inspect,
+    );
+    await secondStarted.promise;
+    releaseFirst.resolve();
+    await first;
+    releaseSecond.resolve();
+    await second;
+
+    expect(store.getWorkspace("local")?.repos).toEqual([
+      expect.objectContaining({ name: "first" }),
+      expect.objectContaining({ name: "second" }),
+    ]);
+  });
+
+  it("patches and deletes against the latest repository list", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const target = await importWorkspaceRepository(
+      store,
+      "local",
+      { url: "https://github.com/acme/target.git" },
+      inspectGitRemoteRepository,
+    );
+    const updateStarted = deferred<void>();
+    const releaseUpdate = deferred<void>();
+    const update = updateWorkspaceRepository(
+      store,
+      "local",
+      target.repository.id,
+      { default_branch: "release" },
+      async () => {
+        updateStarted.resolve();
+        await releaseUpdate.promise;
+        return { default_branch: "main", branches: ["main", "release"] };
+      },
+    );
+    await updateStarted.promise;
+    const concurrent = await importWorkspaceRepository(
+      store,
+      "local",
+      { url: "https://github.com/acme/concurrent.git" },
+      inspectGitRemoteRepository,
+    );
+    releaseUpdate.resolve();
+    await update;
+
+    removeWorkspaceRepository(store, "local", target.repository.id);
+    expect(store.getWorkspace("local")?.repos).toEqual([
+      expect.objectContaining({ id: concurrent.repository.id, name: "concurrent" }),
+    ]);
   });
 
   it("inspects, imports, updates, lists, and removes Git repositories", async () => {

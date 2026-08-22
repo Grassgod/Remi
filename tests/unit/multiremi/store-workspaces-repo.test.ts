@@ -39,6 +39,31 @@ describe("WorkspacesRepo", () => {
     expect(repo.listWorkspaces().map((entry) => entry.id)).toContain(workspace.id);
   });
 
+  it("does not overwrite repositories when a concurrent partial workspace update commits", () => {
+    const repo = createRepo();
+    const workspace = repo.createWorkspace({
+      name: "Concurrent workspace",
+      repos: [{ id: "repo_original", url: "https://github.com/acme/original.git" }],
+    });
+    db!.exec(`
+      CREATE TRIGGER inject_repository_update
+      BEFORE UPDATE OF description ON multiremi_workspaces
+      WHEN OLD.id = '${workspace.id}'
+      BEGIN
+        UPDATE multiremi_workspaces
+        SET repos = '[{"id":"repo_concurrent","url":"https://github.com/acme/concurrent.git"}]'
+        WHERE id = OLD.id;
+      END
+    `);
+
+    repo.updateWorkspace(workspace.id, { description: "updated independently" });
+
+    expect(repo.getWorkspace(workspace.id)).toMatchObject({
+      description: "updated independently",
+      repos: [{ id: "repo_concurrent", url: "https://github.com/acme/concurrent.git" }],
+    });
+  });
+
   it("adds and archives a workspace member", () => {
     const repo = createRepo();
     const workspace = repo.createWorkspace({ name: "Members" });
