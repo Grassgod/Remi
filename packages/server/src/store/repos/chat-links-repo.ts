@@ -20,7 +20,11 @@ export class ChatLinksRepo {
 
     const resolve = (): MultiremiChatSession => {
       const existing = this.getChatLink(workspaceId, input.source, externalChatId);
-      if (existing) return this.requireLinkedSession(existing);
+      if (existing) {
+        const linkedSession = this.ctx.chat().getChatSession(existing.chatSessionId);
+        if (linkedSession) return linkedSession;
+        this.ctx.db.run("DELETE FROM multiremi_chat_links WHERE id = ?", [existing.id]);
+      }
 
       const session = this.ctx.chat().createChatSession({
         workspaceId,
@@ -42,8 +46,9 @@ export class ChatLinksRepo {
     } catch (error) {
       if (!isUniqueError(error)) throw error;
       const raced = this.getChatLink(workspaceId, input.source, externalChatId);
-      if (!raced) throw error;
-      return this.requireLinkedSession(raced);
+      const linkedSession = raced ? this.ctx.chat().getChatSession(raced.chatSessionId) : null;
+      if (linkedSession) return linkedSession;
+      return this.ctx.db.transaction(resolve)();
     }
   }
 
@@ -57,12 +62,6 @@ export class ChatLinksRepo {
        WHERE workspace_id = ? AND source = ? AND external_chat_id = ?`,
     ).get(workspaceId, source, externalChatId) as Row | null;
     return row ? toChatLink(row) : null;
-  }
-
-  private requireLinkedSession(link: MultiremiChatLink): MultiremiChatSession {
-    const session = this.ctx.chat().getChatSession(link.chatSessionId);
-    if (!session) throw new Error(`Linked chat session not found: ${link.chatSessionId}`);
-    return session;
   }
 }
 

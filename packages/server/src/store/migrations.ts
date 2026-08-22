@@ -1381,6 +1381,7 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_workspace ON multiremi_chat_sessions(workspace_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_agent ON multiremi_chat_sessions(agent_id);
 
+    -- Cross-adapter FK cascades are not enforced; repository deletion and orphan repair maintain link integrity.
     CREATE TABLE IF NOT EXISTS multiremi_chat_links (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
@@ -1388,8 +1389,7 @@ export function runMigrations(db: SqlDatabase): void {
       external_chat_id TEXT NOT NULL,
       chat_session_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      UNIQUE(workspace_id, source, external_chat_id),
-      FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE
+      UNIQUE(workspace_id, source, external_chat_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_chat_links_session

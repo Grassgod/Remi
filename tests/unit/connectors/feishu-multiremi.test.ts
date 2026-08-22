@@ -111,4 +111,66 @@ describe("FeishuMultiremiClient", () => {
     });
     await expect(timedOut.sendMessage("oc_1", "hello")).rejects.toThrow("timed out");
   });
+
+  it("preserves enqueue order when an earlier resolve response is slower", async () => {
+    const enqueueOrder: string[] = [];
+    let resolveCalls = 0;
+    const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/chat/external/resolve") {
+        resolveCalls += 1;
+        if (resolveCalls === 1) await new Promise((resolve) => setTimeout(resolve, 30));
+        return Response.json({ id: "chat_ordered" });
+      }
+      if (path === "/api/chat/sessions/chat_ordered/messages" && init?.method === "POST") {
+        const content = String(JSON.parse(String(init.body)).content);
+        enqueueOrder.push(content);
+        return Response.json({ task_id: `tsk_${content}` });
+      }
+      if (path.startsWith("/api/multiremi/tasks/")) {
+        return Response.json({ task: { status: "completed" } });
+      }
+      return Response.json([
+        { role: "assistant", task_id: "tsk_first", content: "reply_first" },
+        { role: "assistant", task_id: "tsk_second", content: "reply_second" },
+      ]);
+    };
+    const client = new FeishuMultiremiClient({
+      enabled: true,
+      serverUrl: "http://multiremi.test",
+      token: "member-token",
+      workspaceId: "local",
+    }, { fetch, pollIntervalMs: 1, timeoutMs: 1_000 });
+
+    const first = client.sendMessage("oc_same_chat", "first");
+    const second = client.sendMessage("oc_same_chat", "second");
+
+    expect(await Promise.all([first, second])).toEqual(["reply_first", "reply_second"]);
+    expect(enqueueOrder).toEqual(["first", "second"]);
+  });
+
+  it("aborts a hanging HTTP request at the end-to-end deadline", async () => {
+    let signalSeen = false;
+    const fetch = (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      signalSeen = init?.signal != null;
+      return new Promise<Response>(() => {});
+    };
+    const client = new FeishuMultiremiClient({
+      enabled: true,
+      serverUrl: "http://multiremi.test",
+      token: "member-token",
+      workspaceId: "local",
+    }, { fetch, timeoutMs: 10 });
+
+    const outcome = await Promise.race([
+      client.sendMessage("oc_hanging", "hello").then(
+        () => "resolved",
+        (error) => error instanceof Error ? error.message : String(error),
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still pending"), 80)),
+    ]);
+
+    expect(signalSeen).toBe(true);
+    expect(outcome).toContain("timed out after 10ms");
+  });
 });

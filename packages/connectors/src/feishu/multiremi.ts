@@ -24,6 +24,7 @@ export class FeishuMultiremiClient {
   private readonly fetchImpl: FetchLike;
   private readonly pollIntervalMs: number;
   private readonly timeoutMs: number;
+  private readonly enqueueTails = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: FeishuMultiremiConfig,
@@ -37,24 +38,14 @@ export class FeishuMultiremiClient {
 
   async sendMessage(externalChatId: string, content: string): Promise<string> {
     this.validateConfig();
-    const workspaceId = this.config.workspaceId.trim();
-    const session = await this.requestJson<{ id?: unknown }>(
-      `/api/chat/external/resolve?workspace_id=${encodeURIComponent(workspaceId)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({ source: "feishu", external_chat_id: externalChatId }),
-      },
-    );
-    const sessionId = requiredString(session.id, "resolve response session id");
-    const sent = await this.requestJson<{ task_id?: unknown }>(
-      `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
-      { method: "POST", body: JSON.stringify({ content }) },
-    );
-    const taskId = requiredString(sent.task_id, "send response task id");
+    const deadline = Date.now() + this.timeoutMs;
+    const { sessionId, taskId } = await this.enqueueMessage(externalChatId, content, deadline);
 
-    await this.waitForTask(taskId);
+    await this.waitForTask(taskId, deadline);
     const messages = await this.requestJson<unknown>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+      {},
+      deadline,
     );
     if (!Array.isArray(messages)) throw new Error("Multiremi chat messages response is invalid");
     const assistant = [...messages].reverse().find((message) => {
@@ -65,11 +56,53 @@ export class FeishuMultiremiClient {
     return requiredString(assistant?.content, "assistant message content");
   }
 
-  private async waitForTask(taskId: string): Promise<void> {
-    const deadline = Date.now() + this.timeoutMs;
+  private enqueueMessage(
+    externalChatId: string,
+    content: string,
+    deadline: number,
+  ): Promise<{ sessionId: string; taskId: string }> {
+    const previous = this.enqueueTails.get(externalChatId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(async () => {
+      return this.resolveAndSend(externalChatId, content, deadline);
+    });
+    const tail = current.then(() => undefined, () => undefined);
+    this.enqueueTails.set(externalChatId, tail);
+    void tail.then(() => {
+      if (this.enqueueTails.get(externalChatId) === tail) this.enqueueTails.delete(externalChatId);
+    });
+    return current;
+  }
+
+  private async resolveAndSend(
+    externalChatId: string,
+    content: string,
+    deadline: number,
+  ): Promise<{ sessionId: string; taskId: string }> {
+    const workspaceId = this.config.workspaceId.trim();
+    const session = await this.requestJson<{ id?: unknown }>(
+      `/api/chat/external/resolve?workspace_id=${encodeURIComponent(workspaceId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ source: "feishu", external_chat_id: externalChatId }),
+      },
+      deadline,
+    );
+    const sessionId = requiredString(session.id, "resolve response session id");
+    const sent = await this.requestJson<{ task_id?: unknown }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+      { method: "POST", body: JSON.stringify({ content }) },
+      deadline,
+    );
+    const taskId = requiredString(sent.task_id, "send response task id");
+    return { sessionId, taskId };
+  }
+
+  private async waitForTask(taskId: string, deadline: number): Promise<void> {
     while (true) {
       const response = await this.requestJson<{ task?: Record<string, unknown> }>(
         `/api/multiremi/tasks/${encodeURIComponent(taskId)}`,
+        {},
+        deadline,
       );
       const task = response.task;
       const status = requiredString(task?.status, "task status");
@@ -79,22 +112,52 @@ export class FeishuMultiremiClient {
         throw new Error(`Multiremi task ${taskId} ${status}: ${reason}`);
       }
       if (Date.now() >= deadline) {
-        throw new Error(`Multiremi task ${taskId} timed out after ${this.timeoutMs}ms`);
+        throw this.timeoutError();
       }
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())));
+      });
     }
   }
 
-  private async requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.fetchImpl(`${this.serverUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${this.config.token}`,
-        "Content-Type": "application/json",
-        ...init.headers,
-      },
+  private async requestJson<T>(path: string, init: RequestInit, deadline: number): Promise<T> {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw this.timeoutError();
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = this.timeoutError();
+        controller.abort(error);
+        reject(error);
+      }, remainingMs);
     });
-    const raw = await response.text();
+
+    let response: Response;
+    let raw: string;
+    try {
+      ({ response, raw } = await Promise.race([
+        (async () => {
+          const response = await this.fetchImpl(`${this.serverUrl}${path}`, {
+            ...init,
+            signal: controller.signal,
+            headers: {
+              Authorization: `Bearer ${this.config.token}`,
+              "Content-Type": "application/json",
+              ...init.headers,
+            },
+          });
+          return { response, raw: await response.text() };
+        })(),
+        timeout,
+      ]));
+    } catch (error) {
+      if (controller.signal.aborted || Date.now() >= deadline) throw this.timeoutError();
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
     let body: unknown = null;
     if (raw) {
       try {
@@ -110,6 +173,10 @@ export class FeishuMultiremiClient {
       throw new Error(`Multiremi request failed (${response.status})${detail ? `: ${detail}` : ""}`);
     }
     return body as T;
+  }
+
+  private timeoutError(): Error {
+    return new Error(`Multiremi request timed out after ${this.timeoutMs}ms`);
   }
 
   private validateConfig(): void {

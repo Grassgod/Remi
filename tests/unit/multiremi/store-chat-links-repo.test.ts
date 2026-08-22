@@ -60,4 +60,25 @@ describe("ChatLinksRepo", () => {
     expect(store!.deleteChatSession(session.id)).toBe(true);
     expect(repo.getChatLink("local", "feishu", "oc_delete_me")).toBeNull();
   });
+
+  it("repairs an orphaned link when the linked session disappeared", () => {
+    const repo = createRepo();
+    const agent = store!.createAgent({ name: "Concierge", provider: "claude" });
+    const input = {
+      workspaceId: "local",
+      source: "feishu" as const,
+      externalChatId: "oc_orphaned",
+      agentId: agent.id,
+      creatorId: "alice",
+    };
+    const original = repo.getOrCreateChatSessionForExternalChat(input);
+    db!.run("DELETE FROM multiremi_chat_sessions WHERE id = ?", [original.id]);
+
+    const repaired = repo.getOrCreateChatSessionForExternalChat(input);
+
+    expect(repaired.id).not.toBe(original.id);
+    expect(store!.listChatSessions("local")).toHaveLength(1);
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_chat_links").get()).toEqual({ count: 1 });
+    expect(repo.getChatLink("local", "feishu", "oc_orphaned")?.chatSessionId).toBe(repaired.id);
+  });
 });
