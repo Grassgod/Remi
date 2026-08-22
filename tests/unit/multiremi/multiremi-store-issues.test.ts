@@ -496,8 +496,15 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     stamp(r2b.id, 12);
 
     const ids = (rows: any[]) => rows.map((comment) => comment.id);
+    const requestComments = (query: string) => {
+      const token = process.env.MULTIREMI_TOKEN;
+      return app.request(
+        `/api/issues/${issue.id}/comments${query ? `?${query}` : ""}`,
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+      );
+    };
     const getComments = async (query: string) => {
-      const response = await app.request(`/api/issues/${issue.id}/comments${query ? `?${query}` : ""}`);
+      const response = await requestComments(query);
       return { response, rows: await response.json() as any[] };
     };
 
@@ -538,7 +545,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const olderReply = await getComments(nextReply.toString());
     expect(ids(olderReply.rows)).toEqual([root1.id, r1b.id]);
 
-    const invalid = await app.request(`/api/issues/${issue.id}/comments?roots_only=true&thread=${root1.id}`);
+    const invalid = await requestComments(`roots_only=true&thread=${root1.id}`);
     expect(invalid.status).toBe(400);
   });
 
