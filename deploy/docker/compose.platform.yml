@@ -45,6 +45,7 @@ services:
       MULTIREMI_OPENVIKING_URL: http://openviking:1933
       MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
       MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
+      MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-1}
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
     volumes:
       - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads

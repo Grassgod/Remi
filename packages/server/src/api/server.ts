@@ -137,6 +137,11 @@ import type {
 
 let authDisabledWarningEmitted = false;
 
+function envEnabled(value: string | undefined, fallback = true): boolean {
+  if (value === undefined) return fallback;
+  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+}
+
 export interface MultiremiApiOptions {
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
@@ -155,6 +160,8 @@ export interface MultiremiApiOptions {
   sessionArchives?: SessionArchiveService;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
   scmPolling?: ScmPollingScheduler | null;
+  /** Disable every server-owned background job for a read-only blue/green candidate. */
+  backgroundJobs?: boolean;
   verifyScmConnection?: ScmConnectionVerifier;
 }
 
@@ -481,19 +488,27 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
 export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
   const store = options.store ?? new MultiremiStore();
-  const scheduler = options.scheduler === undefined ? new MultiremiScheduler({ store }) : options.scheduler;
-  const scmPolling = options.scmPolling === undefined
-    ? new ScmPollingScheduler({ store: scmIngestionStore(store) })
-    : options.scmPolling;
-  const controlPlaneSshMesh = options.controlPlaneSshMesh === undefined
-    ? createControlPlaneSshMeshFromEnv(store)
-    : options.controlPlaneSshMesh;
+  const backgroundJobs = options.backgroundJobs
+    ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
+  const scheduler = backgroundJobs
+    ? (options.scheduler === undefined ? new MultiremiScheduler({ store }) : options.scheduler)
+    : null;
+  const scmPolling = backgroundJobs
+    ? (options.scmPolling === undefined
+      ? new ScmPollingScheduler({ store: scmIngestionStore(store) })
+      : options.scmPolling)
+    : null;
+  const controlPlaneSshMesh = backgroundJobs
+    ? (options.controlPlaneSshMesh === undefined
+      ? createControlPlaneSshMeshFromEnv(store)
+      : options.controlPlaneSshMesh)
+    : null;
   scheduler?.start();
   scmPolling?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
-  sessionArchives.startIssueArchivePurgeRecovery();
+  if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
   const app = createMultiremiApp({
     ...options,
     store,
@@ -697,7 +712,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
-    sessionArchives.stopIssueArchivePurgeRecovery();
+    if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();
     unsubscribeTaskEnqueued();
     unsubscribeTaskEvent();
