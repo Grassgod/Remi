@@ -3,6 +3,8 @@
 // attachments, labels, pinned shortcuts, and search.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { runMigrations } from "@multiremi/store/migrations.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -780,6 +782,9 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 1, done: 1 });
     expect(store.restoreIssue(oldDone.id)).toMatchObject({ completedAt: null, archivedAt: null, status: "done" });
     expect(store.listIssues().map((issue) => issue.id)).toContain(oldDone.id);
+    runMigrations(db! as unknown as SqlDatabase);
+    expect(store.getIssue(oldDone.id)).toMatchObject({ completedAt: null, archivedAt: null, status: "done" });
+    expect(store.archiveEligibleIssues(now).map((issue) => issue.id)).not.toContain(oldDone.id);
 
     db!.run(
       "UPDATE multiremi_issues SET completed_at = ?, archived_at = ? WHERE id = ?",

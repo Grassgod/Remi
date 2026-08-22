@@ -1448,7 +1448,7 @@ export function runMigrations(db: SqlDatabase): void {
   // purge snapshot or resurrect archive bytes after the control-plane row is
   // removed.
   addColumnIfMissing(db, "multiremi_issues", "lifecycle_state TEXT NOT NULL DEFAULT 'active'");
-  addColumnIfMissing(db, "multiremi_issues", "completed_at TEXT");
+  const issueCompletedAtAdded = addColumnIfMissing(db, "multiremi_issues", "completed_at TEXT");
   addColumnIfMissing(db, "multiremi_issues", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_source_revision TEXT");
@@ -1575,9 +1575,11 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_message ON multiremi_attachments(chat_message_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_resolved ON multiremi_issue_comments(issue_id, resolved_at)");
   db.run("UPDATE multiremi_issues SET status = 'todo' WHERE status = 'open'");
-  db.run(
-    "UPDATE multiremi_issues SET completed_at = updated_at WHERE completed_at IS NULL AND status IN ('done', 'cancelled')",
-  );
+  if (issueCompletedAtAdded) {
+    db.run(
+      "UPDATE multiremi_issues SET completed_at = updated_at WHERE completed_at IS NULL AND status IN ('done', 'cancelled')",
+    );
+  }
   // Pool scheduling: agents are logical workers and never bind to a machine.
   // Runs every startup so legacy pins converge back into the pool.
   db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");

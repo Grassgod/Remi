@@ -201,10 +201,15 @@ describe("store migrations", () => {
   it("backfills completed_at for legacy terminal issues", () => {
     const database = freshDb();
     migrate(database);
+    database.exec(`
+      DROP INDEX idx_multiremi_issues_archive;
+      ALTER TABLE multiremi_issues DROP COLUMN archived_at;
+      ALTER TABLE multiremi_issues DROP COLUMN completed_at;
+    `);
     database.run(
       `INSERT INTO multiremi_issues (
-         id, title, status, completed_at, created_at, updated_at
-       ) VALUES (?, ?, ?, NULL, ?, ?)`,
+         id, title, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
       [
         "iss_legacy_done",
         "Legacy done",
@@ -215,8 +220,8 @@ describe("store migrations", () => {
     );
     database.run(
       `INSERT INTO multiremi_issues (
-         id, title, status, completed_at, created_at, updated_at
-       ) VALUES (?, ?, ?, NULL, ?, ?)`,
+         id, title, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
       [
         "iss_legacy_active",
         "Legacy active",
