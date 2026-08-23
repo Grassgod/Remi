@@ -49,6 +49,7 @@ export function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): R
   if (ack.pending_local_skill_import) response.pending_local_skill_import = ack.pending_local_skill_import;
   if (ack.pending_local_skill_imports?.length) response.pending_local_skill_imports = ack.pending_local_skill_imports;
   if (ack.ssh_mesh) response.ssh_mesh = ack.ssh_mesh;
+  if (ack.drain) response.drain = ack.drain;
   return response;
 }
 

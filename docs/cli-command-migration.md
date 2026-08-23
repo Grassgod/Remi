@@ -62,6 +62,7 @@ remi workspace prompt get|update
 remi workspace issue-archive get|update
 remi wiki repository list|get|create|update|delete|revisions|build
 remi wiki repository atlas status|configure
+remi platform operation cancel <operation> --yes
 ```
 
 ## Deprecated aliases

@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 585,
+    "routeCount": 589,
     "routeCountByPrefix": {
-      "native": 192,
-      "compat": 380,
+      "native": 193,
+      "compat": 383,
       "root": 13
     },
     "getRoutes": 254,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 331,
+    "mutationRoutes": 335,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -544,6 +544,7 @@
     "POST /api/multiremi/members",
     "POST /api/multiremi/pins",
     "POST /api/multiremi/platform/operations",
+    "POST /api/multiremi/platform/operations/:id/cancel",
     "POST /api/multiremi/projects",
     "POST /api/multiremi/projects/:id/resources",
     "POST /api/multiremi/projects/:id/restore",
@@ -563,6 +564,9 @@
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
+    "POST /api/platform-updater/drain/begin",
+    "POST /api/platform-updater/drain/release",
+    "POST /api/platform-updater/drain/renew",
     "POST /api/platform-updater/heartbeat",
     "POST /api/platform-updater/operations/:id/report",
     "POST /api/platform-updater/operations/claim",
@@ -4591,6 +4595,10 @@
       "status": 200,
       "body": {
         "status": "ok",
+        "drain": {
+          "mode": "normal",
+          "generation": 0
+        },
         "workspace_settings": {},
         "relay": {
           "claude": null,
@@ -8578,6 +8586,17 @@
             "id": "platform.health",
             "command": "remi platform health",
             "capability": "platform.health",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.operation.cancel",
+            "command": "remi platform operation cancel",
+            "capability": "platform.operation.cancel",
             "outputs": [
               "table",
               "json",
@@ -16672,6 +16691,15 @@
         "updaterHeartbeatAt": null,
         "services": [],
         "activeOperation": null,
+        "lastOperation": null,
+        "maintenance": {
+          "mode": "normal",
+          "generation": 0,
+          "operationId": null,
+          "startedAt": null,
+          "expiresAt": null,
+          "reason": null
+        },
         "recentReleases": []
       }
     },

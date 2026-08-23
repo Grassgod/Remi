@@ -8,10 +8,10 @@ the named tests below are part of `release-build-check.yml` unless noted.
 
 - 32 user API domains: the 31 top-level resources plus Attachment under
   `issue attachment` and `comment attachment`.
-- 424 Registry commands: 408 native/capability entries and 16 compatibility
+- 425 Registry commands: 409 native/capability entries and 16 compatibility
   passthrough entries.
 - 46 deprecated aliases, all with lifecycle metadata and a canonical replacement.
-- 585 server routes: 520 mapped to executable commands, 65 justified exemptions,
+- 589 server routes: 521 mapped to executable commands, 68 justified exemptions,
   and 0 planned or unexplained gaps. The CI ratchet is fixed at 0.
 - Exemptions are limited to internal daemon protocol, callbacks/webhooks,
   WebSocket transport, pure UI behavior, updater internals, and public bootstrap
@@ -29,7 +29,7 @@ the named tests below are part of `release-build-check.yml` unless noted.
 | `repo list` works while Git is offline | `cli-resources.test.ts`: `lists repositories from the API without contacting the local Git helper` | Pass |
 | Checkout touches one repository and returns timeout/failure as tool errors | `cli-resources.test.ts` checkout resolver/timeout tests plus the homepage Chat daemon smoke with two configured repositories | Pass |
 | A stale native Chat session recovers from product history | `multiremi-store-task-routing`, `multiremi-store-chat`, `multiremi-store-daemon-wire`, `agent-runtime-send-options`, and daemon smoke `resumes chat tasks...` | Pass |
-| All 32 API domains are mapped with no unexplained gap | `cli-capabilities-manifest.test.ts` and `bun run cli:capabilities:check`: 520 mapped / 65 exempt / 0 missing / 585 total | Pass |
+| All 32 API domains are mapped with no unexplained gap | `cli-capabilities-manifest.test.ts` and `bun run cli:capabilities:check`: 521 mapped / 68 exempt / 0 missing / 589 total | Pass |
 | TypeScript, full tests, release checks, four-platform CLI archives, and API/Web images | Final MUL-70 delivery gate on fixed Bun 1.3.14; the full suite isolates host-global Git hooks and provider credentials so environment state cannot change the result | Pass; see final run totals |
 
 The old `multiremi-cli-help.test.ts` parsed switch source text and issue usage

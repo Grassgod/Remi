@@ -134,6 +134,26 @@ describe("operations CLI contracts", () => {
     await capture(() => registryFor([spec]).execute(["context", "auth", "send-code", "--data", '{"email":"person@example.test"}', "--output", "json"]));
     expect(paths).toEqual(["/auth/send-code"]);
   });
+
+  it("cancels a platform operation through the registered destructive command", async () => {
+    useCliEnv();
+    const spec = specById("platform.operation.cancel");
+    const requests: Request[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      requests.push(request);
+      return Response.json({ operation: { id: "op_123", status: "cancelled" } });
+    });
+
+    await expect(registryFor([spec]).execute(["platform", "operation", "cancel", "op_123"]))
+      .rejects.toThrow("requires --yes");
+    await capture(() => registryFor([spec]).execute([
+      "platform", "operation", "cancel", "op_123", "--yes", "--output", "json",
+    ]));
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.method).toBe("POST");
+    expect(new URL(requests[0]!.url).pathname).toBe("/api/multiremi/platform/operations/op_123/cancel");
+  });
 });
 
 function specById(id: string): CommandSpec {

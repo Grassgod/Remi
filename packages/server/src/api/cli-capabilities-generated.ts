@@ -4356,6 +4356,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "platform.operation.cancel": {
+      "command": "remi platform operation cancel",
+      "auth": [
+        "human"
+      ],
+      "capability": "platform.operation.cancel",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "platform.release.latest": {
       "command": "remi platform release latest",
       "auth": [

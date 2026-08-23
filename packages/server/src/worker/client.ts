@@ -177,6 +177,7 @@ export class MultiremiDaemonClient {
   async heartbeatRuntime(
     runtimeId: string,
     sshMeshStatus?: MultiremiDaemonSshMeshStatus,
+    drainStatus?: { ackGeneration: number; activeTaskCount: number },
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
     let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
@@ -187,6 +188,12 @@ export class MultiremiDaemonClient {
         agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
         ...(sshMeshStatus ? { ssh_mesh_status: sshMeshStatus } : {}),
+        ...(drainStatus
+          ? {
+              drain_ack_generation: drainStatus.ackGeneration,
+              active_task_count: drainStatus.activeTaskCount,
+            }
+          : {}),
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {

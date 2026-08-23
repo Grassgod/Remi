@@ -484,6 +484,7 @@ function mappedOperationsCommand(route: string): string | null {
     "GET /api/multiremi/platform/status": "platform.status",
     "GET /api/multiremi/platform/operations": "platform.operation.list",
     "POST /api/multiremi/platform/operations": "platform.operation.create",
+    "POST /api/multiremi/platform/operations/:id/cancel": "platform.operation.cancel",
     "PATCH /api/multiremi/platform/settings": "platform.settings.update",
     "GET /api/multiremi/feedback": "platform.feedback.list",
     "POST /api/multiremi/feedback": "platform.feedback.create",

@@ -10,6 +10,7 @@ import {
   RefreshCw,
   RotateCcw,
   Server,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@multiremi/ui/components/ui/badge";
@@ -29,8 +30,10 @@ import {
 } from "@multiremi/ui/components/ui/alert-dialog";
 import {
   platformStatusOptions,
+  useCancelPlatformOperation,
   useCreatePlatformOperation,
   useUpdatePlatformSettings,
+  type PlatformOperation,
   type PlatformRelease,
 } from "@multiremi/core/platform-lifecycle";
 import { useT } from "../../i18n";
@@ -40,15 +43,19 @@ type ConfirmAction =
   | { kind: "update"; release: PlatformRelease }
   | { kind: "rollback"; release: PlatformRelease };
 
+const CANCELLABLE_STATUSES = new Set(["queued", "preparing", "pulling", "draining"]);
+const RECENT_OPERATION_WINDOW_MS = 30 * 60_000;
+
 export function PlatformTab() {
   const { t } = useT("settings");
   const statusQuery = useQuery(platformStatusOptions());
   const operationMutation = useCreatePlatformOperation();
+  const cancelMutation = useCancelPlatformOperation();
   const settingsMutation = useUpdatePlatformSettings();
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const status = statusQuery.data;
   const active = status?.activeOperation;
-  const busy = Boolean(active) || operationMutation.isPending;
+  const busy = Boolean(active) || operationMutation.isPending || cancelMutation.isPending;
 
   async function runAction(action: ConfirmAction | { kind: "check_updates" }) {
     try {
@@ -68,6 +75,15 @@ export function PlatformTab() {
     }
   }
 
+  async function cancelOperation(operationId: string) {
+    try {
+      await cancelMutation.mutateAsync(operationId);
+      toast.success(t(($) => $.platform.cancel_requested));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.platform.operation_failed));
+    }
+  }
+
   if (statusQuery.isPending) {
     return <div className="h-64 animate-pulse rounded-lg bg-muted" />;
   }
@@ -81,9 +97,8 @@ export function PlatformTab() {
   }
 
   const currentVersion = status.currentRelease?.version || t(($) => $.platform.unknown_version);
-  const progressMessage = typeof active?.progress.message === "string"
-    ? active.progress.message
-    : active ? operationLabel(active.kind, t) : null;
+  const progressLines = active ? operationProgressLines(active, t) : [];
+  const recentResult = !active ? recentOperationResult(status.lastOperation, t) : null;
 
   return (
     <div className="space-y-6">
@@ -100,12 +115,42 @@ export function PlatformTab() {
       )}
 
       {active && (
-        <div className="flex items-center gap-3 rounded-md border bg-muted/40 px-3 py-3">
-          <RefreshCw className="h-4 w-4 animate-spin" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{progressMessage}</p>
-            <p className="text-xs text-muted-foreground">{statusLabel(active.status, t)}</p>
+        <div data-testid="platform-operation-status" data-state="active" className="flex flex-col items-stretch gap-3 rounded-md border bg-muted/40 px-3 py-3 sm:flex-row sm:items-start">
+          <RefreshCw className="mt-0.5 h-4 w-4 animate-spin" />
+          <div className="min-w-0 flex-1 space-y-1">
+            {progressLines.map((line, index) => (
+              <p key={line} className={index === 0 ? "text-sm font-medium" : "text-xs text-muted-foreground"}>
+                {line}
+              </p>
+            ))}
           </div>
+          {CANCELLABLE_STATUSES.has(active.status) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 self-start"
+              disabled={cancelMutation.isPending}
+              onClick={() => void cancelOperation(active.id)}
+            >
+              <X />
+              {t(($) => $.platform.cancel_upgrade)}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {recentResult && (
+        <div
+          data-testid="platform-operation-status"
+          data-state={recentResult.kind}
+          className={recentResult.kind === "timeout"
+            ? "flex items-center gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-3 text-destructive"
+            : "flex items-center gap-3 rounded-md border bg-muted/40 px-3 py-3"}
+        >
+          {recentResult.kind === "timeout"
+            ? <CircleAlert className="h-4 w-4" />
+            : <Check className="h-4 w-4" />}
+          <p className="text-sm font-medium">{recentResult.message}</p>
         </div>
       )}
 
@@ -254,7 +299,62 @@ function ServiceBadge({ status, t }: { status: string; t: Translate }) {
 
 type Translate = ReturnType<typeof useT<"settings">>["t"];
 function operationLabel(kind: string, t: Translate) { return kind === "restart" ? t(($) => $.platform.restart) : kind === "rollback" ? t(($) => $.platform.rollback) : kind === "update" ? t(($) => $.platform.update_now) : t(($) => $.platform.check_updates); }
-function statusLabel(status: string, t: Translate) { return status === "pulling" ? t(($) => $.platform.status_pulling) : status === "switching" ? t(($) => $.platform.status_switching) : status === "restarting" ? t(($) => $.platform.status_restarting) : status === "verifying" ? t(($) => $.platform.status_verifying) : status === "rolling_back" ? t(($) => $.platform.status_rolling_back) : t(($) => $.platform.status_preparing); }
+function operationProgressLines(operation: PlatformOperation, t: Translate): string[] {
+  switch (operation.status) {
+    case "queued":
+    case "preparing":
+      return [t(($) => $.platform.status_preparing)];
+    case "pulling":
+      return [t(($) => $.platform.status_pulling)];
+    case "draining": {
+      const drain = operation.progress.drain;
+      const activeTasks = drain?.active_tasks ?? 0;
+      const lines = [t(($) => $.platform.status_pausing_tasks, {
+        acked: drain?.acked_daemons ?? 0,
+        online: drain?.online_daemons ?? 0,
+      })];
+      if (activeTasks > 0) {
+        lines.push(t(($) => $.platform.status_waiting_tasks, {
+          count: activeTasks,
+          minutes: Math.ceil(Math.max(0, drain?.waited_ms ?? 0) / 60_000),
+        }));
+      }
+      return lines;
+    }
+    case "switching":
+      return [t(($) => $.platform.status_switching)];
+    case "verifying":
+      return [t(($) => $.platform.status_verifying)];
+    case "restarting":
+      return [t(($) => $.platform.status_restarting)];
+    case "rolling_back":
+      return [t(($) => $.platform.status_rolling_back)];
+    default:
+      return [operation.progress.message || operationLabel(operation.kind, t)];
+  }
+}
+
+function recentOperationResult(
+  operation: PlatformOperation | null,
+  t: Translate,
+): { kind: "restored" | "timeout" | "cancelled"; message: string } | null {
+  if (!operation?.finishedAt) return null;
+  const finishedAt = Date.parse(operation.finishedAt);
+  if (!Number.isFinite(finishedAt) || finishedAt < Date.now() - RECENT_OPERATION_WINDOW_MS) return null;
+
+  if (operation.status === "succeeded") {
+    return { kind: "restored", message: t(($) => $.platform.status_scheduling_restored) };
+  }
+  if (operation.status === "cancelled") {
+    return { kind: "cancelled", message: t(($) => $.platform.status_upgrade_cancelled) };
+  }
+  const drainTimedOut = operation.progress.drain?.state === "timeout"
+    || /drain(?:ing)?[\s_-]+time(?:d[\s_-]+)?out/i.test(operation.error ?? "");
+  if (operation.status === "failed" && drainTimedOut) {
+    return { kind: "timeout", message: t(($) => $.platform.status_drain_timeout) };
+  }
+  return null;
+}
 function driverLabel(driver: string, t: Translate) { return driver === "docker_compose" ? t(($) => $.platform.driver_compose) : t(($) => $.platform.driver_systemd); }
 function updaterLabel(status: string, t: Translate) { return status === "ready" ? t(($) => $.platform.updater_ready) : status === "stale" ? t(($) => $.platform.updater_stale) : t(($) => $.platform.updater_offline); }
 function confirmTitle(action: ConfirmAction | null, t: Translate) { return action?.kind === "restart" ? t(($) => $.platform.confirm_restart_title) : action?.kind === "rollback" ? t(($) => $.platform.confirm_rollback_title) : t(($) => $.platform.confirm_update_title); }
