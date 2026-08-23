@@ -3380,6 +3380,13 @@ export interface MultiremiScmChangeRequest {
   updatedAt: string;
 }
 
+/** Change request joined with its repository binding identity, so multi-repo issue surfaces can label the source repo. */
+export interface MultiremiScmChangeRequestWithRepository extends MultiremiScmChangeRequest {
+  repositoryName: string | null;
+  repositoryOwner: string | null;
+  repositoryUrl: string | null;
+}
+
 export type MultiremiScmIssueLinkSource = "auto" | "manual" | "legacy";
 
 export interface MultiremiScmIssueLink {
