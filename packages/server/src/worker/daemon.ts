@@ -37,7 +37,7 @@ import { buildTaskPromptArtifact, type TaskRepoCheckout, type TaskRepoWarning } 
 import {
   MultiremiRepoCache,
   normalizeRepoList,
-  type MultiremiRepoCacheOptions,
+  repoCacheTimeoutOverrides,
   type MultiremiRepoSyncResult,
 } from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
@@ -378,25 +378,6 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
   const index = warnings.findIndex((item) => item.repoUrl === warning.repoUrl);
   if (index >= 0) warnings[index] = warning;
   else warnings.push(warning);
-}
-
-export function repoCacheTimeoutOverrides(
-  env: Record<string, string | undefined>,
-): Pick<MultiremiRepoCacheOptions, "fetchTimeoutMs" | "cloneTimeoutMs" | "repoSyncTimeoutMs"> {
-  const overrides: Pick<MultiremiRepoCacheOptions, "fetchTimeoutMs" | "cloneTimeoutMs" | "repoSyncTimeoutMs"> = {};
-  const fetchTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_FETCH_TIMEOUT_MS);
-  const cloneTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_CLONE_TIMEOUT_MS);
-  const repoSyncTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_SYNC_TIMEOUT_MS);
-  if (fetchTimeoutMs) overrides.fetchTimeoutMs = fetchTimeoutMs;
-  if (cloneTimeoutMs) overrides.cloneTimeoutMs = cloneTimeoutMs;
-  if (repoSyncTimeoutMs) overrides.repoSyncTimeoutMs = repoSyncTimeoutMs;
-  return overrides;
-}
-
-function positiveIntEnv(value: string | undefined): number | null {
-  if (!value) return null;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
@@ -2041,11 +2022,14 @@ export class MultiremiDaemon {
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
     if (!task.issueId || !runtimeId) return;
     if (task.issue?.issueKind === "intake") {
+      // A degraded intake run keeps its error repos; the final report must not
+      // paper over them with "ready" or the workspace status would contradict
+      // the per-repo detail it carries.
       await this.client.reportIssueWorkspace(task.id, {
         runtimeId,
         rootPath,
         branchName: "",
-        status: "ready",
+        status: workspaceRepos.some((repo) => repo.status === "error") ? "error" : "ready",
         repos: workspaceRepos,
       });
       return;
