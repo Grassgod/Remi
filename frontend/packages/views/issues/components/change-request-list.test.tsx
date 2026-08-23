@@ -34,6 +34,9 @@ function makeChange(overrides: Partial<ScmChangeRequest> = {}): ScmChangeRequest
     workspaceId: "workspace-1",
     connectionId: "connection-1",
     repositoryId: "repository-1",
+    repositoryName: null,
+    repositoryOwner: null,
+    repositoryUrl: null,
     provider: "github",
     externalId: "1",
     number: 1,
@@ -98,6 +101,31 @@ describe("ChangeRequestList", () => {
     expect(rows[1]).toHaveTextContent("Codebase MR !mr-internal-9");
     expect(screen.getByText("Internal change").closest("a")).toBeNull();
     expect(screen.queryByText("Checks pending")).not.toBeInTheDocument();
+  });
+
+  it("labels each change request with its repository in multi-repo issues", async () => {
+    changes = [
+      makeChange({
+        id: "bound-1",
+        number: 4,
+        repositoryName: "Remi",
+        title: "Bound repository change",
+      }),
+      makeChange({
+        id: "unbound-1",
+        number: 7,
+        repositoryId: "repository-2",
+        url: "https://github.com/acme/personal_automation/pull/7",
+        title: "Unbound repository change",
+      }),
+    ];
+
+    render(<ChangeRequestList issueId="issue-repos" />, { wrapper: Wrapper });
+
+    await screen.findByText("Bound repository change");
+    const rows = screen.getAllByTestId("change-request-row");
+    expect(rows[0]).toHaveTextContent("Remi · GitHub PR #4");
+    expect(rows[1]).toHaveTextContent("personal_automation · GitHub PR #7");
   });
 
   it("collapses long provider-mixed lists and expands them on demand", async () => {

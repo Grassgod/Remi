@@ -13,7 +13,30 @@
     "not_connected": "未接続",
     "sync_modes": { "poll": "ポーリング", "webhook": "Webhook", "hybrid": "ハイブリッド" },
     "description": "説明",
-    "imported": "インポート日"
+    "imported": "インポート日",
+    "wiki": "Wiki"
+  },
+  "wiki": {
+    "title": "リポジトリ Wiki",
+    "search": "Wiki を検索...",
+    "empty_title": "Wiki はまだありません",
+    "empty_description": "Atlas を実行して、このリポジトリの LLM Wiki を構築してください。",
+    "build_action": "Atlas で構築",
+    "build_started": "Atlas がリポジトリ Wiki の構築を開始しました",
+    "build_failed": "リポジトリ Wiki の構築を開始できませんでした",
+    "no_match": "一致するページがありません。",
+    "page_count": "{{count}} ページ",
+    "source_revision": "リビジョン {{revision}}",
+    "updated": "更新日時 {{time}}",
+    "version": "v{{version}}",
+    "history": "バージョン履歴",
+    "status": {
+      "unbuilt": "未構築",
+      "building": "構築中",
+      "healthy": "最新",
+      "stale": "更新が必要",
+      "failed": "失敗"
+    }
   },
   "empty": {
     "title": "リポジトリがありません",

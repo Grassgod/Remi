@@ -37,6 +37,30 @@ export function useInspectWorkspaceRepository(workspaceId: string) {
   });
 }
 
+export function useConfigureAtlasWiki(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.configureAtlasWiki(workspaceId),
+    onSuccess: (status) => {
+      queryClient.setQueryData(repositoryKeys.atlas(workspaceId), status);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.atlas(workspaceId) });
+    },
+  });
+}
+
+export function useBuildRepositoryWiki(workspaceId: string, repositoryId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.buildRepositoryWiki(workspaceId, repositoryId),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.wiki(workspaceId, repositoryId) });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.wikiSummaries(workspaceId) });
+    },
+  });
+}
+
 export function useUpdateWorkspaceRepository(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({

@@ -91,6 +91,7 @@ export interface IssueViewState {
    *  `swimlaneOrders`, plus the sentinel `"none"` for the pinned
    *  no-X lane and `"__orphans__"` for the parent-grouping fallback. */
   collapsedSwimlanes: Record<SwimlaneGrouping, string[]>;
+  archivedColumnVisible: boolean;
   setViewMode: (mode: ViewMode) => void;
   setGanttZoom: (zoom: GanttZoom) => void;
   toggleGanttShowCompleted: () => void;
@@ -116,6 +117,8 @@ export interface IssueViewState {
   setSwimlaneOrder: (order: string[]) => void;
   /** Toggle a lane key in the currently active swimlane grouping. */
   toggleSwimlaneCollapsed: (key: string) => void;
+  showArchivedColumn: () => void;
+  hideArchivedColumn: () => void;
 }
 
 export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): IssueViewState => ({
@@ -148,6 +151,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   swimlaneGrouping: "assignee",
   swimlaneOrders: { parent: [], project: [], assignee: [] },
   collapsedSwimlanes: { parent: [], project: [], assignee: [] },
+  archivedColumnVisible: false,
 
   setViewMode: (mode) => set({ viewMode: mode }),
   setGanttZoom: (zoom) => set({ ganttZoom: zoom }),
@@ -269,6 +273,8 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
         collapsedSwimlanes: { ...state.collapsedSwimlanes, [grouping]: next },
       };
     }),
+  showArchivedColumn: () => set({ archivedColumnVisible: true }),
+  hideArchivedColumn: () => set({ archivedColumnVisible: false }),
 });
 
 export const viewStorePersistOptions = (name: string) => ({
@@ -337,6 +343,10 @@ export function mergeViewStatePersisted<T extends IssueViewState>(
     collapsedSwimlanes: isRecord(p.collapsedSwimlanes)
       ? { ...current.collapsedSwimlanes, ...p.collapsedSwimlanes }
       : current.collapsedSwimlanes,
+    // The archived pseudo-column is intentionally ephemeral: every page load
+    // starts with it hidden, including snapshots from experimental builds
+    // that may have persisted the field.
+    archivedColumnVisible: current.archivedColumnVisible,
   };
 }
 

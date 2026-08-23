@@ -100,6 +100,39 @@ describe("native CLI resource contracts", () => {
     expect(body).toEqual({ name: "Explicit", description: "file description" });
   });
 
+  it("updates workspace prompts and issue archive settings through explicit commands", async () => {
+    useCliEnv();
+    const bodies = new Map<string, unknown>();
+    const handler = async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1" && request.method === "GET") {
+        return Response.json({ id: "ws_1", name: "Workspace" });
+      }
+      if (path === "/api/workspaces/ws_1/prompts" && request.method === "PUT") {
+        bodies.set(path, await request.json());
+        return Response.json({ revision: 4 });
+      }
+      if (path === "/api/workspaces/ws_1/issue-archive" && request.method === "PUT") {
+        bodies.set(path, await request.json());
+        return Response.json({ config: await bodies.get(path) });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    };
+    const prompts = specById("workspace.prompt.update");
+    globalThis.fetch = mockFetch(prompts.id, [], handler);
+    await execute(prompts, ["ws_1", "--bootstrap-prompt", "Bootstrap", "--delta-prompt=", "--expected-revision", "3", "--output", "json"]);
+    expect(bodies.get("/api/workspaces/ws_1/prompts")).toEqual({
+      bootstrap_prompt: "Bootstrap",
+      delta_prompt: "",
+      expected_revision: 3,
+    });
+
+    const archive = specById("workspace.issue-archive.update");
+    globalThis.fetch = mockFetch(archive.id, [], handler);
+    await execute(archive, ["ws_1", "--ttl-ms", "86400000", "--sweep-interval-ms", "60000", "--output", "json"]);
+    expect(bodies.get("/api/workspaces/ws_1/issue-archive")).toEqual({ ttl_ms: 86400000, sweep_interval_ms: 60000 });
+  });
+
   it("lists repositories from the API without contacting the local Git helper", async () => {
     useCliEnv();
     const spec = specById("repo.list");
@@ -223,6 +256,37 @@ describe("native CLI resource contracts", () => {
       expect(resolved?.alias?.deprecatedSince, argv.join(" ")).toBe("0.3.0");
       expect(resolved?.alias?.replacement, argv.join(" ")).toStartWith("remi ");
     }
+  });
+
+  it("resolves repositories for direct Repository Wiki commands", async () => {
+    useCliEnv();
+    const create = specById("wiki.repository.create");
+    let body: unknown;
+    globalThis.fetch = mockFetch(create.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1/repos" && request.method === "GET") {
+        return Response.json({ repositories: [{ id: "repo_123456", name: "Remi", url: "https://example.test/remi.git" }] });
+      }
+      if (path === "/api/workspaces/ws_1/repos/repo_123456/wiki" && request.method === "POST") {
+        body = await request.json();
+        return Response.json({ doc: { id: "rwd_1", ...(body as object) } }, { status: 201 });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    await execute(create, [
+      "Remi",
+      "--path", "architecture/overview.md",
+      "--title", "Architecture",
+      "--content", "Repository facts",
+      "--source-revision", "abc123",
+      "--output", "json",
+    ]);
+    expect(body).toMatchObject({
+      path: "architecture/overview.md",
+      title: "Architecture",
+      body: "Repository facts",
+      source_revision: "abc123",
+    });
   });
 
   it("preserves legacy memory body flags while routing through the native command", async () => {

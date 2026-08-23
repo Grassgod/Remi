@@ -28,6 +28,15 @@ import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { WorkbenchListItem } from "./workbench-list-item";
 
+const FAILURE_SUMMARY_MAX_LENGTH = 160;
+
+function summarizeFailure(raw: string): string {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  return normalized.length > FAILURE_SUMMARY_MAX_LENGTH
+    ? `${normalized.slice(0, FAILURE_SUMMARY_MAX_LENGTH - 3)}...`
+    : normalized;
+}
+
 function WorkbenchLoadError({ onRetry }: { onRetry: () => void }) {
   const { t } = useT("common");
   return (
@@ -96,10 +105,16 @@ export function WorkbenchPage() {
 
   const {
     data: reviewData,
-    isLoading: loading,
-    isError: loadFailed,
+    isLoading: reviewLoading,
+    isError: reviewLoadFailed,
     refetch: refetchReview,
   } = useQuery(workbenchIssuesOptions(wsId, "in_review"));
+  const {
+    data: blockedData,
+    isLoading: blockedLoading,
+    isError: blockedLoadFailed,
+    refetch: refetchBlocked,
+  } = useQuery(workbenchIssuesOptions(wsId, "blocked"));
   const { data: inProgressData } = useQuery(workbenchIssuesOptions(wsId, "in_progress"));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
 
@@ -107,12 +122,27 @@ export function WorkbenchPage() {
     () => partitionReviewIssues(reviewData?.issues ?? [], snapshot),
     [reviewData, snapshot],
   );
+  const blocked = blockedData?.issues ?? [];
   const inProgress = inProgressData?.issues ?? [];
+  const loading = reviewLoading || blockedLoading;
+  const loadFailed = reviewLoadFailed || blockedLoadFailed;
 
-  // Ordered "needs me" list — drives auto-advance after an issue is resolved.
+  const failureSummaryByIssueId = useMemo(() => {
+    const summaries = new Map<string, string>();
+    for (const task of snapshot) {
+      if (task.status !== "failed" || !task.issue_id || summaries.has(task.issue_id)) {
+        continue;
+      }
+      const summary = summarizeFailure(task.error || task.failure_reason || "");
+      if (summary) summaries.set(task.issue_id, summary);
+    }
+    return summaries;
+  }, [snapshot]);
+
+  // Ordered attention list — drives auto-advance after an issue is resolved.
   const pending = useMemo(
-    () => [...awaitingInput, ...awaitingReview],
-    [awaitingInput, awaitingReview],
+    () => [...awaitingInput, ...awaitingReview, ...blocked],
+    [awaitingInput, awaitingReview, blocked],
   );
 
   // After the selected issue is accepted or deleted, jump to the next pending
@@ -133,7 +163,11 @@ export function WorkbenchPage() {
   // A failed fetch must not masquerade as an empty (all-clear) workbench.
   const allClear = !loadFailed && pending.length === 0 && inProgress.length === 0;
 
-  const renderSection = (issues: Issue[], label: string, urgent?: boolean) =>
+  const renderSection = (
+    issues: Issue[],
+    label: string,
+    options?: { urgent?: boolean; showFailure?: boolean },
+  ) =>
     issues.length > 0 && (
       <div>
         <SectionHeading label={label} count={issues.length} />
@@ -142,7 +176,14 @@ export function WorkbenchPage() {
             key={issue.id}
             issue={issue}
             isSelected={issue.id === selectedId}
-            urgent={urgent}
+            urgent={options?.urgent}
+            failureSummary={
+              options?.showFailure && failureSummaryByIssueId.has(issue.id)
+                ? t(($) => $.failure.summary, {
+                    reason: failureSummaryByIssueId.get(issue.id) ?? "",
+                  })
+                : undefined
+            }
             onClick={() => setSelectedId(issue.id)}
           />
         ))}
@@ -160,7 +201,9 @@ export function WorkbenchPage() {
   );
 
   const listBody = loadFailed ? (
-    <WorkbenchLoadError onRetry={() => void refetchReview()} />
+    <WorkbenchLoadError
+      onRetry={() => void Promise.all([refetchReview(), refetchBlocked()])}
+    />
   ) : allClear ? (
     <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
       <CircleCheckBig className="mb-3 h-8 w-8 text-muted-foreground/50" />
@@ -171,8 +214,13 @@ export function WorkbenchPage() {
     </div>
   ) : (
     <div className="pb-4">
-      {renderSection(awaitingInput, t(($) => $.sections.awaiting_input), true)}
+      {renderSection(awaitingInput, t(($) => $.sections.awaiting_input), {
+        urgent: true,
+      })}
       {renderSection(awaitingReview, t(($) => $.sections.awaiting_review))}
+      {renderSection(blocked, t(($) => $.sections.blocked), {
+        showFailure: true,
+      })}
       {renderSection(inProgress, t(($) => $.sections.in_progress))}
     </div>
   );

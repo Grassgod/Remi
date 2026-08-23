@@ -322,6 +322,70 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.prompt.get": {
+      "command": "remi workspace prompt get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.prompt.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.prompt.update": {
+      "command": "remi workspace prompt update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.prompt.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.issue-archive.get": {
+      "command": "remi workspace issue-archive get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.issue-archive.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.issue-archive.update": {
+      "command": "remi workspace issue-archive update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.issue-archive.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "member": {
       "command": "remi member",
       "aliases": [],
@@ -1368,6 +1432,156 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "wiki.repository.list": {
+      "command": "remi wiki repository list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.get": {
+      "command": "remi wiki repository get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.create": {
+      "command": "remi wiki repository create",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.update": {
+      "command": "remi wiki repository update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.delete": {
+      "command": "remi wiki repository delete",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.revisions": {
+      "command": "remi wiki repository revisions",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.revisions",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.build": {
+      "command": "remi wiki repository build",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "wiki.repository.build",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.atlas.status": {
+      "command": "remi wiki repository atlas status",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "wiki.repository.atlas.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.repository.atlas.configure": {
+      "command": "remi wiki repository atlas configure",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "wiki.repository.atlas.configure",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "wiki.pull": {
       "command": "remi wiki pull",
       "aliases": [],
@@ -1564,6 +1778,22 @@
       ],
       "capability": "issue.delete",
       "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.restore": {
+      "command": "remi issue restore",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.restore",
+      "mutation": "write",
       "output": [
         "table",
         "json",
@@ -7010,6 +7240,9 @@
     "DELETE /api/workspaces/:id/repos/:repositoryId": {
       "command": "repo.delete"
     },
+    "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref": {
+      "command": "wiki.repository.delete"
+    },
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId": {
       "command": "scm.connection.delete"
     },
@@ -7737,6 +7970,9 @@
     "GET /api/workspaces/:id/invitations": {
       "command": "invite.list"
     },
+    "GET /api/workspaces/:id/issue-archive": {
+      "command": "workspace.issue-archive.get"
+    },
     "GET /api/workspaces/:id/lark/install/:sessionId/status": {
       "command": "lark.install.status"
     },
@@ -7746,11 +7982,29 @@
     "GET /api/workspaces/:id/members": {
       "command": "member.list"
     },
+    "GET /api/workspaces/:id/prompts": {
+      "command": "workspace.prompt.get"
+    },
     "GET /api/workspaces/:id/relay-config": {
       "command": "workspace.relay.get"
     },
     "GET /api/workspaces/:id/repos": {
       "command": "repo.list"
+    },
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki": {
+      "command": "wiki.repository.list"
+    },
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref": {
+      "command": "wiki.repository.get"
+    },
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions": {
+      "command": "wiki.repository.revisions"
+    },
+    "GET /api/workspaces/:id/repository-wikis": {
+      "command": "wiki.repository.list"
+    },
+    "GET /api/workspaces/:id/repository-wikis/atlas": {
+      "command": "wiki.repository.atlas.status"
     },
     "GET /api/workspaces/:id/session-archive": {
       "command": "session.config.get"
@@ -8175,6 +8429,9 @@
     "POST /api/issues/:id/rerun": {
       "command": "issue.rerun"
     },
+    "POST /api/issues/:id/restore": {
+      "command": "issue.restore"
+    },
     "POST /api/issues/:id/sessions": {
       "command": "session.create"
     },
@@ -8346,6 +8603,9 @@
     },
     "POST /api/multiremi/issues/:id/reactions": {
       "command": "issue.reaction.add"
+    },
+    "POST /api/multiremi/issues/:id/restore": {
+      "command": "issue.restore"
     },
     "POST /api/multiremi/issues/:id/subscribers": {
       "command": "issue.subscriber.add"
@@ -8544,8 +8804,17 @@
     "POST /api/workspaces/:id/repos": {
       "command": "repo.create"
     },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki": {
+      "command": "wiki.repository.create"
+    },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/build": {
+      "command": "wiki.repository.build"
+    },
     "POST /api/workspaces/:id/repos/inspect": {
       "command": "repo.inspect"
+    },
+    "POST /api/workspaces/:id/repository-wikis/atlas": {
+      "command": "wiki.repository.atlas.configure"
     },
     "POST /api/workspaces/:id/ssh-mesh/rotate": {
       "command": "workspace.ssh-mesh.rotate"
@@ -8670,11 +8939,20 @@
     "PUT /api/workspaces/:id/env": {
       "command": "workspace.env.update"
     },
+    "PUT /api/workspaces/:id/issue-archive": {
+      "command": "workspace.issue-archive.update"
+    },
+    "PUT /api/workspaces/:id/prompts": {
+      "command": "workspace.prompt.update"
+    },
     "PUT /api/workspaces/:id/relay-config/:engine": {
       "command": "workspace.relay.update"
     },
     "PUT /api/workspaces/:id/relay-config/discovery": {
       "command": "workspace.relay.discovery"
+    },
+    "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref": {
+      "command": "wiki.repository.update"
     },
     "PUT /api/workspaces/:id/session-archive": {
       "command": "session.config.update"

@@ -53,6 +53,17 @@ Use `remi help <path>` or `remi <path> --help` for the registered positional and
 option contract. All capability commands declare their authentication identities,
 mutation class, and `table|json|jsonl` output contract in the Registry.
 
+The current main integration also exposes archived Issue recovery, Workspace
+prompt/archive settings, and Repository Wiki administration through:
+
+```text
+remi issue restore
+remi workspace prompt get|update
+remi workspace issue-archive get|update
+remi wiki repository list|get|create|update|delete|revisions|build
+remi wiki repository atlas status|configure
+```
+
 ## Deprecated aliases
 
 All aliases below are deprecated since `0.3.0`. They remain executable for at

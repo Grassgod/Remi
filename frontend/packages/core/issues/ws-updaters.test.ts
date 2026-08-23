@@ -76,6 +76,8 @@ const baseIssue: Issue = {
   due_date: null,
   metadata: {},
   labels: [labelA],
+  completed_at: null,
+  archived_at: null,
   created_at: "2025-01-01T00:00:00Z",
   updated_at: "2025-01-01T00:00:00Z",
 };
@@ -259,6 +261,23 @@ describe("project progress invalidation", () => {
     });
 
     expectInvalidated(qc, projectKeys.list(WS_ID));
+  });
+});
+
+describe("issue archive cache updates", () => {
+  it("removes a swept issue from active buckets and invalidates archived queries", () => {
+    const qc = new QueryClient();
+    qc.setQueryData<ListIssuesCache>(issueKeys.list(WS_ID), makeListCache(baseIssue));
+    qc.setQueryData(issueKeys.archivedCount(WS_ID), 0);
+
+    onIssueUpdated(qc, WS_ID, {
+      id: baseIssue.id,
+      archived_at: "2026-08-22T00:00:00.000Z",
+    });
+
+    expect(qc.getQueryData<ListIssuesCache>(issueKeys.list(WS_ID))?.byStatus.todo)
+      .toEqual({ issues: [], total: 0 });
+    expectInvalidated(qc, issueKeys.archivedCount(WS_ID));
   });
 });
 

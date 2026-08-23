@@ -131,6 +131,9 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     ], ["issue", "assign"]),
     legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [], ["issue", "status"]),
     legacySpec("issue.delete", ["issue", "delete"], "Delete an issue", "destructive", HUMAN_TASK, [refPositional("issue")], [], ["issue", "delete"]),
+    nativeSpec("issue.restore", ["issue", "restore"], "Restore an archived issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/restore`, {});
+    }),
     legacySpec("issue.rerun", ["issue", "rerun"], "Rerun an issue", "write", HUMAN, [refPositional("issue")], [
       { name: "agent-id", type: "string", valueName: "id", description: "Override agent" },
       { name: "prompt", type: "string", valueName: "text", description: "Override prompt" },

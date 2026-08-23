@@ -14,6 +14,7 @@ import {
   Archive,
   GitBranch,
   ServerCog,
+  FileText,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { platformStatusOptions } from "@multiremi/core/platform-lifecycle";
@@ -32,6 +33,7 @@ import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { StorageCleanupTab } from "./storage-cleanup-tab";
 import { PlatformTab } from "./platform-tab";
+import { PromptsTab } from "./prompts-tab";
 import { useT } from "../../i18n";
 
 const ACCOUNT_TAB_KEYS = ["profile", "preferences", "notifications", "tokens"] as const;
@@ -44,6 +46,7 @@ const ACCOUNT_TAB_ICONS = {
 
 const WORKSPACE_TAB_KEYS = [
   "general",
+  "prompts",
   "source_control",
   "integrations",
   "model_gateway",
@@ -53,6 +56,7 @@ const WORKSPACE_TAB_KEYS = [
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
+  prompts: "prompts",
   source_control: "source-control",
   integrations: "integrations",
   model_gateway: "model-gateway",
@@ -62,6 +66,7 @@ const WORKSPACE_TAB_VALUES = {
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
+  prompts: FileText,
   source_control: GitBranch,
   integrations: Plug,
   model_gateway: Waypoints,
@@ -196,6 +201,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="notifications"><NotificationsTab /></TabsContent>
           <TabsContent value="tokens"><TokensTab /></TabsContent>
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
+          <TabsContent value="prompts"><PromptsTab /></TabsContent>
           <TabsContent value="source-control"><SourceControlTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="model-gateway"><ModelGatewayTab /></TabsContent>

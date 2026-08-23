@@ -33,6 +33,8 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     start_date: null,
     due_date: null,
     metadata: {},
+    completed_at: null,
+    archived_at: null,
     created_at: "2025-01-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
     ...overrides,
@@ -49,6 +51,12 @@ const issues: Issue[] = [
 describe("filterIssues", () => {
   it("returns all issues when no filters are active", () => {
     expect(filterIssues(issues, NO_FILTER)).toHaveLength(4);
+  });
+
+  it("excludes archived issues as a client-side fallback", () => {
+    const archived = makeIssue({ id: "archived", archived_at: "2025-01-05T00:00:00Z" });
+    expect(filterIssues([...issues, archived], NO_FILTER).map((issue) => issue.id))
+      .toEqual(["1", "2", "3", "4"]);
   });
 
   // --- Status ---

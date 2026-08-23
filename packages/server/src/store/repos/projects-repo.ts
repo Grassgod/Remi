@@ -94,7 +94,8 @@ export class ProjectsRepo {
     const archivedAt = isArchivedProjectStatus(status) ? now : null;
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
     const instructions = normalizeProjectInstructions(input.instructions);
-    const hasInstructions = instructions !== "";
+    const deltaInstructions = normalizeProjectInstructions(input.deltaInstructions ?? input.delta_instructions);
+    const hasInstructions = instructions !== "" || deltaInstructions !== "";
     const defaultAssignee = this.resolveDefaultAssignee(
       input.defaultAssigneeType === undefined ? input.default_assignee_type : input.defaultAssigneeType,
       input.defaultAssigneeId === undefined ? input.default_assignee_id : input.defaultAssigneeId,
@@ -112,16 +113,17 @@ export class ProjectsRepo {
       else if (hasGitRepository) this.ctx.lockWorkspaceRepositoryTopology(workspaceId);
       const result = this.ctx.db.run(
         `INSERT INTO multiremi_projects (
-          id, title, description, instructions, instructions_revision,
+          id, title, description, instructions, delta_instructions, instructions_revision,
           instructions_updated_at, instructions_updated_by, icon, status, priority, workspace_id,
           lead_type, lead_id, default_assignee_type, default_assignee_id,
           archived_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           input.title.trim(),
           input.description ?? null,
           instructions,
+          deltaInstructions,
           hasInstructions ? 1 : 0,
           hasInstructions ? now : null,
           hasInstructions ? nullableString(writeContext.instructionsUpdatedBy) : null,
@@ -192,11 +194,19 @@ export class ProjectsRepo {
     const instructions = input.instructions === undefined
       ? current.instructions
       : normalizeProjectInstructions(input.instructions);
-    const instructionsChanged = instructions !== current.instructions;
+    const deltaInstructionsInput = input.deltaInstructions === undefined
+      ? input.delta_instructions
+      : input.deltaInstructions;
+    const deltaInstructions = deltaInstructionsInput === undefined
+      ? current.deltaInstructions
+      : normalizeProjectInstructions(deltaInstructionsInput);
+    const instructionsChanged = instructions !== current.instructions
+      || deltaInstructions !== current.deltaInstructions;
+    const writesInstructions = input.instructions !== undefined || deltaInstructionsInput !== undefined;
     const expectedInstructionsRevision = input.expectedInstructionsRevision
       ?? input.expected_instructions_revision;
     if (
-      input.instructions !== undefined
+      writesInstructions
       && expectedInstructionsRevision !== undefined
       && expectedInstructionsRevision !== current.instructionsRevision
     ) {
@@ -218,8 +228,9 @@ export class ProjectsRepo {
     };
     if (input.title !== undefined) assign("title", input.title);
     if (input.description !== undefined) assign("description", input.description);
-    if (input.instructions !== undefined) {
+    if (writesInstructions) {
       assign("instructions", instructions);
+      assign("delta_instructions", deltaInstructions);
       assign("instructions_revision", instructionsChanged ? current.instructionsRevision + 1 : current.instructionsRevision);
       assign("instructions_updated_at", instructionsChanged ? now : current.instructionsUpdatedAt);
       assign(
@@ -245,15 +256,15 @@ export class ProjectsRepo {
     }
     assign("updated_at", now);
     values.push(id);
-    if (input.instructions !== undefined && expectedInstructionsRevision !== undefined) {
+    if (writesInstructions && expectedInstructionsRevision !== undefined) {
       values.push(expectedInstructionsRevision);
     }
     const result = this.ctx.db.run(
       `UPDATE multiremi_projects SET ${assignments.join(", ")}
-       WHERE id = ?${input.instructions !== undefined && expectedInstructionsRevision !== undefined ? " AND instructions_revision = ?" : ""}`,
+       WHERE id = ?${writesInstructions && expectedInstructionsRevision !== undefined ? " AND instructions_revision = ?" : ""}`,
       values,
     );
-    if (input.instructions !== undefined && expectedInstructionsRevision !== undefined && result.changes === 0) {
+    if (writesInstructions && expectedInstructionsRevision !== undefined && result.changes === 0) {
       const latest = this.getProject(id);
       throw new ProjectInstructionsRevisionConflictError(
         expectedInstructionsRevision,
@@ -1178,6 +1189,7 @@ function toProject(row: Row): MultiremiProject {
     title: String(row.title),
     description: nullableString(row.description),
     instructions: String(row.instructions ?? ""),
+    deltaInstructions: String(row.delta_instructions ?? ""),
     instructionsRevision: Number(row.instructions_revision ?? 0),
     instructionsUpdatedAt: nullableString(row.instructions_updated_at),
     instructionsUpdatedBy: nullableString(row.instructions_updated_by),

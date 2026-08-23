@@ -1366,6 +1366,9 @@ describe("SCM connection and canonical event store", () => {
       externalId: "99",
       sourceBranch: "feature/api",
       targetBranch: "main",
+      repositoryName: "widgets",
+      repositoryOwner: "acme",
+      repositoryUrl: "git@github.com:acme/widgets.git",
     });
     expect(listedBody.changeRequests[0]).not.toHaveProperty("source_branch");
 

@@ -37,6 +37,8 @@ export function filterIssues(issues: Issue[], filters: IssueFilters): Issue[] {
   const applyAgentRunning = agentRunningFilter === true;
 
   return issues.filter((issue) => {
+    if (issue.archived_at) return false;
+
     if (applyAgentRunning && !(runningIssueIds?.has(issue.id) ?? false))
       return false;
 

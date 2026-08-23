@@ -21,3 +21,4 @@ export {
   type ChangeRequestStatusKind,
   type ChangeRequestProgressSegment,
 } from "./change-request-status";
+export { deriveChangeRequestRepositoryName } from "./change-request-repository";

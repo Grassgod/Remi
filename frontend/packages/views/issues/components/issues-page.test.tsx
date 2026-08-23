@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -170,10 +170,12 @@ const mockViewState = {
   projectFilters: [] as string[],
   includeNoProject: false,
   labelFilters: [] as string[],
+  agentRunningFilter: false,
   sortBy: "position" as const,
   sortDirection: "asc" as const,
   cardProperties: { priority: true, description: true, assignee: true, dueDate: true, project: true, childProgress: true, labels: true },
   listCollapsedStatuses: [] as string[],
+  archivedColumnVisible: false,
   setViewMode: vi.fn(),
   setGrouping: vi.fn(),
   toggleStatusFilter: vi.fn(),
@@ -191,6 +193,8 @@ const mockViewState = {
   setSortDirection: vi.fn(),
   toggleCardProperty: vi.fn(),
   toggleListCollapsed: vi.fn(),
+  showArchivedColumn: vi.fn(),
+  hideArchivedColumn: vi.fn(),
 };
 
 vi.mock("@multiremi/core/issues/stores/view-store", () => ({
@@ -339,6 +343,8 @@ const issueDefaults = {
   project_id: null,
   position: 0,
   metadata: {},
+  completed_at: null,
+  archived_at: null,
 };
 
 const mockIssues: Issue[] = [
@@ -526,6 +532,22 @@ describe("IssuesPage (shared)", () => {
     expect(screen.getAllByText("In Progress").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("keeps the archived pseudo-column hidden and shows its server count", async () => {
+    mockListIssues.mockImplementation((params: any) => {
+      if (params?.archived_only) return Promise.resolve({ issues: [], total: 18 });
+      const issues = mockIssues.filter((i) => i.status === params?.status);
+      return Promise.resolve({ issues, total: issues.length });
+    });
+
+    renderWithQuery(<IssuesPage />);
+
+    await screen.findByText("Archived");
+    expect(screen.getByText("18")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Hide archived column")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /show column/i }));
+    expect(mockViewState.showArchivedColumn).toHaveBeenCalledOnce();
+  });
+
   it("groups board columns by assignee", async () => {
     mockViewState.grouping = "assignee";
     mockListGroupedIssues.mockResolvedValue(mockAssigneeGroups(mockIssues));
@@ -556,7 +578,12 @@ describe("IssuesPage (shared)", () => {
         statuses: ["backlog", "todo", "in_progress", "in_review", "done", "blocked"],
       }),
     );
-    expect(mockListIssues).not.toHaveBeenCalled();
+    expect(mockListIssues).toHaveBeenCalledTimes(1);
+    expect(mockListIssues).toHaveBeenCalledWith({
+      archived_only: true,
+      limit: 1,
+      offset: 0,
+    });
   });
 
   it("shows the 'Issues' section header without a workspace prefix", async () => {

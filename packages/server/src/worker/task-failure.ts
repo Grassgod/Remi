@@ -28,6 +28,7 @@ export const TaskFailureReason = {
   AgentModelNotFoundOrUnavailable: "agent_error.model_not_found_or_unavailable",
   AgentRuntimeVersionUnsupported: "agent_error.runtime_version_unsupported",
   AgentRuntimeMissingExecutable: "agent_error.runtime_missing_executable",
+  RepoSyncFailed: "repo_sync_failed",
   AgentUnknown: "agent_error.unknown",
 } as const;
 
@@ -37,6 +38,22 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   const trimmed = String(rawError ?? "").trim();
   if (!trimmed) return TaskFailureReason.AgentUnknown;
   const lower = trimmed.toLowerCase();
+
+  // Repository preparation happens before the agent starts; these markers only
+  // occur in repo cache/sync errors, which may embed network phrases ("connection
+  // refused", "timed out after") that later rules would misattribute to the
+  // agent or its provider. Check first: these are infrastructure failures and
+  // are safe to auto-retry.
+  if (containsAny(
+    lower,
+    "repository sync timed out",
+    "repository sync failed",
+    "repository sync aborted",
+    "intake workspace requires a fresh repository snapshot",
+    "repo not found in cache",
+  )) {
+    return TaskFailureReason.RepoSyncFailed;
+  }
 
   if (containsAny(lower, "stale provider session", "no conversation found")) {
     return TaskFailureReason.AgentStaleSession;

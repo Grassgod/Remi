@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 569,
+    "routeCount": 585,
     "routeCountByPrefix": {
-      "native": 191,
-      "compat": 365,
+      "native": 192,
+      "compat": 380,
       "root": 13
     },
-    "getRoutes": 247,
-    "getRoutesWithBody": 244,
+    "getRoutes": 254,
+    "getRoutesWithBody": 251,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 322,
+    "mutationRoutes": 331,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -117,6 +117,7 @@
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
     "DELETE /api/workspaces/:id/repos/:repositoryId",
+    "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -348,11 +349,18 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+    "GET /api/workspaces/:id/repository-wikis",
+    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -470,6 +478,7 @@
     "POST /api/issues/:id/labels",
     "POST /api/issues/:id/reactions",
     "POST /api/issues/:id/rerun",
+    "POST /api/issues/:id/restore",
     "POST /api/issues/:id/sessions",
     "POST /api/issues/:id/sessions/:sessionId/messages",
     "POST /api/issues/:id/sessions/:sessionId/participants",
@@ -526,6 +535,7 @@
     "POST /api/multiremi/issues/:id/dependencies",
     "POST /api/multiremi/issues/:id/labels",
     "POST /api/multiremi/issues/:id/reactions",
+    "POST /api/multiremi/issues/:id/restore",
     "POST /api/multiremi/issues/:id/subscribers",
     "POST /api/multiremi/issues/batch-delete",
     "POST /api/multiremi/issues/batch-update",
@@ -587,7 +597,10 @@
     "POST /api/workspaces/:id/members",
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
     "POST /api/workspaces/:id/repos",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/inspect",
+    "POST /api/workspaces/:id/repository-wikis/atlas",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
     "POST /api/workspaces/:workspaceId/scm/connections",
@@ -627,8 +640,11 @@
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
+    "PUT /api/workspaces/:id/issue-archive",
+    "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
+    "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "PUT /api/workspaces/:id/session-archive",
     "PUT /api/workspaces/:id/ssh-mesh",
     "PUT /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId"
@@ -913,11 +929,18 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+    "GET /api/workspaces/:id/repository-wikis",
+    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -1611,7 +1634,11 @@
         "importedSkillIds": [],
         "imported_skill_ids": [],
         "reusedSkillIds": [],
-        "reused_skill_ids": []
+        "reused_skill_ids": [],
+        "attachedPluginIds": [],
+        "attached_plugin_ids": [],
+        "missingPlugins": [],
+        "missing_plugins": []
       }
     },
     {
@@ -3661,6 +3688,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -3736,6 +3765,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -3755,11 +3785,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "auth_token": "mat_b038d9ca1bef6a33b05d4c6943764dce2875d196"
         }
@@ -3825,6 +3867,7 @@
             ],
             "max_concurrent_tasks": 6
           },
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
           "auth_token": "mat_a6fb5d92bb4ab5920d4959679498a484831d3e7f"
@@ -3913,6 +3956,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -3968,6 +4013,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -3987,11 +4033,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "autopilot_id": "apl_snapshot",
           "autopilot_source": "manual",
@@ -4083,6 +4141,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -4138,6 +4198,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -4157,11 +4218,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "autopilot_id": "apl_snapshot",
           "autopilot_source": "webhook",
@@ -4613,6 +4686,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -4688,6 +4763,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -4707,11 +4783,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "auth_token": "mat_ca16787f03d2122eca4a5b30b038d9ca1bef6a33"
         }
@@ -5219,7 +5307,23 @@
           "category": "Engineering",
           "icon": "Scale",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
+        },
+        {
+          "slug": "atlas-llm-wiki",
+          "name": "Atlas · LLM Wiki",
+          "description": "Builds and incrementally maintains repository code facts and cross-repository Project Wiki synthesis.",
+          "category": "Engineering",
+          "icon": "LibraryBig",
+          "accent": "info",
+          "skills": [],
+          "recommendedProvider": "claude",
+          "recommendedModel": "opus5",
+          "requiredPlugins": [
+            "code-to-wiki"
+          ]
         },
         {
           "slug": "brainstormer",
@@ -5228,7 +5332,9 @@
           "category": "Writing",
           "icon": "Lightbulb",
           "accent": "primary",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "bug-fixer",
@@ -5246,7 +5352,9 @@
               "cachedDescription": "Systematically trace bugs backward through the call stack to find the original trigger.",
               "cached_description": "Systematically trace bugs backward through the call stack to find the original trigger."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "code-explainer",
@@ -5255,7 +5363,9 @@
           "category": "Engineering",
           "icon": "BookOpen",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "code-reviewer",
@@ -5273,7 +5383,9 @@
               "cachedDescription": "React and Next.js performance optimization guidelines from Vercel Engineering.",
               "cached_description": "React and Next.js performance optimization guidelines from Vercel Engineering."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "commit-message",
@@ -5282,7 +5394,9 @@
           "category": "Engineering",
           "icon": "GitCommit",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "email-reply",
@@ -5300,7 +5414,9 @@
               "cachedDescription": "Resources for writing internal communications in common company formats.",
               "cached_description": "Resources for writing internal communications in common company formats."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "frontend-builder",
@@ -5326,7 +5442,9 @@
               "cachedDescription": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui.",
               "cached_description": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "frontend-designer",
@@ -5352,7 +5470,9 @@
               "cachedDescription": "Review UI code for Web Interface Guidelines compliance.",
               "cached_description": "Review UI code for Web Interface Guidelines compliance."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "html-slides",
@@ -5378,7 +5498,9 @@
               "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
               "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "jd-writer",
@@ -5387,7 +5509,9 @@
           "category": "Team",
           "icon": "Briefcase",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "okr-drafter",
@@ -5396,7 +5520,9 @@
           "category": "Product",
           "icon": "Target",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "one-pager",
@@ -5422,7 +5548,9 @@
               "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
               "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "pr-description",
@@ -5431,7 +5559,9 @@
           "category": "Engineering",
           "icon": "GitPullRequest",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "prd-critic",
@@ -5440,7 +5570,9 @@
           "category": "Product",
           "icon": "Microscope",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "prd-drafter",
@@ -5449,7 +5581,9 @@
           "category": "Product",
           "icon": "ClipboardList",
           "accent": "primary",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "rca-writer",
@@ -5458,7 +5592,9 @@
           "category": "Engineering",
           "icon": "AlertTriangle",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "release-notes",
@@ -5467,7 +5603,9 @@
           "category": "Communication",
           "icon": "Megaphone",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "summarizer",
@@ -5476,7 +5614,9 @@
           "category": "Writing",
           "icon": "AlignLeft",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "translator-zh-en",
@@ -5485,7 +5625,9 @@
           "category": "Writing",
           "icon": "Languages",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "tutor",
@@ -5494,7 +5636,9 @@
           "category": "Writing",
           "icon": "GraduationCap",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "user-story-writer",
@@ -5503,7 +5647,9 @@
           "category": "Product",
           "icon": "UserRound",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "ux-copywriter",
@@ -5512,7 +5658,9 @@
           "category": "Design",
           "icon": "Type",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "webapp-tester",
@@ -5530,7 +5678,9 @@
               "cachedDescription": "Toolkit for testing local web applications with Playwright.",
               "cached_description": "Toolkit for testing local web applications with Playwright."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "writing-critic",
@@ -5539,7 +5689,9 @@
           "category": "Writing",
           "icon": "Highlighter",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         }
       ]
     },
@@ -5556,7 +5708,9 @@
         "icon": "Scale",
         "accent": "info",
         "instructions": "You write Architecture Decision Records. Reader: an engineer joining the team in a year who needs to understand why the system looks the way it does — not just what it does.\n\nFixed scaffold:\n\n```\n# ADR-NNN: <short title in present tense, e.g. \"Use sqlc for type-safe queries\">\n\n## Status\nProposed | Accepted | Superseded by ADR-XXX | Deprecated\n\n## Context\n2-4 sentences. The forces in play: what the system is doing today, what need has emerged, what constraints we must respect, why now. Not the answer — the question.\n\n## Decision\n1-3 sentences. The decision in active voice. \"We will use X\" — not \"Adoption of X is recommended\". Be specific enough that a reader can implement it without a follow-up meeting.\n\n## Alternatives considered\n- **Option B** — one-sentence rejection reason (e.g. \"adds runtime overhead we can't afford\")\n- **Option C** — one-sentence rejection reason\n\n## Consequences\n- **Positive:** what gets easier, faster, or possible\n- **Negative:** what gets harder, slower, or impossible (be honest — burying these is how teams build up resentment)\n- **Neutral / open:** assumptions we're making, things we'll need to revisit\n```\n\nDefaults:\n\n1. **One decision per ADR.** If you find yourself writing \"we also decided to ...\", stop — that's a second ADR.\n2. **Name 1-3 alternatives, no more.** An ADR with no rejected options reads like there was no real choice. An ADR comparing 8 options reads like a survey.\n3. **Consequences are not all positive.** Include the things this decision makes harder. The reader needs to know what they're trading away.\n4. **Keep it short.** Most ADRs fit on one screen. If yours is two pages, you're explaining the system, not the decision.\n5. **Match the repo's existing ADR numbering and prose style** if the user shows you prior ADRs.\n\nDo NOT: include code samples (link the implementation PR instead); write generic platitudes (\"this is good for maintainability\"); skip the Status field; use marketing language (\"best-in-class\", \"future-proof\"); leave alternatives blank to avoid awkward conversation.",
-        "skills": []
+        "skills": [],
+        "recommendedModel": null,
+        "requiredPlugins": []
       }
     },
     {
@@ -7830,6 +7984,17 @@
             "id": "issue.rerun",
             "command": "remi issue rerun",
             "capability": "issue.rerun",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.restore",
+            "command": "remi issue restore",
+            "capability": "issue.restore",
             "outputs": [
               "table",
               "json",
@@ -10137,6 +10302,105 @@
             "allowed": true
           },
           {
+            "id": "wiki.repository.atlas.configure",
+            "command": "remi wiki repository atlas configure",
+            "capability": "wiki.repository.atlas.configure",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.atlas.status",
+            "command": "remi wiki repository atlas status",
+            "capability": "wiki.repository.atlas.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.build",
+            "command": "remi wiki repository build",
+            "capability": "wiki.repository.build",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.create",
+            "command": "remi wiki repository create",
+            "capability": "wiki.repository.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.delete",
+            "command": "remi wiki repository delete",
+            "capability": "wiki.repository.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.get",
+            "command": "remi wiki repository get",
+            "capability": "wiki.repository.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.list",
+            "command": "remi wiki repository list",
+            "capability": "wiki.repository.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.revisions",
+            "command": "remi wiki repository revisions",
+            "capability": "wiki.repository.revisions",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.update",
+            "command": "remi wiki repository update",
+            "capability": "wiki.repository.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "wiki.revisions",
             "command": "remi wiki revisions",
             "capability": "wiki.revisions",
@@ -10236,6 +10500,28 @@
             "allowed": true
           },
           {
+            "id": "workspace.issue-archive.get",
+            "command": "remi workspace issue-archive get",
+            "capability": "workspace.issue-archive.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.issue-archive.update",
+            "command": "remi workspace issue-archive update",
+            "capability": "workspace.issue-archive.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.leave",
             "command": "remi workspace leave",
             "capability": "workspace.leave",
@@ -10250,6 +10536,28 @@
             "id": "workspace.list",
             "command": "remi workspace list",
             "capability": "workspace.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.prompt.get",
+            "command": "remi workspace prompt get",
+            "capability": "workspace.prompt.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.prompt.update",
+            "command": "remi workspace prompt update",
+            "capability": "workspace.prompt.update",
             "outputs": [
               "table",
               "json",
@@ -10948,6 +11256,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11022,6 +11332,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -11047,6 +11359,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -11072,6 +11386,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -11097,6 +11413,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -11133,6 +11451,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -11167,6 +11487,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {
@@ -11331,6 +11653,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11423,6 +11747,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {
@@ -11449,6 +11775,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {}
@@ -12186,6 +12514,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -12231,6 +12561,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -12265,6 +12597,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -12291,6 +12625,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -12317,6 +12653,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -12353,6 +12691,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -12378,6 +12718,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -12403,6 +12745,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -12428,6 +12772,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -12456,6 +12802,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -12946,7 +13294,23 @@
             "category": "Engineering",
             "icon": "Scale",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
+          },
+          {
+            "slug": "atlas-llm-wiki",
+            "name": "Atlas · LLM Wiki",
+            "description": "Builds and incrementally maintains repository code facts and cross-repository Project Wiki synthesis.",
+            "category": "Engineering",
+            "icon": "LibraryBig",
+            "accent": "info",
+            "skills": [],
+            "recommendedProvider": "claude",
+            "recommendedModel": "opus5",
+            "requiredPlugins": [
+              "code-to-wiki"
+            ]
           },
           {
             "slug": "brainstormer",
@@ -12955,7 +13319,9 @@
             "category": "Writing",
             "icon": "Lightbulb",
             "accent": "primary",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "bug-fixer",
@@ -12973,7 +13339,9 @@
                 "cachedDescription": "Systematically trace bugs backward through the call stack to find the original trigger.",
                 "cached_description": "Systematically trace bugs backward through the call stack to find the original trigger."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "code-explainer",
@@ -12982,7 +13350,9 @@
             "category": "Engineering",
             "icon": "BookOpen",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "code-reviewer",
@@ -13000,7 +13370,9 @@
                 "cachedDescription": "React and Next.js performance optimization guidelines from Vercel Engineering.",
                 "cached_description": "React and Next.js performance optimization guidelines from Vercel Engineering."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "commit-message",
@@ -13009,7 +13381,9 @@
             "category": "Engineering",
             "icon": "GitCommit",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "email-reply",
@@ -13027,7 +13401,9 @@
                 "cachedDescription": "Resources for writing internal communications in common company formats.",
                 "cached_description": "Resources for writing internal communications in common company formats."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "frontend-builder",
@@ -13053,7 +13429,9 @@
                 "cachedDescription": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui.",
                 "cached_description": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "frontend-designer",
@@ -13079,7 +13457,9 @@
                 "cachedDescription": "Review UI code for Web Interface Guidelines compliance.",
                 "cached_description": "Review UI code for Web Interface Guidelines compliance."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "html-slides",
@@ -13105,7 +13485,9 @@
                 "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
                 "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "jd-writer",
@@ -13114,7 +13496,9 @@
             "category": "Team",
             "icon": "Briefcase",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "okr-drafter",
@@ -13123,7 +13507,9 @@
             "category": "Product",
             "icon": "Target",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "one-pager",
@@ -13149,7 +13535,9 @@
                 "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
                 "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "pr-description",
@@ -13158,7 +13546,9 @@
             "category": "Engineering",
             "icon": "GitPullRequest",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "prd-critic",
@@ -13167,7 +13557,9 @@
             "category": "Product",
             "icon": "Microscope",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "prd-drafter",
@@ -13176,7 +13568,9 @@
             "category": "Product",
             "icon": "ClipboardList",
             "accent": "primary",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "rca-writer",
@@ -13185,7 +13579,9 @@
             "category": "Engineering",
             "icon": "AlertTriangle",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "release-notes",
@@ -13194,7 +13590,9 @@
             "category": "Communication",
             "icon": "Megaphone",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "summarizer",
@@ -13203,7 +13601,9 @@
             "category": "Writing",
             "icon": "AlignLeft",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "translator-zh-en",
@@ -13212,7 +13612,9 @@
             "category": "Writing",
             "icon": "Languages",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "tutor",
@@ -13221,7 +13623,9 @@
             "category": "Writing",
             "icon": "GraduationCap",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "user-story-writer",
@@ -13230,7 +13634,9 @@
             "category": "Product",
             "icon": "UserRound",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "ux-copywriter",
@@ -13239,7 +13645,9 @@
             "category": "Design",
             "icon": "Type",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "webapp-tester",
@@ -13257,7 +13665,9 @@
                 "cachedDescription": "Toolkit for testing local web applications with Playwright.",
                 "cached_description": "Toolkit for testing local web applications with Playwright."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "writing-critic",
@@ -13266,10 +13676,12 @@
             "category": "Writing",
             "icon": "Highlighter",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           }
         ],
-        "total": 25
+        "total": 26
       }
     },
     {
@@ -13286,7 +13698,9 @@
           "icon": "Scale",
           "accent": "info",
           "instructions": "You write Architecture Decision Records. Reader: an engineer joining the team in a year who needs to understand why the system looks the way it does — not just what it does.\n\nFixed scaffold:\n\n```\n# ADR-NNN: <short title in present tense, e.g. \"Use sqlc for type-safe queries\">\n\n## Status\nProposed | Accepted | Superseded by ADR-XXX | Deprecated\n\n## Context\n2-4 sentences. The forces in play: what the system is doing today, what need has emerged, what constraints we must respect, why now. Not the answer — the question.\n\n## Decision\n1-3 sentences. The decision in active voice. \"We will use X\" — not \"Adoption of X is recommended\". Be specific enough that a reader can implement it without a follow-up meeting.\n\n## Alternatives considered\n- **Option B** — one-sentence rejection reason (e.g. \"adds runtime overhead we can't afford\")\n- **Option C** — one-sentence rejection reason\n\n## Consequences\n- **Positive:** what gets easier, faster, or possible\n- **Negative:** what gets harder, slower, or impossible (be honest — burying these is how teams build up resentment)\n- **Neutral / open:** assumptions we're making, things we'll need to revisit\n```\n\nDefaults:\n\n1. **One decision per ADR.** If you find yourself writing \"we also decided to ...\", stop — that's a second ADR.\n2. **Name 1-3 alternatives, no more.** An ADR with no rejected options reads like there was no real choice. An ADR comparing 8 options reads like a survey.\n3. **Consequences are not all positive.** Include the things this decision makes harder. The reader needs to know what they're trading away.\n4. **Keep it short.** Most ADRs fit on one screen. If yours is two pages, you're explaining the system, not the decision.\n5. **Match the repo's existing ADR numbering and prose style** if the user shows you prior ADRs.\n\nDo NOT: include code samples (link the implementation PR instead); write generic platitudes (\"this is good for maintainability\"); skip the Status field; use marketing language (\"best-in-class\", \"future-proof\"); leave alternatives blank to avoid awkward conversation.",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         }
       }
     },
@@ -14469,6 +14883,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -14547,6 +14963,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
@@ -14576,6 +14994,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -14605,6 +15025,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -14645,6 +15067,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 2,
@@ -14674,13 +15098,16 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
             "latestTaskStatus": null,
             "latestTaskId": null
           }
-        ]
+        ],
+        "total": 5
       }
     },
     {
@@ -14723,6 +15150,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
           "tasks": [
@@ -14887,6 +15316,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -14937,6 +15368,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -14963,6 +15396,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -14994,6 +15429,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15044,6 +15481,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -15070,6 +15509,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -15276,6 +15717,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15396,6 +15839,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -15422,6 +15867,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -15741,6 +16188,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -15786,6 +16235,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -15820,6 +16271,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -15846,6 +16299,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -15872,6 +16327,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -15911,6 +16368,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -15938,6 +16397,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -15965,6 +16426,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -16003,6 +16466,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title",
@@ -16031,6 +16496,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -16250,6 +16717,7 @@
           "title": "Snapshot Project",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -17264,6 +17732,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -17273,6 +17743,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "instructions": "",
+            "deltaInstructions": "",
             "instructionsRevision": 0,
             "instructionsUpdatedAt": null,
             "instructionsUpdatedBy": null,
@@ -17554,6 +18025,7 @@
         "resource_count": 1,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -18542,6 +19014,18 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/issue-archive",
+      "route": "GET /api/workspaces/:id/issue-archive",
+      "path": "/api/workspaces/local/issue-archive",
+      "status": 200,
+      "body": {
+        "config": {
+          "ttl_ms": 0,
+          "sweep_interval_ms": 0
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/lark/install/:sessionId/status",
       "route": "GET /api/workspaces/:id/lark/install/:sessionId/status",
       "path": "/api/workspaces/local/lark/install/lark_snapshot_session/status",
@@ -18601,6 +19085,19 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/prompts",
+      "route": "GET /api/workspaces/:id/prompts",
+      "path": "/api/workspaces/local/prompts",
+      "status": 200,
+      "body": {
+        "bootstrapPrompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
+        "deltaPrompt": "",
+        "revision": 0,
+        "updatedAt": null,
+        "updatedBy": null
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/relay-config",
       "route": "GET /api/workspaces/:id/relay-config",
       "path": "/api/workspaces/local/relay-config",
@@ -18650,6 +19147,88 @@
           }
         ],
         "total": 3
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki",
+      "status": 200,
+      "body": {
+        "docs": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec",
+      "status": 404,
+      "body": {
+        "error": "repository wiki doc not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec/revisions",
+      "status": 404,
+      "body": {
+        "error": "repository wiki doc not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repository-wikis",
+      "route": "GET /api/workspaces/:id/repository-wikis",
+      "path": "/api/workspaces/local/repository-wikis",
+      "status": 200,
+      "body": {
+        "repositories": [
+          {
+            "repository_id": "repo_snapshot",
+            "repository_name": "snapshot",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          },
+          {
+            "repository_id": "repo_snapshot_compat",
+            "repository_name": "compat",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          },
+          {
+            "repository_id": "repo_snapshot_native",
+            "repository_name": "native",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repository-wikis/atlas",
+      "route": "GET /api/workspaces/:id/repository-wikis/atlas",
+      "path": "/api/workspaces/local/repository-wikis/atlas",
+      "status": 200,
+      "body": {
+        "state": "plugin_required",
+        "configured": false,
+        "required_plugin": "code-to-wiki",
+        "plugin_id": null,
+        "plugin_bound": false,
+        "agent_id": null,
+        "repository_autopilot_id": null,
+        "repository_trigger_id": null,
+        "project_autopilot_id": null,
+        "project_trigger_id": null
       }
     },
     {
@@ -18914,6 +19493,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -18972,6 +19553,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -19031,6 +19614,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -19091,6 +19676,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -19250,6 +19837,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -19276,6 +19865,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {}
@@ -19439,6 +20030,8 @@
             },
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -19465,6 +20058,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -19755,6 +20350,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -19785,6 +20382,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -19815,6 +20414,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -19847,6 +20448,8 @@
           "position": 0,
           "start_date": null,
           "due_date": null,
+          "completed_at": null,
+          "archived_at": null,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "metadata": {}
@@ -19933,6 +20536,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -19979,6 +20584,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -20024,6 +20631,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -20122,6 +20731,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -20708,6 +21319,7 @@
         "resource_count": 0,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -20737,6 +21349,7 @@
         "resource_count": 0,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -20806,6 +21419,7 @@
           "title": "Native project",
           "description": null,
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -20837,6 +21451,7 @@
           "title": "Native project patched",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -20919,6 +21534,7 @@
           "title": "Native project patched",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,

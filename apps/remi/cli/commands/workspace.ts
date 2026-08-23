@@ -13,6 +13,7 @@ import {
   commandOptions,
   encodePath,
   extractRecords,
+  integerOption,
   positional,
   renderResource,
   requestBody,
@@ -81,6 +82,17 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite("workspace.relay.discovery", ["workspace", "relay", "discovery"], "Update relay discovery settings", "/relay-config/discovery", "PUT"),
     scopedWrite("workspace.relay.update", ["workspace", "relay", "update"], "Update a relay engine", "/relay-config/:engine", "PUT", [refPositional("engine")]),
     scopedWrite("workspace.relay.reveal", ["workspace", "relay", "reveal"], "Reveal a relay engine credential", "/relay-config/:engine/reveal", "POST", [refPositional("engine")]),
+    scopedRead("workspace.prompt.get", ["workspace", "prompt", "get"], "Read workspace prompt appendices", "/prompts"),
+    scopedWrite("workspace.prompt.update", ["workspace", "prompt", "update"], "Update workspace prompt appendices", "/prompts", "PUT", [
+      { name: "bootstrap-prompt", type: "string", valueName: "text", description: "Bootstrap prompt appendix" },
+      { name: "delta-prompt", type: "string", valueName: "text", description: "Delta prompt appendix" },
+      { name: "expected-revision", type: "integer", valueName: "n", description: "Expected prompt revision" },
+    ], promptBody),
+    scopedRead("workspace.issue-archive.get", ["workspace", "issue-archive", "get"], "Read issue archive retention settings", "/issue-archive"),
+    scopedWrite("workspace.issue-archive.update", ["workspace", "issue-archive", "update"], "Update issue archive retention settings", "/issue-archive", "PUT", [
+      { name: "ttl-ms", type: "integer", valueName: "ms", description: "Archive retention duration" },
+      { name: "sweep-interval-ms", type: "integer", valueName: "ms", description: "Archive sweep interval" },
+    ], issueArchiveBody),
   ];
 }
 
@@ -248,6 +260,32 @@ async function envBody(invocation: CommandInvocation): Promise<Record<string, un
     env[pair.slice(0, separator)] = pair.slice(separator + 1);
   }
   return { ...body, env };
+}
+
+async function promptBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  return requestBody(invocation, {
+    bootstrap_prompt: rawStringOption(invocation, "bootstrap-prompt"),
+    delta_prompt: rawStringOption(invocation, "delta-prompt"),
+    expected_revision: integerOption(invocation, "expected-revision") ?? undefined,
+  });
+}
+
+async function issueArchiveBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const ttlMs = integerOption(invocation, "ttl-ms");
+  const sweepIntervalMs = integerOption(invocation, "sweep-interval-ms");
+  const body = await requestBody(invocation, {
+    ttl_ms: ttlMs ?? undefined,
+    sweep_interval_ms: sweepIntervalMs ?? undefined,
+  });
+  if (!Number.isSafeInteger(body.ttl_ms) || !Number.isSafeInteger(body.sweep_interval_ms)) {
+    throw new CliError("usage", "workspace issue-archive update requires --ttl-ms and --sweep-interval-ms or input JSON");
+  }
+  return body;
+}
+
+function rawStringOption(invocation: CommandInvocation, name: string): string | undefined {
+  const value = invocation.options[name];
+  return typeof value === "string" ? value : undefined;
 }
 
 function refPositional(name: string) {

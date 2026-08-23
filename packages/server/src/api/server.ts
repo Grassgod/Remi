@@ -55,6 +55,10 @@ import {
   type ProjectKnowledgeServiceContract,
 } from "@multiremi/project-knowledge/service.js";
 import {
+  createRepositoryWikiServiceFromEnv,
+  type RepositoryWikiServiceContract,
+} from "@multiremi/repository-wiki/service.js";
+import {
   inspectGitRemoteRepository,
   type GitRemoteInspector,
 } from "./helpers/repositories.js";
@@ -159,6 +163,7 @@ export interface MultiremiApiOptions {
   inspectGitRemoteRepository?: GitRemoteInspector;
   resolveAgentPluginGitSource?: AgentPluginGitSourceResolver;
   projectKnowledge?: ProjectKnowledgeServiceContract;
+  repositoryWiki?: RepositoryWikiServiceContract;
   sessionArchives?: SessionArchiveService;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
   scmPolling?: ScmPollingScheduler | null;
@@ -183,6 +188,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const webhookIpRateLimiter = createWebhookRateLimiter(options.webhookIpRateLimit, DEFAULT_WEBHOOK_IP_RATE_LIMIT);
   const app = new Hono();
   const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
+  const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
@@ -199,6 +205,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       options.resolveAgentPluginGitSource
         ?? createScmAuthenticatedAgentPluginGitSourceResolver(store, resolveAgentPluginGitSource),
     projectKnowledge,
+    repositoryWiki,
     sessionArchives,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
   };

@@ -60,7 +60,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     return;
   }
   if (action === "status") {
-    await wikiStatus(options, requireProject("wiki", "status", options));
+    await wikiStatus(options, projectOption(options));
     return;
   }
   if (action === "diff") {
@@ -68,7 +68,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     return;
   }
   if (action === "push") {
-    await wikiPush(options, requireProject("wiki", "push", options));
+    await wikiPush(options, projectOption(options));
     return;
   }
   if (action === "list") {

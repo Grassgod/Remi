@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { GitBranch, GitFork, Plus, Search, Trash2 } from "lucide-react";
+import { BookOpen, GitBranch, GitFork, Plus, Search, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { scmConnectionsOptions } from "@multiremi/core/scm";
 import {
   repositoryListOptions,
+  repositoryWikiSummariesOptions,
   useInspectWorkspaceRepository,
   useRemoveWorkspaceRepository,
   useUpdateWorkspaceRepository,
@@ -36,10 +37,13 @@ import { PageHeader } from "../layout/page-header";
 import { BranchPicker } from "./branch-picker";
 import { ImportRepositoryDialog } from "./import-repository-dialog";
 import { RepositoryDescriptionEditor } from "./repository-description-editor";
+import { RepositoryWikiStatusBadge } from "./repository-wiki-page";
+import { useWorkspacePaths } from "@multiremi/core/paths";
+import { AppLink } from "../navigation";
 
 const EMPTY_REPOSITORIES: WorkspaceRepository[] = [];
 const TABLE_GRID =
-  "grid min-w-[840px] grid-cols-[minmax(240px,1.2fr)_130px_130px_minmax(180px,1fr)_120px_44px]";
+  "grid min-w-[960px] grid-cols-[minmax(240px,1.2fr)_130px_130px_120px_minmax(180px,1fr)_120px_44px]";
 
 function formatImportedDate(value: string | null): string {
   if (!value) return "--";
@@ -139,11 +143,13 @@ function RepositoryDefaultBranchSelect({
 export function RepositoriesPage() {
   const { t } = useT("repositories");
   const workspaceId = useWorkspaceId();
+  const paths = useWorkspacePaths();
   const userId = useAuthStore((state) => state.user?.id);
   const { data: repositoryResponse, isLoading } = useQuery(
     repositoryListOptions(workspaceId),
   );
   const { data: scmResponse } = useQuery(scmConnectionsOptions(workspaceId));
+  const { data: wikiSummaries = [] } = useQuery(repositoryWikiSummariesOptions(workspaceId));
   const { data: members = [] } = useQuery(memberListOptions(workspaceId));
   const repositories = repositoryResponse?.repositories ?? EMPTY_REPOSITORIES;
   const removeRepository = useRemoveWorkspaceRepository(workspaceId);
@@ -161,6 +167,10 @@ export function RepositoriesPage() {
     }
     return result;
   }, [scmResponse]);
+  const wikiByRepositoryId = useMemo(
+    () => new Map(wikiSummaries.map((summary) => [summary.repository_id, summary])),
+    [wikiSummaries],
+  );
 
   const filteredRepositories = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -222,10 +232,11 @@ export function RepositoriesPage() {
 
       <div className="min-h-0 flex-1 overflow-auto">
         {isLoading ? (
-          <div className="min-w-[840px]">
+          <div className="min-w-[960px]">
             {Array.from({ length: 7 }).map((_, index) => (
               <div key={index} className={cn(TABLE_GRID, "h-12 items-center gap-3 border-b px-5")}>
                 <Skeleton className="h-4 w-44" />
+                <Skeleton className="h-4 w-20" />
                 <Skeleton className="h-4 w-20" />
                 <Skeleton className="h-4 w-20" />
                 <Skeleton className="h-4 w-40" />
@@ -252,11 +263,12 @@ export function RepositoriesPage() {
             <p className="text-sm">{t(($) => $.empty.search)}</p>
           </div>
         ) : (
-          <div className="min-w-[840px]">
+          <div className="min-w-[960px]">
             <div className={cn(TABLE_GRID, "sticky top-0 z-10 h-9 items-center gap-3 border-b bg-background px-5 text-xs font-medium text-muted-foreground")}>
               <span>{t(($) => $.table.repository)}</span>
               <span>{t(($) => $.table.default_branch)}</span>
               <span>{t(($) => $.table.sync)}</span>
+              <span>{t(($) => $.table.wiki)}</span>
               <span>{t(($) => $.table.description)}</span>
               <span>{t(($) => $.table.imported)}</span>
               <span />
@@ -291,6 +303,13 @@ export function RepositoriesPage() {
                     <span className="text-xs text-muted-foreground">{t(($) => $.table.not_connected)}</span>
                   );
                 })()}
+                <AppLink
+                  href={paths.repositoryWiki(repository.id)}
+                  className="flex min-w-0 items-center gap-1.5 text-xs hover:underline"
+                >
+                  <BookOpen className="size-3.5 shrink-0 text-muted-foreground" />
+                  <RepositoryWikiStatusBadge status={wikiByRepositoryId.get(repository.id)?.status ?? "unbuilt"} />
+                </AppLink>
                 <RepositoryDescriptionEditor
                   workspaceId={workspaceId}
                   repository={repository}

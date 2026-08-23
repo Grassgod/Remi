@@ -10,10 +10,33 @@
     "default_branch_aria": "{{name}} 的默认分支",
     "default_branch_placeholder": "选择分支",
     "sync": "事件采集",
+    "wiki": "Wiki",
     "not_connected": "未连接",
     "sync_modes": { "poll": "主动拉取", "webhook": "Webhook", "hybrid": "混合" },
     "description": "描述",
     "imported": "导入时间"
+  },
+  "wiki": {
+    "title": "仓库 Wiki",
+    "search": "筛选页面...",
+    "empty_title": "尚未构建仓库 Wiki",
+    "empty_description": "由 Atlas 分析默认分支后生成，构建期间不会影响仓库使用。",
+    "build_action": "使用 Atlas 构建",
+    "build_started": "Atlas 已开始构建仓库 Wiki",
+    "build_failed": "无法启动仓库 Wiki 构建",
+    "no_match": "没有匹配的 Wiki 页面。",
+    "page_count": "{{count}} 个页面",
+    "source_revision": "代码版本 {{revision}}",
+    "updated": "更新于 {{time}}",
+    "version": "版本 {{version}}",
+    "history": "版本历史",
+    "status": {
+      "unbuilt": "未构建",
+      "building": "构建中",
+      "healthy": "已同步",
+      "stale": "待更新",
+      "failed": "更新失败"
+    }
   },
   "empty": {
     "title": "还没有代码仓库",

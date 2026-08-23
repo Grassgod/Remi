@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,15 @@ interface DocState {
 interface WikiServerHooks {
   afterUpdate?: (slug: string) => void;
   failUpdate?: (slug: string) => boolean;
+  repositoryDocs?: Map<string, RepositoryDocState>;
+}
+
+interface RepositoryDocState {
+  id: string;
+  path: string;
+  title: string;
+  body: string;
+  version: number;
 }
 
 const tempDirs: string[] = [];
@@ -241,6 +251,65 @@ describe("Wiki working copy", () => {
       }
     });
   });
+
+  test("pushes repository Wiki updates and creates the first page for an empty repository", async () => {
+    const docs = new Map<string, DocState>();
+    const repositoryDocs = new Map<string, RepositoryDocState>([["architecture/overview.md", {
+      id: "rwdoc_overview",
+      path: "architecture/overview.md",
+      title: "Architecture",
+      body: "before",
+      version: 1,
+    }]]);
+    await withWikiServer(docs, async (serverUrl, requests) => {
+      const root = workspaceRoot();
+      const base = ["--project", "prj_1", "--server", serverUrl, "--token", "token"];
+      await runMultiremi(["wiki", "pull", ...base], { programName: "multiremi" });
+      const repositoryRoot = join(root, "wiki", "repositories", "alpha-po_alpha");
+      const baseRoot = join(root, ".multiremi", "wiki-base", "repositories");
+      mkdirSync(join(repositoryRoot, "architecture"), { recursive: true });
+      mkdirSync(join(baseRoot, "files", "alpha-po_alpha", "architecture"), { recursive: true });
+      writeFileSync(join(repositoryRoot, "architecture", "overview.md"), "before\n");
+      writeFileSync(join(baseRoot, "files", "alpha-po_alpha", "architecture", "overview.md"), "before\n");
+      writeFileSync(join(baseRoot, "manifest.json"), `${JSON.stringify({
+        version: 1,
+        workspaceId: "local",
+        pulledAt: "2026-08-18T00:00:00.000Z",
+        repositories: [{ id: "repo_alpha", name: "alpha", directory: "alpha-po_alpha" }],
+        docs: [{
+          id: "rwdoc_overview",
+          repositoryId: "repo_alpha",
+          repositoryName: "alpha",
+          path: "alpha-po_alpha/architecture/overview.md",
+          version: 1,
+          sourceRevision: "abc123",
+          sha256: createHash("sha256").update("before\n").digest("hex"),
+          updatedAt: "2026-08-18T00:00:00.000Z",
+        }],
+      }, null, 2)}\n`);
+
+      writeFileSync(join(repositoryRoot, "architecture", "overview.md"), "after\n");
+      writeFileSync(join(repositoryRoot, "getting-started.md"), "# Getting started\n\nFirst page.\n");
+      rmSync(join(root, ".multiremi", "wiki-base", "manifest.json"));
+      await runMultiremi([
+        "wiki",
+        "push",
+        "--server",
+        serverUrl,
+        "--token",
+        "token",
+        "--source-revision",
+        "deadbeef",
+      ], { programName: "multiremi" });
+
+      expect(repositoryDocs.get("architecture/overview.md")).toMatchObject({ body: "after", version: 2 });
+      expect(repositoryDocs.get("getting-started.md")).toMatchObject({ title: "Getting started", body: "# Getting started\n\nFirst page." });
+      expect(requests.filter((request) => request.method === "PUT" || request.method === "POST")
+        .every((request) => request.body?.source_revision === "deadbeef")).toBe(true);
+      expect(requests.filter((request) => request.path.includes("/repos/repo_alpha/wiki")).map((request) => request.method))
+        .toEqual(["GET", "PUT", "POST", "GET"]);
+    }, { repositoryDocs });
+  });
 });
 
 async function withWikiServer(
@@ -256,6 +325,38 @@ async function withWikiServer(
       const url = new URL(request.url);
       const body = request.method === "GET" || request.method === "DELETE" ? undefined : await request.json();
       requests.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
+      if (url.pathname === "/api/workspaces/local/repos/repo_alpha/wiki" && request.method === "GET") {
+        return Response.json({ docs: [...(hooks.repositoryDocs?.values() ?? [])].map(wireRepositoryDoc) });
+      }
+      if (url.pathname === "/api/workspaces/local/repos/repo_alpha/wiki" && request.method === "POST") {
+        const path = String(body.path);
+        if (hooks.repositoryDocs?.has(path)) return Response.json({ error: "already exists" }, { status: 409 });
+        const created: RepositoryDocState = {
+          id: `rwdoc_${path.replace(/[^a-z0-9]+/gi, "_")}`,
+          path,
+          title: String(body.title),
+          body: String(body.body ?? ""),
+          version: 1,
+        };
+        hooks.repositoryDocs?.set(path, created);
+        return Response.json({ doc: wireRepositoryDoc(created) }, { status: 201 });
+      }
+      const repositoryMatch = url.pathname.match(/^\/api\/workspaces\/local\/repos\/repo_alpha\/wiki\/([^/]+)$/);
+      if (repositoryMatch) {
+        const id = decodeURIComponent(repositoryMatch[1]!);
+        const current = [...(hooks.repositoryDocs?.values() ?? [])].find((doc) => doc.id === id);
+        if (!current) return Response.json({ error: "not found" }, { status: 404 });
+        if (request.method === "PUT") {
+          if (Number(body.expected_version) !== current.version) return Response.json({ error: "version conflict" }, { status: 409 });
+          const updated = { ...current, body: String(body.body ?? current.body), version: current.version + 1 };
+          hooks.repositoryDocs?.set(current.path, updated);
+          return Response.json({ doc: wireRepositoryDoc(updated) });
+        }
+        if (request.method === "DELETE") {
+          hooks.repositoryDocs?.delete(current.path);
+          return Response.json({ doc: wireRepositoryDoc(current) });
+        }
+      }
       if (url.pathname === "/api/projects/prj_1/docs" && request.method === "GET") {
         return Response.json({ docs: [...docs.values()].map(wireDoc) });
       }
@@ -324,6 +425,22 @@ function wireDoc(doc: DocState): Record<string, unknown> {
     tags: [],
     pinned: false,
     refs: [],
+    updated_at: `2026-08-18T00:00:0${doc.version}.000Z`,
+  };
+}
+
+function wireRepositoryDoc(doc: RepositoryDocState): Record<string, unknown> {
+  return {
+    ...doc,
+    workspace_id: "local",
+    repository_id: "repo_alpha",
+    slug: doc.path.replace(/\.md$/i, ""),
+    summary: null,
+    tags: [],
+    refs: [],
+    source_revision: "abc123",
+    status: "healthy",
+    status_message: null,
     updated_at: `2026-08-18T00:00:0${doc.version}.000Z`,
   };
 }

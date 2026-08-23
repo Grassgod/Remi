@@ -220,6 +220,12 @@ export function issueListQuery(
     includeNoProject: compat
       ? c.req.query("include_no_project") === "true"
       : c.req.query("includeNoProject") === "true" || c.req.query("include_no_project") === "true",
+    includeArchived: compat
+      ? c.req.query("include_archived") === "true"
+      : c.req.query("includeArchived") === "true" || c.req.query("include_archived") === "true",
+    archivedOnly: compat
+      ? c.req.query("archived_only") === "true"
+      : c.req.query("archivedOnly") === "true" || c.req.query("archived_only") === "true",
     limit: parseOptionalInt(c.req.query("limit")),
     offset: parseOptionalInt(c.req.query("offset")),
   };

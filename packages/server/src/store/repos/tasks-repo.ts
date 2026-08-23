@@ -62,6 +62,7 @@ const AUTO_RETRY_FAILURE_REASONS = new Set([
   "codex_semantic_inactivity",
   "agent_error.stale_session",
   "project_knowledge_unavailable",
+  "repo_sync_failed",
 ]);
 const RESUME_UNSAFE_FAILURE_REASONS = new Set([
   "iteration_limit",
@@ -2269,9 +2270,10 @@ export class TasksRepo {
     if (issue?.status === "done" || issue?.status === "cancelled") return;
     if (!issue || issue.status === status) return;
     const now = nowIso();
+    const completedAt = status === "done" || status === "cancelled" ? now : null;
     this.ctx.db.run(
-      "UPDATE multiremi_issues SET status = ?, updated_at = ? WHERE id = ?",
-      [status, now, task.issueId],
+      "UPDATE multiremi_issues SET status = ?, completed_at = ?, archived_at = NULL, updated_at = ? WHERE id = ?",
+      [status, completedAt, now, task.issueId],
     );
     const updatedIssue = this.ctx.issues().getIssue(task.issueId);
     if (updatedIssue) {
@@ -2292,7 +2294,13 @@ export class TasksRepo {
       actorType: "agent",
       actorId: task.agentId,
       payload: {
-        issue: { id: task.issueId, status, updated_at: now },
+        issue: {
+          id: task.issueId,
+          status,
+          completed_at: completedAt,
+          archived_at: null,
+          updated_at: now,
+        },
         status_changed: true,
         prev_status: issue.status,
       },

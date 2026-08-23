@@ -95,6 +95,14 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
     expect(parsed.issues[0]?.metadata).toEqual({});
   });
 
+  it("defaults issue lifecycle timestamps to null for older backends", () => {
+    const parsed = ListIssuesResponseSchema.parse({ issues: [baseIssue], total: 1 });
+    expect(parsed.issues[0]).toMatchObject({
+      completed_at: null,
+      archived_at: null,
+    });
+  });
+
   it("rejects metadata with non-primitive values (nested object)", () => {
     const payload = {
       issues: [{ ...baseIssue, metadata: { nested: { x: 1 } } }],

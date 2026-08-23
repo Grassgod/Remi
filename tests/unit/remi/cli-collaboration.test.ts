@@ -164,6 +164,23 @@ describe("native collaboration CLI contracts", () => {
     expect(bodies[1]).toMatchObject({ assignee_type: "agent", assignee_id: "agt_default" });
     expect(optedIn.stderr).not.toContain("Project default assignee is");
   });
+
+  it("restores an archived issue through the native command", async () => {
+    useCliEnv();
+    const spec = specById("issue.restore");
+    let restored = "";
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === "/api/issues/iss_archived/restore") {
+        restored = path;
+        return Response.json({ id: "iss_archived", status: "backlog", deleted_at: null });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    const result = await capture(() => registryFor([spec]).execute(["issue", "restore", "iss_archived", "--output", "json"]));
+    expect(restored).toBe("/api/issues/iss_archived/restore");
+    expect(JSON.parse(result.stdout)).toMatchObject({ id: "iss_archived", deleted_at: null });
+  });
 });
 
 function specById(id: string): CommandSpec {

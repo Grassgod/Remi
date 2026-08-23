@@ -209,6 +209,54 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.prompt.get": {
+      "command": "remi workspace prompt get",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.prompt.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.prompt.update": {
+      "command": "remi workspace prompt update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.prompt.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.issue-archive.get": {
+      "command": "remi workspace issue-archive get",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.issue-archive.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.issue-archive.update": {
+      "command": "remi workspace issue-archive update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.issue-archive.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "member.list": {
       "command": "remi member list",
       "auth": [
@@ -928,6 +976,120 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "wiki.repository.list": {
+      "command": "remi wiki repository list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.get": {
+      "command": "remi wiki repository get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.create": {
+      "command": "remi wiki repository create",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.update": {
+      "command": "remi wiki repository update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.delete": {
+      "command": "remi wiki repository delete",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.revisions": {
+      "command": "remi wiki repository revisions",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.repository.revisions",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.build": {
+      "command": "remi wiki repository build",
+      "auth": [
+        "human"
+      ],
+      "capability": "wiki.repository.build",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.atlas.status": {
+      "command": "remi wiki repository atlas status",
+      "auth": [
+        "human"
+      ],
+      "capability": "wiki.repository.atlas.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.repository.atlas.configure": {
+      "command": "remi wiki repository atlas configure",
+      "auth": [
+        "human"
+      ],
+      "capability": "wiki.repository.atlas.configure",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "wiki.pull": {
       "command": "remi wiki pull",
       "auth": [
@@ -1078,6 +1240,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "issue.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.restore": {
+      "command": "remi issue restore",
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.restore",
       "output": [
         "table",
         "json",

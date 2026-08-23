@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   AlertCircle,
   ArrowDownUp,
@@ -10,17 +11,27 @@ import {
   ChevronRight,
   Files,
   FolderKanban,
+  GitFork,
   Library,
+  Loader2,
+  Bot,
+  CheckCircle2,
   Search,
 } from "lucide-react";
-import { Button } from "@multiremi/ui/components/ui/button";
+import { Button, buttonVariants } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { workspaceDocListOptions } from "@multiremi/core/project-docs";
 import { projectListOptions } from "@multiremi/core/projects/queries";
+import {
+  atlasWikiSetupOptions,
+  repositoryListOptions,
+  repositoryWikiSummariesOptions,
+  useConfigureAtlasWiki,
+} from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
-import type { Project, WorkspaceDoc } from "@multiremi/core/types";
+import type { AtlasWikiSetupStatus, Project, RepositoryWikiSummary, WorkspaceDoc, WorkspaceRepository } from "@multiremi/core/types";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { AppLink } from "../navigation";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -199,15 +210,101 @@ function ProjectRow({ row }: { row: ProjectKnowledgeRow }) {
   );
 }
 
+function RepositoryRow({ repository, summary }: { repository: WorkspaceRepository; summary?: RepositoryWikiSummary }) {
+  const { t } = useT("projects");
+  const paths = useWorkspacePaths();
+  return (
+    <AppLink
+      href={paths.repositoryWiki(repository.id)}
+      className="group grid min-h-12 grid-cols-[minmax(0,1fr)_auto_20px] items-center gap-3 border-b px-4 last:border-b-0 hover:bg-accent/40"
+    >
+      <span className="flex min-w-0 items-center gap-2.5">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded border bg-muted/50">
+          <GitFork className="size-3.5 text-muted-foreground" />
+        </span>
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium">{repository.name}</span>
+          <span className="block truncate font-mono text-xs text-muted-foreground">{repository.url}</span>
+        </span>
+      </span>
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {summary?.page_count ? t(($) => $.knowledge.repository_pages, { count: summary.page_count }) : t(($) => $.knowledge.repository_unbuilt)}
+      </span>
+      <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+    </AppLink>
+  );
+}
+
+function AtlasSetupBar({ status, loading }: { status?: AtlasWikiSetupStatus; loading: boolean }) {
+  const { t } = useT("projects");
+  const workspaceId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const configure = useConfigureAtlasWiki(workspaceId);
+
+  if (loading) return <div className="border-b px-4 py-2"><Skeleton className="h-8 w-full" /></div>;
+  const state = status?.state ?? "not_configured";
+  const description = state === "plugin_required"
+    ? t(($) => $.knowledge.atlas_plugin_required)
+    : state === "scm_connection_required"
+      ? t(($) => $.knowledge.atlas_scm_required)
+      : state === "ready"
+        ? t(($) => $.knowledge.atlas_ready)
+        : t(($) => $.knowledge.atlas_description);
+
+  const runConfigure = () => configure.mutate(undefined, {
+    onSuccess: (result) => {
+      if (result.configured) toast.success(t(($) => $.knowledge.atlas_configured));
+      else if (result.scm_warning) toast.warning(result.scm_warning);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.knowledge.atlas_failed)),
+  });
+
+  return (
+    <div className="flex min-h-12 items-center gap-3 border-b bg-muted/10 px-4 py-2">
+      <span className="flex size-7 shrink-0 items-center justify-center rounded border bg-background">
+        {state === "ready" ? <CheckCircle2 className="size-4 text-emerald-600" /> : <Bot className="size-4 text-muted-foreground" />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">{t(($) => $.knowledge.atlas_title)}</div>
+        <p className="truncate text-xs text-muted-foreground">{description}</p>
+      </div>
+      {state === "plugin_required" ? (
+        <AppLink href={paths.plugins()} className={buttonVariants({ variant: "outline", size: "sm" })}>{t(($) => $.knowledge.atlas_import_plugin)}</AppLink>
+      ) : state === "ready" ? (
+        <div className="flex items-center gap-2">
+          {status?.agent_id && <AppLink href={paths.agentDetail(status.agent_id)} className={buttonVariants({ variant: "ghost", size: "sm" })}>{t(($) => $.knowledge.atlas_agent)}</AppLink>}
+          {status?.repository_autopilot_id && <AppLink href={paths.autopilotDetail(status.repository_autopilot_id)} className={buttonVariants({ variant: "outline", size: "sm" })}>{t(($) => $.knowledge.atlas_automation)}</AppLink>}
+        </div>
+      ) : (
+        <Button type="button" variant="outline" size="sm" disabled={configure.isPending} onClick={runConfigure}>
+          {configure.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Bot className="size-3.5" />}
+          {t(($) => $.knowledge.atlas_configure)}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function KnowledgePage() {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const projectsQuery = useQuery(projectListOptions(wsId));
   const docsQuery = useQuery(workspaceDocListOptions(wsId));
+  const repositoriesQuery = useQuery(repositoryListOptions(wsId));
+  const repositoryWikiQuery = useQuery(repositoryWikiSummariesOptions(wsId));
+  const atlasQuery = useQuery(atlasWikiSetupOptions(wsId));
   const [search, setSearch] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
   const docs = useMemo(() => docsQuery.data ?? [], [docsQuery.data]);
+  const repositories = useMemo(
+    () => repositoriesQuery.data?.repositories ?? [],
+    [repositoriesQuery.data],
+  );
+  const repositorySummaries = useMemo(
+    () => repositoryWikiQuery.data ?? [],
+    [repositoryWikiQuery.data],
+  );
 
   const rows = useMemo(() => {
     const docsByProject = new Map<string, WorkspaceDoc[]>();
@@ -256,9 +353,17 @@ export function KnowledgePage() {
       });
   }, [docs, projects, search, sortOrder]);
 
-  const isPending = projectsQuery.isPending || docsQuery.isPending;
-  const isError = projectsQuery.isError || docsQuery.isError;
-  const error = projectsQuery.error ?? docsQuery.error;
+  const repositoryRows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const summaries = new Map(repositorySummaries.map((summary) => [summary.repository_id, summary]));
+    return repositories
+      .filter((repository) => !query || [repository.name, repository.url, repository.description ?? ""].some((value) => value.toLowerCase().includes(query)))
+      .map((repository) => ({ repository, summary: summaries.get(repository.id) }));
+  }, [repositories, repositorySummaries, search]);
+
+  const isPending = projectsQuery.isPending || docsQuery.isPending || repositoriesQuery.isPending || repositoryWikiQuery.isPending;
+  const isError = projectsQuery.isError || docsQuery.isError || repositoriesQuery.isError || repositoryWikiQuery.isError;
+  const error = projectsQuery.error ?? docsQuery.error ?? repositoriesQuery.error ?? repositoryWikiQuery.error;
 
   if (isPending) {
     return (
@@ -297,6 +402,8 @@ export function KnowledgePage() {
               onClick={() => {
                 void projectsQuery.refetch();
                 void docsQuery.refetch();
+                void repositoriesQuery.refetch();
+                void repositoryWikiQuery.refetch();
               }}
             >
               {t(($) => $.knowledge.load_error_retry)}
@@ -307,9 +414,10 @@ export function KnowledgePage() {
     );
   }
 
-  if (projects.length === 0) {
+  if (projects.length === 0 && repositories.length === 0) {
     return (
       <KnowledgeShell projectCount={0}>
+        <AtlasSetupBar status={atlasQuery.data} loading={atlasQuery.isPending} />
         <EmptyState
           icon={BookText}
           title={t(($) => $.knowledge.empty_title)}
@@ -320,7 +428,8 @@ export function KnowledgePage() {
   }
 
   return (
-    <KnowledgeShell projectCount={projects.length}>
+    <KnowledgeShell projectCount={projects.length + repositories.length}>
+      <AtlasSetupBar status={atlasQuery.data} loading={atlasQuery.isPending} />
       <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
         <div className="relative min-w-0 flex-1 sm:flex-none">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -332,7 +441,7 @@ export function KnowledgePage() {
           />
         </div>
         <span className="ml-auto hidden text-xs tabular-nums text-muted-foreground sm:block">
-          {rows.length} / {projects.length}
+          {rows.length + repositoryRows.length} / {projects.length + repositories.length}
         </span>
         <Button
           type="button"
@@ -361,23 +470,32 @@ export function KnowledgePage() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {rows.length === 0 ? (
+        {rows.length === 0 && repositoryRows.length === 0 ? (
           <p className="py-12 text-center text-sm text-muted-foreground">
             {t(($) => $.knowledge.no_results)}
           </p>
         ) : (
-          <div className="overflow-hidden rounded-md border">
-            <div className="hidden h-8 grid-cols-[minmax(220px,1fr)_84px_108px_108px_minmax(128px,180px)_20px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground sm:grid">
-              <span>{t(($) => $.knowledge.column_project)}</span>
-              <span>{t(($) => $.knowledge.column_wiki)}</span>
-              <span>{t(($) => $.knowledge.column_memory)}</span>
-              <span>{t(($) => $.knowledge.column_updated)}</span>
-              <span>{t(($) => $.knowledge.column_maintainer)}</span>
-              <span />
-            </div>
-            {rows.map((row) => (
-              <ProjectRow key={row.project.id} row={row} />
-            ))}
+          <div className="space-y-5">
+            {rows.length > 0 && <section>
+              <h2 className="mb-2 text-xs font-medium uppercase text-muted-foreground">{t(($) => $.knowledge.projects_group)}</h2>
+              <div className="overflow-hidden rounded-md border">
+                <div className="hidden h-8 grid-cols-[minmax(220px,1fr)_84px_108px_108px_minmax(128px,180px)_20px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground sm:grid">
+                  <span>{t(($) => $.knowledge.column_project)}</span>
+                  <span>{t(($) => $.knowledge.column_wiki)}</span>
+                  <span>{t(($) => $.knowledge.column_memory)}</span>
+                  <span>{t(($) => $.knowledge.column_updated)}</span>
+                  <span>{t(($) => $.knowledge.column_maintainer)}</span>
+                  <span />
+                </div>
+                {rows.map((row) => <ProjectRow key={row.project.id} row={row} />)}
+              </div>
+            </section>}
+            {repositoryRows.length > 0 && <section>
+              <h2 className="mb-2 text-xs font-medium uppercase text-muted-foreground">{t(($) => $.knowledge.repositories_group)}</h2>
+              <div className="overflow-hidden rounded-md border">
+                {repositoryRows.map(({ repository, summary }) => <RepositoryRow key={repository.id} repository={repository} summary={summary} />)}
+              </div>
+            </section>}
           </div>
         )}
       </div>

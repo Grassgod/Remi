@@ -29,6 +29,7 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { buildChatBootstrapTranscript } from "@multiremi/store/repos/chat-repo.js";
 import { createLogger } from "@shared/logger.js";
+import { readWorkspacePromptSettings } from "../../prompts/workspace-settings.js";
 import { daemonClaimAgentResponse } from "./agents.js";
 import { issueCompatibilityResponse } from "./issues.js";
 import {
@@ -335,6 +336,32 @@ export function daemonTaskClaimResponse(
   if (task.projectWikiDocs?.length) {
     response.project_wiki_docs = task.projectWikiDocs.map(projectDocCompatibilityResponse);
   }
+  if (task.repositoryWikiContexts?.length) {
+    response.repository_wiki_contexts = task.repositoryWikiContexts.map((context) => ({
+      repository: {
+        id: context.repository.id,
+        name: context.repository.name,
+        url: context.repository.url,
+        default_branch: context.repository.defaultBranch,
+      },
+      docs: context.docs.map((doc) => ({
+        id: doc.id,
+        repository_id: doc.repositoryId,
+        workspace_id: doc.workspaceId,
+        path: doc.path,
+        slug: doc.slug,
+        title: doc.title,
+        summary: doc.summary,
+        body: doc.body,
+        tags: doc.tags,
+        refs: doc.refs,
+        source_revision: doc.sourceRevision,
+        status: doc.status,
+        version: doc.version,
+        updated_at: doc.updatedAt,
+      })),
+    }));
+  }
   if (task.projectContexts.length) {
     response.project_contexts = task.projectContexts.map((context) => ({
       project: projectCompatibilityResponse(context.project),
@@ -420,6 +447,11 @@ function appendDaemonClaimExecutionContext(
 function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: MultiremiTaskWithAgent, response: Record<string, unknown>): void {
   const workspace = store.getWorkspace(task.workspaceId);
   if (workspace?.context?.trim()) response.workspace_context = workspace.context.trim();
+  if (workspace) {
+    const prompts = readWorkspacePromptSettings(workspace);
+    if (prompts.bootstrapPrompt.trim()) response.workspace_bootstrap_prompt = prompts.bootstrapPrompt.trim();
+    if (prompts.deltaPrompt.trim()) response.workspace_delta_prompt = prompts.deltaPrompt.trim();
+  }
 
   // Read at claim time so a saved workspace env applies to the next dispatched
   // task without a daemon restart. Precedence is resolved daemon-side:

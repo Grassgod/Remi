@@ -18,6 +18,7 @@ import {
 import { type StoreContext, toInboxItem, toIssueComment } from "@multiremi/store/context.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
+import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import type {
   AssignIssueInput,
   AssignIssueResult,
@@ -164,19 +165,21 @@ export class IssuesRepo {
     const acceptanceCriteria = normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? []);
     const contextRefs = normalizeJsonArray(input.contextRefs ?? input.context_refs ?? []);
     const createdBy = input.createdBy ?? input.created_by ?? null;
+    const status = normalizeIssueStatus(input.status);
+    const completedAt = isTerminalIssueStatus(status) ? now : null;
     this.ctx.db.run(
       `INSERT INTO multiremi_issues (
         id, issue_number, issue_key, title, description, status, priority, workspace_id, project_id,
         parent_issue_id, issue_kind, source_issue_id, assignee_type, assignee_id, position, start_date, due_date,
-        acceptance_criteria, context_refs, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        acceptance_criteria, context_refs, created_by, completed_at, archived_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         issueNumber,
         issueKey,
         input.title,
         input.description ?? null,
-        normalizeIssueStatus(input.status),
+        status,
         priority,
         workspaceId,
         projectId,
@@ -191,6 +194,8 @@ export class IssuesRepo {
         toJson(acceptanceCriteria),
         toJson(contextRefs),
         createdBy,
+        completedAt,
+        null,
         now,
         now,
       ],
@@ -319,6 +324,17 @@ export class IssuesRepo {
       .filter((issue) => issueMatchesListFilter(issue, input))
       .slice(offset, offset + limit);
     return this.hydrateIssues(issues);
+  }
+
+  countIssues(input: ListIssuesInput = {}): number {
+    const unpaginated = { ...input, limit: undefined, offset: undefined };
+    const hasMetadata = Boolean(input.metadata) && Object.keys(input.metadata!).length > 0;
+    if (hasMetadata) return this.listIssues(unpaginated).length;
+    const { where, params } = buildIssueListWhere(unpaginated);
+    const row = this.ctx.db.query(
+      `SELECT COUNT(*) AS total FROM multiremi_issues ${where}`,
+    ).get(...params) as Row | null;
+    return Number(row?.total ?? 0);
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
@@ -661,14 +677,14 @@ export class IssuesRepo {
     const includeCommentBodies = input.includeCommentBodies !== false;
     const limit = clampSearchLimit(input.limit);
     const offset = Math.max(0, Number(input.offset ?? 0));
-    const rows = this.listIssues().map((issue) => ({
+    const rows = this.listIssues({ includeArchived: true }).map((issue) => ({
       issue,
       matchedCommentSnippet: includeCommentBodies
         ? this.searchIssueCommentSnippet(issue.id, query)
         : null,
     })).filter(({ issue, matchedCommentSnippet }) => {
       if (issue.workspaceId !== workspaceId) return false;
-      if (!includeClosed && CLOSED_ISSUE_STATUSES.has(issue.status)) return false;
+      if (!includeClosed && CLOSED_ISSUE_STATUSES.has(issue.status) && !issue.archivedAt) return false;
       return searchMatch(issue.key, query)
         || searchMatch(issue.title, query)
         || searchMatch(issue.description ?? "", query)
@@ -854,6 +870,15 @@ export class IssuesRepo {
       }
 
       updatedAt = nowIso();
+      const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
+      const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
+      const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
+      const nextCompletedAt = enteringTerminal
+        ? updatedAt
+        : leavingTerminal
+          ? null
+          : current.completedAt;
+      const nextArchivedAt = leavingTerminal ? null : current.archivedAt;
       this.ctx.db.run(
         `UPDATE multiremi_issues SET
         title = ?,
@@ -870,12 +895,14 @@ export class IssuesRepo {
         due_date = ?,
         acceptance_criteria = ?,
         context_refs = ?,
+        completed_at = ?,
+        archived_at = ?,
         updated_at = ?
        WHERE id = ?`,
       [
         input.title ?? current.title,
         input.description === undefined ? current.description : input.description,
-        hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status,
+        nextStatus,
         normalizeIssuePriority(input.priority ?? current.priority),
         nextWorkspaceId,
         nextProjectId,
@@ -887,6 +914,8 @@ export class IssuesRepo {
         nextDueDate,
         toJson(nextAcceptanceCriteria),
         toJson(nextContextRefs),
+        nextCompletedAt,
+        nextArchivedAt,
         updatedAt,
         id,
         ],
@@ -911,6 +940,77 @@ export class IssuesRepo {
     if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
     this.notifyParentOfChildDone(previous!, updated);
     return updated;
+  }
+
+  restoreIssue(id: string): MultiremiIssue {
+    const current = this.getIssue(id);
+    if (!current) throw new Error(`Issue not found: ${id}`);
+    if (!current.archivedAt && !current.completedAt) return current;
+    this.ctx.db.run(
+      "UPDATE multiremi_issues SET completed_at = NULL, archived_at = NULL WHERE id = ?",
+      [id],
+    );
+    return this.getIssue(id)!;
+  }
+
+  archiveEligibleIssues(now: Date = new Date()): MultiremiIssue[] {
+    const archived: MultiremiIssue[] = [];
+    const archivedAt = now.toISOString();
+    this.ctx.db.transaction(() => {
+      for (const workspace of this.ctx.workspaces().listWorkspaces()) {
+        const { ttlMs } = resolveIssueArchiveSettings(workspace.settings);
+        const cutoff = new Date(now.getTime() - ttlMs).toISOString();
+        const rows = this.ctx.db.query(
+          `SELECT id FROM multiremi_issues
+           WHERE workspace_id = ?
+             AND archived_at IS NULL
+             AND completed_at IS NOT NULL
+             AND completed_at <= ?
+             AND status IN ('done', 'cancelled')`,
+        ).all(workspace.id, cutoff) as Row[];
+        for (const row of rows) {
+          const id = String(row.id);
+          const result = this.ctx.db.run(
+            `UPDATE multiremi_issues SET archived_at = ?
+             WHERE id = ?
+               AND archived_at IS NULL
+               AND completed_at IS NOT NULL
+               AND completed_at <= ?
+               AND status IN ('done', 'cancelled')`,
+            [archivedAt, id, cutoff],
+          );
+          if (result.changes !== 1) continue;
+          const issue = this.getIssue(id);
+          if (issue) archived.push(issue);
+        }
+      }
+    })();
+    for (const issue of archived) {
+      this.ctx.emitWorkspaceEvent({
+        type: "issue:updated",
+        workspaceId: issue.workspaceId,
+        actorType: "system",
+        actorId: null,
+        payload: {
+          issue: {
+            id: issue.id,
+            completed_at: issue.completedAt,
+            archived_at: issue.archivedAt,
+          },
+          status_changed: false,
+        },
+      });
+    }
+    return archived;
+  }
+
+  issueArchiveSweepIntervalMs(): number {
+    const intervals = this.ctx.workspaces().listWorkspaces().map(
+      (workspace) => resolveIssueArchiveSettings(workspace.settings).sweepIntervalMs,
+    );
+    return intervals.length > 0
+      ? Math.min(...intervals)
+      : resolveIssueArchiveSettings(null).sweepIntervalMs;
   }
 
   private notifyParentOfChildDone(previous: MultiremiIssue, issue: MultiremiIssue): void {
@@ -2802,6 +2902,9 @@ function normalizeIssueDependencyType(value: string | undefined): MultiremiIssue
 }
 
 function issueMatchesListFilter(issue: MultiremiIssue, input: ListIssuesInput): boolean {
+  const archivedOnly = input.archivedOnly ?? input.archived_only ?? false;
+  const includeArchived = input.includeArchived ?? input.include_archived ?? false;
+  if (archivedOnly ? !issue.archivedAt : !includeArchived && issue.archivedAt) return false;
   const workspaceId = input.workspaceId ?? input.workspace_id;
   if (workspaceId && issue.workspaceId !== workspaceId) return false;
   const statuses = normalizeIssueStatusList(input.statuses ?? input.status);
@@ -2839,6 +2942,11 @@ function buildIssueListWhere(input: ListIssuesInput): { where: string; params: u
     clauses.push(`${column} IN (${values.map(() => "?").join(", ")})`);
     params.push(...values);
   };
+
+  const archivedOnly = input.archivedOnly ?? input.archived_only ?? false;
+  const includeArchived = input.includeArchived ?? input.include_archived ?? false;
+  if (archivedOnly) clauses.push("archived_at IS NOT NULL");
+  else if (!includeArchived) clauses.push("archived_at IS NULL");
 
   const workspaceId = input.workspaceId ?? input.workspace_id;
   if (workspaceId) {
@@ -2881,6 +2989,10 @@ function normalizeIssueStatus(value: unknown): string {
   const status = String(value ?? "todo").trim();
   if (status === "open") return "todo";
   return (ISSUE_STATUSES as readonly string[]).includes(status) ? status : "todo";
+}
+
+function isTerminalIssueStatus(status: string): boolean {
+  return status === "done" || status === "cancelled";
 }
 
 function normalizeIssueStatusList(value: string[] | string | undefined | null): string[] {
@@ -3029,6 +3141,8 @@ function toIssue(row: Row): MultiremiIssue {
     metadata: parseIssueMetadata(row.metadata),
     labels: [],
     createdBy: nullableString(row.created_by),
+    completedAt: nullableString(row.completed_at),
+    archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

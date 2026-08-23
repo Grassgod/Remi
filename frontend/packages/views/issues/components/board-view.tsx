@@ -12,6 +12,7 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import { BoardColumn, BOARD_CARD_WIDTH, type BoardColumnGroup } from "./board-column";
 import { BoardCardContent } from "./board-card";
 import { HiddenColumnsPanel, HiddenColumnRow } from "./hidden-columns-panel";
+import { ArchivedBoardColumn } from "./archived-issues";
 import { InfiniteScrollSentinel } from "./infinite-scroll-sentinel";
 import type { ChildProgress } from "./list-row";
 import { useT } from "../../i18n";
@@ -107,6 +108,7 @@ export function BoardView({
   sort,
   projectId,
   allowCreate = true,
+  archivedTotal,
 }: {
   issues: Issue[];
   assigneeGroups?: IssueAssigneeGroup[];
@@ -124,10 +126,16 @@ export function BoardView({
   /** When set, the per-column "+" pre-fills the project on the create form. */
   projectId?: string;
   allowCreate?: boolean;
+  /** Defined only on the workspace Issues page, which owns the archive entry. */
+  archivedTotal?: number;
 }) {
   const { t } = useT("issues");
   const grouping = useViewStore((s) => s.grouping);
   const sortBy = useViewStore((s) => s.sortBy);
+  const archivedColumnVisible = useViewStore((s) => s.archivedColumnVisible);
+  const hideArchivedColumn = useViewStore((s) => s.hideArchivedColumn);
+  const showArchivedColumn = useViewStore((s) => s.showArchivedColumn);
+  const archiveEnabled = archivedTotal !== undefined;
   const sortFieldKey = sortBy === "created_at" ? "created" : sortBy;
   const sortLabel = sortBy !== "position"
     ? t(($) => $.board.ordered_by, { field: t(($) => $.display[`sort_${sortFieldKey}` as keyof typeof $.display]) })
@@ -262,11 +270,22 @@ export function BoardView({
           )
         )}
 
-        {grouping === "status" && hiddenStatuses.length > 0 && (
+        {archiveEnabled && archivedColumnVisible && (
+          <ArchivedBoardColumn
+            total={archivedTotal}
+            sort={sort}
+            onHide={hideArchivedColumn}
+          />
+        )}
+
+        {((grouping === "status" && hiddenStatuses.length > 0) ||
+          (archiveEnabled && !archivedColumnVisible)) && (
           <BoardHiddenColumnsPanel
-            hiddenStatuses={hiddenStatuses}
+            hiddenStatuses={grouping === "status" ? hiddenStatuses : []}
             myIssuesOpts={myIssuesOpts}
             sort={sort}
+            archivedTotal={archivedTotal}
+            onShowArchived={archiveEnabled && !archivedColumnVisible ? showArchivedColumn : undefined}
           />
         )}
       </div>
@@ -403,14 +422,20 @@ function BoardHiddenColumnsPanel({
   hiddenStatuses,
   myIssuesOpts,
   sort,
+  archivedTotal,
+  onShowArchived,
 }: {
   hiddenStatuses: IssueStatus[];
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
   sort?: IssueSortParam;
+  archivedTotal?: number;
+  onShowArchived?: () => void;
 }) {
   return (
     <HiddenColumnsPanel
       hiddenStatuses={hiddenStatuses}
+      archivedTotal={archivedTotal}
+      onShowArchived={onShowArchived}
       renderRow={(status) => (
         <BoardHiddenColumnRow
           key={status}

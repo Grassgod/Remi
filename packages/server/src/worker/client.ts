@@ -674,6 +674,8 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     autopilotTriggerPayload: raw.autopilot_trigger_payload ?? raw.autopilotTriggerPayload ?? null,
     quickCreatePrompt: stringOrNull(raw.quick_create_prompt ?? raw.quickCreatePrompt),
     workspaceContext: stringOrNull(raw.workspace_context ?? raw.workspaceContext),
+    workspaceBootstrapPrompt: stringOrNull(raw.workspace_bootstrap_prompt ?? raw.workspaceBootstrapPrompt),
+    workspaceDeltaPrompt: stringOrNull(raw.workspace_delta_prompt ?? raw.workspaceDeltaPrompt),
     workspaceEnv: objectOrDefault(raw.workspace_env ?? raw.workspaceEnv),
     requestingUserName: stringOrNull(raw.requesting_user_name ?? raw.requestingUserName),
     requestingUserProfileDescription: stringOrNull(raw.requesting_user_profile_description ?? raw.requestingUserProfileDescription),
@@ -701,6 +703,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     projectResources: normalizeDaemonClaimProjectResources(raw.project_resources ?? raw.projectResources),
     projectDocs: normalizeDaemonClaimProjectDocs(raw.project_docs ?? raw.projectDocs),
     projectWikiDocs: normalizeDaemonClaimProjectWikiDocs(raw.project_wiki_docs ?? raw.projectWikiDocs),
+    repositoryWikiContexts: normalizeDaemonClaimRepositoryWikiContexts(raw.repository_wiki_contexts ?? raw.repositoryWikiContexts),
     projectContexts: normalizeDaemonClaimProjectContexts(raw.project_contexts ?? raw.projectContexts),
     squadContext: normalizeDaemonClaimSquadContext(raw.squad_context ?? raw.squadContext),
     repos: Array.isArray(raw.repos) ? raw.repos : [],
@@ -779,6 +782,9 @@ function normalizeDaemonClaimProject(raw: any): MultiremiTaskWithAgent["project"
     ...raw,
     workspaceId: stringOrNull(raw.workspace_id ?? raw.workspaceId) ?? "",
     instructions: typeof raw.instructions === "string" ? raw.instructions : "",
+    deltaInstructions: typeof (raw.delta_instructions ?? raw.deltaInstructions) === "string"
+      ? raw.delta_instructions ?? raw.deltaInstructions
+      : "",
     instructionsRevision: numberOrDefault(raw.instructions_revision ?? raw.instructionsRevision, 0),
     instructionsUpdatedAt: stringOrNull(raw.instructions_updated_at ?? raw.instructionsUpdatedAt),
     instructionsUpdatedBy: stringOrNull(raw.instructions_updated_by ?? raw.instructionsUpdatedBy),
@@ -847,6 +853,49 @@ function normalizeDaemonClaimProjectWikiDocs(raw: any): NonNullable<MultiremiTas
       version: numberOrDefault(doc.version, 1),
       createdAt: stringOrNull(doc.created_at ?? doc.createdAt) ?? "",
       updatedAt: stringOrNull(doc.updated_at ?? doc.updatedAt) ?? "",
+    }];
+  });
+}
+
+function normalizeDaemonClaimRepositoryWikiContexts(raw: any): NonNullable<MultiremiTaskWithAgent["repositoryWikiContexts"]> {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((context: any) => {
+    if (!context || typeof context !== "object" || !context.repository || !Array.isArray(context.docs)) return [];
+    const repository = context.repository;
+    const id = stringOrNull(repository.id);
+    const name = stringOrNull(repository.name);
+    const url = stringOrNull(repository.url);
+    if (!id || !name || !url) return [];
+    return [{
+      repository: {
+        id,
+        name,
+        url,
+        defaultBranch: stringOrNull(repository.default_branch ?? repository.defaultBranch),
+      },
+      docs: context.docs.flatMap((doc: any) => {
+        const docId = stringOrNull(doc?.id);
+        const path = stringOrNull(doc?.path);
+        const title = stringOrNull(doc?.title);
+        if (!docId || !path || !title) return [];
+        return [{
+          ...doc,
+          id: docId,
+          repositoryId: stringOrNull(doc.repository_id ?? doc.repositoryId) ?? id,
+          workspaceId: stringOrNull(doc.workspace_id ?? doc.workspaceId) ?? "",
+          path,
+          slug: stringOrNull(doc.slug) ?? path.replace(/\.md$/i, ""),
+          title,
+          summary: stringOrNull(doc.summary),
+          body: typeof doc.body === "string" ? doc.body : "",
+          tags: Array.isArray(doc.tags) ? doc.tags.filter((value: unknown): value is string => typeof value === "string") : [],
+          refs: Array.isArray(doc.refs) ? doc.refs : [],
+          sourceRevision: stringOrNull(doc.source_revision ?? doc.sourceRevision),
+          status: stringOrNull(doc.status) ?? "healthy",
+          version: numberOrDefault(doc.version, 1),
+          updatedAt: stringOrNull(doc.updated_at ?? doc.updatedAt) ?? "",
+        }];
+      }),
     }];
   });
 }

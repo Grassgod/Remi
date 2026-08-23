@@ -3,6 +3,7 @@ import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-quer
 import { api } from "../api";
 import {
   issueKeys,
+  ARCHIVED_ISSUE_PAGE_SIZE,
   ISSUE_PAGE_SIZE,
   type AssigneeGroupedIssuesFilter,
   type IssueSortParam,
@@ -28,7 +29,7 @@ import {
 import { useWorkspaceId } from "../hooks";
 import { useRecentContextStore } from "../chat/recent-context-store";
 import { useRecentIssuesStore } from "./stores";
-import type { GroupedIssuesResponse, Issue, IssueAssigneeGroup, IssueReaction, IssueStatus } from "../types";
+import type { GroupedIssuesResponse, Issue, IssueAssigneeGroup, IssueReaction, IssueStatus, ListIssuesResponse } from "../types";
 import type {
   CreateIssueRequest,
   UpdateIssueRequest,
@@ -165,6 +166,45 @@ export function useLoadMoreByAssigneeGroup(
       setIsLoading(false);
     }
   }, [filter, group.assignee_id, group.assignee_type, hasMore, isLoading, loaded, qc, queryKey, sort]);
+
+  return { loadMore, hasMore, isLoading, total };
+}
+
+export function useLoadMoreArchivedIssues(sort?: IssueSortParam) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  const [isLoading, setIsLoading] = useState(false);
+  const activeKey = issueKeys.archivedListSorted(wsId, sort);
+  const cache = qc.getQueryData<ListIssuesResponse>(activeKey);
+  const loaded = cache?.issues.length ?? 0;
+  const total = cache?.total ?? 0;
+  const hasMore = loaded < total;
+
+  const loadMore = useCallback(async () => {
+    if (isLoading || !hasMore) return;
+    setIsLoading(true);
+    try {
+      const res = await api.listIssues({
+        archived_only: true,
+        limit: ARCHIVED_ISSUE_PAGE_SIZE,
+        offset: loaded,
+        ...sort,
+      });
+      qc.setQueryData<ListIssuesResponse>(activeKey, (old) => {
+        if (!old) return old;
+        const existingIds = new Set(old.issues.map((issue) => issue.id));
+        return {
+          issues: [
+            ...old.issues,
+            ...res.issues.filter((issue) => !existingIds.has(issue.id)),
+          ],
+          total: res.total,
+        };
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeKey, hasMore, isLoading, loaded, qc, sort]);
 
   return { loadMore, hasMore, isLoading, total };
 }
@@ -316,6 +356,63 @@ export function useUpdateIssue() {
       if (ctx?.parentId || newParentId) {
         qc.invalidateQueries({ queryKey: issueKeys.childrenByParentsAll(wsId) });
       }
+    },
+  });
+}
+
+export function useRestoreIssue() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (id: string) => api.restoreIssue(id),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: issueKeys.archivedAll(wsId) });
+      const prevArchivedLists = qc.getQueriesData<ListIssuesResponse>({
+        queryKey: issueKeys.archivedListAll(wsId),
+      });
+      const prevCount = qc.getQueryData<number>(issueKeys.archivedCount(wsId));
+      const prevDetail = qc.getQueryData<Issue>(issueKeys.detail(wsId, id));
+      for (const [key, data] of prevArchivedLists) {
+        if (!data) continue;
+        qc.setQueryData<ListIssuesResponse>(key, {
+          issues: data.issues.filter((issue) => issue.id !== id),
+          total: Math.max(0, data.total - 1),
+        });
+      }
+      if (prevCount !== undefined) {
+        qc.setQueryData(issueKeys.archivedCount(wsId), Math.max(0, prevCount - 1));
+      }
+      qc.setQueryData<Issue>(issueKeys.detail(wsId, id), (old) =>
+        old ? { ...old, completed_at: null, archived_at: null } : old,
+      );
+      return { id, prevArchivedLists, prevCount, prevDetail };
+    },
+    onError: (_error, _id, context) => {
+      for (const [key, data] of context?.prevArchivedLists ?? []) {
+        qc.setQueryData(key, data);
+      }
+      if (context?.prevCount !== undefined) {
+        qc.setQueryData(issueKeys.archivedCount(wsId), context.prevCount);
+      }
+      if (context?.prevDetail) {
+        qc.setQueryData(issueKeys.detail(wsId, context.id), context.prevDetail);
+      }
+    },
+    onSuccess: (issue) => {
+      for (const [key, data] of qc.getQueriesData<ListIssuesCache>({ queryKey: issueKeys.list(wsId) })) {
+        if (data) qc.setQueryData<ListIssuesCache>(key, addIssueToBuckets(data, issue));
+      }
+      qc.setQueryData(issueKeys.detail(wsId, issue.id), issue);
+    },
+    onSettled: (_data, _error, id) => {
+      qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, id) });
+      qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.archivedAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
+      qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
     },
   });
 }

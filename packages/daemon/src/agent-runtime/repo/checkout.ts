@@ -95,9 +95,12 @@ const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_STALE_LOCK_MS = 60 * 60_000;
 const DEFAULT_FETCH_RETRY_DELAYS_MS = [1_000, 3_000] as const;
-const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
-const DEFAULT_CLONE_TIMEOUT_MS = 120_000;
-const DEFAULT_REPO_SYNC_TIMEOUT_MS = 120_000;
+// Large active repos (10GB+, thousands of refs) need well over 30s to catch up
+// after falling behind; a killed fetch discards all transfer progress, so a
+// too-small budget turns one slow window into a permanent sync death spiral.
+const DEFAULT_FETCH_TIMEOUT_MS = 150_000;
+const DEFAULT_CLONE_TIMEOUT_MS = 600_000;
+const DEFAULT_REPO_SYNC_TIMEOUT_MS = 300_000;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 2_000;
 const DEFAULT_GIT_SSH_COMMAND = [
   "ssh",
@@ -156,7 +159,7 @@ export class MultiremiRepoCache {
       const barePath = this.barePath(workspaceId, url);
       const scope = repoSyncAbortScope(
         options.signal,
-        this.options.repoSyncTimeoutMs ?? DEFAULT_REPO_SYNC_TIMEOUT_MS,
+        repoSyncBudgetMs(this.options, isBareRepo(barePath)),
         url,
       );
       try {
@@ -438,6 +441,40 @@ export class MultiremiRepoCache {
       release();
     }
   }
+}
+
+/**
+ * Wall-clock budget for one repo's sync scope. A refresh of an existing bare
+ * repo only needs the fetch ladder, so it runs under repoSyncTimeoutMs. Initial
+ * materialization must additionally leave room for a full clone and its
+ * fallback-URL retry — without this the outer scope would abort the clone at
+ * the refresh budget, making cloneTimeoutMs unreachable.
+ */
+export function repoSyncBudgetMs(options: MultiremiRepoCacheOptions, hasBareRepo: boolean): number {
+  const refreshBudget = options.repoSyncTimeoutMs ?? DEFAULT_REPO_SYNC_TIMEOUT_MS;
+  if (hasBareRepo) return refreshBudget;
+  const cloneBudget = options.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS;
+  return refreshBudget + 2 * cloneBudget;
+}
+
+/** Reads MULTIREMI_REPO_{FETCH,CLONE,SYNC}_TIMEOUT_MS into repo cache options. */
+export function repoCacheTimeoutOverrides(
+  env: Record<string, string | undefined>,
+): Pick<MultiremiRepoCacheOptions, "fetchTimeoutMs" | "cloneTimeoutMs" | "repoSyncTimeoutMs"> {
+  const overrides: Pick<MultiremiRepoCacheOptions, "fetchTimeoutMs" | "cloneTimeoutMs" | "repoSyncTimeoutMs"> = {};
+  const fetchTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_FETCH_TIMEOUT_MS);
+  const cloneTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_CLONE_TIMEOUT_MS);
+  const repoSyncTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_SYNC_TIMEOUT_MS);
+  if (fetchTimeoutMs) overrides.fetchTimeoutMs = fetchTimeoutMs;
+  if (cloneTimeoutMs) overrides.cloneTimeoutMs = cloneTimeoutMs;
+  if (repoSyncTimeoutMs) overrides.repoSyncTimeoutMs = repoSyncTimeoutMs;
+  return overrides;
+}
+
+function positiveIntEnv(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 export function normalizeRepoList(rawRepos: unknown[]): MultiremiRepoData[] {

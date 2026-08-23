@@ -42,6 +42,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   sections.push(currentTaskRequest(task));
 
   appendClaimContextSections(sections, task, mode);
+  appendWorkspacePromptSection(sections, task, mode);
   if (mode === "bootstrap") appendHomepageChatCliSection(sections, task);
   appendSessionContextSections(sections, task, mode);
 
@@ -68,27 +69,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
 
   appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
 
-  if (mode === "bootstrap" && task.project) {
-    const gitResources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
-    const projectInstructions = task.project.instructions?.trim();
-    sections.push("");
-    sections.push("## Project Context");
-    sections.push(`This issue belongs to project: ${task.project.title}`);
-    if (task.project.description) sections.push(task.project.description);
-    if (gitResources.length) {
-      sections.push("");
-      sections.push("Project resources:");
-      for (const resource of gitResources) {
-        sections.push(formatProjectResource(resource));
-      }
-    }
-    if (projectInstructions) {
-      sections.push("");
-      sections.push("## Project Instructions");
-      sections.push(projectInstructions);
-    }
-    appendProjectKnowledgeSections(sections, task.project.id);
-  }
+  appendProjectPromptSections(sections, task, mode);
 
   if (mode === "bootstrap" && task.repos.length) {
     const checkouts = opts.repoCheckouts ?? [];
@@ -146,6 +127,48 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     prompt,
     sha256: createHash("sha256").update(prompt).digest("hex"),
   };
+}
+
+function appendWorkspacePromptSection(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
+  const prompt = mode === "bootstrap"
+    ? stringField(task, "workspaceBootstrapPrompt", "workspace_bootstrap_prompt")
+    : stringField(task, "workspaceDeltaPrompt", "workspace_delta_prompt");
+  if (!prompt) return;
+  sections.push("");
+  sections.push(mode === "bootstrap" ? "## Workspace Bootstrap Instructions" : "## Workspace Delta Instructions");
+  sections.push(prompt);
+}
+
+function appendProjectPromptSections(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
+  if (!task.project) return;
+  if (mode === "delta") {
+    const deltaInstructions = task.project.deltaInstructions?.trim()
+      || task.project.delta_instructions?.trim();
+    if (deltaInstructions) {
+      sections.push("");
+      sections.push("## Project Delta Instructions");
+      sections.push(deltaInstructions);
+    }
+    return;
+  }
+
+  const gitResources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
+  const projectInstructions = task.project.instructions?.trim();
+  sections.push("");
+  sections.push("## Project Context");
+  sections.push(`This issue belongs to project: ${task.project.title}`);
+  if (task.project.description) sections.push(task.project.description);
+  if (gitResources.length) {
+    sections.push("");
+    sections.push("Project resources:");
+    for (const resource of gitResources) sections.push(formatProjectResource(resource));
+  }
+  if (projectInstructions) {
+    sections.push("");
+    sections.push("## Project Instructions");
+    sections.push(projectInstructions);
+  }
+  appendProjectKnowledgeSections(sections, task.project.id);
 }
 
 function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[]): void {
@@ -490,7 +513,8 @@ function appendProjectKnowledgeSections(sections: string[], projectId: string): 
   sections.push("Project Memory is not embedded in this prompt. Use the `remi memory` CLI only: first run `remi memory search \"<query>\"`, then `remi memory get <slug-or-id>` for relevant hits before relying on them.");
   sections.push("Do not use an MCP server for Project Memory. The task environment already scopes these commands to the current project.");
   sections.push("");
-  sections.push("Wiki is materialized in `./wiki`. Edit files only in that directory; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+  sections.push("Project Wiki is materialized in `./wiki`. Repository code facts are materialized in `./wiki/repositories/<repository>/`. Edit files only below `./wiki`; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+  sections.push("Repository Wiki is shared by every Project that references the same repository. Keep code-level facts there; keep cross-repository decisions and synthesis in the Project Wiki.");
   sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
   sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory create|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
 }

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
   deriveChangeRequestProgressSegments,
+  deriveChangeRequestRepositoryName,
   deriveChangeRequestStatusKind,
   issueChangeRequestsOptions,
   shouldShowChangeRequestStats,
@@ -122,6 +123,7 @@ function ChangeRequestRow({ changeRequest }: { changeRequest: ScmChangeRequest }
     checksPassed: changeRequest.checksPassed,
   });
   const showStats = shouldShowChangeRequestStats(changeRequest);
+  const repositoryName = deriveChangeRequestRepositoryName(changeRequest);
   const row = (
     <>
       <StateIcon className={cn("mt-0.5 size-3.5 shrink-0", config.className)} />
@@ -130,6 +132,7 @@ function ChangeRequestRow({ changeRequest }: { changeRequest: ScmChangeRequest }
           {changeRequest.title || t(($) => $.detail.change_request_untitled)}
         </p>
         <p className="truncate text-[11px] text-muted-foreground">
+          {repositoryName ? `${repositoryName} · ` : null}
           {getChangeReference(changeRequest, t)} · {getStateLabel(displayState, t)}
           {changeRequest.author ? ` · @${changeRequest.author}` : null}
         </p>

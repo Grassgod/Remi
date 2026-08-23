@@ -143,6 +143,16 @@
     "empty_grouping": "No matching issues",
     "ordered_by": "Board ordered by {{field}}"
   },
+  "archive": {
+    "label": "Archived",
+    "archived_ago": "Archived {{time}}",
+    "restore_issue": "Restore issue",
+    "restore_success": "Issue restored",
+    "restore_failed": "Failed to restore issue",
+    "hide_column": "Hide archived column",
+    "loading": "Loading archived issues...",
+    "empty": "No archived issues"
+  },
   "detail": {
     "not_found": "This issue does not exist or has been deleted in this workspace.",
     "breadcrumb_project_unknown": "Unknown project",

@@ -22,10 +22,12 @@ import {
   stringOptions,
 } from "./resource-common.js";
 import { resolveProject } from "./project.js";
+import { resolveRepository } from "./repo.js";
 
 type KnowledgeKind = "memory" | "wiki";
 
 const PROJECT_OPTION: CliOptionSpec = { name: "project", type: "string", valueName: "project", description: "Project ID, unique short ID, or unique name" };
+const REPOSITORY_OPTION: CliOptionSpec = { name: "repo", type: "string", valueName: "repository", description: "Repository ID, unique short ID, or unique name" };
 const KNOWLEDGE_FIELDS: readonly CliOptionSpec[] = [
   PROJECT_OPTION,
   { name: "title", type: "string", valueName: "title", description: "Document title" },
@@ -61,7 +63,98 @@ export function knowledgeCommandSpecs(): CommandSpec[] {
     migrationSpec("memory.migration.retry", ["memory", "migration", "retry"], "Retry failed project knowledge migration", "POST", "/api/project-knowledge/migration/retry-failed", [
       { path: ["project", "knowledge", "retry-failed"], deprecatedSince: "0.3.0", replacement: "remi memory migration retry" },
     ]),
+    ...repositoryWikiSpecs(),
     ...wikiWorkingCopySpecs(),
+  ];
+}
+
+function repositoryWikiSpecs(): CommandSpec[] {
+  const fields: readonly CliOptionSpec[] = [
+    REPOSITORY_OPTION,
+    { name: "path", type: "string", valueName: "path", description: "Repository-relative Wiki path" },
+    { name: "slug", type: "string", valueName: "slug", description: "Wiki document slug" },
+    { name: "title", type: "string", valueName: "title", description: "Wiki document title" },
+    { name: "summary", type: "string", valueName: "text", description: "Wiki document summary" },
+    { name: "content", type: "string", valueName: "text", description: "Wiki document body", conflictsWith: ["content-file", "content-stdin"] },
+    { name: "content-file", type: "string", valueName: "path|-", description: "Read document body from a file or stdin", conflictsWith: ["content", "content-stdin"] },
+    { name: "content-stdin", type: "boolean", description: "Read document body from stdin", conflictsWith: ["content", "content-file"] },
+    { name: "tags", type: "string", valueName: "a,b", description: "Comma-separated tags" },
+    { name: "ref", type: "string", valueName: "type:value", repeatable: true, description: "Citation reference" },
+    { name: "source-revision", type: "string", valueName: "sha", description: "Source repository revision" },
+    { name: "status", type: "string", valueName: "status", description: "Repository Wiki status" },
+    { name: "status-message", type: "string", valueName: "text", description: "Repository Wiki status detail" },
+    { name: "expected-version", type: "integer", valueName: "n", description: "Expected document version" },
+  ];
+  const repositoryRef = (invocation: CommandInvocation, positionalIndex?: number): string => {
+    const value = stringOption(invocation, "repo")
+      ?? (positionalIndex === undefined ? null : invocation.positionals[positionalIndex]?.trim() || null);
+    if (!value) throw new CliError("usage", `--repo or <repository> is required for ${invocation.spec.path.join(" ")}`);
+    return value;
+  };
+  const requestPath = async (invocation: CommandInvocation, ref: string, suffix = "") => {
+    const client = await clientFor(invocation);
+    const repository = await resolveRepository(client, requiredWorkspace(invocation), ref);
+    return {
+      client,
+      path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repos/${encodePath(String(repository.id))}/wiki${suffix}`,
+    };
+  };
+  return [
+    spec("wiki.repository.list", ["wiki", "repository", "list"], "List repository Wiki status or documents", "read", [{ name: "repository", required: false }], [REPOSITORY_OPTION], async (invocation) => {
+      const ref = stringOption(invocation, "repo") ?? invocation.positionals[0]?.trim() ?? null;
+      if (!ref) {
+        const client = await clientFor(invocation);
+        const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repository-wikis` });
+        renderResource(invocation, response.data, ["repositories"]);
+        return;
+      }
+      const target = await requestPath(invocation, ref);
+      const response = await target.client.request({ method: "GET", path: target.path, query: queryOptions(invocation) });
+      renderResource(invocation, response.data, ["docs"]);
+    }),
+    spec("wiki.repository.get", ["wiki", "repository", "get"], "Get a repository Wiki document", "read", [refPositional("repository"), refPositional("document")], [], async (invocation) => {
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), `/${encodePath(positional(invocation, 1, "document"))}`);
+      const response = await target.client.request({ method: "GET", path: target.path });
+      renderResource(invocation, response.data);
+    }),
+    spec("wiki.repository.create", ["wiki", "repository", "create"], "Create a repository Wiki document", "write", [refPositional("repository")], [...INPUT_OPTIONS, ...fields], async (invocation) => {
+      const target = await requestPath(invocation, repositoryRef(invocation, 0));
+      const response = await target.client.request({ method: "POST", path: target.path, body: await repositoryWikiBody(invocation, true) });
+      renderResource(invocation, response.data);
+    }),
+    spec("wiki.repository.update", ["wiki", "repository", "update"], "Update a repository Wiki document", "write", [refPositional("repository"), refPositional("document")], [...INPUT_OPTIONS, ...fields], async (invocation) => {
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), `/${encodePath(positional(invocation, 1, "document"))}`);
+      const response = await target.client.request({ method: "PUT", path: target.path, body: await repositoryWikiBody(invocation, false) });
+      renderResource(invocation, response.data);
+    }),
+    spec("wiki.repository.delete", ["wiki", "repository", "delete"], "Delete a repository Wiki document", "destructive", [refPositional("repository"), refPositional("document")], [YES_OPTION, { name: "expected-version", type: "integer", valueName: "n", description: "Expected document version" }], async (invocation) => {
+      requireConfirmation(invocation);
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), `/${encodePath(positional(invocation, 1, "document"))}`);
+      const response = await target.client.request({ method: "DELETE", path: target.path, query: { expected_version: integerOption(invocation, "expected-version") } });
+      renderResource(invocation, response.data);
+    }),
+    spec("wiki.repository.revisions", ["wiki", "repository", "revisions"], "List repository Wiki document revisions", "read", [refPositional("repository"), refPositional("document")], [], async (invocation) => {
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), `/${encodePath(positional(invocation, 1, "document"))}/revisions`);
+      const response = await target.client.request({ method: "GET", path: target.path });
+      renderResource(invocation, response.data, ["revisions"]);
+    }),
+    spec("wiki.repository.build", ["wiki", "repository", "build"], "Build or refresh one repository Wiki", "destructive", [refPositional("repository")], [YES_OPTION], async (invocation) => {
+      requireConfirmation(invocation);
+      const target = await requestPath(invocation, repositoryRef(invocation, 0), "/build");
+      const response = await target.client.request({ method: "POST", path: target.path, body: {} });
+      renderResource(invocation, response.data);
+    }, [], ["human"]),
+    spec("wiki.repository.atlas.status", ["wiki", "repository", "atlas", "status"], "Show Repository Wiki Atlas setup", "read", [], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repository-wikis/atlas` });
+      renderResource(invocation, response.data);
+    }, [], ["human"]),
+    spec("wiki.repository.atlas.configure", ["wiki", "repository", "atlas", "configure"], "Configure Repository Wiki Atlas automations", "destructive", [], [YES_OPTION], async (invocation) => {
+      requireConfirmation(invocation);
+      const client = await clientFor(invocation);
+      const response = await client.request({ method: "POST", path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repository-wikis/atlas`, body: {} });
+      renderResource(invocation, response.data);
+    }, [], ["human"]),
   ];
 }
 
@@ -236,6 +329,37 @@ async function knowledgeBody(invocation: CommandInvocation, kind: KnowledgeKind,
     refs: "ref" in invocation.options ? refs : undefined,
     expected_version: integerOption(invocation, "expected-version") ?? undefined,
     source_task_id: creating && kind === "memory" ? process.env.MULTIREMI_TASK_ID?.trim() || undefined : undefined,
+  });
+}
+
+async function repositoryWikiBody(invocation: CommandInvocation, creating: boolean): Promise<Record<string, unknown>> {
+  const contentFile = stringOption(invocation, "content-file");
+  const content = invocation.options["content-stdin"] === true
+    ? readFileSync(0, "utf8")
+    : contentFile
+    ? readFileSync(contentFile === "-" ? 0 : contentFile, "utf8")
+    : rawOption(invocation, "content");
+  const refs = stringOptions(invocation, "ref").map((entry) => {
+    const value = entry.trim();
+    if (/^https?:\/\//i.test(value)) return { type: "url", value };
+    const separator = value.indexOf(":");
+    if (separator <= 0 || separator === value.length - 1) throw new CliError("usage", "--ref expects type:value or an http(s) URL");
+    return { type: value.slice(0, separator), value: value.slice(separator + 1) };
+  });
+  return requestBody(invocation, {
+    path: rawOption(invocation, "path"),
+    slug: rawOption(invocation, "slug"),
+    title: rawOption(invocation, "title"),
+    summary: "summary" in invocation.options ? rawOption(invocation, "summary") || null : undefined,
+    body: content,
+    tags: "tags" in invocation.options ? csvOption(invocation, "tags") ?? [] : undefined,
+    refs: "ref" in invocation.options ? refs : undefined,
+    source_revision: rawOption(invocation, "source-revision"),
+    source_task_id: creating ? process.env.MULTIREMI_TASK_ID?.trim() || undefined : undefined,
+    source_issue_id: creating ? process.env.MULTIREMI_ISSUE_ID?.trim() || undefined : undefined,
+    status: creating ? undefined : rawOption(invocation, "status"),
+    status_message: creating ? undefined : ("status-message" in invocation.options ? rawOption(invocation, "status-message") || null : undefined),
+    expected_version: creating ? undefined : integerOption(invocation, "expected-version") ?? undefined,
   });
 }
 

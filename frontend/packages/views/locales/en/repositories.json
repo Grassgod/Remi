@@ -10,10 +10,33 @@
     "default_branch_aria": "Default branch for {{name}}",
     "default_branch_placeholder": "Select branch",
     "sync": "Event ingestion",
+    "wiki": "Wiki",
     "not_connected": "Not connected",
     "sync_modes": { "poll": "Polling", "webhook": "Webhook", "hybrid": "Hybrid" },
     "description": "Description",
     "imported": "Imported"
+  },
+  "wiki": {
+    "title": "Repository Wiki",
+    "search": "Filter pages...",
+    "empty_title": "Repository Wiki has not been built",
+    "empty_description": "Atlas builds it from the default branch without blocking repository use.",
+    "build_action": "Build with Atlas",
+    "build_started": "Atlas started building the repository Wiki",
+    "build_failed": "Could not start the repository Wiki build",
+    "no_match": "No Wiki pages match your filter.",
+    "page_count": "{{count}} pages",
+    "source_revision": "Code revision {{revision}}",
+    "updated": "Updated {{time}}",
+    "version": "Version {{version}}",
+    "history": "Version history",
+    "status": {
+      "unbuilt": "Not built",
+      "building": "Building",
+      "healthy": "Synced",
+      "stale": "Update available",
+      "failed": "Update failed"
+    }
   },
   "empty": {
     "title": "No repositories yet",

@@ -21,12 +21,19 @@ const state = vi.hoisted(() => ({
 const refetch = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({
+  queryOptions: <T,>(options: T) => options,
+  useQuery: (options: { queryKey?: readonly unknown[] }) => options.queryKey?.[0] === "project-docs" ? ({
     data: state.isPending ? undefined : state.docs,
     isPending: state.isPending,
     isError: state.isError,
     error: state.error,
     refetch,
+  }) : ({
+    data: options.queryKey?.[0] === "repositories" ? { repositories: [], total: 0 } : [],
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
   }),
 }));
 
@@ -44,6 +51,7 @@ vi.mock("@multiremi/core/paths", () => ({
     projectWiki: (id: string) => `/ws/projects/${id}/wiki`,
     projectWikiPage: (id: string, ref: string) =>
       `/ws/projects/${id}/wiki/${ref}`,
+    repositoryWiki: (id: string) => `/ws/repos/${id}/wiki`,
   }),
 }));
 
