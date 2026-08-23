@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cliCommandInventory } from "../../../apps/remi/cli/index.js";
+import { cliCommandHelp, cliCommandInventory } from "../../../apps/remi/cli/index.js";
 import { CLI_CAPABILITIES_RUNTIME } from "../../../packages/server/src/api/cli-capabilities-generated.js";
 import {
   cliCoverageReport,
@@ -13,6 +13,7 @@ import {
 const root = resolve(import.meta.dir, "../../..");
 const golden = JSON.parse(readFileSync(resolve(root, "scripts/api-routes.golden.json"), "utf8")) as { routes: string[] };
 const manifest = JSON.parse(readFileSync(resolve(root, "cli-capabilities.json"), "utf8")) as CliCapabilitiesManifest;
+const migrationDoc = readFileSync(resolve(root, "docs/cli-command-migration.md"), "utf8");
 
 describe("CLI capabilities manifest", () => {
   it("matches golden routes in both directions and Registry commands in both directions", () => {
@@ -24,6 +25,47 @@ describe("CLI capabilities manifest", () => {
   it("keeps the server runtime projection synchronized with the root manifest", () => {
     const generatedRuntime: unknown = CLI_CAPABILITIES_RUNTIME;
     expect(generatedRuntime).toEqual(cliRuntimeCapabilities(manifest));
+  });
+
+  it("generates discoverable help for every visible Registry command and its direct children", () => {
+    const inventory = cliCommandInventory();
+    for (const entry of inventory.filter((candidate) => !candidate.hidden)) {
+      const help = cliCommandHelp(entry.path);
+      expect(help, entry.id).toContain(`Usage: remi ${entry.path.join(" ")}`);
+      for (const positional of entry.positionals) {
+        expect(help, `${entry.id} positional ${positional.name}`).toContain(`<${positional.name}`);
+      }
+      for (const option of entry.options) {
+        expect(help, `${entry.id} option ${option.name}`).toContain(`--${option.name}`);
+      }
+      const directChildren = inventory.filter((candidate) =>
+        !candidate.hidden
+        && candidate.path.length === entry.path.length + 1
+        && entry.path.every((segment, index) => candidate.path[index] === segment)
+      );
+      for (const child of directChildren) {
+        expect(help, `${entry.id} -> ${child.id}`).toContain(child.path.join(" "));
+      }
+    }
+  });
+
+  it("declares the common parameter, renderer, auth, and confirmation contract on every capability command", () => {
+    for (const entry of cliCommandInventory().filter((candidate) => candidate.capability)) {
+      expect(entry.auth.length, `${entry.id} auth`).toBeGreaterThan(0);
+      expect(entry.outputs, `${entry.id} outputs`).toEqual(["table", "json", "jsonl"]);
+      const options = new Set(entry.options.map((option) => option.name));
+      for (const name of ["output", "workspace"]) {
+        expect(options.has(name), `${entry.id} --${name}`).toBe(true);
+      }
+      if (entry.mutation === "read") {
+        for (const name of ["limit", "cursor", "query"]) {
+          expect(options.has(name), `${entry.id} --${name}`).toBe(true);
+        }
+      }
+      if (entry.mutation === "destructive" && entry.parse !== "passthrough") {
+        expect(options.has("yes"), `${entry.id} --yes`).toBe(true);
+      }
+    }
   });
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
@@ -72,6 +114,10 @@ describe("CLI capabilities manifest", () => {
       deprecated_since: "0.3.0",
     });
     expect(Object.values(manifest.routes).filter((route) => "planned_command" in route)).toEqual([]);
+    expect(Object.keys(manifest.aliases)).toHaveLength(46);
+    for (const [legacy, alias] of Object.entries(manifest.aliases)) {
+      expect(migrationDoc, legacy).toContain(`| \`${legacy}\` | \`${alias.replacement}\` |`);
+    }
   });
 
   it("rejects any new unmapped route after the zero-gap ratchet", () => {

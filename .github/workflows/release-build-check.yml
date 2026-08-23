@@ -12,6 +12,8 @@ on:
       - "bun.lock"
       - "bunfig.toml"
       - "deploy/**"
+      - "docs/cli-command-migration.md"
+      - "docs/cli-parity-acceptance.md"
       - "frontend/**"
       - "package.json"
       - "packages/**"
@@ -29,6 +31,8 @@ on:
       - "bun.lock"
       - "bunfig.toml"
       - "deploy/**"
+      - "docs/cli-command-migration.md"
+      - "docs/cli-parity-acceptance.md"
       - "frontend/**"
       - "package.json"
       - "packages/**"
@@ -76,7 +80,7 @@ jobs:
       - name: Verify CLI capability coverage and contracts
         run: |
           bun run cli:capabilities:check
-          bun test tests/unit/multiremi/cli-capabilities-manifest.test.ts tests/unit/multiremi/multiremi-api-cli.test.ts tests/unit/multiremi/multiremi-cli-collaboration-auth.test.ts tests/unit/multiremi/multiremi-cli-agent-extensions-auth.test.ts tests/unit/multiremi/multiremi-cli-operations-auth.test.ts tests/unit/multiremi/multiremi-store-chat.test.ts tests/unit/multiremi/multiremi-store-task-routing.test.ts tests/unit/multiremi/multiremi-store-daemon-wire.test.ts tests/unit/multiremi/multiremi-project-docs-prompt.test.ts tests/unit/daemon/agent-runtime-send-options.test.ts tests/unit/remi/cli-context.test.ts tests/unit/remi/cli-resources.test.ts tests/unit/remi/cli-collaboration.test.ts tests/unit/remi/cli-agent-extensions.test.ts tests/unit/remi/cli-operations.test.ts tests/unit/remi/cli-plugin-registry.test.ts
+          bun test tests/unit/multiremi/cli-capabilities-manifest.test.ts tests/unit/multiremi/multiremi-api-cli.test.ts tests/unit/multiremi/api-route-snapshot.test.ts tests/unit/multiremi/multiremi-cli-dispatch.test.ts tests/unit/multiremi/multiremi-cli-collaboration-auth.test.ts tests/unit/multiremi/multiremi-cli-agent-extensions-auth.test.ts tests/unit/multiremi/multiremi-cli-operations-auth.test.ts tests/unit/multiremi/multiremi-issue-sessions.test.ts tests/unit/multiremi/multiremi-multiuser-auth.test.ts tests/unit/multiremi/multiremi-store-chat.test.ts tests/unit/multiremi/multiremi-store-task-routing.test.ts tests/unit/multiremi/multiremi-store-daemon-wire.test.ts tests/unit/multiremi/multiremi-project-docs-prompt.test.ts tests/unit/daemon/agent-runtime-send-options.test.ts tests/unit/remi/cli-context.test.ts tests/unit/remi/cli-resources.test.ts tests/unit/remi/cli-collaboration.test.ts tests/unit/remi/cli-agent-extensions.test.ts tests/unit/remi/cli-operations.test.ts tests/unit/remi/cli-plugin-registry.test.ts
           bun test tests/integration/multiremi-daemon-smoke.test.ts --test-name-pattern "starts homepage Chat|resumes chat tasks"
 
       # This workflow path-filters on `frontend/**` but used to build only the

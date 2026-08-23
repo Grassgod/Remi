@@ -95,7 +95,9 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("## Available Repositories");
     expect(artifact.prompt).toContain("## Agent Instructions");
     expect(artifact.prompt).toContain("## Output");
-    expect(artifact.prompt).toContain('remi memory recall "<query>"');
+    expect(artifact.prompt).toContain('remi memory search "<query>"');
+    expect(artifact.prompt).toContain("remi memory get <slug-or-id>");
+    expect(artifact.prompt).not.toMatch(/remi (?:issue (?:comment|session)|memory (?:recall|read|remember|forget)|wiki (?:read|history))\b/);
     expect(artifact.prompt).toContain("Wiki is materialized in `./wiki`");
     expect(artifact.prompt).toContain("`./.multiremi/sessions/`");
     expect(artifact.prompt).toContain("`remi wiki status`");
@@ -271,7 +273,7 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain("Reviewer (agent: agt_reviewer) - reviewer - Owns security reviews");
     expect(prompt).toContain("`[@Reviewer](mention://agent/agt_reviewer)`");
     expect(prompt).toContain("independent workstreams");
-    expect(prompt).toContain(`remi issue comment add ${issue.id} --content-stdin`);
+    expect(prompt).toContain(`remi comment add ${issue.id} --content-stdin`);
     expect(prompt).toContain("cat <<'MULTIREMI_COMMENT'");
     expect(prompt).not.toContain("remi issue create");
   });

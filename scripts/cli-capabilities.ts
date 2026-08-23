@@ -146,6 +146,7 @@ export function validateCliCapabilities(
   }
   if (inventory) {
     const inventoryById = new Map(inventory.map((entry) => [entry.id, entry]));
+    const registryAliases = new Map<string, CliManifestAlias>();
     for (const id of Object.keys(manifest.commands)) {
       if (!inventoryById.has(id)) errors.push(`manifest command missing from Registry: ${id}`);
     }
@@ -162,6 +163,33 @@ export function validateCliCapabilities(
       if (command.mutation !== entry.mutation) errors.push(`${entry.id} mutation differs from Registry`);
       if (JSON.stringify(command.auth) !== JSON.stringify(entry.auth)) errors.push(`${entry.id} auth differs from Registry`);
       if (JSON.stringify(command.output) !== JSON.stringify(entry.outputs)) errors.push(`${entry.id} outputs differ from Registry`);
+      const aliases = entry.aliases.map((alias) => `remi ${alias.path.join(" ")}`);
+      if (JSON.stringify(command.aliases) !== JSON.stringify(aliases)) errors.push(`${entry.id} aliases differ from Registry`);
+      for (const alias of entry.aliases) {
+        if (!alias.deprecatedSince) continue;
+        registryAliases.set(`remi ${alias.path.join(" ")}`, {
+          command: entry.id,
+          deprecated_since: alias.deprecatedSince,
+          replacement: alias.replacement ?? expectedPath,
+          hidden: Boolean(alias.hidden),
+        });
+      }
+      if (entry.id === "legacy.multiremi") {
+        registryAliases.set(expectedPath, {
+          command: entry.id,
+          deprecated_since: "0.3.0",
+          replacement: "remi <command>",
+          hidden: true,
+        });
+      }
+    }
+    for (const [path, expected] of registryAliases) {
+      if (JSON.stringify(manifest.aliases[path]) !== JSON.stringify(expected)) {
+        errors.push(`${path} deprecated alias differs from Registry`);
+      }
+    }
+    for (const path of Object.keys(manifest.aliases)) {
+      if (!registryAliases.has(path)) errors.push(`manifest alias missing from Registry: ${path}`);
     }
   }
   return errors;

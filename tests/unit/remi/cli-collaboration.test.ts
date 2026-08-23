@@ -46,15 +46,23 @@ describe("native collaboration CLI contracts", () => {
     }
   });
 
-  it("keeps daemon bootstrap command paths on the legacy issue dispatcher", () => {
+  it("injects canonical daemon prompt paths while preserving legacy issue dispatch", () => {
     const daemonSource = readFileSync(resolve(root, "packages/daemon/src/agent-runtime/prompts/ephemeral.ts"), "utf8");
-    const promptPaths = [
+    const canonicalPromptPaths = [
+      "comment list",
+      "comment add",
+      "session result publish",
+    ];
+    for (const path of canonicalPromptPaths) {
+      expect(daemonSource, path).toContain(`remi ${path}`);
+    }
+    const compatibilityPaths = [
       "issue comment list",
       "issue comment add",
       "issue session result publish",
     ];
-    for (const path of promptPaths) {
-      expect(daemonSource, path).toContain(`remi ${path}`);
+    for (const path of compatibilityPaths) {
+      expect(daemonSource, path).not.toContain(`remi ${path}`);
       expect(BOOTSTRAP_COMPATIBILITY_PATHS).toContain(path as typeof BOOTSTRAP_COMPATIBILITY_PATHS[number]);
     }
 
@@ -75,7 +83,7 @@ describe("native collaboration CLI contracts", () => {
     }
 
     const inventory = specs.flatMap((spec) => spec.aliases ?? []);
-    for (const path of promptPaths) {
+    for (const path of compatibilityPaths) {
       expect(inventory.some((alias) => alias.path.join(" ") === path && alias.dispatch === false), path).toBe(true);
     }
 

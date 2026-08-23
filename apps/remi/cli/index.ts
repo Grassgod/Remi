@@ -223,3 +223,7 @@ export async function dispatch(args: string[]): Promise<void> {
 export function cliCommandInventory(): readonly CommandInventoryEntry[] {
   return commandRegistry.inventory();
 }
+
+export function cliCommandHelp(path: readonly string[]): string {
+  return commandRegistry.renderHelp(path);
+}

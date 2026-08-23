@@ -314,12 +314,12 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     sections.push("## Sharing Results Across Sessions");
     sections.push("Historical transcripts are supporting evidence, while published Session results are the canonical cross-session handoff. If you produce a durable decision, artifact, or finding that other Sessions should reuse, explicitly publish only that result. Do not republish an unchanged result.");
     if (process.platform === "win32") {
-      sections.push(`Write the result body to a UTF-8 file, then run: \`remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-file ./session-result.md\`.`);
+      sections.push(`Write the result body to a UTF-8 file, then run: \`remi session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-file ./session-result.md\`.`);
     } else {
       sections.push([
         "Use a quoted HEREDOC so the shell cannot rewrite the result:",
         "",
-        `    cat <<'RESULT' | remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-stdin`,
+        `    cat <<'RESULT' | remi session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-stdin`,
         "    Reusable result only; omit private working notes.",
         "    RESULT",
       ].join("\n"));
@@ -396,12 +396,12 @@ function buildCommentReadHint(
   const threadId = triggerThreadId || triggerCommentId;
   if (!issueId || !threadId) return "";
   if (newCommentCount > 0 && newCommentsSince) {
-    return `${newCommentCount} new comment(s) on this issue since your last run. Start with the thread your triggering comment is in: \`remi issue comment list ${issueId} --thread ${threadId} --since ${newCommentsSince} --output json\` (swap \`--since\` for \`--tail 30\` if you need the full thread). Only if you need context from other threads, catch up issue-wide: \`remi issue comment list ${issueId} --since ${newCommentsSince} --output json\`.`;
+    return `${newCommentCount} new comment(s) on this issue since your last run. Start with the thread your triggering comment is in: \`remi comment list ${issueId} --thread ${threadId} --since ${newCommentsSince} --output json\` (swap \`--since\` for \`--tail 30\` if you need the full thread). Only if you need context from other threads, catch up issue-wide: \`remi comment list ${issueId} --since ${newCommentsSince} --output json\`.`;
   }
   if (hasPriorSession) {
-    return `You are resuming a prior session, and the triggering comment is already included above. Use active thread anchor \`${threadId}\` and triggering comment ID \`${triggerCommentId}\`. If your reply depends on thread context, refresh the triggering conversation first: \`remi issue comment list ${issueId} --thread ${threadId} --tail 30 --output json\`.`;
+    return `You are resuming a prior session, and the triggering comment is already included above. Use active thread anchor \`${threadId}\` and triggering comment ID \`${triggerCommentId}\`. If your reply depends on thread context, refresh the triggering conversation first: \`remi comment list ${issueId} --thread ${threadId} --tail 30 --output json\`.`;
   }
-  return `Read the triggering conversation first: \`remi issue comment list ${issueId} --thread ${threadId} --tail 30 --output json\`. Need cross-thread background? \`remi issue comment list ${issueId} --recent 20 --output json\`.`;
+  return `Read the triggering conversation first: \`remi comment list ${issueId} --thread ${threadId} --tail 30 --output json\`. Need cross-thread background? \`remi comment list ${issueId} --recent 20 --output json\`.`;
 }
 
 function buildCommentReplyInstructions(issueId: string, triggerCommentId: string): string {
@@ -410,7 +410,7 @@ function buildCommentReplyInstructions(issueId: string, triggerCommentId: string
     return [
       "If you decide to reply, post it as a comment. Always use the trigger comment ID below, and do not reuse --parent values from previous turns.",
       "",
-      `On Windows, write the reply body to a UTF-8 file, then run: \`remi issue comment add ${issueId} --parent ${triggerCommentId} --content-file ./reply.md\`.`,
+      `On Windows, write the reply body to a UTF-8 file, then run: \`remi comment add ${issueId} --parent ${triggerCommentId} --content-file ./reply.md\`.`,
       "Do not pipe via --content-stdin on Windows, and do not use inline --content.",
     ].join("\n");
   }
@@ -419,7 +419,7 @@ function buildCommentReplyInstructions(issueId: string, triggerCommentId: string
     "",
     "Use --content-stdin with a quoted HEREDOC so the shell cannot rewrite backticks, $(), variables, quotes, or formatting:",
     "",
-    `    cat <<'COMMENT' | remi issue comment add ${issueId} --parent ${triggerCommentId} --content-stdin`,
+    `    cat <<'COMMENT' | remi comment add ${issueId} --parent ${triggerCommentId} --content-stdin`,
     "    First paragraph.",
     "",
     "    Second paragraph.",
@@ -487,12 +487,12 @@ function formatProjectResource(resource: AgentTask["projectResources"][number]):
 function appendProjectKnowledgeSections(sections: string[], projectId: string): void {
   sections.push("");
   sections.push("## Project Knowledge");
-  sections.push("Project Memory is not embedded in this prompt. Use the `remi memory` CLI only: first run `remi memory recall \"<query>\"`, then `remi memory read <slug-or-id>` for relevant hits before relying on them.");
+  sections.push("Project Memory is not embedded in this prompt. Use the `remi memory` CLI only: first run `remi memory search \"<query>\"`, then `remi memory get <slug-or-id>` for relevant hits before relying on them.");
   sections.push("Do not use an MCP server for Project Memory. The task environment already scopes these commands to the current project.");
   sections.push("");
   sections.push("Wiki is materialized in `./wiki`. Edit files only in that directory; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
   sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
-  sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory remember|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
+  sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory create|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
 }
 
 function lastPathSegment(path: string): string {
@@ -522,7 +522,7 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
     sections.push("Use a rich mention only to assign a concrete next task. Do not use one while summarizing, thanking, quoting, or referring to earlier work. Teammates do not need to mention you when they finish: the system returns each delegated task to you automatically.");
     sections.push("Issue tasks run serially. A delegation is queued until the current task finishes; it is not an interrupt or a live agent-to-agent chat message. State the deliverable, constraints, and verification, then finish your turn so the teammate can run.");
     sections.push("```sh");
-    sections.push(`cat <<'MULTIREMI_COMMENT' | remi issue comment add ${task.issue?.id ?? "<issue-id>"} --content-stdin`);
+    sections.push(`cat <<'MULTIREMI_COMMENT' | remi comment add ${task.issue?.id ?? "<issue-id>"} --content-stdin`);
     sections.push(`${agentMentionToken(example.name, example.agentId)} <bounded task, constraints, and verification>`);
     sections.push("MULTIREMI_COMMENT");
     sections.push("```");

@@ -118,7 +118,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(firstPrompt).toContain("Historical transcripts are supporting evidence");
     expect(firstPrompt).toContain("## Current Request\nImplement the projection.");
     expect(firstPrompt).toContain(
-      `remi issue session result publish ${issue.id} --session ${session.id}`,
+      `remi session result publish ${issue.id} --session ${session.id}`,
     );
     // The result taxonomy is only useful if the agent is told it exists.
     expect(firstPrompt).toContain("--type mr|report|deploy|decision|doc|other");

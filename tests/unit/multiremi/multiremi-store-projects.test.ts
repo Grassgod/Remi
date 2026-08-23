@@ -235,8 +235,8 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(prompt).toContain("> Please inspect `$PATH` handling.");
     expect(prompt).toContain("> Second line");
     expect(prompt).toContain("do not reply");
-    expect(prompt).toContain(`remi issue comment list ${issue.id} --thread ${root.id} --since 2025-01-01T00:00:00.000Z --output json`);
-    expect(prompt).toContain(`remi issue comment add ${issue.id} --parent ${comment.id} --content-stdin`);
+    expect(prompt).toContain(`remi comment list ${issue.id} --thread ${root.id} --since 2025-01-01T00:00:00.000Z --output json`);
+    expect(prompt).toContain(`remi comment add ${issue.id} --parent ${comment.id} --content-stdin`);
     expect(prompt).toContain("<<'COMMENT'");
     expect(prompt).not.toContain("multimira");
   });

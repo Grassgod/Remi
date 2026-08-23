@@ -75,6 +75,9 @@ export interface CommandInventoryEntry {
   auth: readonly CliIdentity[];
   mutation: CliMutation;
   outputs: readonly CliOutputMode[];
+  parse: "strict" | "passthrough";
+  positionals: readonly CliPositionalSpec[];
+  options: readonly CliOptionSpec[];
   source: CommandSource;
 }
 
@@ -157,6 +160,13 @@ export class CommandRegistry {
       auth: [...(spec.auth ?? [])],
       mutation: spec.mutation ?? "read",
       outputs: [...(spec.outputs ?? [])],
+      parse: spec.parse ?? "strict",
+      positionals: (spec.positionals ?? []).map((positional) => ({ ...positional })),
+      options: (spec.options ?? []).map((option) => ({
+        ...option,
+        aliases: option.aliases ? [...option.aliases] : undefined,
+        conflictsWith: option.conflictsWith ? [...option.conflictsWith] : undefined,
+      })),
       source: spec.source ?? { kind: "builtin" },
     }));
   }
@@ -167,6 +177,12 @@ export class CommandRegistry {
 
   renderHelp(path: readonly string[] = [], programName = "remi"): string {
     const inventory = this.inventory();
+    const children = inventory.filter((entry) =>
+      !entry.hidden
+      && entry.path.length > path.length
+      && path.every((segment, index) => entry.path[index] === segment)
+    );
+    const directChildren = uniqueDirectChildren(children, path.length);
     const exact = inventory.find((entry) => samePath(entry.path, path));
     if (exact) {
       const spec = this.specs.get(exact.id)!;
@@ -194,30 +210,16 @@ export class CommandRegistry {
           return `  ${(names + value).padEnd(28)} ${option.description ?? ""}`.trimEnd();
         }));
       }
+      if (directChildren.length) {
+        lines.push("", ...renderCommandList(directChildren, path.length));
+      }
       return lines.join("\n");
     }
-    const children = inventory.filter((entry) =>
-      !entry.hidden
-      && entry.path.length > path.length
-      && path.every((segment, index) => entry.path[index] === segment)
-    );
-    const unique = new Map<string, CommandInventoryEntry>();
-    for (const entry of children) {
-      const childPath = entry.path.slice(0, path.length + 1);
-      if (!unique.has(pathKey(childPath))) unique.set(pathKey(childPath), entry);
-    }
-    if (!unique.size) throw new CliError("not_found", `unknown command: ${path.join(" ")}`);
-    const commandNames = [...unique.values()].map((entry) => entry.path.slice(0, path.length + 1).join(" "));
-    const width = commandNames.reduce((max, value) => Math.max(max, value.length), 0);
+    if (!directChildren.length) throw new CliError("not_found", `unknown command: ${path.join(" ")}`);
     return [
       `Usage: ${[programName, ...path, "<command>"].join(" ")}`,
       "",
-      "Commands:",
-      ...[...unique.values()].map((entry) => {
-        const name = entry.path.slice(0, path.length + 1).join(" ");
-        const source = entry.source.kind === "plugin" ? ` [plugin:${entry.source.pluginId}]` : "";
-        return `  ${name.padEnd(width)}  ${entry.description}${source}`;
-      }),
+      ...renderCommandList(directChildren, path.length),
     ].join("\n");
   }
 
@@ -235,6 +237,30 @@ export class CommandRegistry {
       .sort((a, b) => b.path.length - a.path.length || Number(Boolean(a.alias)) - Number(Boolean(b.alias)))[0];
     return Boolean(matched && !matched.spec.id.startsWith("legacy."));
   }
+}
+
+function uniqueDirectChildren(
+  children: readonly CommandInventoryEntry[],
+  parentLength: number,
+): CommandInventoryEntry[] {
+  const unique = new Map<string, CommandInventoryEntry>();
+  for (const entry of children) {
+    const childPath = entry.path.slice(0, parentLength + 1);
+    if (!unique.has(pathKey(childPath))) unique.set(pathKey(childPath), entry);
+  }
+  return [...unique.values()];
+}
+
+function renderCommandList(entries: readonly CommandInventoryEntry[], parentLength: number): string[] {
+  const names = entries.map((entry) => entry.path.slice(0, parentLength + 1).join(" "));
+  const width = names.reduce((max, value) => Math.max(max, value.length), 0);
+  return [
+    "Commands:",
+    ...entries.map((entry, index) => {
+      const source = entry.source.kind === "plugin" ? ` [plugin:${entry.source.pluginId}]` : "";
+      return `  ${names[index]!.padEnd(width)}  ${entry.description}${source}`;
+    }),
+  ];
 }
 
 function validateCommandSpec(spec: CommandSpec): void {
