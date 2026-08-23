@@ -9,7 +9,11 @@
   "sections": {
     "awaiting_input": "等待你回复",
     "awaiting_review": "待审核",
+    "blocked": "已阻塞",
     "in_progress": "进行中，可稍后处理"
+  },
+  "failure": {
+    "summary": "失败原因：{{reason}}"
   },
   "time": {
     "just_now": "刚刚",

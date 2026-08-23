@@ -127,6 +127,24 @@ function awaitingTask(issueId: string): AgentTask {
   } as AgentTask;
 }
 
+function failedTask(issueId: string, error: string): AgentTask {
+  return {
+    ...awaitingTask(issueId),
+    id: `task-${issueId}-failed`,
+    status: "failed",
+    error,
+    failure_reason: "agent_error",
+    completed_at: "2026-01-01T00:01:00Z",
+  } as AgentTask;
+}
+
+function mockIssueLists(lists: Partial<Record<Issue["status"], Issue[]>>) {
+  listIssues.mockImplementation(({ status }: { status: Issue["status"] }) => {
+    const issues = lists[status] ?? [];
+    return Promise.resolve({ issues, total: issues.length });
+  });
+}
+
 function renderWorkbench() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -148,13 +166,10 @@ beforeEach(() => {
 
 describe("WorkbenchPage", () => {
   it("splits in_review issues into reply/review sections and lists in-progress ones", async () => {
-    listIssues.mockImplementation(({ status }: { status: string }) =>
-      Promise.resolve(
-        status === "in_review"
-          ? { issues: [issue("a", "in_review"), issue("b", "in_review")], total: 2 }
-          : { issues: [issue("c", "in_progress")], total: 1 },
-      ),
-    );
+    mockIssueLists({
+      in_review: [issue("a", "in_review"), issue("b", "in_review")],
+      in_progress: [issue("c", "in_progress")],
+    });
     getAgentTaskSnapshot.mockResolvedValue([awaitingTask("a")]);
     renderWorkbench();
 
@@ -166,14 +181,43 @@ describe("WorkbenchPage", () => {
     expect(screen.getByText("Issue c")).toBeInTheDocument();
   });
 
+  it("shows blocked issues after the review queues with available failure context", async () => {
+    mockIssueLists({
+      in_review: [issue("a", "in_review"), issue("b", "in_review")],
+      blocked: [issue("blocked", "blocked")],
+      in_progress: [issue("c", "in_progress")],
+    });
+    getAgentTaskSnapshot.mockResolvedValue([
+      awaitingTask("a"),
+      failedTask("blocked", "Repository refresh failed after retries"),
+    ]);
+    renderWorkbench();
+
+    const awaitingInput = await screen.findByText("Waiting for your reply");
+    const awaitingReview = screen.getByText("Ready for review");
+    const blocked = screen.getByText("Blocked");
+    const inProgress = screen.getByText("In progress — can wait");
+    expect(screen.getByText("Issue blocked")).toBeInTheDocument();
+    expect(
+      screen.getByText("Failure: Repository refresh failed after retries"),
+    ).toBeInTheDocument();
+    expect(awaitingInput.compareDocumentPosition(awaitingReview) & 4).toBeTruthy();
+    expect(awaitingReview.compareDocumentPosition(blocked) & 4).toBeTruthy();
+    expect(blocked.compareDocumentPosition(inProgress) & 4).toBeTruthy();
+  });
+
+  it("hides the blocked section when there are no blocked issues", async () => {
+    mockIssueLists({ in_review: [issue("a", "in_review")] });
+    renderWorkbench();
+
+    expect(await screen.findByText("Issue a")).toBeInTheDocument();
+    expect(screen.queryByText("Blocked")).not.toBeInTheDocument();
+  });
+
   it("switches issue detail in place while keeping the workbench route", async () => {
-    listIssues.mockImplementation(({ status }: { status: string }) =>
-      Promise.resolve(
-        status === "in_review"
-          ? { issues: [issue("a", "in_review"), issue("b", "in_review")], total: 2 }
-          : { issues: [], total: 0 },
-      ),
-    );
+    mockIssueLists({
+      in_review: [issue("a", "in_review"), issue("b", "in_review")],
+    });
     renderWorkbench();
 
     fireEvent.click(await screen.findByText("Issue a"));
@@ -201,13 +245,7 @@ describe("WorkbenchPage", () => {
     navigationState.searchParams = new URLSearchParams(
       "issue=a&session=session-main",
     );
-    listIssues.mockImplementation(({ status }: { status: string }) =>
-      Promise.resolve(
-        status === "in_review"
-          ? { issues: [issue("a", "in_review")], total: 1 }
-          : { issues: [], total: 0 },
-      ),
-    );
+    mockIssueLists({ in_review: [issue("a", "in_review")] });
 
     renderWorkbench();
 

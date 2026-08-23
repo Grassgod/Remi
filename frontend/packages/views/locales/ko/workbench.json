@@ -9,7 +9,11 @@
   "sections": {
     "awaiting_input": "답변 대기 중",
     "awaiting_review": "검토 대기 중",
+    "blocked": "차단됨",
     "in_progress": "진행 중, 나중에 확인 가능"
+  },
+  "failure": {
+    "summary": "실패 원인: {{reason}}"
   },
   "time": {
     "just_now": "방금 전",
