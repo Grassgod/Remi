@@ -14,6 +14,14 @@ export function useCreatePlatformOperation() {
   });
 }
 
+export function useCancelPlatformOperation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.cancelPlatformOperation(id),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: platformLifecycleKeys.all }),
+  });
+}
+
 export function useUpdatePlatformSettings() {
   const queryClient = useQueryClient();
   return useMutation({

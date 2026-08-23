@@ -8,6 +8,12 @@ import type {
   MultiremiPlatformService,
   ReportPlatformOperationInput,
 } from "@multiremi/contracts/types.js";
+import {
+  PlatformDrainConflictError,
+} from "@multiremi/store/repos/platform-maintenance-repo.js";
+import {
+  PlatformOperationNotCancellableError,
+} from "@multiremi/store/repos/platform-operations-repo.js";
 import { loadCurrentWorkspaceRole, readJson } from "../helpers.js";
 import { currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
@@ -16,8 +22,8 @@ const OPERATION_KINDS = new Set<MultiremiPlatformOperationKind>([
   "check_updates", "restart", "update", "rollback",
 ]);
 const OPERATION_STATUSES = new Set<MultiremiPlatformOperationStatus>([
-  "queued", "preparing", "pulling", "switching", "restarting", "verifying",
-  "succeeded", "failed", "rolling_back", "rolled_back",
+  "queued", "preparing", "pulling", "draining", "switching", "restarting", "verifying",
+  "succeeded", "failed", "cancelled", "rolling_back", "rolled_back",
 ]);
 const DRIVERS = new Set<MultiremiPlatformDeploymentDriver>(["systemd_release", "docker_compose"]);
 
@@ -42,6 +48,8 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
       updaterHeartbeatAt: state.updaterHeartbeatAt,
       services: state.services,
       activeOperation: store.getActivePlatformOperation(),
+      lastOperation: store.listPlatformOperations(1)[0] ?? null,
+      maintenance: store.getPlatformMaintenance(),
       recentReleases: state.recentReleases,
     });
   });
@@ -67,6 +75,23 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
       targetManifest: body.targetManifest ?? {},
     }, currentRequestUserId(c));
     return c.json({ operation }, 202);
+  });
+
+  app.post("/api/multiremi/platform/operations/:id/cancel", (c) => {
+    const requester = loadCurrentWorkspaceRole(c, store, "local", ["owner", "admin"]);
+    if (requester instanceof Response) return requester;
+    try {
+      const operation = store.cancelPlatformOperation(c.req.param("id"));
+      // A queued operation cancels immediately and may still hold a drain from
+      // a previous claim attempt; release is idempotent either way.
+      if (operation.status === "cancelled") store.releasePlatformDrain(operation.id);
+      return c.json({ operation });
+    } catch (error) {
+      if (error instanceof PlatformOperationNotCancellableError) {
+        return c.json({ error: error.message, code: error.code }, 409);
+      }
+      throw error;
+    }
   });
 
   app.patch("/api/multiremi/platform/settings", async (c) => {
@@ -124,8 +149,88 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
     if (!OPERATION_STATUSES.has(body.status)) return c.json({ error: "invalid platform operation status" }, 400);
     const operation = store.reportPlatformOperation(c.req.param("id"), body);
     if (!operation) return c.json({ error: "platform operation not found" }, 404);
+    // Terminal outcomes must never leave the platform draining, even if the
+    // updater dies before its own release call. Release is idempotent.
+    if (["succeeded", "failed", "cancelled", "rolled_back"].includes(operation.status)) {
+      store.releasePlatformDrain(operation.id);
+    }
     return c.json({ operation });
   });
+
+  app.post("/api/platform-updater/drain/begin", async (c) => {
+    const denied = denyUpdater(c, deps);
+    if (denied) return denied;
+    const body = await readJson<{ operation_id?: string; reason?: string | null; ttl_ms?: number }>(c);
+    const operationId = clean(body.operation_id);
+    if (!operationId) return c.json({ error: "operation_id is required" }, 400);
+    if (!store.getPlatformOperation(operationId)) {
+      return c.json({ error: "platform operation not found" }, 404);
+    }
+    try {
+      const maintenance = store.beginPlatformDrain({
+        operationId,
+        reason: clean(body.reason),
+        ttlMs: numberOrUndefined(body.ttl_ms),
+      });
+      return c.json({ maintenance, status: drainStatusWire(store) });
+    } catch (error) {
+      if (error instanceof PlatformDrainConflictError) {
+        return c.json({ error: error.message, code: error.code }, 409);
+      }
+      throw error;
+    }
+  });
+
+  // Renew doubles as the wait-loop poll: one call refreshes the lease and
+  // returns aggregated progress plus the operator's cancel flag.
+  app.post("/api/platform-updater/drain/renew", async (c) => {
+    const denied = denyUpdater(c, deps);
+    if (denied) return denied;
+    const body = await readJson<{ operation_id?: string; ttl_ms?: number }>(c);
+    const operationId = clean(body.operation_id);
+    if (!operationId) return c.json({ error: "operation_id is required" }, 400);
+    const maintenance = store.renewPlatformDrain(operationId, numberOrUndefined(body.ttl_ms));
+    if (!maintenance) {
+      return c.json({ error: "drain lease is not held by this operation", code: "platform_drain_lost" }, 409);
+    }
+    const operation = store.getPlatformOperation(operationId);
+    return c.json({
+      maintenance,
+      status: drainStatusWire(store),
+      cancel_requested: operation?.cancelRequested ?? false,
+    });
+  });
+
+  app.post("/api/platform-updater/drain/release", async (c) => {
+    const denied = denyUpdater(c, deps);
+    if (denied) return denied;
+    const body = await readJson<{ operation_id?: string }>(c);
+    const operationId = clean(body.operation_id);
+    if (!operationId) return c.json({ error: "operation_id is required" }, 400);
+    return c.json({ maintenance: store.releasePlatformDrain(operationId) });
+  });
+}
+
+function drainStatusWire(store: RouterDeps["store"]): Record<string, unknown> {
+  const status = store.getPlatformDrainStatus();
+  return {
+    generation: status.maintenance.generation,
+    mode: status.maintenance.mode,
+    online_daemons: status.onlineDaemons,
+    acked_daemons: status.ackedDaemons,
+    active_tasks: status.activeTasks,
+    pending_runtimes: status.pendingRuntimes.map((runtime) => ({
+      id: runtime.id,
+      name: runtime.name,
+      daemon_id: runtime.daemonId,
+    })),
+    ready: status.ready,
+  };
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function hasRecentFailedAutoUpdate(

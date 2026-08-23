@@ -6,6 +6,7 @@ import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
 import { PlatformOperationsRepo } from "@multiremi/store/repos/platform-operations-repo.js";
+import { PlatformMaintenanceRepo } from "@multiremi/store/repos/platform-maintenance-repo.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
 import { AgentPluginsRepo } from "@multiremi/store/repos/agent-plugins-repo.js";
 import {
@@ -278,6 +279,8 @@ import type {
 import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/types.js";
 import type {
   CreatePlatformOperationInput,
+  MultiremiPlatformDrainStatus,
+  MultiremiPlatformMaintenance,
   MultiremiPlatformOperation,
   MultiremiPlatformRelease,
   MultiremiPlatformService,
@@ -320,6 +323,7 @@ export class MultiremiStore {
   private issueShares: IssueSharesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
   private platformOperations: PlatformOperationsRepo;
+  private platformMaintenance: PlatformMaintenanceRepo;
   private agents: AgentsSkillsRepo;
   private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
@@ -348,6 +352,7 @@ export class MultiremiStore {
     this.issueShares = new IssueSharesRepo(this.db);
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
     this.platformOperations = new PlatformOperationsRepo(this.db);
+    this.platformMaintenance = new PlatformMaintenanceRepo(this.db);
     this.agents = new AgentsSkillsRepo(this.ctx);
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
@@ -466,6 +471,34 @@ runMigrations(this.db);
     input: ReportPlatformOperationInput,
   ): MultiremiPlatformOperation | null {
     return this.platformOperations.report(id, input);
+  }
+
+  cancelPlatformOperation(id: string): MultiremiPlatformOperation {
+    return this.platformOperations.requestCancel(id);
+  }
+
+  getPlatformMaintenance(): MultiremiPlatformMaintenance {
+    return this.platformMaintenance.get();
+  }
+
+  beginPlatformDrain(input: { operationId: string; reason?: string | null; ttlMs?: number }): MultiremiPlatformMaintenance {
+    return this.platformMaintenance.beginDrain(input);
+  }
+
+  renewPlatformDrain(operationId: string, ttlMs?: number): MultiremiPlatformMaintenance | null {
+    return this.platformMaintenance.renewDrain(operationId, ttlMs);
+  }
+
+  releasePlatformDrain(operationId: string): MultiremiPlatformMaintenance {
+    return this.platformMaintenance.releaseDrain(operationId);
+  }
+
+  recordRuntimeDrainAck(runtimeId: string, generation: number, activeTasks: number | null): void {
+    this.platformMaintenance.recordRuntimeDrainAck(runtimeId, generation, activeTasks);
+  }
+
+  getPlatformDrainStatus(): MultiremiPlatformDrainStatus {
+    return this.platformMaintenance.drainStatus();
   }
 
   getSessionArchive(id: string): MultiremiSessionArchive | null {

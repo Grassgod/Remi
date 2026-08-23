@@ -6,6 +6,7 @@ import type {
   MultiremiPlatformService,
   ReportPlatformOperationInput,
 } from "@multiremi/contracts";
+import { DrainAbortedError, type PlatformDrainGate } from "./drain.js";
 import type { CommandRunner, PlatformDeploymentDriver, PlatformInspection } from "./types.js";
 
 interface ComposeConfig {
@@ -42,6 +43,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
   async execute(
     operation: MultiremiPlatformOperation,
     report: (input: ReportPlatformOperationInput) => Promise<void>,
+    drain?: PlatformDrainGate,
   ): Promise<MultiremiPlatformRelease | null> {
     if (operation.kind === "check_updates") return (await this.inspect()).currentRelease;
     if (operation.kind === "restart") {
@@ -53,9 +55,9 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     if (operation.kind === "rollback") {
       const release = (await this.readRecentReleases()).find((item) => item.ref === operation.targetRef || item.version === operation.targetVersion);
       if (!release?.apiImage || !release.webImage) throw new Error("rollback release not found");
-      return this.activate(release as ComposeManifest, operation, report, true);
+      return this.activate(release as ComposeManifest, operation, report, true, drain);
     }
-    return this.activate(parseComposeManifest(operation.targetManifest), operation, report, false);
+    return this.activate(parseComposeManifest(operation.targetManifest), operation, report, false, drain);
   }
 
   private async activate(
@@ -63,6 +65,7 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     operation: MultiremiPlatformOperation,
     report: (input: ReportPlatformOperationInput) => Promise<void>,
     rollback: boolean,
+    drain?: PlatformDrainGate,
   ): Promise<MultiremiPlatformRelease> {
     const previous = await this.readCurrentRelease();
     const originalEnv = await readFile(this.config.envFile, "utf8").catch(() => "");
@@ -70,6 +73,10 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     try {
       await this.writeImageEnv(originalEnv, manifest.apiImage, manifest.webImage);
       await this.mustCompose(["pull", "api", "web"]);
+      // Images are staged; only the container switch needs a drained platform.
+      // waitUntilDrained throws (with the drain already released) on timeout or
+      // operator cancel, so the switch below never runs in those cases.
+      if (drain) await drain.waitUntilDrained(report);
       await report({ status: "switching", previousRelease: previous, progress: { message: "Applying image digests" } });
       await this.mustCompose(["up", "-d", "--no-deps", "api", "web", "ssh-mesh-control-plane"]);
       await report({ status: "verifying", previousRelease: previous, progress: { message: "Verifying services" } });
@@ -78,6 +85,13 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
       await this.writeRelease(release);
       return release;
     } catch (error) {
+      if (error instanceof DrainAbortedError) {
+        // The switch never ran: containers still run the previous images. Only
+        // the staged env file needs restoring — recreating containers here
+        // would cause the very restart the drain refused to perform.
+        await this.restoreEnvFile(originalEnv);
+        throw error;
+      }
       if (previous?.apiImage && previous.webImage) {
         await report({ status: "rolling_back", previousRelease: previous, error: errorMessage(error) });
         await this.writeImageEnv(originalEnv, previous.apiImage, previous.webImage);
@@ -86,6 +100,12 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
       }
       throw error;
     }
+  }
+
+  private async restoreEnvFile(originalEnv: string): Promise<void> {
+    const temp = `${this.config.envFile}.tmp-${process.pid}`;
+    await writeFile(temp, originalEnv, { mode: 0o600 });
+    await rename(temp, this.config.envFile);
   }
 
   private async writeImageEnv(source: string, apiImage: string, webImage: string): Promise<void> {

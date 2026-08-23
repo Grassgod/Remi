@@ -760,6 +760,14 @@ export interface MultiremiDaemonHeartbeatAck {
     skill_key: string;
   }>;
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
+  /** Platform maintenance directive: daemons must pause task claims while draining. */
+  drain?: MultiremiDaemonDrainDirective;
+}
+
+/** Server → daemon drain instruction carried in every heartbeat ack. */
+export interface MultiremiDaemonDrainDirective {
+  mode: MultiremiPlatformMaintenanceMode;
+  generation: number;
 }
 
 export const MULTIREMI_SSH_MESH_PROTOCOL_VERSION = 1;
@@ -3621,13 +3629,40 @@ export type MultiremiPlatformOperationStatus =
   | "queued"
   | "preparing"
   | "pulling"
+  | "draining"
   | "switching"
   | "restarting"
   | "verifying"
   | "succeeded"
   | "failed"
+  | "cancelled"
   | "rolling_back"
   | "rolled_back";
+
+export type MultiremiPlatformMaintenanceMode = "normal" | "draining";
+
+/** Persistent platform maintenance (drain) state — one row, survives API restarts. */
+export interface MultiremiPlatformMaintenance {
+  mode: MultiremiPlatformMaintenanceMode;
+  generation: number;
+  operationId: string | null;
+  startedAt: string | null;
+  expiresAt: string | null;
+  reason: string | null;
+}
+
+/** Aggregated drain progress used by the updater wait loop and the dashboard. */
+export interface MultiremiPlatformDrainStatus {
+  maintenance: MultiremiPlatformMaintenance;
+  onlineDaemons: number;
+  ackedDaemons: number;
+  /** Server-authoritative count of in-flight tasks (dispatched/running/waiting/awaiting). */
+  activeTasks: number;
+  /** Online runtimes that have not acknowledged the current generation. */
+  pendingRuntimes: Array<{ id: string; name: string; daemonId: string | null }>;
+  /** All online daemons acked the current generation and no task is in flight. */
+  ready: boolean;
+}
 
 export type MultiremiPlatformServiceId =
   | "api"
@@ -3670,6 +3705,8 @@ export interface MultiremiPlatformOperation {
   error: string | null;
   previousRelease: MultiremiPlatformRelease | null;
   resultRelease: MultiremiPlatformRelease | null;
+  /** Set by the cancel endpoint; the updater honors it before the switch phase. */
+  cancelRequested: boolean;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
@@ -3687,6 +3724,9 @@ export interface MultiremiPlatformStatus {
   updaterHeartbeatAt: string | null;
   services: MultiremiPlatformService[];
   activeOperation: MultiremiPlatformOperation | null;
+  /** Most recent operation (may equal activeOperation); shows terminal outcomes after the banner clears. */
+  lastOperation: MultiremiPlatformOperation | null;
+  maintenance: MultiremiPlatformMaintenance;
   recentReleases: MultiremiPlatformRelease[];
 }
 

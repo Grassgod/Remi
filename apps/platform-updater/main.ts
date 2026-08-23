@@ -1,6 +1,11 @@
 import type { MultiremiPlatformOperation, MultiremiPlatformRelease } from "@multiremi/contracts";
 import { PlatformUpdaterClient } from "@remi-platform/updater/client.js";
 import { DockerComposeDriver } from "@remi-platform/updater/compose-driver.js";
+import {
+  DEFAULT_DRAIN_TIMEOUT_MS,
+  DrainCancelledError,
+  PlatformDrainCoordinator,
+} from "@remi-platform/updater/drain.js";
 import { fetchReleaseFeed } from "@remi-platform/updater/release-feed.js";
 import { SystemdReleaseDriver } from "@remi-platform/updater/systemd-release-driver.js";
 import { BunCommandRunner, type PlatformDeploymentDriver } from "@remi-platform/updater/types.js";
@@ -10,6 +15,7 @@ const apiToken = requiredEnv("MULTIREMI_TOKEN");
 const updaterToken = requiredEnv("MULTIREMI_PLATFORM_UPDATER_TOKEN");
 const releaseFeedUrl = optionalEnv("MULTIREMI_PLATFORM_RELEASE_FEED_URL");
 const pollMs = positiveNumber(process.env.MULTIREMI_PLATFORM_UPDATER_POLL_MS, 5_000);
+const drainTimeoutMs = positiveNumber(process.env.MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS, DEFAULT_DRAIN_TIMEOUT_MS);
 const runner = new BunCommandRunner();
 const client = new PlatformUpdaterClient(apiUrl, apiToken, updaterToken);
 const driver = createDriver();
@@ -34,13 +40,28 @@ while (true) {
 }
 
 async function execute(operation: MultiremiPlatformOperation): Promise<void> {
+  // Only container/service switches need a drained platform. The coordinator
+  // renews a server-side lease on every poll, so if this process dies the API
+  // auto-releases the drain when the lease expires.
+  const drain = operation.kind === "update" || operation.kind === "rollback"
+    ? new PlatformDrainCoordinator(client, operation.id, {
+        timeoutMs: drainTimeoutMs,
+        reason: operation.kind === "rollback"
+          ? `platform rollback to ${operation.targetVersion ?? operation.targetRef ?? "previous release"}`
+          : `platform update to ${operation.targetVersion ?? "new release"}`,
+      })
+    : null;
   try {
     if (operation.kind === "check_updates") {
       latestRelease = await fetchReleaseFeed(releaseFeedUrl);
       lastFeedCheck = Date.now();
     }
     const resolved = await resolveManifest(operation);
-    const resultRelease = await driver.execute(resolved, (input) => client.report(operation.id, input));
+    const resultRelease = await driver.execute(
+      resolved,
+      (input) => client.report(operation.id, input),
+      drain ?? undefined,
+    );
     await client.report(operation.id, {
       status: operation.kind === "rollback" ? "rolled_back" : "succeeded",
       resultRelease,
@@ -49,9 +70,18 @@ async function execute(operation: MultiremiPlatformOperation): Promise<void> {
     await client.heartbeat(await driver.inspect(), latestRelease);
   } catch (error) {
     await client.report(operation.id, {
-      status: "failed",
+      status: error instanceof DrainCancelledError ? "cancelled" : "failed",
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    // Success, failure, failed health checks and automatic rollback all end
+    // here; release is idempotent and also covered server-side by the
+    // terminal-report hook and the lease TTL.
+    if (drain) {
+      await drain.release().catch((error: unknown) => {
+        console.error(`drain release failed (lease TTL will recover): ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
   }
 }
 

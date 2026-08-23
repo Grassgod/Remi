@@ -85,3 +85,45 @@ The updater may use this Compose file after cutover. Set
 `MULTIREMI_PLATFORM_POSTGRES_CONTAINER` and
 `MULTIREMI_PLATFORM_OPENVIKING_CONTAINER` so externally managed dependencies
 still appear in the service status panel.
+
+## Drain-protected updates (MUL-74)
+
+Update and rollback operations drain the platform before touching containers
+or services; `check_updates` and `restart` do not drain.
+
+Sequence: the updater pulls/stages the release first, then calls
+`POST /api/platform-updater/drain/begin` and polls `drain/renew` (which also
+renews the lease and returns aggregated progress). Daemons learn about the
+drain through their next heartbeat ack, stop claiming new tasks, keep running
+tasks and heartbeats alive, and report the acknowledged drain generation plus
+their active task count. Only when every online runtime acked the current
+generation AND the server counts zero in-flight tasks does the updater run the
+container/service switch. The drain is released on success, failure, failed
+health checks, automatic rollback, operator cancellation, and — as a safety
+net — whenever a terminal operation status is reported.
+
+- The drain state lives in the database (`multiremi_platform_maintenance`),
+  so an API restart mid-update does not lose it.
+- The drain lease has a TTL (default 120 s, renewed every poll). If the
+  updater crashes, the API lazily flips back to `normal` on the next read and
+  daemons resume claiming — the platform can never stay stuck draining.
+- If the wait exceeds `MULTIREMI_PLATFORM_DRAIN_TIMEOUT_MS` (default 15 min),
+  the switch is NOT executed, the operation fails with a drain-timeout error,
+  and scheduling resumes. There is no automatic force-update; resolve or
+  cancel the long-running tasks and retry the update manually.
+- Operators can cancel an update from the 版本与服务 page until the switch
+  phase begins (`queued/preparing/pulling/draining`).
+- Old daemons that do not report a drain ack keep the gate closed until the
+  timeout: upgrade or retire them first.
+
+Daemon-side report outbox: every task-scoped report (messages, prompt,
+progress, session pin, usage, workspace, complete/fail) is written to a
+durable per-daemon SQLite queue under `~/.multiremi/outbox/` and delivered in
+per-task order with bounded exponential backoff. A brief API outage (for
+example the update window itself) therefore never terminates a running agent
+or strands a task in `running`; permanent auth errors (401/403/410) park the
+queue in a `blocked` state with diagnostics instead of retrying forever.
+Inspect it via the daemon's local `/health` endpoint (`outbox` block). Size
+cap: `MULTIREMI_OUTBOX_MAX_BYTES` (default 256 MB) — oldest non-terminal
+records are dropped over the cap; terminal complete/fail events are never
+dropped.

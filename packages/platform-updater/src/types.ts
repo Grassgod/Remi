@@ -5,6 +5,7 @@ import type {
   MultiremiPlatformService,
   ReportPlatformOperationInput,
 } from "@multiremi/contracts";
+import type { PlatformDrainGate } from "./drain.js";
 
 export interface PlatformInspection {
   driver: MultiremiPlatformDeploymentDriver;
@@ -19,6 +20,12 @@ export interface PlatformDeploymentDriver {
   execute(
     operation: MultiremiPlatformOperation,
     report: (input: ReportPlatformOperationInput) => Promise<void>,
+    /**
+     * When provided (update/rollback), the driver must wait for this gate
+     * between preparing artifacts (image pull / build) and the service switch,
+     * and the caller releases it after the operation finishes.
+     */
+    drain?: PlatformDrainGate,
   ): Promise<MultiremiPlatformRelease | null>;
 }
 
