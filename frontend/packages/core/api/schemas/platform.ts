@@ -10,6 +10,21 @@ export const PlatformReleaseSchema = z.object({
   webImage: z.string().nullable().default(null),
 }).loose();
 
+export const PlatformDrainProgressSchema = z.object({
+  generation: z.number().default(0),
+  online_daemons: z.number().default(0),
+  acked_daemons: z.number().default(0),
+  active_tasks: z.number().default(0),
+  waited_ms: z.number().default(0),
+  timeout_ms: z.number().default(0),
+  state: z.string().default("waiting"),
+}).loose();
+
+export const PlatformOperationProgressSchema = z.object({
+  message: z.string().default(""),
+  drain: PlatformDrainProgressSchema.nullable().default(null),
+}).loose();
+
 export const PlatformOperationSchema = z.object({
   id: z.string().default(""),
   kind: z.string().default("check_updates"),
@@ -18,7 +33,8 @@ export const PlatformOperationSchema = z.object({
   targetVersion: z.string().nullable().default(null),
   targetRef: z.string().nullable().default(null),
   targetManifest: z.record(z.string(), z.unknown()).default({}),
-  progress: z.record(z.string(), z.unknown()).default({}),
+  progress: PlatformOperationProgressSchema.default({ message: "", drain: null }),
+  cancelRequested: z.boolean().default(false),
   requestedBy: z.string().default(""),
   output: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
@@ -28,6 +44,15 @@ export const PlatformOperationSchema = z.object({
   updatedAt: z.string().default(""),
   startedAt: z.string().nullable().default(null),
   finishedAt: z.string().nullable().default(null),
+}).loose();
+
+export const PlatformMaintenanceSchema = z.object({
+  mode: z.string().default("normal"),
+  generation: z.number().default(0),
+  operationId: z.string().nullable().default(null),
+  startedAt: z.string().nullable().default(null),
+  expiresAt: z.string().nullable().default(null),
+  reason: z.string().nullable().default(null),
 }).loose();
 
 export const PlatformServiceSchema = z.object({
@@ -50,6 +75,15 @@ export const PlatformStatusSchema = z.object({
   updaterHeartbeatAt: z.string().nullable().default(null),
   services: z.array(PlatformServiceSchema).default([]),
   activeOperation: PlatformOperationSchema.nullable().default(null),
+  lastOperation: PlatformOperationSchema.nullable().default(null),
+  maintenance: PlatformMaintenanceSchema.default({
+    mode: "normal",
+    generation: 0,
+    operationId: null,
+    startedAt: null,
+    expiresAt: null,
+    reason: null,
+  }),
   recentReleases: z.array(PlatformReleaseSchema).default([]),
 }).loose();
 
@@ -63,6 +97,8 @@ export const PlatformSettingsResponseSchema = z.object({
 
 export type PlatformRelease = z.infer<typeof PlatformReleaseSchema>;
 export type PlatformOperation = z.infer<typeof PlatformOperationSchema>;
+export type PlatformDrainProgress = z.infer<typeof PlatformDrainProgressSchema>;
+export type PlatformMaintenance = z.infer<typeof PlatformMaintenanceSchema>;
 export type PlatformService = z.infer<typeof PlatformServiceSchema>;
 export type PlatformStatus = z.infer<typeof PlatformStatusSchema>;
 
@@ -77,5 +113,14 @@ export const EMPTY_PLATFORM_STATUS: PlatformStatus = {
   updaterHeartbeatAt: null,
   services: [],
   activeOperation: null,
+  lastOperation: null,
+  maintenance: {
+    mode: "normal",
+    generation: 0,
+    operationId: null,
+    startedAt: null,
+    expiresAt: null,
+    reason: null,
+  },
   recentReleases: [],
 };

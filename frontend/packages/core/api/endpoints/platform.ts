@@ -33,6 +33,15 @@ export class PlatformEndpoints {
     }).operation;
   }
 
+  async cancelPlatformOperation(id: string): Promise<PlatformOperation> {
+    const raw = await this.http.fetch<unknown>(`/api/multiremi/platform/operations/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    });
+    return parseStrictResponse<{ operation: PlatformOperation }>(raw, PlatformOperationResponseSchema, {
+      endpoint: "POST /api/multiremi/platform/operations/:id/cancel",
+    }).operation;
+  }
+
   async updatePlatformSettings(autoUpdateStable: boolean): Promise<boolean> {
     const raw = await this.http.fetch<unknown>("/api/multiremi/platform/settings", {
       method: "PATCH",
