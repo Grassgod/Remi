@@ -16,11 +16,28 @@ type Row = Record<string, unknown>;
 const TERMINAL_STATUSES = new Set<MultiremiPlatformOperationStatus>([
   "succeeded",
   "failed",
+  "cancelled",
   "rolled_back",
 ]);
 
+/** Cancellation is only honored before the container-switch phase begins. */
+const CANCELLABLE_STATUSES = new Set<MultiremiPlatformOperationStatus>([
+  "queued",
+  "preparing",
+  "pulling",
+  "draining",
+]);
+
+export function isTerminalPlatformOperationStatus(status: MultiremiPlatformOperationStatus): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
+
 export class PlatformOperationConflictError extends Error {
   readonly code = "platform_operation_active";
+}
+
+export class PlatformOperationNotCancellableError extends Error {
+  readonly code = "platform_operation_not_cancellable";
 }
 
 export interface PlatformStateRecord {
@@ -148,6 +165,38 @@ export class PlatformOperationsRepo {
     return result.changes > 0 ? this.get(pending.id) : null;
   }
 
+  /**
+   * Operator-initiated cancellation. A queued operation cancels immediately;
+   * a claimed pre-switch operation is flagged and the updater finalizes it
+   * (releasing the drain lease it may hold). From `switching` on, cancellation
+   * is rejected — the container swap is already in flight.
+   */
+  requestCancel(id: string): MultiremiPlatformOperation {
+    const current = this.get(id);
+    if (!current) throw new PlatformOperationNotCancellableError("operation not found");
+    if (TERMINAL_STATUSES.has(current.status) || !CANCELLABLE_STATUSES.has(current.status)) {
+      throw new PlatformOperationNotCancellableError(
+        `operation is ${current.status} and can no longer be cancelled`,
+      );
+    }
+    const now = nowIso();
+    if (current.status === "queued") {
+      const result = this.db.run(
+        `UPDATE multiremi_platform_operations
+         SET status = 'cancelled', cancel_requested = 1, active_slot = NULL, updated_at = ?, finished_at = ?
+         WHERE id = ? AND status = 'queued'`,
+        [now, now, id],
+      );
+      if (result.changes > 0) return this.get(id)!;
+      // Lost the race to the updater's claim — fall through to the flag path.
+    }
+    this.db.run(
+      `UPDATE multiremi_platform_operations SET cancel_requested = 1, updated_at = ? WHERE id = ?`,
+      [now, id],
+    );
+    return this.get(id)!;
+  }
+
   report(id: string, input: ReportPlatformOperationInput): MultiremiPlatformOperation | null {
     const current = this.get(id);
     if (!current) return null;
@@ -212,6 +261,7 @@ function toOperation(row: Row): MultiremiPlatformOperation {
     error: row.error ? String(row.error) : null,
     previousRelease: parseNullableRelease(row.previous_release),
     resultRelease: parseNullableRelease(row.result_release),
+    cancelRequested: Number(row.cancel_requested ?? 0) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     startedAt: row.started_at ? String(row.started_at) : null,

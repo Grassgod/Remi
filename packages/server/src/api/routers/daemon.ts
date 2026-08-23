@@ -332,6 +332,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       agent_plugin_protocol?: number;
       ssh_mesh_protocol?: number;
       ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
+      drain_ack_generation?: number;
+      active_task_count?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -364,6 +366,19 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       if (meshAck) ack.ssh_mesh = meshAck;
     } else {
       store.recordSshMeshHeartbeat(runtimeId, 0);
+    }
+    // Reading the maintenance row also enforces the drain lease TTL lazily,
+    // so an expired lease flips back to normal on the very next heartbeat.
+    const maintenance = store.getPlatformMaintenance();
+    ack.drain = { mode: maintenance.mode, generation: maintenance.generation };
+    const ackGeneration = Number(body.drain_ack_generation);
+    if (Number.isSafeInteger(ackGeneration) && ackGeneration >= 0) {
+      const activeCount = Number(body.active_task_count);
+      store.recordRuntimeDrainAck(
+        runtimeId,
+        ackGeneration,
+        Number.isSafeInteger(activeCount) && activeCount >= 0 ? activeCount : null,
+      );
     }
     const response = daemonHeartbeatHttpResponse(ack);
     const runtime = store.getRuntime(runtimeId);

@@ -7,6 +7,7 @@ import type {
   MultiremiPlatformService,
   ReportPlatformOperationInput,
 } from "@multiremi/contracts";
+import { DrainAbortedError, type PlatformDrainGate } from "./drain.js";
 import type { CommandRunner, PlatformDeploymentDriver, PlatformInspection } from "./types.js";
 
 interface SystemdReleaseConfig {
@@ -49,6 +50,7 @@ export class SystemdReleaseDriver implements PlatformDeploymentDriver {
   async execute(
     operation: MultiremiPlatformOperation,
     report: (input: ReportPlatformOperationInput) => Promise<void>,
+    drain?: PlatformDrainGate,
   ): Promise<MultiremiPlatformRelease | null> {
     if (operation.kind === "check_updates") return (await this.inspect()).currentRelease;
     if (operation.kind === "restart") {
@@ -56,13 +58,14 @@ export class SystemdReleaseDriver implements PlatformDeploymentDriver {
       await this.restartAndVerify();
       return (await this.inspect()).currentRelease;
     }
-    if (operation.kind === "rollback") return this.rollback(operation, report);
-    return this.update(operation, report);
+    if (operation.kind === "rollback") return this.rollback(operation, report, drain);
+    return this.update(operation, report, drain);
   }
 
   private async update(
     operation: MultiremiPlatformOperation,
     report: (input: ReportPlatformOperationInput) => Promise<void>,
+    drain?: PlatformDrainGate,
   ): Promise<MultiremiPlatformRelease> {
     const manifest = parseSystemdManifest(operation.targetManifest);
     const previous = await this.readCurrentRelease();
@@ -92,12 +95,17 @@ export class SystemdReleaseDriver implements PlatformDeploymentDriver {
         webImage: null,
       };
       await writeFile(join(target, ".platform-release.json"), `${JSON.stringify(release, null, 2)}\n`);
+      // The release is fully staged; only the symlink switch + service restart
+      // require a drained platform. Timeout/cancel throws with drain released
+      // and the current release untouched.
+      if (drain) await drain.waitUntilDrained(report);
       await report({ status: "switching", previousRelease: previous, progress: { message: "Activating release" } });
       await this.switchCurrent(target);
       await report({ status: "restarting", previousRelease: previous, progress: { message: "Restarting services" } });
       await this.restartAndVerify();
       return release;
     } catch (error) {
+      if (error instanceof DrainAbortedError) throw error;
       if (previous) {
         await report({ status: "rolling_back", previousRelease: previous, error: errorMessage(error) });
         await this.switchCurrent(await this.releasePathFor(previous));
@@ -112,10 +120,12 @@ export class SystemdReleaseDriver implements PlatformDeploymentDriver {
   private async rollback(
     operation: MultiremiPlatformOperation,
     report: (input: ReportPlatformOperationInput) => Promise<void>,
+    drain?: PlatformDrainGate,
   ): Promise<MultiremiPlatformRelease> {
     const targetRelease = await this.findRelease(operation.targetRef ?? operation.targetVersion ?? "");
     if (!targetRelease) throw new Error("rollback release not found");
     const previous = await this.readCurrentRelease();
+    if (drain) await drain.waitUntilDrained(report);
     await report({ status: "rolling_back", previousRelease: previous, progress: { message: `Switching to ${targetRelease.version}` } });
     await this.switchCurrent(await this.releasePathFor(targetRelease));
     await report({ status: "restarting", previousRelease: previous });

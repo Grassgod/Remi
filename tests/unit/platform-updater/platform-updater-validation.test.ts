@@ -105,6 +105,7 @@ function operation(targetManifest: Record<string, unknown>): MultiremiPlatformOp
     targetRef: "https://example.com/platform-release.json",
     targetManifest,
     progress: {},
+    cancelRequested: false,
     requestedBy: "local",
     output: null,
     error: null,

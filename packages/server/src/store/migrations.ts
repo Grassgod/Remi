@@ -1556,6 +1556,18 @@ export function runMigrations(db: SqlDatabase): void {
       ON multiremi_platform_operations(active_slot);
     CREATE INDEX IF NOT EXISTS idx_multiremi_platform_operations_created
       ON multiremi_platform_operations(created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_platform_maintenance (
+      id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL DEFAULT 'normal',
+      generation INTEGER NOT NULL DEFAULT 0,
+      operation_id TEXT,
+      started_at TEXT,
+      expires_at TEXT,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS multiremi_issue_workspaces (
@@ -1643,6 +1655,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "owner_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
   addColumnIfMissing(db, "multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_generation INTEGER");
+  addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_at TEXT");
+  addColumnIfMissing(db, "multiremi_runtimes", "drain_reported_active_tasks INTEGER");
+  addColumnIfMissing(db, "multiremi_platform_operations", "cancel_requested INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(
     db,
     "multiremi_daemon_retirements",
