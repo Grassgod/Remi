@@ -57,7 +57,7 @@
       "ISO-8601 timestamps (anywhere in a string) -> \"<timestamp>\"",
       "epoch-millisecond numbers (1.5e12..4e12) and *_ms/duration/elapsed/uptime/latency numeric keys -> 0",
       "absolute machine paths (repo root, $HOME, $TMPDIR, upload dir) -> \"<repo>\"/\"<home>\"/\"<tmp>\"/\"<uploads>\"",
-      "os.hostname() -> \"<hostname>\", os.userInfo().username -> \"<user>\"",
+      "hostname in URL/UNC authorities -> \"<hostname>\"; username in Unix/Windows home paths -> \"<user>\"",
       "package VERSION -> \"<version>\"",
       "non-JSON bodies larger than 2000 bytes -> { __body__: { contentType, bytes, sha256 } }"
     ]
@@ -5187,7 +5187,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "<user>",
+              "provider": "unknown",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -5955,7 +5955,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "<user>",
+              "provider": "unknown",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -10884,7 +10884,7 @@
         {
           "date": "2026-01-01",
           "runtimeId": "rt_snapshot",
-          "provider": "<user>",
+          "provider": "unknown",
           "model": "claude-sonnet-4",
           "inputTokens": 10,
           "outputTokens": 5,
@@ -11898,7 +11898,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "<user>",
+              "provider": "unknown",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -12911,7 +12911,7 @@
             "wait_reason": null,
             "usage": [
               {
-                "provider": "<user>",
+                "provider": "unknown",
                 "model": "claude-sonnet-4",
                 "inputTokens": 10,
                 "outputTokens": 5,
@@ -13751,7 +13751,7 @@
             "wait_reason": null,
             "usage": [
               {
-                "provider": "<user>",
+                "provider": "unknown",
                 "model": "claude-sonnet-4",
                 "inputTokens": 10,
                 "outputTokens": 5,
@@ -14833,7 +14833,7 @@
               "wait_reason": null,
               "usage": [
                 {
-                  "provider": "<user>",
+                  "provider": "unknown",
                   "model": "claude-sonnet-4",
                   "inputTokens": 10,
                   "outputTokens": 5,
@@ -16430,7 +16430,7 @@
         "usage": [
           {
             "runtimeId": "rt_snapshot",
-            "provider": "<user>",
+            "provider": "unknown",
             "model": "claude-sonnet-4",
             "inputTokens": 10,
             "outputTokens": 5,
@@ -16581,7 +16581,7 @@
         "usage": [
           {
             "runtimeId": "rt_snapshot",
-            "provider": "<user>",
+            "provider": "unknown",
             "model": "claude-sonnet-4",
             "inputTokens": 10,
             "outputTokens": 5,
@@ -17081,7 +17081,7 @@
             "wait_reason": null,
             "usage": [
               {
-                "provider": "<user>",
+                "provider": "unknown",
                 "model": "claude-sonnet-4",
                 "inputTokens": 10,
                 "outputTokens": 5,
@@ -17157,7 +17157,7 @@
           "wait_reason": null,
           "usage": [
             {
-              "provider": "<user>",
+              "provider": "unknown",
               "model": "claude-sonnet-4",
               "inputTokens": 10,
               "outputTokens": 5,
@@ -17849,7 +17849,7 @@
         "usage": [
           {
             "runtimeId": "rt_snapshot",
-            "provider": "<user>",
+            "provider": "unknown",
             "model": "claude-sonnet-4",
             "inputTokens": 10,
             "outputTokens": 5,
@@ -17990,7 +17990,7 @@
         {
           "runtime_id": "rt_snapshot",
           "date": "2026-01-01",
-          "provider": "<user>",
+          "provider": "unknown",
           "model": "claude-sonnet-4",
           "input_tokens": 10,
           "output_tokens": 5,
