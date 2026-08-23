@@ -33,6 +33,19 @@ describe("Multiremi task failure classification", () => {
     expect(classifyTaskFailure("the agent gave up for reasons unknown")).toBe(TaskFailureReason.AgentUnknown);
   });
 
+  it("classifies repository sync failures ahead of network and timeout rules", () => {
+    expect(classifyTaskFailure("repository sync timed out after 120000ms: git@code.byted.org:ies/sdma-deepwiki.git"))
+      .toBe(TaskFailureReason.RepoSyncFailed);
+    expect(classifyTaskFailure("repository sync failed: ssh: connect to host code.byted.org port 22: Connection refused"))
+      .toBe(TaskFailureReason.RepoSyncFailed);
+    expect(classifyTaskFailure("Intake workspace requires a fresh repository snapshot, but git@example.com:a/b.git is cached: fetch timed out after 30000ms"))
+      .toBe(TaskFailureReason.RepoSyncFailed);
+    expect(classifyTaskFailure("repo not found in cache: git@example.com:a/b.git (workspace: local)"))
+      .toBe(TaskFailureReason.RepoSyncFailed);
+    // Agent-phase timeouts must keep their original classification.
+    expect(classifyTaskFailure("claude timed out after 2h0m0s")).toBe(TaskFailureReason.AgentTimeout);
+  });
+
   it("keeps 5xx detection bounded like the Go regex", () => {
     expect(classifyTaskFailure("upstream returned 504")).toBe(TaskFailureReason.AgentProviderServerError);
     expect(classifyTaskFailure("1500ms latency observed")).not.toBe(TaskFailureReason.AgentProviderServerError);

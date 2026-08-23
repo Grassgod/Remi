@@ -37,6 +37,7 @@ import { buildTaskPromptArtifact, type TaskRepoCheckout, type TaskRepoWarning } 
 import {
   MultiremiRepoCache,
   normalizeRepoList,
+  type MultiremiRepoCacheOptions,
   type MultiremiRepoSyncResult,
 } from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
@@ -379,6 +380,25 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
   else warnings.push(warning);
 }
 
+export function repoCacheTimeoutOverrides(
+  env: Record<string, string | undefined>,
+): Pick<MultiremiRepoCacheOptions, "fetchTimeoutMs" | "cloneTimeoutMs" | "repoSyncTimeoutMs"> {
+  const overrides: Pick<MultiremiRepoCacheOptions, "fetchTimeoutMs" | "cloneTimeoutMs" | "repoSyncTimeoutMs"> = {};
+  const fetchTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_FETCH_TIMEOUT_MS);
+  const cloneTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_CLONE_TIMEOUT_MS);
+  const repoSyncTimeoutMs = positiveIntEnv(env.MULTIREMI_REPO_SYNC_TIMEOUT_MS);
+  if (fetchTimeoutMs) overrides.fetchTimeoutMs = fetchTimeoutMs;
+  if (cloneTimeoutMs) overrides.cloneTimeoutMs = cloneTimeoutMs;
+  if (repoSyncTimeoutMs) overrides.repoSyncTimeoutMs = repoSyncTimeoutMs;
+  return overrides;
+}
+
+function positiveIntEnv(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
@@ -581,6 +601,7 @@ export class MultiremiDaemon {
         serverUrl: this.options.serverUrl,
         token: this.options.token,
       },
+      ...repoCacheTimeoutOverrides(process.env),
     });
     this.agentPluginCache = new AgentPluginCache({
       root: this.options.pluginCacheRoot,
@@ -1965,14 +1986,15 @@ export class MultiremiDaemon {
         repos: [],
       });
     }
+    // Intake prefers a fresh snapshot of every repo, but a refresh failure
+    // degrades to the cached (or absent) view with a prompt warning instead of
+    // failing the task: triage rarely depends on being at the exact tip.
+    const warnings = repoWarningsFromSyncResults(syncResults);
+    for (const warning of warnings) {
+      log.warn(`Intake workspace degraded for ${task.id}: ${warning.repoUrl} is ${warning.kind === "stale_cache" ? "stale" : "unavailable"}: ${warning.message}`);
+    }
     let prepared: PreparedIssueWorkspace;
     try {
-      const staleRepo = syncResults.find((result) => result.status !== "fresh");
-      if (staleRepo) {
-        throw new Error(
-          `Intake workspace requires a fresh repository snapshot, but ${staleRepo.repoUrl} is ${staleRepo.status}: ${staleRepo.error ?? "repository refresh failed"}`,
-        );
-      }
       prepared = await prepareIntakeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, {
         snapshotsRoot: join(this.options.workspacesRoot, ".snapshots"),
         skipRepoFetch: true,
@@ -1990,16 +2012,25 @@ export class MultiremiDaemon {
       }
       throw error;
     }
+    for (const repo of prepared.repos) {
+      if (repo.status !== "error") continue;
+      upsertRepoWarning(warnings, {
+        repoUrl: repo.repoUrl,
+        kind: "unavailable",
+        message: repo.error ?? "repository preparation failed",
+      });
+      log.warn(`Intake snapshot of ${repo.repoUrl} unavailable for ${task.id}: ${repo.error ?? "repository preparation failed"}`);
+    }
     if (runtimeId) {
       await this.client.reportIssueWorkspace(task.id, {
         runtimeId,
         rootPath: resolvedWorkDir.workDir,
         branchName: "",
-        status: "in_use",
+        status: prepared.repos.some((repo) => repo.status === "error") ? "error" : "in_use",
         repos: prepared.repos,
       });
     }
-    return prepared;
+    return { ...prepared, warnings };
   }
 
   private async reportIssueWorkspaceAfterRun(

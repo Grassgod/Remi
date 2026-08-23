@@ -95,9 +95,12 @@ const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_STALE_LOCK_MS = 60 * 60_000;
 const DEFAULT_FETCH_RETRY_DELAYS_MS = [1_000, 3_000] as const;
-const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
-const DEFAULT_CLONE_TIMEOUT_MS = 120_000;
-const DEFAULT_REPO_SYNC_TIMEOUT_MS = 120_000;
+// Large active repos (10GB+, thousands of refs) need well over 30s to catch up
+// after falling behind; a killed fetch discards all transfer progress, so a
+// too-small budget turns one slow window into a permanent sync death spiral.
+const DEFAULT_FETCH_TIMEOUT_MS = 150_000;
+const DEFAULT_CLONE_TIMEOUT_MS = 600_000;
+const DEFAULT_REPO_SYNC_TIMEOUT_MS = 300_000;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 2_000;
 const DEFAULT_GIT_SSH_COMMAND = [
   "ssh",
