@@ -15,6 +15,82 @@ import type {
 
 type Row = Record<string, unknown>;
 
+export const CHAT_BOOTSTRAP_MAX_MESSAGES = 64;
+export const CHAT_BOOTSTRAP_MAX_BYTES = 64 * 1024;
+export const CHAT_BOOTSTRAP_OMITTED_NOTICE = "[Earlier product chat history omitted.]";
+const CHAT_BOOTSTRAP_TRUNCATED_NOTICE = "[Message truncated.]";
+
+export interface ChatBootstrapTranscript {
+  transcript: string;
+  includedMessages: number;
+  totalMessages: number;
+  omitted: boolean;
+}
+
+export function buildChatBootstrapTranscript(
+  messages: readonly MultiremiChatMessage[],
+): ChatBootstrapTranscript {
+  const entries = messages.flatMap((message) => {
+    const body = message.body.trim();
+    return body ? [`[${message.role}]\n${body}`] : [];
+  });
+  const noticeBytes = utf8Bytes(`${CHAT_BOOTSTRAP_OMITTED_NOTICE}\n\n`);
+  const separatorBytes = utf8Bytes("\n\n");
+  const selected: string[] = [];
+  let selectedBytes = 0;
+  let omitted = false;
+
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (selected.length >= CHAT_BOOTSTRAP_MAX_MESSAGES) {
+      omitted = true;
+      break;
+    }
+    const separator = selected.length ? separatorBytes : 0;
+    const available = CHAT_BOOTSTRAP_MAX_BYTES - noticeBytes - selectedBytes - separator;
+    const entry = entries[index]!;
+    const entryBytes = utf8Bytes(entry);
+    if (entryBytes <= available) {
+      selected.unshift(entry);
+      selectedBytes += separator + entryBytes;
+      continue;
+    }
+    omitted = true;
+    if (!selected.length) {
+      const suffix = `\n${CHAT_BOOTSTRAP_TRUNCATED_NOTICE}`;
+      const body = truncateUtf8(entry, Math.max(0, available - utf8Bytes(suffix)));
+      selected.unshift(`${body}${suffix}`);
+    }
+    break;
+  }
+
+  if (selected.length < entries.length) omitted = true;
+  const body = selected.join("\n\n");
+  const transcript = omitted && body
+    ? `${CHAT_BOOTSTRAP_OMITTED_NOTICE}\n\n${body}`
+    : omitted
+      ? CHAT_BOOTSTRAP_OMITTED_NOTICE
+      : body;
+  return {
+    transcript,
+    includedMessages: selected.length,
+    totalMessages: entries.length,
+    omitted,
+  };
+}
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.byteLength <= maxBytes) return value;
+  let end = Math.min(maxBytes, bytes.byteLength);
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return new TextDecoder().decode(bytes.slice(0, end)).trimEnd();
+}
+
 export class ChatRepo {
   constructor(private ctx: StoreContext) {}
 

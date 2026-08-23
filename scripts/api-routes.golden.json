@@ -3825,17 +3825,6 @@
             ],
             "max_concurrent_tasks": 6
           },
-          "repos": [
-            {
-              "url": "https://example.invalid/snapshot.git"
-            },
-            {
-              "url": "https://example.invalid/compat.git"
-            },
-            {
-              "url": "https://example.invalid/native.git"
-            }
-          ],
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
           "auth_token": "mat_a6fb5d92bb4ab5920d4959679498a484831d3e7f"

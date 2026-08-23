@@ -100,6 +100,23 @@ describe("native CLI resource contracts", () => {
     expect(body).toEqual({ name: "Explicit", description: "file description" });
   });
 
+  it("lists repositories from the API without contacting the local Git helper", async () => {
+    useCliEnv();
+    const spec = specById("repo.list");
+    const requests: Request[] = [];
+    globalThis.fetch = mockFetch(spec.id, requests, (request) => {
+      const url = new URL(request.url);
+      if (url.hostname === "127.0.0.1") throw new Error("Git helper must stay offline for repo list");
+      if (url.pathname === "/api/workspaces/ws_1/repos") {
+        return Response.json({ repositories: [{ id: "repo_db", name: "Database only", url: "https://offline.test/repo.git" }] });
+      }
+      throw new Error(`unexpected request ${request.url}`);
+    });
+    const output = await execute(spec, ["--output", "json"]);
+    expect(JSON.parse(output).repositories[0]).toMatchObject({ id: "repo_db", name: "Database only" });
+    expect(requests.some((request) => new URL(request.url).hostname === "127.0.0.1")).toBe(false);
+  });
+
   it("resolves repository names when creating a project and carries explicit defaults", async () => {
     useCliEnv();
     const spec = specById("project.create");
@@ -160,6 +177,33 @@ describe("native CLI resource contracts", () => {
     expect(help).toContain("URLs are used directly");
     expect(help).toContain("IDs, short IDs, and names resolve from the database");
     expect(help).toContain("--ref <branch-or-sha>");
+  });
+
+  it("returns checkout timeout and daemon failures as retryable CLI errors", async () => {
+    useCliEnv();
+    const spec = specById("repo.checkout");
+    globalThis.fetch = mockFetch(spec.id, [], (request) => {
+      if (new URL(request.url).hostname !== "127.0.0.1") throw new Error(`unexpected request ${request.url}`);
+      return new Promise<Response>((_resolve, reject) => {
+        request.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      });
+    });
+    await expect(execute(spec, [
+      "https://example.test/slow.git",
+      "--daemon-port", "6121",
+      "--timeout", "5",
+    ])).rejects.toMatchObject({ code: "timeout", retryable: true });
+
+    globalThis.fetch = mockFetch(spec.id, [], (request) => {
+      if (new URL(request.url).hostname === "127.0.0.1") {
+        return Response.json({ error: "repository fetch failed" }, { status: 500 });
+      }
+      throw new Error(`unexpected request ${request.url}`);
+    });
+    await expect(execute(spec, [
+      "https://example.test/fail.git",
+      "--daemon-port", "6121",
+    ])).rejects.toMatchObject({ code: "server", status: 500 });
   });
 
   it("registers all legacy memory/wiki paths as deprecated aliases", () => {

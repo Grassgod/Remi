@@ -155,6 +155,32 @@ test("a continued turn forwards the pinned session id and the current cwd", asyn
   expect(options.cwd).toBe("/tmp/work");
 });
 
+test("ephemeral stale sessions report once and never replay inside the daemon", async () => {
+  let sends = 0;
+  let clears = 0;
+  const provider = {
+    name: "stale",
+    async send() { return { text: "" }; },
+    async *sendStream(): AsyncGenerator<ProviderEvent> {
+      sends += 1;
+      throw new Error("no conversation found for session");
+    },
+    getLastResponse: () => null,
+    clearSession: async () => { clears += 1; },
+    async healthCheck() { return true; },
+  } as Provider & { clearSession: () => Promise<void> };
+  const config = new AgentRuntime().assemble(ephemeralContext({}, { sessionId: "sess_stale" }));
+  expect(config.recovery).toBeUndefined();
+  const drain = async () => {
+    for await (const _event of new AgentSession(provider, config).run("resume")) {
+      // A stale provider emits no useful events before the stable error.
+    }
+  };
+  await expect(drain()).rejects.toThrow("Stale provider session: no conversation found");
+  expect(sends).toBe(1);
+  expect(clears).toBe(0);
+});
+
 test("AgentSession forwards the assembled system prompt and memory context", async () => {
   const config = new AgentRuntime().assemble(persistentContext({ provider: "claude" }));
   const options = await runOnce(config);

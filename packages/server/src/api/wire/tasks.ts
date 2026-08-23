@@ -27,6 +27,7 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
   return publicTask;
 }
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { buildChatBootstrapTranscript } from "@multiremi/store/repos/chat-repo.js";
 import { createLogger } from "@shared/logger.js";
 import { daemonClaimAgentResponse } from "./agents.js";
 import { issueCompatibilityResponse } from "./issues.js";
@@ -435,7 +436,17 @@ function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: Multirem
 function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTaskWithAgent, response: Record<string, unknown>): void {
   if (!task.chatSessionId) return;
   try {
-    const messages = trailingDaemonUserMessages(store.listChatMessages(task.chatSessionId));
+    const allMessages = store.listChatMessages(task.chatSessionId);
+    const parent = task.parentTaskId ? store.getTask(task.parentTaskId) : null;
+    if (
+      parent?.failureReason === "agent_error.stale_session"
+      && parent.chatSessionId === task.chatSessionId
+    ) {
+      const bootstrap = buildChatBootstrapTranscript(allMessages);
+      if (bootstrap.transcript) response.chat_bootstrap_transcript = bootstrap.transcript;
+      return;
+    }
+    const messages = trailingDaemonUserMessages(allMessages);
     const chatMessage = messages.map((message) => message.body.trim()).filter(Boolean).join("\n\n");
     if (chatMessage) response.chat_message = chatMessage;
   } catch (error) {

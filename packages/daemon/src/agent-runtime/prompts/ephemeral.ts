@@ -42,6 +42,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   sections.push(currentTaskRequest(task));
 
   appendClaimContextSections(sections, task, mode);
+  if (mode === "bootstrap") appendHomepageChatCliSection(sections, task);
   appendSessionContextSections(sections, task, mode);
 
   if (task.issue) {
@@ -178,6 +179,9 @@ function taskPromptMode(task: AgentTask): TaskPromptMode {
 }
 
 function currentTaskRequest(task: AgentTask): string {
+  if (stringField(task, "chatBootstrapTranscript", "chat_bootstrap_transcript")) {
+    return "Continue this Chat from the canonical product history below.";
+  }
   let prompt = task.prompt.trim();
   const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
   if (triggerCommentId) {
@@ -206,8 +210,15 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     if (requestingUserProfile) sections.push(requestingUserProfile);
   }
 
+  const chatBootstrapTranscript = stringField(task, "chatBootstrapTranscript", "chat_bootstrap_transcript");
   const chatMessage = stringField(task, "chatMessage", "chat_message");
-  if (chatMessage) {
+  if (chatBootstrapTranscript) {
+    sections.push("");
+    sections.push("## Product Chat History");
+    sections.push("The native provider session was unavailable. Continue from this canonical, product-stored history; do not assume any provider-local history survived.");
+    sections.push("");
+    sections.push(chatBootstrapTranscript);
+  } else if (chatMessage) {
     sections.push("");
     sections.push("## Chat Message");
     sections.push(chatMessage);
@@ -248,6 +259,14 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     sections.push("## Quick Create Request");
     sections.push(quickCreatePrompt);
   }
+}
+
+function appendHomepageChatCliSection(sections: string[], task: AgentTask): void {
+  if (!task.chatSessionId || task.issueId) return;
+  sections.push("");
+  sections.push("## Remi Context");
+  sections.push("Use `remi context` for the current identity and allowed operations. Use `remi project list|get|search` and `remi repo list|get|search` to inspect the database-backed safe directory.");
+  sections.push("Repositories are not fetched for Chat startup, and `remi repo list` never contacts Git. Run `remi repo checkout <repo-id>` only when repository files are needed; checkout fetches that one repository and returns timeout or fetch failures as a tool error.");
 }
 
 function appendSessionContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode): void {

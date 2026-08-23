@@ -9,6 +9,7 @@ import {
   extractRecords,
   positional,
   renderResource,
+  integerOption,
   requestBody,
   requireConfirmation,
   requiredWorkspace,
@@ -100,18 +101,32 @@ async function checkoutRepository(invocation: CommandInvocation): Promise<void> 
   const port = invocation.options["daemon-port"];
   const daemonPort = typeof port === "number" ? String(port) : process.env.MULTIREMI_DAEMON_PORT?.trim();
   if (!daemonPort) throw new CliError("usage", "--daemon-port or MULTIREMI_DAEMON_PORT is required for repo checkout");
-  const response = await fetch(`http://127.0.0.1:${daemonPort}/repo/checkout`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      url,
-      workspace_id: requiredWorkspace(invocation),
-      workdir: process.cwd(),
-      ref: stringOption(invocation, "ref") ?? "",
-      agent_name: stringOption(invocation, "agent-name") ?? process.env.MULTIREMI_AGENT_NAME?.trim() ?? "",
-      task_id: stringOption(invocation, "task-id") ?? process.env.MULTIREMI_TASK_ID?.trim() ?? "",
-    }),
-  });
+  const timeoutMs = integerOption(invocation, "timeout") ?? 30_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${daemonPort}/repo/checkout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        url,
+        workspace_id: requiredWorkspace(invocation),
+        workdir: process.cwd(),
+        ref: stringOption(invocation, "ref") ?? "",
+        agent_name: stringOption(invocation, "agent-name") ?? process.env.MULTIREMI_AGENT_NAME?.trim() ?? "",
+        task_id: stringOption(invocation, "task-id") ?? process.env.MULTIREMI_TASK_ID?.trim() ?? "",
+      }),
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new CliError("timeout", `checkout timed out after ${timeoutMs}ms`, { retryable: true });
+    }
+    throw new CliError("server", `checkout failed: ${error instanceof Error ? error.message : String(error)}`, { retryable: true });
+  } finally {
+    clearTimeout(timeout);
+  }
   const text = await response.text();
   if (!response.ok) throw new CliError("server", `checkout failed: ${text}`, { status: response.status });
   let result: Record<string, unknown>;

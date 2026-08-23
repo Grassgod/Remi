@@ -38,6 +38,39 @@ function createProjectTask(store: MultiremiStore) {
 }
 
 describe("bootstrap and delta task prompts", () => {
+  it("bootstraps homepage Chat from product history and CLI directory instructions only", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [{
+        id: "repo_chat_prompt",
+        name: "chat-prompt",
+        url: "https://github.com/example/chat-prompt",
+        source: "github",
+      }],
+    });
+    const agent = store.createAgent({ name: "Chat Agent", provider: "codex" });
+    const chat = store.createChatSession({ agentId: agent.id, title: "Home Chat" });
+    const sent = store.sendChatMessage(chat.id, { body: "latest question" });
+    const task = store.getTaskWithAgent(sent.task.id)!;
+    expect(task.repos).toEqual([]);
+
+    const prompt = buildTaskPrompt({
+      ...task,
+      chatBootstrapTranscript: "[user]\nolder question\n\n[assistant]\nolder answer\n\n[user]\nlatest question",
+    } as any);
+    expect(prompt).toContain("## Current Request\nContinue this Chat from the canonical product history below.");
+    expect(prompt).toContain("## Product Chat History");
+    expect(prompt).toContain("[assistant]\nolder answer");
+    expect(prompt).toContain("## Remi Context");
+    expect(prompt).toContain("`remi context`");
+    expect(prompt).toContain("`remi project list|get|search`");
+    expect(prompt).toContain("`remi repo list|get|search`");
+    expect(prompt).toContain("`remi repo checkout <repo-id>`");
+    expect(prompt).not.toContain("## Available Repositories");
+    expect(prompt).not.toContain("https://github.com/example/chat-prompt");
+  });
+
   it("builds a bootstrap prompt with stable execution context", () => {
     const store = createStore();
     const { project, issue, task } = createProjectTask(store);
