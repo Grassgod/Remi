@@ -9,7 +9,11 @@
   "sections": {
     "awaiting_input": "返信待ち",
     "awaiting_review": "レビュー待ち",
+    "blocked": "ブロック中",
     "in_progress": "進行中（後で確認可）"
+  },
+  "failure": {
+    "summary": "失敗理由: {{reason}}"
   },
   "time": {
     "just_now": "たった今",

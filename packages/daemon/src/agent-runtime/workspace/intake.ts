@@ -76,13 +76,31 @@ export async function prepareIntakeWorkspace(
       for (const repo of context.repos) {
         const repoName = uniqueRepoDirectory(repo.url, usedRepoDirectories);
         const linkPath = join(projectRoot, "repos", repoName);
-        const snapshot = await repoCache.createSnapshot({
-          workspaceId: task.workspaceId,
-          repoUrl: repo.url,
-          snapshotsRoot: options.snapshotsRoot,
-          skipFetch: options.skipRepoFetch,
-          signal: options.signal,
-        });
+        let snapshot;
+        try {
+          snapshot = await repoCache.createSnapshot({
+            workspaceId: task.workspaceId,
+            repoUrl: repo.url,
+            snapshotsRoot: options.snapshotsRoot,
+            skipFetch: options.skipRepoFetch,
+            signal: options.signal,
+          });
+        } catch (error) {
+          options.signal?.throwIfAborted();
+          // A repo without any usable snapshot must not sink the whole intake
+          // round; the caller surfaces it as an availability warning instead.
+          repos.push({
+            repoUrl: repo.url,
+            repoName,
+            worktreePath: join(projectsRoot, directory, "repos", repoName),
+            branchName: "",
+            baseRef: "",
+            status: "error",
+            dirty: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
         symlinkSync(snapshot.path, linkPath, "dir");
         repos.push({
           repoUrl: repo.url,

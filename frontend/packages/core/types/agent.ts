@@ -43,6 +43,7 @@ export type TaskFailureReason =
   | "runtime_offline"
   | "runtime_recovery"
   | "agent_error.stale_session"
+  | "repo_sync_failed"
   | "manual";
 
 // One daily bucket for the Agents-list ACTIVITY sparkline. The back-end

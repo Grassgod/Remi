@@ -1,6 +1,21 @@
-import { describe, it, expect } from "vitest";
-import { partitionReviewIssues } from "./workbench";
+// @vitest-environment jsdom
+
+import { createElement, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  partitionReviewIssues,
+  useWorkbenchPendingCount,
+  workbenchKeys,
+} from "./workbench";
 import type { AgentTask, Issue } from "../types";
+
+const listIssues = vi.hoisted(() => vi.fn());
+
+vi.mock("../api", () => ({
+  api: { listIssues },
+}));
 
 function issue(id: string): Issue {
   return {
@@ -74,5 +89,48 @@ describe("partitionReviewIssues", () => {
     const { awaitingInput, awaitingReview } = partitionReviewIssues([issue("a")], []);
     expect(awaitingInput).toEqual([]);
     expect(awaitingReview).toHaveLength(1);
+  });
+});
+
+describe("useWorkbenchPendingCount", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("adds in-review and blocked totals while sharing both query keys", async () => {
+    listIssues.mockImplementation(({ status }: { status: string }) =>
+      Promise.resolve({ issues: [], total: status === "in_review" ? 2 : 3 }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(
+      () => [useWorkbenchPendingCount("ws1"), useWorkbenchPendingCount("ws1")],
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current).toEqual([5, 5]));
+    expect(listIssues).toHaveBeenCalledTimes(2);
+    expect(listIssues.mock.calls.map(([params]) => params.status).sort()).toEqual([
+      "blocked",
+      "in_review",
+    ]);
+    expect(workbenchKeys.blocked("ws1")).toEqual(
+      workbenchKeys.status("ws1", "blocked"),
+    );
+  });
+
+  it("does not query without a workspace", () => {
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useWorkbenchPendingCount(null), { wrapper });
+
+    expect(result.current).toBe(0);
+    expect(listIssues).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,7 @@ import { issueKeys } from "./queries";
 
 /**
  * Data layer for the reviewer workbench (工作台) — the triage surface a human
- * uses to find every issue that is waiting on them.
+ * uses to find every issue that is waiting on them or needs recovery.
  *
  * The backend keeps `issue.status = "in_review"` in sync for BOTH review
  * situations (see server tasks-repo `syncIssueStatusFromTask`):
@@ -14,9 +14,10 @@ import { issueKeys } from "./queries";
  *  - a task is blocked on a human (`awaiting_human`, permission/question) →
  *    the issue also moves to `in_review` while the agent waits.
  *
- * So one `status=in_review` list is the complete "needs me" set, and the
+ * The `status=in_review` list is the complete "needs me" set, and the
  * workspace agent-task snapshot (which includes every active task) splits it
- * into "answer the agent now" vs "review the finished result".
+ * into "answer the agent now" vs "review the finished result". A separate
+ * `status=blocked` list surfaces intake work that failed before completion.
  */
 
 /** One page is the whole workbench — matches the server's default cap. */
@@ -27,6 +28,7 @@ export const workbenchKeys = {
   all: (wsId: string) => [...issueKeys.all(wsId), "workbench"] as const,
   status: (wsId: string, status: IssueStatus) =>
     [...workbenchKeys.all(wsId), status] as const,
+  blocked: (wsId: string) => workbenchKeys.status(wsId, "blocked"),
 };
 
 /**
@@ -73,15 +75,20 @@ export function partitionReviewIssues(
 }
 
 /**
- * Count of issues waiting on a human, for the sidebar badge. Shares the
- * workbench page's `in_review` cache entry, so visiting the workbench keeps
- * the badge fresh at zero extra cost.
+ * Count of issues waiting on a human or blocked after a failed task, for the
+ * sidebar badge. Shares both cache entries with the workbench page, so the
+ * badge adds no requests while that page is mounted.
  */
 export function useWorkbenchPendingCount(wsId: string | null | undefined): number {
-  const { data } = useQuery({
+  const { data: reviewCount } = useQuery({
     ...workbenchIssuesOptions(wsId ?? "", "in_review"),
     enabled: !!wsId,
     select: (res) => res.total,
   });
-  return data ?? 0;
+  const { data: blockedCount } = useQuery({
+    ...workbenchIssuesOptions(wsId ?? "", "blocked"),
+    enabled: !!wsId,
+    select: (res) => res.total,
+  });
+  return (reviewCount ?? 0) + (blockedCount ?? 0);
 }

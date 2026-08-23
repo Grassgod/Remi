@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -27,6 +28,13 @@ afterEach(() => {
   db?.close();
   db = null;
   if (workDir) {
+    try {
+      // Intake snapshots are materialized read-only (0555 dirs); restore write
+      // permission or rmSync fails with EACCES.
+      execFileSync("chmod", ["-R", "u+w", workDir], { stdio: "ignore" });
+    } catch {
+      // The directory may already be gone.
+    }
     rmSync(workDir, { recursive: true, force: true });
     workDir = null;
   }
@@ -1405,6 +1413,90 @@ describe("Bun Multiremi daemon smoke", () => {
       server.stop(true);
     }
   });
+
+  it("degrades an intake task to repo warnings and keeps the error workspace status after the run", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-intake-degraded-");
+    // github_repo project resources require remote-looking URLs; .invalid never
+    // resolves, so every refresh attempt fails fast and deterministically.
+    const cachedRepo = "git@invalid.invalid:intake/cached-repo.git";
+    const unavailableRepo = "git@invalid.invalid:intake/missing-repo.git";
+    const sourceRepo = createSourceRepo(join(workDir, "_source", "cached-repo"));
+    const repoCacheRoot = join(workDir, ".repo-cache");
+    // Seed the daemon cache for cachedRepo by hand (its remote is unreachable):
+    // a bare mirror at the cache path the daemon derives from the URL, with the
+    // remote-tracking layout sync would have produced.
+    const cachedDigest = createHash("sha256").update(cachedRepo).digest("hex").slice(0, 16);
+    const cachedBarePath = join(repoCacheRoot, "local", `cached-repo-${cachedDigest}.git`);
+    mkdirSync(join(repoCacheRoot, "local"), { recursive: true });
+    execFileSync("git", ["clone", "--bare", sourceRepo, cachedBarePath], { stdio: "pipe" });
+    execFileSync("git", ["--git-dir", cachedBarePath, "fetch", sourceRepo, "+refs/heads/*:refs/remotes/origin/*"], { stdio: "pipe" });
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      settings: { github_enabled: false, co_authored_by_enabled: false },
+      repos: [
+        { url: cachedRepo, description: "cached source repo" },
+        { url: unavailableRepo, description: "unavailable source repo" },
+      ],
+    });
+    const project = store.createProject({
+      title: "Intake project",
+      resources: [
+        { resourceType: "github_repo", resourceRef: { url: cachedRepo } },
+        { resourceType: "github_repo", resourceRef: { url: unavailableRepo } },
+      ],
+    });
+    const agent = store.createAgent({ name: "Intake Claude", provider: "claude" });
+    const issue = store.createIssue({ title: "Degraded intake", issueKind: "intake", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Triage the request" });
+    const daemonToken = await store.createAccessToken({
+      name: "Intake degraded daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-intake-degraded-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const prompts: string[] = [];
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeName: "intake-degraded-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot: join(workDir, "workspaces"),
+        repoCacheRoot,
+        providerFactory: messageProviderFactory({
+          text: "triaged with degraded repos",
+          sessionId: "sess-intake-degraded",
+          requestId: "req-intake-degraded",
+          onSend: (message) => { prompts.push(message); },
+        }),
+      });
+
+      await daemon.start();
+
+      // The intake round completes on the cached snapshot instead of failing.
+      expect(store.getTask(task.id)?.status).toBe("completed");
+      expect(prompts[0]).toContain("## Repository Availability Warnings");
+      expect(prompts[0]).toContain("may use stale cached data");
+      expect(prompts[0]).toContain("checkout is unavailable");
+      const workspace = store.getIssueWorkspace(issue.id);
+      expect(workspace?.status).toBe("error");
+      const statusByUrl = new Map((workspace?.repos ?? []).map((repo) => [repo.repoUrl, repo.status]));
+      expect(statusByUrl.get(cachedRepo)).toBe("ready");
+      expect(statusByUrl.get(unavailableRepo)).toBe("error");
+    } finally {
+      server.stop(true);
+    }
+  }, 120_000);
 
   it("resumes chat tasks with the pinned provider session after daemon restart", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-chat-resume-");
