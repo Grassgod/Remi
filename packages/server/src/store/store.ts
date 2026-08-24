@@ -60,11 +60,15 @@ import {
   AutopilotsRepo,
   type MultiremiAutopilotFailureThresholdCandidate,
   type MultiremiAutopilotFailureThresholdOptions,
+  type MultiremiAutopilotRunRecord,
+  type RunAutopilotStoreInput,
 } from "@multiremi/store/repos/autopilots-repo.js";
 // The autopilot failure-monitor option/candidate shapes used to be declared here; keep the public surface unchanged.
 export type {
   MultiremiAutopilotFailureThresholdCandidate,
   MultiremiAutopilotFailureThresholdOptions,
+  MultiremiAutopilotRunRecord,
+  RunAutopilotStoreInput,
 } from "@multiremi/store/repos/autopilots-repo.js";
 import {
   AnalyticsRepo,
@@ -2755,8 +2759,12 @@ runMigrations(this.db);
     return this.autopilots.dispatchPendingSystemEvents(now, limit);
   }
 
-  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRun[] {
+  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRunRecord[] {
     return this.autopilots.listAutopilotRuns(autopilotId);
+  }
+
+  listLatestRepositoryAutopilotRuns(workspaceId: string): MultiremiAutopilotRunRecord[] {
+    return this.autopilots.listLatestRepositoryAutopilotRuns(workspaceId);
   }
 
   selectAutopilotsExceedingFailureThreshold(
@@ -2775,11 +2783,11 @@ runMigrations(this.db);
     return this.autopilots.pauseAutopilotsExceedingFailureThreshold(options);
   }
 
-  runAutopilot(autopilotId: string, input: RunAutopilotInput = {}): MultiremiAutopilotRun {
+  runAutopilot(autopilotId: string, input: RunAutopilotStoreInput = {}): MultiremiAutopilotRunRecord {
     return this.autopilots.runAutopilot(autopilotId, input);
   }
 
-  getAutopilotRun(id: string): MultiremiAutopilotRun | null {
+  getAutopilotRun(id: string): MultiremiAutopilotRunRecord | null {
     return this.autopilots.getAutopilotRun(id);
   }
 

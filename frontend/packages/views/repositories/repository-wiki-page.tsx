@@ -1,12 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, BookOpen, ChevronRight, FileText, GitFork, History, Loader2, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, BookOpen, ChevronRight, FileText, GitFork, History, Loader2, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import {
+  isWikiBuildActive,
+  isWikiBuildInProgressError,
+  repositoryKeys,
   repositoryListOptions,
   repositoryWikiDocsOptions,
   repositoryWikiSummariesOptions,
@@ -14,6 +17,7 @@ import {
 } from "@multiremi/core/repositories";
 import { api } from "@multiremi/core/api";
 import type { RepositoryWikiDoc, RepositoryWikiStatus } from "@multiremi/core/types";
+import type { AgentTask } from "@multiremi/core/types/agent";
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
@@ -22,6 +26,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { AppLink } from "../navigation";
 import { DocRefs } from "../common/doc-refs";
 import { EmptyState } from "../common/empty-state";
+import { TranscriptButton } from "../common/task-transcript";
 import { ReadonlyContent } from "../editor";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n";
@@ -81,6 +86,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
   const { t } = useT("repositories");
   const workspaceId = useWorkspaceId();
   const paths = useWorkspacePaths();
+  const queryClient = useQueryClient();
   const repositoriesQuery = useQuery(repositoryListOptions(workspaceId));
   const docsQuery = useQuery(repositoryWikiDocsOptions(workspaceId, repositoryId));
   const summariesQuery = useQuery(repositoryWikiSummariesOptions(workspaceId));
@@ -94,6 +100,84 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
     return docs.filter((doc) => !query || [doc.title, doc.path, doc.summary ?? "", ...doc.tags].some((value) => value.toLowerCase().includes(query)));
   }, [docs, filter]);
   const selected = docs.find((doc) => doc.path === wikiPath || doc.slug === wikiPath || doc.id === wikiPath) ?? docs[0] ?? null;
+
+  // The server-reported build state is the single source of truth — the page
+  // never keeps its own "building" flag, so a refresh restores the state.
+  const buildInfo = summary?.build ?? null;
+  const building = isWikiBuildActive(summary);
+  const buildFailed = !building && (buildInfo?.status === "failed" || summary?.status === "failed");
+  const failureReason = buildInfo?.failure_reason ?? summary?.status_message ?? null;
+
+  // When polling observes the build leaving the active state (→ healthy or
+  // failed), refresh the docs so newly generated pages appear immediately.
+  const wasBuildingRef = useRef(false);
+  useEffect(() => {
+    if (wasBuildingRef.current && !building) {
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.wiki(workspaceId, repositoryId) });
+    }
+    wasBuildingRef.current = building;
+  }, [building, queryClient, repositoryId, workspaceId]);
+
+  const handleBuild = () => {
+    if (building || buildMutation.isPending) return;
+    buildMutation.mutate(undefined, {
+      onSuccess: () => {
+        toast.success(t(($) => $.wiki.build_started));
+      },
+      onError: (error) => {
+        // 409 "already building" is not a failure — the mutation hook has
+        // already flipped the cached summary to the building state.
+        if (isWikiBuildInProgressError(error)) {
+          toast.info(t(($) => $.wiki.build_in_progress));
+          return;
+        }
+        toast.error(error instanceof Error && error.message ? error.message : t(($) => $.wiki.build_failed));
+      },
+    });
+  };
+
+  // Minimal AgentTask so TranscriptButton can lazy-load the Atlas build
+  // transcript — same pattern as the autopilot run history rows.
+  const buildTask: AgentTask | null = buildInfo?.task_id
+    ? {
+        id: buildInfo.task_id,
+        agent_id: "",
+        runtime_id: "",
+        issue_id: "",
+        status: buildFailed ? "failed" : building ? "running" : "completed",
+        priority: 0,
+        dispatched_at: null,
+        started_at: buildInfo.started_at,
+        completed_at: null,
+        result: null,
+        error: buildInfo.failure_reason,
+        created_at: buildInfo.started_at ?? buildInfo.updated_at ?? "",
+      }
+    : null;
+
+  const buildDisabled = building || buildMutation.isPending;
+  const buildPending = building || buildMutation.isPending;
+
+  const buildButton = (variant: "default" | "outline", rebuild: boolean) => (
+    <Button
+      type="button"
+      size={variant === "outline" ? "sm" : undefined}
+      variant={variant}
+      disabled={buildDisabled}
+      onClick={handleBuild}
+    >
+      {buildPending
+        ? <Loader2 className="size-4 animate-spin" />
+        : rebuild
+          ? <RefreshCw className="size-4" />
+          : <BookOpen className="size-4" />}
+      {buildPending
+        ? t(($) => $.wiki.building_action)
+        : rebuild
+          ? t(($) => $.wiki.rebuild_action)
+          : t(($) => $.wiki.build_action)}
+    </Button>
+  );
 
   if (repositoriesQuery.isLoading || docsQuery.isLoading) {
     return <div className="flex flex-1 flex-col"><PageHeader><Skeleton className="h-4 w-40" /></PageHeader><div className="p-5"><Skeleton className="h-96 w-full" /></div></div>;
@@ -110,8 +194,28 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
           <ChevronRight className="size-3.5 text-muted-foreground" />
           <span className="truncate font-medium">{t(($) => $.wiki.title)}</span>
         </div>
-        <RepositoryWikiStatusBadge status={summary?.status ?? "unbuilt"} />
+        <div className="flex shrink-0 items-center gap-2">
+          <RepositoryWikiStatusBadge status={building ? "building" : summary?.status ?? "unbuilt"} />
+          {building && buildTask && (
+            <TranscriptButton task={buildTask} agentName="Atlas" isLive title={t(($) => $.wiki.view_build_log)} />
+          )}
+          {docs.length > 0 && buildButton("outline", true)}
+        </div>
       </PageHeader>
+
+      {buildFailed && (
+        <div className="flex items-center gap-3 border-b bg-destructive/5 px-5 py-2.5 text-sm">
+          <AlertCircle className="size-4 shrink-0 text-destructive" />
+          <div className="min-w-0 flex-1 truncate">
+            <span className="font-medium text-destructive">{t(($) => $.wiki.build_failed_title)}</span>
+            {failureReason && <span className="ml-2 text-muted-foreground" title={failureReason}>{failureReason}</span>}
+          </div>
+          {buildTask && (
+            <TranscriptButton task={buildTask} agentName="Atlas" title={t(($) => $.wiki.view_build_log)} />
+          )}
+          {docs.length === 0 && buildButton("outline", true)}
+        </div>
+      )}
 
       {docsQuery.isError ? (
         <EmptyState variant="status" tone="destructive" icon={AlertCircle} title={String(docsQuery.error)} />
@@ -120,22 +224,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
           icon={BookOpen}
           title={t(($) => $.wiki.empty_title)}
           description={t(($) => $.wiki.empty_description)}
-          action={(
-            <Button
-              type="button"
-              disabled={buildMutation.isPending}
-              onClick={() => buildMutation.mutate(undefined, {
-                onSuccess: (run) => {
-                  if (run.task_id) toast.success(t(($) => $.wiki.build_started));
-                  else toast.error(t(($) => $.wiki.build_failed));
-                },
-                onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.wiki.build_failed)),
-              })}
-            >
-              {buildMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <BookOpen className="size-4" />}
-              {t(($) => $.wiki.build_action)}
-            </Button>
-          )}
+          action={buildButton("default", buildFailed)}
         />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col xl:grid xl:grid-cols-[280px_minmax(0,1fr)]">

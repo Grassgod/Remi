@@ -1054,6 +1054,97 @@ describe("SCM connection and canonical event store", () => {
     expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
   });
 
+  it("collapses change.merged and default_branch.updated at one revision into a single wiki build run", () => {
+    const { store, connection } = seedConnection();
+    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    const wiki = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      workspaceId: "local",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      description: "Update the repository wiki",
+    });
+    const wikiTrigger = store.createAutopilotTrigger(wiki.id, {
+      kind: "scm_event",
+      eventConfig: {
+        resource: "scm",
+        events: ["change.merged", "default_branch.updated"],
+        repositoryIds: ["repo_widgets"],
+      },
+    });
+    const announcer = store.createAutopilot({
+      title: "Merge announcer",
+      workspaceId: "local",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      description: "Announce merges",
+    });
+    store.createAutopilotTrigger(announcer.id, {
+      kind: "scm_event",
+      eventConfig: {
+        resource: "scm",
+        events: ["change.merged", "default_branch.updated"],
+        repositoryIds: ["repo_widgets"],
+      },
+    });
+
+    const mergedAt = new Date(Date.now() + 1_000).toISOString();
+    store.recordScmCanonicalEvent({
+      workspaceId: "local",
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      type: "change.merged",
+      subjectType: "change_request",
+      subjectId: "7",
+      logicalKey: "change.merged:7:merged",
+      fidelity: "exact",
+      occurredAt: mergedAt,
+      observedAt: mergedAt,
+      payload: { number: 7, title: "Add docs", target_branch: "main", merge_sha: "abc123" },
+      evidence: { source: "webhook", dedupeKey: "webhook:change-7" },
+    });
+    const pushedAt = new Date(Date.now() + 1_500).toISOString();
+    store.recordScmCanonicalEvent({
+      workspaceId: "local",
+      connectionId: connection.id,
+      repositoryId: "repo_widgets",
+      type: "default_branch.updated",
+      subjectType: "ref",
+      subjectId: "main",
+      logicalKey: "default_branch.updated:main:abc123",
+      fidelity: "exact",
+      occurredAt: pushedAt,
+      observedAt: pushedAt,
+      payload: { branch: "main", head_sha: "abc123" },
+      evidence: { source: "webhook", dedupeKey: "webhook:push-abc123" },
+    });
+
+    store.dispatchPendingScmEvents(new Date(Date.now() + 5_000));
+
+    // The wiki autopilot deduped the two events into one revision-pinned run…
+    const wikiRuns = store.listAutopilotRuns(wiki.id);
+    expect(wikiRuns).toHaveLength(1);
+    expect(wikiRuns[0]).toMatchObject({
+      source: "scm_event",
+      status: "running",
+      repositoryId: "repo_widgets",
+      dedupeKey: "repo_widgets:incremental_update:abc123",
+    });
+    // …with both deliveries resolved against the same run.
+    const deliveries = db!.query(
+      "SELECT autopilot_run_id, status FROM multiremi_scm_event_deliveries WHERE trigger_id = ?",
+    ).all(wikiTrigger.id) as Array<{ autopilot_run_id: string; status: string }>;
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries.every((delivery) =>
+      delivery.status === "delivered" && delivery.autopilot_run_id === wikiRuns[0]!.id
+    )).toBe(true);
+
+    // Non-wiki autopilots keep one run per event.
+    const announcerRuns = store.listAutopilotRuns(announcer.id);
+    expect(announcerRuns).toHaveLength(2);
+    expect(announcerRuns.every((run) => run.repositoryId === null && run.dedupeKey === null)).toBe(true);
+  });
+
   it("retries the persisted delivery set after filters change and explicitly skips disabled triggers", () => {
     const { store, connection } = seedConnection();
     const agent = store.createAgent({ name: "Wiki Maintainer", provider: "codex" });

@@ -81,7 +81,7 @@ describe("store migrations", () => {
     ]));
     expect(columnNames(database, "multiremi_autopilot_triggers")).toContain("event_config");
     expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
-      "trigger_id", "event_id", "issue_session_id",
+      "trigger_id", "event_id", "issue_session_id", "repository_id", "dedupe_key",
     ]));
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining([
       "issue_kind", "source_issue_id", "lifecycle_state", "completed_at", "archived_at",
@@ -673,12 +673,17 @@ describe("store migrations", () => {
     migrate(database);
 
     expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
-      "trigger_id", "event_id", "issue_session_id",
+      "trigger_id", "event_id", "issue_session_id", "repository_id", "dedupe_key",
     ]));
     expect(database.query(
       "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
     ).get("idx_multiremi_autopilot_runs_system_event")).toEqual({
       name: "idx_multiremi_autopilot_runs_system_event",
+    });
+    expect(database.query(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+    ).get("idx_multiremi_autopilot_runs_repository")).toEqual({
+      name: "idx_multiremi_autopilot_runs_repository",
     });
   });
 

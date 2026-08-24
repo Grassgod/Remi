@@ -3,6 +3,11 @@ import type { StoreContext } from "@multiremi/store/context.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
 import { assertScmRepositoryMatchesConnection } from "@multiremi/scm/repository-url.js";
+import {
+  ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
+  extractScmPayloadRevision,
+  repositoryWikiBuildDedupeKey,
+} from "@multiremi/store/repos/autopilots-repo.js";
 import type {
   ScmSnapshotEventFactory,
   ScmSnapshotEventWriteResult,
@@ -1212,10 +1217,23 @@ export class ScmRepo {
           continue;
         }
         try {
+          // Repository Wiki builds are idempotent per repository + revision:
+          // when the target is the Atlas Repository Wiki autopilot, carry the
+          // repository and a revision-pinned dedupe key so change.merged and
+          // default_branch.updated for the same merge produce a single run.
+          const wikiAutopilot = this.ctx.autopilots().getAutopilot(target.autopilotId);
+          const wikiBuild = wikiAutopilot?.title === ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE;
+          const wikiRevision = wikiBuild ? extractScmPayloadRevision(event.payload) : null;
           const run = this.ctx.autopilots().runAutopilot(target.autopilotId, {
             source: "scm_event",
             triggerId: persisted.triggerId,
             eventId: event.id,
+            ...(wikiBuild
+              ? {
+                repositoryId: event.repositoryId,
+                dedupeKey: repositoryWikiBuildDedupeKey(event.repositoryId, "incremental_update", wikiRevision),
+              }
+              : {}),
             payload: {
               event: {
                 id: event.id,

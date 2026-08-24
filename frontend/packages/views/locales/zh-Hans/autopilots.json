@@ -105,16 +105,18 @@
     "running": "运行中",
     "skipped": "已跳过",
     "completed": "已完成",
-    "failed": "失败",
-    "skipped": "已跳过"
+    "failed": "失败"
   },
   "run_source": {
-    "schedule": "时间表",
+    "schedule": "定时执行",
     "manual": "手动",
     "webhook": "Webhook",
     "system_event": "系统事件",
     "scm_event": "代码事件",
-    "api": "API"
+    "wiki_build": "手动构建",
+    "change_merged": "PR/MR 已合入",
+    "default_branch_updated": "默认分支已更新",
+    "api": "API 调用"
   },
   "run": {
     "issue_linked": "已关联 issue",
@@ -330,7 +332,11 @@
       "all_repositories": "所有已绑定仓库",
       "no_repositories": "没有可用仓库，请先在代码托管设置中绑定。",
       "events_label": "事件",
-      "groups": { "changes": "合并请求", "collaboration": "协作", "delivery": "交付" },
+      "groups": {
+        "changes": "合并请求",
+        "collaboration": "协作",
+        "delivery": "交付"
+      },
       "events": {
         "change.opened": "创建 MR/PR",
         "change.updated": "更新 MR/PR",

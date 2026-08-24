@@ -786,6 +786,209 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(store.listTasks()).toEqual([]);
   });
 
+  it("dedupes repository Wiki build runs by active build and pinned-revision key", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    const runtime = store.registerRuntime({ name: "wiki-runtime", provider: "claude" });
+    const autopilot = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      description: "Update the repository wiki",
+    });
+    const manualInput = {
+      source: "api" as const,
+      repositoryId: "repo_x",
+      dedupeKey: "repo_x:bootstrap_repository:head",
+      payload: { atlas_repository_id: "repo_x", atlas_mode: "bootstrap_repository" },
+    };
+
+    const first = store.runAutopilot(autopilot.id, manualInput);
+    expect(first.status).toBe("running");
+    expect(first.repositoryId).toBe("repo_x");
+    expect(first.dedupeKey).toBe("repo_x:bootstrap_repository:head");
+    expect(first.deduplicated).toBeUndefined();
+
+    // A second request while the build is active returns the existing run.
+    const duplicate = store.runAutopilot(autopilot.id, manualInput);
+    expect(duplicate.id).toBe(first.id);
+    expect(duplicate.deduplicated).toBe(true);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
+
+    // A failed build never blocks a retry.
+    expect(store.claimTask(runtime.id)?.id).toBe(first.taskId!);
+    store.startTask(first.taskId!);
+    store.failTask(first.taskId!, { error: "clone failed" });
+    expect(store.getAutopilotRun(first.id)?.status).toBe("failed");
+    const retry = store.runAutopilot(autopilot.id, manualInput);
+    expect(retry.id).not.toBe(first.id);
+    expect(retry.deduplicated).toBeUndefined();
+
+    // A completed HEAD build targets a moving revision — rebuilds stay allowed.
+    expect(store.claimTask(runtime.id)?.id).toBe(retry.taskId!);
+    store.startTask(retry.taskId!);
+    store.completeTask(retry.taskId!, { output: "ok" });
+    const rebuild = store.runAutopilot(autopilot.id, manualInput);
+    expect(rebuild.id).not.toBe(retry.id);
+    expect(store.claimTask(runtime.id)?.id).toBe(rebuild.taskId!);
+    store.startTask(rebuild.taskId!);
+    store.completeTask(rebuild.taskId!, { output: "ok" });
+
+    // A completed pinned-revision build is authoritative for that revision.
+    const pinnedInput = {
+      source: "scm_event" as const,
+      repositoryId: "repo_x",
+      dedupeKey: "repo_x:incremental_update:abc123",
+    };
+    const pinned = store.runAutopilot(autopilot.id, pinnedInput);
+    expect(pinned.deduplicated).toBeUndefined();
+    expect(store.claimTask(runtime.id)?.id).toBe(pinned.taskId!);
+    store.startTask(pinned.taskId!);
+    store.completeTask(pinned.taskId!, { output: "ok" });
+    const replay = store.runAutopilot(autopilot.id, pinnedInput);
+    expect(replay.id).toBe(pinned.id);
+    expect(replay.deduplicated).toBe(true);
+
+    // Runs without repository scoping (every other autopilot) never dedupe.
+    const other = store.createAutopilot({
+      title: "Not a wiki autopilot",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      description: "Do something else",
+    });
+    const a = store.runAutopilot(other.id);
+    const b = store.runAutopilot(other.id);
+    expect(a.id).not.toBe(b.id);
+    expect(store.listAutopilotRuns(other.id)).toHaveLength(2);
+  });
+
+  it("returns structured trigger summaries in slim run listings", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [{
+        id: "repo_widgets",
+        name: "widgets",
+        url: "git@github.com:acme/widgets.git",
+        source: "github",
+        default_branch: "main",
+      }],
+    });
+    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    const autopilot = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      description: "Update the repository wiki",
+    });
+
+    const mergedRun = store.runAutopilot(autopilot.id, {
+      source: "scm_event",
+      payload: {
+        event: {
+          id: "sce_merge",
+          type: "change.merged",
+          repositoryId: "repo_widgets",
+          occurredAt: "2026-08-24T00:00:00.000Z",
+        },
+        data: { number: 7, title: "Add docs", target_branch: "main", merge_sha: "abc123" },
+      },
+    });
+    const branchRun = store.runAutopilot(autopilot.id, {
+      source: "scm_event",
+      payload: {
+        event: {
+          id: "sce_branch",
+          type: "default_branch.updated",
+          repositoryId: "repo_widgets",
+          occurredAt: "2026-08-24T00:01:00.000Z",
+        },
+        data: { branch: "main", head_sha: "def456" },
+      },
+    });
+    const webhookRun = store.runAutopilot(autopilot.id, {
+      source: "webhook",
+      payload: {
+        event: "github.pull_request.opened",
+        eventPayload: { action: "opened" },
+        request: { receivedAt: "2026-08-24T00:02:00.000Z" },
+      },
+    });
+    const scheduleRun = store.runAutopilot(autopilot.id, {
+      source: "schedule",
+      payload: { cronExpression: "0 9 * * *", triggerId: "trg_sched", timezone: "UTC" },
+    });
+    const wikiRun = store.runAutopilot(autopilot.id, {
+      source: "api",
+      repositoryId: "repo_widgets",
+      dedupeKey: "repo_widgets:bootstrap_repository:head",
+      payload: { atlas_repository_id: "repo_widgets", atlas_mode: "bootstrap_repository" },
+    });
+
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/autopilots/${autopilot.id}/runs`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    const byId = new Map<string, any>(body.runs.map((run: any) => [run.id, run]));
+    expect(body.runs.every((run: any) => run.trigger_payload === null)).toBe(true);
+
+    expect(byId.get(mergedRun.id)?.trigger_summary).toEqual({
+      event_type: "change.merged",
+      repository_id: "repo_widgets",
+      repository_name: "widgets",
+      change_number: 7,
+      change_title: "Add docs",
+      target_branch: "main",
+      source_revision: "abc123",
+      occurred_at: "2026-08-24T00:00:00.000Z",
+      wiki_build: false,
+    });
+    expect(byId.get(branchRun.id)?.trigger_summary).toEqual({
+      event_type: "default_branch.updated",
+      repository_id: "repo_widgets",
+      repository_name: "widgets",
+      change_number: null,
+      change_title: null,
+      target_branch: "main",
+      source_revision: "def456",
+      occurred_at: "2026-08-24T00:01:00.000Z",
+      wiki_build: false,
+    });
+    expect(byId.get(webhookRun.id)?.trigger_summary).toEqual({
+      event_type: "github.pull_request.opened",
+      repository_id: null,
+      repository_name: null,
+      change_number: null,
+      change_title: null,
+      target_branch: null,
+      source_revision: null,
+      occurred_at: "2026-08-24T00:02:00.000Z",
+      wiki_build: false,
+    });
+    expect(byId.get(scheduleRun.id)?.trigger_summary).toEqual({
+      event_type: "schedule",
+      repository_id: null,
+      repository_name: null,
+      change_number: null,
+      change_title: null,
+      target_branch: null,
+      source_revision: null,
+      occurred_at: null,
+      wiki_build: false,
+    });
+    expect(byId.get(wikiRun.id)?.trigger_summary).toEqual({
+      event_type: null,
+      repository_id: "repo_widgets",
+      repository_name: "widgets",
+      change_number: null,
+      change_title: null,
+      target_branch: null,
+      source_revision: null,
+      occurred_at: null,
+      wiki_build: true,
+    });
+  });
+
   it("rolls back the reserved run when trigger_issue has no triggering Issue", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });

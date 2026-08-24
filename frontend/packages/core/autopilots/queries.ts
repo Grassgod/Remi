@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import type { ListAutopilotRunsResponse } from "../types";
 
 export const autopilotKeys = {
   all: (wsId: string) => ["autopilots", wsId] as const,
@@ -31,11 +32,36 @@ export function autopilotDetailOptions(wsId: string, id: string) {
   });
 }
 
+// Statuses after which a run can no longer change. `issue_created` is the
+// terminal state for create_issue / trigger_issue autopilots — progress after
+// that point lives on the issue, not on the run row.
+const TERMINAL_RUN_STATUSES = new Set(["issue_created", "completed", "failed", "skipped"]);
+
+export const ACTIVE_RUN_POLL_INTERVAL_MS = 2_500;
+export const EMPTY_RUNS_POLL_INTERVAL_MS = 10_000;
+
+// Conditional polling for the run-history list:
+// - any non-terminal run → fast poll (a run is executing right now)
+// - empty list → slow poll (waiting for the first run to appear, e.g. right
+//   after a wiki build or webhook was fired from another page)
+// - all terminal → stop polling entirely.
+export function autopilotRunsRefetchInterval(
+  data: ListAutopilotRunsResponse | undefined,
+): number | false {
+  if (!data) return false;
+  if (data.runs.length === 0) return EMPTY_RUNS_POLL_INTERVAL_MS;
+  return data.runs.some((run) => !TERMINAL_RUN_STATUSES.has(run.status))
+    ? ACTIVE_RUN_POLL_INTERVAL_MS
+    : false;
+}
+
 export function autopilotRunsOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: autopilotKeys.runs(wsId, id),
     queryFn: () => api.listAutopilotRuns(id),
     select: (data) => data.runs,
+    // Note: refetchInterval sees the raw (pre-`select`) cached response.
+    refetchInterval: (query) => autopilotRunsRefetchInterval(query.state.data),
   });
 }
 

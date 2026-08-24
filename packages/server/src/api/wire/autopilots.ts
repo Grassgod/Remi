@@ -13,6 +13,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { Context } from "hono";
 import { cleanString, currentAccessToken, currentRequestUserId, hasOwn } from "./context.js";
+import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 
 export function autopilotCreateInput(c: Context, input: CreateAutopilotInput): CreateAutopilotInput {
   const workspaceId = cleanString(input.workspaceId) ??
@@ -199,11 +200,32 @@ export function autopilotTriggerCompatibilityResponse(trigger: MultiremiAutopilo
   return response;
 }
 
+/** Run shape produced by the server store: contracts run + repository Wiki build scoping. */
+type AutopilotRunWireInput = MultiremiAutopilotRun & {
+  repositoryId?: string | null;
+  dedupeKey?: string | null;
+};
+
+export interface AutopilotRunTriggerSummary {
+  event_type: string | null;
+  repository_id: string | null;
+  repository_name: string | null;
+  change_number: number | null;
+  change_title: string | null;
+  target_branch: string | null;
+  source_revision: string | null;
+  occurred_at: string | null;
+  wiki_build: boolean;
+}
+
 export function autopilotRunCompatibilityResponse(
-  run: MultiremiAutopilotRun,
-  options: { slim?: boolean } = {},
+  run: AutopilotRunWireInput,
+  options: {
+    slim?: boolean;
+    resolveRepositoryName?: (repositoryId: string) => string | null;
+  } = {},
 ): Record<string, unknown> {
-  return {
+  const response: Record<string, unknown> = {
     id: run.id,
     autopilot_id: run.autopilotId,
     trigger_id: run.triggerId,
@@ -220,6 +242,69 @@ export function autopilotRunCompatibilityResponse(
     result: run.result,
     created_at: run.createdAt,
   };
+  // List rows never carry the full trigger payload; a structured best-effort
+  // summary replaces it so the UI can render the run's origin.
+  if (options.slim) {
+    response.trigger_summary = autopilotRunTriggerSummary(run, options.resolveRepositoryName);
+  }
+  return response;
+}
+
+/**
+ * Best-effort structured origin summary for a run, extracted from its payload:
+ * SCM canonical events ({event, data}), webhook envelopes ({event, request}),
+ * schedule metadata, and manual repository Wiki builds (atlas_repository_id).
+ */
+export function autopilotRunTriggerSummary(
+  run: AutopilotRunWireInput,
+  resolveRepositoryName?: (repositoryId: string) => string | null,
+): AutopilotRunTriggerSummary | null {
+  const payload = summaryRecord(run.payload);
+  const scmEvent = summaryRecord(payload?.event);
+  const data = summaryRecord(payload?.data);
+  const atlasRepositoryId = summaryString(payload?.atlas_repository_id);
+  const repositoryId = run.repositoryId
+    ?? (scmEvent ? summaryString(scmEvent.repositoryId) : null)
+    ?? atlasRepositoryId;
+  const wikiBuild = Boolean(run.repositoryId ?? atlasRepositoryId);
+  const eventType = scmEvent
+    ? summaryString(scmEvent.type)
+    : summaryString(payload?.event)
+      ?? (run.source === "schedule" ? "schedule" : null);
+  const occurredAt = scmEvent
+    ? summaryString(scmEvent.occurredAt)
+    : summaryString(summaryRecord(payload?.request)?.receivedAt);
+  const changeNumber = typeof data?.number === "number" && Number.isFinite(data.number)
+    ? data.number
+    : null;
+  const changeTitle = data ? summaryString(data.title) : null;
+  const targetBranch = data ? summaryString(data.target_branch) ?? summaryString(data.branch) : null;
+  const sourceRevision = autopilotRunSourceRevision({
+    dedupeKey: run.dedupeKey ?? null,
+    payload: run.payload,
+  });
+  if (!eventType && !repositoryId && !wikiBuild && !occurredAt) return null;
+  return {
+    event_type: eventType,
+    repository_id: repositoryId,
+    repository_name: repositoryId ? resolveRepositoryName?.(repositoryId) ?? null : null,
+    change_number: changeNumber,
+    change_title: changeTitle,
+    target_branch: targetBranch,
+    source_revision: sourceRevision,
+    occurred_at: occurredAt,
+    wiki_build: wikiBuild,
+  };
+}
+
+function summaryRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function summaryString(value: unknown): string | null {
+  return typeof value === "string" ? cleanString(value) : null;
 }
 
 export function validateAutopilotTriggerCompatibilityInput(input: CreateAutopilotTriggerInput): string | null {

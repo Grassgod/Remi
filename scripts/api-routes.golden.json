@@ -2203,6 +2203,8 @@
           "triggerId": null,
           "eventId": null,
           "issueSessionId": "ises_aw448dcq07dx",
+          "repositoryId": null,
+          "dedupeKey": null,
           "triggeredAt": "<timestamp>",
           "completedAt": null,
           "failureReason": null,
@@ -2348,6 +2350,8 @@
           "triggerId": null,
           "eventId": null,
           "issueSessionId": "ises_8dim5r24mzl2",
+          "repositoryId": null,
+          "dedupeKey": null,
           "triggeredAt": "<timestamp>",
           "completedAt": null,
           "failureReason": null,
@@ -2377,6 +2381,8 @@
           "triggerId": null,
           "eventId": null,
           "issueSessionId": "ises_q5010won31uy",
+          "repositoryId": null,
+          "dedupeKey": null,
           "triggeredAt": "<timestamp>",
           "completedAt": null,
           "failureReason": null,
@@ -2406,6 +2412,8 @@
           "triggerId": null,
           "eventId": null,
           "issueSessionId": "ises_c77isk189u85",
+          "repositoryId": null,
+          "dedupeKey": null,
           "triggeredAt": "<timestamp>",
           "completedAt": null,
           "failureReason": null,
@@ -2504,6 +2512,8 @@
           "triggerId": null,
           "eventId": null,
           "issueSessionId": "ises_d9havbvj3rg3",
+          "repositoryId": null,
+          "dedupeKey": null,
           "triggeredAt": "<timestamp>",
           "completedAt": null,
           "failureReason": null,
@@ -6412,7 +6422,18 @@
               "issueId": "iss_8rcx9z88woyu",
               "issueSessionId": "ises_gbmah1mhgwob"
             },
-            "created_at": "<timestamp>"
+            "created_at": "<timestamp>",
+            "trigger_summary": {
+              "event_type": "github.issues.opened",
+              "repository_id": null,
+              "repository_name": null,
+              "change_number": null,
+              "change_title": null,
+              "target_branch": null,
+              "source_revision": null,
+              "occurred_at": "<timestamp>",
+              "wiki_build": false
+            }
           },
           {
             "id": "run_sv8e5p1ut6x0",
@@ -6433,7 +6454,8 @@
               "issueId": "iss_i244sp2mewms",
               "issueSessionId": "ises_j3m15clzy3p6"
             },
-            "created_at": "<timestamp>"
+            "created_at": "<timestamp>",
+            "trigger_summary": null
           }
         ],
         "total": 2
@@ -14442,6 +14464,8 @@
             "triggerId": null,
             "eventId": null,
             "issueSessionId": "ises_gbmah1mhgwob",
+            "repositoryId": null,
+            "dedupeKey": null,
             "triggeredAt": "<timestamp>",
             "completedAt": null,
             "failureReason": null,
@@ -14471,6 +14495,8 @@
             "triggerId": null,
             "eventId": null,
             "issueSessionId": "ises_j3m15clzy3p6",
+            "repositoryId": null,
+            "dedupeKey": null,
             "triggeredAt": "<timestamp>",
             "completedAt": null,
             "failureReason": null,
@@ -14601,6 +14627,8 @@
             "triggerId": null,
             "eventId": null,
             "issueSessionId": "ises_gbmah1mhgwob",
+            "repositoryId": null,
+            "dedupeKey": null,
             "triggeredAt": "<timestamp>",
             "completedAt": null,
             "failureReason": null,
@@ -14630,6 +14658,8 @@
             "triggerId": null,
             "eventId": null,
             "issueSessionId": "ises_j3m15clzy3p6",
+            "repositoryId": null,
+            "dedupeKey": null,
             "triggeredAt": "<timestamp>",
             "completedAt": null,
             "failureReason": null,
@@ -19303,7 +19333,16 @@
             "status_message": null,
             "source_revision": null,
             "page_count": 0,
-            "updated_at": null
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": null,
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": null,
+              "updated_at": null,
+              "source_revision": null
+            }
           },
           {
             "repository_id": "repo_snapshot_compat",
@@ -19312,7 +19351,16 @@
             "status_message": null,
             "source_revision": null,
             "page_count": 0,
-            "updated_at": null
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": null,
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": null,
+              "updated_at": null,
+              "source_revision": null
+            }
           },
           {
             "repository_id": "repo_snapshot_native",
@@ -19321,7 +19369,16 @@
             "status_message": null,
             "source_revision": null,
             "page_count": 0,
-            "updated_at": null
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": null,
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": null,
+              "updated_at": null,
+              "source_revision": null
+            }
           }
         ]
       }

@@ -172,6 +172,7 @@ export type {
   AutopilotRun,
   AutopilotRunStatus,
   AutopilotRunSource,
+  AutopilotRunTriggerSummary,
   AutopilotSystemEventCondition,
   AutopilotSystemEventConfig,
   AutopilotScmEventConfig,
