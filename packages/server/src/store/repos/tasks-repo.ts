@@ -2508,6 +2508,7 @@ function delegationReturnPrompt(input: {
     return [
       `${input.sourceAgentName} requested your attention while working on a task you delegated.`,
       "Read the latest Session Updates, respond to the teammate's report, and continue owning the parent task.",
+      "Treat this as progress or a blocker in the current round, not as the completed delivery.",
       "Do not repeat work that the teammate already completed.",
       "",
       `Source task: ${input.sourceTaskId}`,
@@ -2522,7 +2523,9 @@ function delegationReturnPrompt(input: {
   const prompt = [
     opening,
     "Read the latest Session Updates and terminal report, then continue owning the parent task.",
-    "Validate the result, decide the next action, and communicate the final outcome to the user.",
+    "Treat this as one result in the current round. Check the latest Session Updates or `remi context` for other delegated tasks that are still queued or running.",
+    "If delegated tasks remain active, continue coordinating and report only meaningful progress, blockers, or decisions needed from the user; do not publish the round delivery summary yet.",
+    "Once every delegated task in the current round is completed, failed, or cancelled, validate the combined result and publish one round delivery summary. A later user follow-up starts a new round and may have its own summary.",
     "Do not repeat work that the teammate already completed.",
     "",
     `Source task: ${input.sourceTaskId}`,

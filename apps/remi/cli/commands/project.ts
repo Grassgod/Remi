@@ -1,4 +1,4 @@
-import { CliError, ResourceResolver, type CliOptionSpec, type CommandInvocation, type CommandSpec } from "../core/index.js";
+import { CliError, CliRenderer, ResourceResolver, type CliOptionSpec, type CommandInvocation, type CommandSpec } from "../core/index.js";
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
@@ -8,6 +8,7 @@ import {
   encodePath,
   extractRecords,
   integerOption,
+  outputMode,
   positional,
   queryOptions,
   renderResource,
@@ -55,7 +56,15 @@ export function projectCommandSpecs(): CommandSpec[] {
     spec("project.defaults", ["project", "defaults"], "Show project issue defaults", "read", ["human", "task"], [refPositional("project")], [], async (invocation) => {
       const client = await clientFor(invocation);
       const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
-      renderResource(invocation, projectDefaultAssignee(project));
+      const defaults = projectDefaultAssignee(project);
+      new CliRenderer().render(defaults, {
+        mode: outputMode(invocation),
+        columns: [
+          { header: "PROJECT", value: (row: Record<string, unknown>) => row.project_id, maxWidth: 28 },
+          { header: "ASSIGNEE_TYPE", value: (row: Record<string, unknown>) => row.default_assignee_type, maxWidth: 16 },
+          { header: "ASSIGNEE_ID", value: (row: Record<string, unknown>) => row.default_assignee_id, maxWidth: 28 },
+        ],
+      });
     }),
     spec("project.create", ["project", "create"], "Create a project", "write", ["human"], [], [...INPUT_OPTIONS, ...PROJECT_FIELDS], async (invocation) => {
       const client = await clientFor(invocation);
@@ -126,7 +135,14 @@ export async function resolveProject(
     },
     search: async (query) => {
       const response = await client.request<unknown>({ method: "GET", path: "/api/projects/search", query: { workspace_id: workspaceId, q: query, include_closed: true } });
-      return extractRecords(response.data, ["projects"]);
+      const records = extractRecords(response.data, ["projects"]);
+      if (records.length) return records;
+      // Task tokens may only GET their own issue's project by id, and text
+      // search does not match project ids. The workspace list is readable by
+      // every identity and carries each project's summary (including the
+      // default assignee), so fall back to it for id/name resolution.
+      const listed = await client.request<unknown>({ method: "GET", path: "/api/projects", query: { workspace_id: workspaceId } });
+      return extractRecords(listed.data, ["projects"]);
     },
     id: (project) => String(project.id ?? ""),
     name: (project) => typeof project.name === "string" ? project.name : typeof project.title === "string" ? project.title : null,

@@ -67,6 +67,7 @@ import {
   taskCompatibilityResponse,
   taskPublicResponse,
 } from "../wire/index.js";
+import type { MultiremiStore } from "@multiremi/store/store.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -80,6 +81,7 @@ import type {
   CreateMultiremiReactionInput,
   CreateSessionTaskInput,
   ListIssuesInput,
+  MultiremiIssue,
   MultiremiIssueWorkspaceArchiveBinding,
   PublishSessionResultInput,
   QuickCreateIssueInput,
@@ -93,6 +95,43 @@ import {
 } from "@multiremi/contracts/types.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import type { RouterDeps } from "./deps.js";
+
+// The idempotent generated-issue replay (source_issue_id + same title, 200)
+// must satisfy the same dispatch-outcome contract as a fresh create: a
+// retrying agent otherwise reads a response with no dispatch fields and stays
+// blind to an issue nobody is executing. This request dispatched nothing
+// itself, so the outcome is derived from the existing issue's CURRENT state —
+// assignment classification first (unassigning cancels the issue's tasks, so a
+// stale cancelled task must not resurface as "dispatched"), then the newest
+// still-standing task, and with no task left the recorded dispatch_skipped
+// activity supplies the original failure reason instead of a guess.
+function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIssue): Record<string, unknown> {
+  const response = issueCompatibilityResponse(issue);
+  const skipped = (reason: string, error?: string | null): Record<string, unknown> => ({
+    ...response,
+    task_id: null,
+    dispatch_status: "skipped",
+    dispatch_skipped_reason: reason,
+    ...(error ? { dispatch_error: error } : {}),
+  });
+  if (!issue.assigneeType || !issue.assigneeId) return skipped("no_assignee");
+  if (issue.status === "backlog") return skipped("backlog_status");
+  if (issue.assigneeType === "member") return skipped("member_assignee");
+  const standingTask = store.listTasksForIssue(issue.id).find((task) => task.status !== "cancelled") ?? null;
+  if (standingTask) {
+    return {
+      ...response,
+      task_id: standingTask.id,
+      dispatch_status: "dispatched",
+      dispatch_skipped_reason: null,
+    };
+  }
+  const skipActivity = store.listIssueActivity(issue.id).findLast((activity) => activity.type === "dispatch_skipped");
+  const data = (skipActivity?.data ?? null) as { reason?: unknown; error?: unknown } | null;
+  const reason = typeof data?.reason === "string" ? data.reason : "no_runnable_agent";
+  const error = typeof data?.error === "string" ? data.error : skipActivity?.body ?? null;
+  return skipped(reason, error);
+}
 
 export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const { store, sessionArchives } = deps;
@@ -500,26 +539,54 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       const sourceIssueId = issueInput.source_issue_id ?? null;
       if (sourceIssueId) {
         const existing = store.findGeneratedIssueByTitle(sourceIssueId, issueInput.title);
-        if (existing) return c.json(issueCompatibilityResponse(existing), 200);
+        if (existing) return c.json(existingIssueDispatchResponse(store, existing), 200);
       }
       const issue = store.createIssue(issueInput);
-      let response = issueCompatibilityResponse(issue);
-      publishIssueCreated(c, store, issue, response);
+      publishIssueCreated(c, store, issue, issueCompatibilityResponse(issue));
       // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
       // dispatches a task, unless it's in backlog (a parking lot for pre-assignment).
       // If no runnable agent is available the assignment stands without a task, matching
-      // the Go server's "not ready → skip" behavior.
-      if (issue.assigneeType && issue.assigneeId && issue.status !== "backlog") {
+      // the Go server's "not ready → skip" behavior — but the outcome is never silent:
+      // the response always says whether a task was dispatched and why not, and a
+      // dispatch failure leaves a dispatch_skipped activity on the issue.
+      let finalIssue = issue;
+      let task: { id: string } | null = null;
+      let dispatchSkippedReason: string | null = null;
+      let dispatchError: string | null = null;
+      if (!issue.assigneeType || !issue.assigneeId) {
+        dispatchSkippedReason = "no_assignee";
+      } else if (issue.status === "backlog") {
+        dispatchSkippedReason = "backlog_status";
+      } else {
         try {
           const assigned = store.assignIssue(issue.id, {
             assigneeType: issue.assigneeType,
             assigneeId: issue.assigneeId,
           });
-          response = issueCompatibilityResponse(assigned.issue);
+          finalIssue = assigned.issue;
+          task = assigned.task;
+          // A member assignee gets an inbox notification instead of a task.
+          if (!task) dispatchSkippedReason = "member_assignee";
         } catch (err) {
-          log.warn(`assign-on-create dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          dispatchSkippedReason = message.startsWith("No runnable agent") ? "no_runnable_agent" : "assign_failed";
+          dispatchError = message;
+          log.warn(`assign-on-create dispatch skipped for ${issue.id}: ${message}`);
+          store.recordIssueDispatchSkipped(issue.id, {
+            reason: dispatchSkippedReason,
+            error: message,
+            assigneeType: issue.assigneeType,
+            assigneeId: issue.assigneeId,
+          });
         }
       }
+      const response: Record<string, unknown> = {
+        ...issueCompatibilityResponse(finalIssue),
+        task_id: task?.id ?? null,
+        dispatch_status: task ? "dispatched" : "skipped",
+        dispatch_skipped_reason: task ? null : dispatchSkippedReason,
+      };
+      if (dispatchError) response.dispatch_error = dispatchError;
       return c.json(response, 201);
     } catch (err) {
       const response = issueErrorResponse(c, err);

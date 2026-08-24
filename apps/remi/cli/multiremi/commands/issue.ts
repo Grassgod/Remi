@@ -16,6 +16,7 @@ import {
 import {
   MultiremiCliHttpError,
   attachmentStringField,
+  multiremiApiConnection,
   multiremiApiFetch,
   multiremiApiRequest,
   multiremiApiUploadFile,
@@ -530,6 +531,42 @@ export async function issueCreate(options: CliOptions): Promise<void> {
     }
   }
   printJson(response);
+  warnUndispatchedIssue(response, projectId ?? null, !hasExplicitAssignee && !noProjectDefaults);
+}
+
+// Assign-on-create can silently end without a task (no assignee, no runnable
+// agent, assignment error). The JSON on stdout carries dispatch_status /
+// dispatch_skipped_reason for scripts; this prints a human-facing warning so
+// an interactive caller cannot mistake "201 created" for "an agent is on it".
+function warnUndispatchedIssue(
+  response: unknown,
+  projectId: string | null,
+  serverInheritanceAttempted: boolean,
+): void {
+  if (!isRecord(response) || response.dispatch_status !== "skipped") return;
+  const reason = typeof response.dispatch_skipped_reason === "string" ? response.dispatch_skipped_reason : null;
+  // Expected outcomes: a member assignee gets an inbox notification instead of
+  // a task, and backlog is a parking lot for pre-assignment issues.
+  if (reason === "member_assignee" || reason === "backlog_status") return;
+  const ref = (typeof response.identifier === "string" && response.identifier) || String(response.id ?? "");
+  const error = typeof response.dispatch_error === "string" ? response.dispatch_error : null;
+  console.error("");
+  console.error(`⚠ Issue ${ref} was created but NOT dispatched — no agent will pick it up.`);
+  if (reason === "no_assignee") {
+    console.error("  Reason: the issue has no assignee.");
+    // The server backfills the project's default assignee whenever the request
+    // omits assignee fields, so reaching no_assignee on such a request means
+    // the project has none configured.
+    if (projectId && serverInheritanceAttempted) {
+      console.error(`  Note: project ${projectId} has no default assignee configured, so none was inherited.`);
+    }
+    console.error(`  To start execution, assign an agent: issue assign ${ref} --to <agent>`);
+  } else if (reason === "no_runnable_agent") {
+    console.error(`  Reason: no runnable agent for the assignee${error ? ` (${error})` : ""}.`);
+    console.error(`  Reassign it to a runnable agent: issue assign ${ref} --to <agent>`);
+  } else {
+    console.error(`  Reason: ${error ?? reason ?? "unknown"}`);
+  }
 }
 
 function booleanFlag(options: CliOptions, ...keys: string[]): boolean {
