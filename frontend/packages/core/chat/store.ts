@@ -64,6 +64,7 @@ export interface ChatTimelineItem {
     | "tool_result"
     | "thinking"
     | "text"
+    | "steer"
     | "error"
     | "permission_request"
     | "permission_response"

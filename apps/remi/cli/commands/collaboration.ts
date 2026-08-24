@@ -490,6 +490,20 @@ function taskCommandSpecs(): CommandSpec[] {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/cancel`, {});
     }),
+    nativeSpec("task.steer", ["task", "steer"], "Send a mid-run directive to a live task", "write", HUMAN_TASK, [refPositional("task")], [
+      { name: "content", type: "string", valueName: "text", description: "Directive content", conflictsWith: ["content-file", "content-stdin"] },
+      { name: "content-file", type: "string", valueName: "path|-", description: "Read directive from a file or stdin", conflictsWith: ["content", "content-stdin"] },
+      { name: "content-stdin", type: "boolean", description: "Read directive from stdin", conflictsWith: ["content", "content-file"] },
+      { name: "force-answer", type: "boolean", description: "Ask the agent to wrap up and deliver its best conclusion now" },
+    ], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, {
+        content: await contentOption(invocation),
+        ...(invocation.options["force-answer"] === true ? { force_answer: true } : {}),
+      });
+    }),
+    nativeSpec("task.steer.list", ["task", "steer", "list"], "List steer directives sent to a task", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
+      await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, ["messages"]);
+    }),
     nativeSpec("task.message.list", ["task", "message", "list"], "List task messages", "read", HUMAN_TASK, [refPositional("task")], [
       { name: "since", type: "integer", valueName: "seq", description: "First sequence number" },
     ], async (invocation) => {

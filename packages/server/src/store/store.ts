@@ -132,6 +132,7 @@ import type {
   CreateSquadInput,
   CreateTaskHumanRequestInput,
   CreateTaskInput,
+  CreateTaskSteerMessageInput,
   CreateWorkspaceInvitationInput,
   CreateWorkspaceInput,
   CreateWorkspaceMemberInput,
@@ -231,6 +232,7 @@ import type {
   MultiremiTaskMessage,
   MultiremiTaskPromptArtifact,
   MultiremiTaskStatus,
+  MultiremiTaskSteerMessage,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
   MultiremiTaskPluginSnapshotEntry,
@@ -2957,6 +2959,26 @@ runMigrations(this.db);
 
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
     return this.tasks.expireTaskHumanRequest(requestId, status);
+  }
+
+  createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.tasks.createTaskSteerMessage(input);
+  }
+
+  getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
+    return this.tasks.getTaskSteerMessage(steerId);
+  }
+
+  listTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[] {
+    return this.tasks.listTaskSteerMessages(taskId);
+  }
+
+  listPendingTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[] {
+    return this.tasks.listPendingTaskSteerMessages(taskId);
+  }
+
+  consumeTaskSteerMessages(taskId: string, steerIds: string[]): MultiremiTaskSteerMessage[] {
+    return this.tasks.consumeTaskSteerMessages(taskId, steerIds);
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {

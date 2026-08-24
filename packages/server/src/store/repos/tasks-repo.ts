@@ -25,6 +25,7 @@ import { createLogger } from "@shared/logger.js";
 import type {
   CreateTaskHumanRequestInput,
   CreateTaskInput,
+  CreateTaskSteerMessageInput,
   MultiremiAgent,
   MultiremiAgentActivityBucket,
   MultiremiAgentRunCount,
@@ -44,6 +45,8 @@ import type {
   MultiremiTaskProjectContext,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiTaskStatus,
+  MultiremiTaskSteerKind,
+  MultiremiTaskSteerMessage,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
   TaskMessageInput,
@@ -97,6 +100,16 @@ interface TaskTerminalFollowUps {
 }
 
 class AgentPluginReadinessChangedError extends Error {}
+
+/** Steer submitted for a task that already reached a terminal state — API contract: 409. */
+export class TaskSteerConflictError extends Error {}
+
+/**
+ * completeTask refused because unconsumed steer messages exist. The daemon
+ * must fetch and inject them instead of completing — otherwise a steer that
+ * was accepted before the run ended would be silently stranded.
+ */
+export class TaskSteerPendingError extends Error {}
 
 function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
   const rawVersion = runtime.metadata.cli_version ?? runtime.metadata.cliVersion;
@@ -1302,6 +1315,93 @@ export class TasksRepo {
     return null;
   }
 
+  /**
+   * Record a mid-run user directive for a live task. The daemon's steer
+   * watcher polls unconsumed rows and injects them into the executing
+   * provider session; the row doubles as the audit record. Rejects terminal
+   * tasks — there is no run left to steer.
+   */
+  createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    const content = String(input.content ?? "").trim();
+    if (!content) throw new Error("steer content must not be empty");
+    const kind: MultiremiTaskSteerKind = input.kind === "force_answer" ? "force_answer" : "steer";
+    const id = input.id ?? createId("steer");
+    const initial = this.getTask(input.taskId);
+    if (!initial) throw new Error(`Task not found: ${input.taskId}`);
+    return this.ctx.db.transaction(() => {
+      // Serialize against completeTask/cancelTask on their workspace→session
+      // lock order. On Postgres two connections could otherwise each observe
+      // "running" / "no pending steer" and commit both the steer insert and
+      // the completion — the steer barrier is only a real barrier when both
+      // sides contend on the same lock.
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const task = this.getTask(input.taskId);
+      if (!task || task.workspaceId !== initial.workspaceId) throw new Error(`Task not found: ${input.taskId}`);
+      if (["completed", "failed", "cancelled"].includes(task.status)) {
+        throw new TaskSteerConflictError(`Task is already ${task.status}: steer messages can only target a live task`);
+      }
+      this.lockTaskIssueSessionsWithinWorkspaceLock([task]);
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, author_id, kind, content, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, input.taskId, input.authorType ?? "user", input.authorId ?? null, kind, content, now],
+      );
+      // The steer must be visible on the session timeline even before the
+      // daemon consumes it — auditability is part of the contract.
+      if (task.issueSessionId) {
+        this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, {
+          authorType: input.authorType ?? "user",
+          authorId: input.authorId ?? null,
+          kind: "task_steer",
+          body: content,
+          taskId: task.id,
+          metadata: { steer_id: id, steer_kind: kind },
+        });
+      }
+      return this.getTaskSteerMessage(id)!;
+    })();
+  }
+
+  getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_task_steer_messages WHERE id = ?").get(steerId) as Row | null;
+    return row ? toTaskSteerMessage(row) : null;
+  }
+
+  listTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[] {
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? ORDER BY created_at ASC, id ASC",
+    ).all(taskId) as Row[];
+    return rows.map(toTaskSteerMessage);
+  }
+
+  listPendingTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[] {
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
+    ).all(taskId) as Row[];
+    return rows.map(toTaskSteerMessage);
+  }
+
+  /** Idempotent: already-consumed ids are skipped. Returns the rows actually consumed now. */
+  consumeTaskSteerMessages(taskId: string, steerIds: string[]): MultiremiTaskSteerMessage[] {
+    const ids = [...new Set(steerIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
+    if (!ids.length) return [];
+    return this.ctx.db.transaction(() => {
+      const consumed: MultiremiTaskSteerMessage[] = [];
+      const now = nowIso();
+      for (const id of ids) {
+        const result = this.ctx.db.run(
+          `UPDATE multiremi_task_steer_messages
+           SET consumed_at = ?
+           WHERE id = ? AND task_id = ? AND consumed_at IS NULL`,
+          [now, id, taskId],
+        );
+        if (result.changes > 0) consumed.push(this.getTaskSteerMessage(id)!);
+      }
+      return consumed;
+    })();
+  }
+
   reportProgress(
     taskId: string,
     summary: string,
@@ -1452,6 +1552,16 @@ export class TasksRepo {
       if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
       this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
       this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
+      // Steer barrier: an accepted-but-unconsumed steer wins over completion.
+      // Same transaction as the status flip, so either the steer insert saw a
+      // live task and this refuses, or completion committed first and the
+      // steer API returned 409 — no window where both succeed.
+      const pendingSteer = this.ctx.db.query(
+        "SELECT COUNT(*) AS n FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL",
+      ).get(taskId) as { n: number } | null;
+      if (pendingSteer && Number(pendingSteer.n) > 0) {
+        throw new TaskSteerPendingError(`Task ${taskId} has ${pendingSteer.n} unconsumed steer message(s); inject them before completing`);
+      }
       const now = nowIso();
       const storedResult = toJson(taskCompletionResultPayload(input));
       const result = this.ctx.db.run(
@@ -2663,6 +2773,19 @@ function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
 
 function normalizeHumanRequestKind(value: unknown): MultiremiTaskHumanRequestKind {
   return String(value ?? "") === "question" ? "question" : "permission";
+}
+
+function toTaskSteerMessage(row: Row): MultiremiTaskSteerMessage {
+  return {
+    id: String(row.id),
+    taskId: String(row.task_id),
+    authorType: String(row.author_type ?? "user"),
+    authorId: nullableString(row.author_id),
+    kind: String(row.kind) === "force_answer" ? "force_answer" : "steer",
+    content: String(row.content ?? ""),
+    createdAt: String(row.created_at),
+    consumedAt: nullableString(row.consumed_at),
+  };
 }
 
 function normalizeHumanRequestStatus(value: unknown): MultiremiTaskHumanRequestStatus {

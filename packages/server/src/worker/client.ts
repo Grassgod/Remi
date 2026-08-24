@@ -9,6 +9,7 @@ import type {
   MultiremiSkillFile,
   MultiremiTaskHumanRequest,
   MultiremiTaskStatus,
+  MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
   RegisterRuntimeInput,
   TaskMessageInput,
@@ -440,6 +441,16 @@ export class MultiremiDaemonClient {
   async getTaskStatus(taskId: string): Promise<MultiremiTaskStatus> {
     const resp = await this.get<{ status: MultiremiTaskStatus }>(`/api/daemon/tasks/${taskId}/status`);
     return resp.status;
+  }
+
+  async listPendingTaskSteerMessages(taskId: string): Promise<MultiremiTaskSteerMessage[]> {
+    const resp = await this.get<{ messages?: MultiremiTaskSteerMessage[] }>(`/api/daemon/tasks/${taskId}/steer`);
+    return Array.isArray(resp.messages) ? resp.messages : [];
+  }
+
+  async consumeTaskSteerMessages(taskId: string, ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.post(`/api/daemon/tasks/${taskId}/steer/consume`, { ids });
   }
 
   async getIssueGcCheck(issueId: string): Promise<MultiremiDaemonGcStatus> {

@@ -45,6 +45,7 @@ import type {
   MultiremiIssueWorkspaceStatus,
   MultiremiTask,
 } from "@multiremi/contracts/types.js";
+import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
@@ -678,12 +679,22 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (existing.status !== "running") {
       return c.json(daemonTaskWireResponse(existing, store.getTaskTriggerMetadata(existing)));
     }
-    const task = store.completeTask(taskId, {
-      output: body.output ?? "",
-      branchName: body.pr_url ?? null,
-      sessionId: body.session_id ?? null,
-      workDir: body.work_dir ?? null,
-    });
+    let task: MultiremiTask;
+    try {
+      task = store.completeTask(taskId, {
+        output: body.output ?? "",
+        branchName: body.pr_url ?? null,
+        sessionId: body.session_id ?? null,
+        workDir: body.work_dir ?? null,
+      });
+    } catch (err) {
+      // Unconsumed steer messages won the race against completion: tell the
+      // daemon to fetch and inject them instead of ending the run.
+      if (err instanceof TaskSteerPendingError) {
+        return c.json({ error: err.message, code: "steer_pending" }, 409);
+      }
+      throw err;
+    }
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });
   app.post("/api/daemon/tasks/:taskId/fail", async (c) => {
@@ -722,6 +733,23 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const task = store.getTask(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status });
+  });
+  app.get("/api/daemon/tasks/:taskId/steer", (c) => {
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (identityDenied) return identityDenied;
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    return c.json({ messages: store.listPendingTaskSteerMessages(taskId) });
+  });
+  app.post("/api/daemon/tasks/:taskId/steer/consume", async (c) => {
+    const body = await readJsonStrict<{ ids?: string[] }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (identityDenied) return identityDenied;
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id)) : [];
+    return c.json({ consumed: store.consumeTaskSteerMessages(taskId, ids) });
   });
   app.get("/api/daemon/issues/:issueId/gc-check", (c) => {
     const issue = issueFromParam(store, c, "issueId");

@@ -24,6 +24,7 @@ import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/p
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
+import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { readyArchiveBinding } from "./helpers.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
@@ -1646,6 +1647,75 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       triggerCommentId: null,
       prompt: "Terminal PG report.",
     });
+  });
+
+  const createRunningSteerTask = () => {
+    const workspaceId = freshWorkspace();
+    const runtime = store.registerRuntime({ name: `steer-race-runtime-${wsCounter}`, provider: "claude", workspaceId });
+    const agent = store.createAgent({ name: `Steer Race ${wsCounter}`, provider: "claude", workspaceId });
+    const task = store.createTask({ agentId: agent.id, prompt: "steer race" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    return { workspaceId, task };
+  };
+
+  it("steer insert committed by a second connection blocks completion (PG steer barrier)", async () => {
+    const { workspaceId, task } = createRunningSteerTask();
+    const worker = new Worker(
+      new URL("./fixtures/postgres-steer-race-worker.ts", import.meta.url).href,
+    );
+    const locked = waitForWorkerPhase(worker, "locked");
+    const committed = waitForWorkerPhase(worker, "committed");
+    const steerId = `steer_pg_race_${wsCounter}`;
+    worker.postMessage({
+      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      mode: "steer",
+      workspaceId,
+      taskId: task.id,
+      steerId,
+      holdMs: 200,
+    });
+
+    await locked;
+    // completeTask contends on the same workspace lifecycle lock; once the
+    // steer transaction commits, its post-lock re-read must see the pending
+    // steer and refuse.
+    expect(() => store.completeTask(task.id, { output: "old answer" })).toThrow(TaskSteerPendingError);
+    await committed;
+    worker.terminate();
+
+    expect(store.getTaskStatus(task.id)).toBe("running");
+    expect(store.listPendingTaskSteerMessages(task.id).map((m) => m.id)).toEqual([steerId]);
+
+    // Consuming lifts the barrier.
+    store.consumeTaskSteerMessages(task.id, [steerId]);
+    expect(store.completeTask(task.id, { output: "steered answer" }).status).toBe("completed");
+  });
+
+  it("completion committed by a second connection makes steer insert conflict (PG)", async () => {
+    const { workspaceId, task } = createRunningSteerTask();
+    const worker = new Worker(
+      new URL("./fixtures/postgres-steer-race-worker.ts", import.meta.url).href,
+    );
+    const locked = waitForWorkerPhase(worker, "locked");
+    const committed = waitForWorkerPhase(worker, "committed");
+    worker.postMessage({
+      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      mode: "complete",
+      workspaceId,
+      taskId: task.id,
+      steerId: `steer_pg_unused_${wsCounter}`,
+      holdMs: 200,
+    });
+
+    await locked;
+    expect(() => store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "too late" }))
+      .toThrow(TaskSteerConflictError);
+    await committed;
+    worker.terminate();
+
+    expect(store.getTaskStatus(task.id)).toBe("completed");
+    expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
   });
 
   it("creates a fresh terminal return when comment editing cancels the explicit return first (PG)", () => {

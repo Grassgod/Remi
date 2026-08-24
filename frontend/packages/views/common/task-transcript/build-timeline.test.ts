@@ -13,6 +13,20 @@ function message(seq: number, type: TaskMessagePayload["type"], content?: string
 }
 
 describe("task transcript timeline", () => {
+  it("keeps steer messages as distinct timeline events with audit metadata", () => {
+    const steer = message(1, "steer", "Switch to Chinese");
+    steer.meta = { steer_kind: "steer", author_type: "user" };
+
+    expect(buildTimeline([steer])).toEqual([
+      expect.objectContaining({
+        seq: 1,
+        type: "steer",
+        content: "Switch to Chinese",
+        meta: expect.objectContaining({ steer_kind: "steer" }),
+      }),
+    ]);
+  });
+
   it("merges adjacent text and thinking fragments split by streaming flushes", () => {
     const items = buildTimeline([
       message(2, "text", "world"),

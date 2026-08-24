@@ -1576,6 +1576,20 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_task ON multiremi_task_human_requests(task_id, status);
 
+    CREATE TABLE IF NOT EXISTS multiremi_task_steer_messages (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      author_type TEXT NOT NULL DEFAULT 'user',
+      author_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'steer',
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      consumed_at TEXT,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_task_steer_task ON multiremi_task_steer_messages(task_id, consumed_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_platform_state (
       id TEXT PRIMARY KEY,
       driver TEXT NOT NULL DEFAULT 'systemd_release',

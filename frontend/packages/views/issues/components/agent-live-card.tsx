@@ -19,6 +19,7 @@ import { useT } from "../../i18n";
 import { TerminateTaskConfirmDialog } from "./terminate-task-confirm-dialog";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import { HumanRequestDock } from "../../common/human-request-dock";
+import { TaskSteerActions } from "./task-steer-actions";
 
 // AgentLiveCard renders a sticky banner at the top of the issue's main
 // column for every active task. Each banner shows "agent X is working",
@@ -454,6 +455,7 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
         </div>
       )}
       <div className="ml-auto flex items-center gap-1 shrink-0">
+        <TaskSteerActions task={task} showLabels />
         {!isParked && (
           <TranscriptButton
             task={task}

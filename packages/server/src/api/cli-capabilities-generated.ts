@@ -2371,6 +2371,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "task.steer": {
+      "command": "remi task steer",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.steer",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "task.steer.list": {
+      "command": "remi task steer list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.steer.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "task.message.list": {
       "command": "remi task message list",
       "auth": [

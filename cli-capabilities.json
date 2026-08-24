@@ -3355,6 +3355,40 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "task.steer": {
+      "command": "remi task steer",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.steer",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.steer.list": {
+      "command": "remi task steer list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.steer.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "task.message.list": {
       "command": "remi task message list",
       "aliases": [
@@ -7449,6 +7483,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "GET /api/daemon/tasks/:taskId/steer": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "GET /api/daemon/workspaces/:workspaceId/repos": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -7834,6 +7873,9 @@
     "GET /api/multiremi/tasks/:id/messages": {
       "command": "task.message.list"
     },
+    "GET /api/multiremi/tasks/:id/steer": {
+      "command": "task.steer.list"
+    },
     "GET /api/multiremi/tokens": {
       "command": "token.list"
     },
@@ -7964,6 +8006,9 @@
     },
     "GET /api/tasks/:id/human-requests": {
       "command": "task.request.list"
+    },
+    "GET /api/tasks/:id/steer": {
+      "command": "task.steer.list"
     },
     "GET /api/tasks/:taskId/messages": {
       "command": "task.message.list"
@@ -8385,6 +8430,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "POST /api/daemon/tasks/:taskId/steer/consume": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "POST /api/daemon/tasks/:taskId/usage": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -8703,6 +8753,9 @@
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond": {
       "command": "task.request.respond"
     },
+    "POST /api/multiremi/tasks/:id/steer": {
+      "command": "task.steer"
+    },
     "POST /api/multiremi/tokens": {
       "command": "token.create"
     },
@@ -8795,6 +8848,9 @@
     },
     "POST /api/tasks/:id/human-requests/:requestId/respond": {
       "command": "task.request.respond"
+    },
+    "POST /api/tasks/:id/steer": {
+      "command": "task.steer"
     },
     "POST /api/tokens": {
       "command": "token.create"

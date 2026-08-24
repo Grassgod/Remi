@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 589,
+    "routeCount": 595,
     "routeCountByPrefix": {
-      "native": 193,
-      "compat": 383,
+      "native": 195,
+      "compat": 387,
       "root": 13
     },
-    "getRoutes": 254,
-    "getRoutesWithBody": 251,
+    "getRoutes": 257,
+    "getRoutesWithBody": 254,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 335,
+    "mutationRoutes": 338,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -172,6 +172,7 @@
     "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
     "GET /api/daemon/tasks/:taskId/messages",
     "GET /api/daemon/tasks/:taskId/status",
+    "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
     "GET /api/daemon/ws",
     "GET /api/dashboard/agent-runtime",
@@ -299,6 +300,7 @@
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
     "GET /api/multiremi/tasks/:id/messages",
+    "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
     "GET /api/notification-preferences",
     "GET /api/pins",
@@ -342,6 +344,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
@@ -460,6 +463,7 @@
     "POST /api/daemon/tasks/:taskId/prompt",
     "POST /api/daemon/tasks/:taskId/session",
     "POST /api/daemon/tasks/:taskId/start",
+    "POST /api/daemon/tasks/:taskId/steer/consume",
     "POST /api/daemon/tasks/:taskId/usage",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
     "POST /api/daemon/tasks/:taskId/workspace",
@@ -562,6 +566,7 @@
     "POST /api/multiremi/tasks",
     "POST /api/multiremi/tasks/:id/cancel",
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/multiremi/tasks/:id/steer",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
     "POST /api/platform-updater/drain/begin",
@@ -589,6 +594,7 @@
     "POST /api/squads/:id/members",
     "POST /api/tasks/:id/cancel",
     "POST /api/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/tasks/:id/steer",
     "POST /api/tokens",
     "POST /api/tokens/current/renew",
     "POST /api/upload-file",
@@ -756,6 +762,7 @@
     "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
     "GET /api/daemon/tasks/:taskId/messages",
     "GET /api/daemon/tasks/:taskId/status",
+    "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
     "GET /api/daemon/ws",
     "GET /api/dashboard/agent-runtime",
@@ -883,6 +890,7 @@
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
     "GET /api/multiremi/tasks/:id/messages",
+    "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
     "GET /api/notification-preferences",
     "GET /api/pins",
@@ -926,6 +934,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
@@ -10189,6 +10198,28 @@
             "allowed": true
           },
           {
+            "id": "task.steer",
+            "command": "remi task steer",
+            "capability": "task.steer",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.steer.list",
+            "command": "remi task steer list",
+            "capability": "task.steer.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "token.create",
             "command": "remi token create",
             "capability": "token.create",
@@ -11117,6 +11148,15 @@
       "status": 200,
       "body": {
         "status": "completed"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/tasks/:taskId/steer",
+      "route": "GET /api/daemon/tasks/:taskId/steer",
+      "path": "/api/daemon/tasks/tsk_snapshot/steer",
+      "status": 200,
+      "body": {
+        "messages": []
       }
     },
     {
@@ -17879,6 +17919,15 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/tasks/:id/steer",
+      "route": "GET /api/multiremi/tasks/:id/steer",
+      "path": "/api/multiremi/tasks/tsk_snapshot/steer",
+      "status": 200,
+      "body": {
+        "messages": []
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/tokens",
       "route": "GET /api/multiremi/tokens",
       "path": "/api/multiremi/tokens",
@@ -18852,6 +18901,15 @@
             "respondedAt": null
           }
         ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/tasks/:id/steer",
+      "route": "GET /api/tasks/:id/steer",
+      "path": "/api/tasks/tsk_snapshot/steer",
+      "status": 200,
+      "body": {
+        "messages": []
       }
     },
     {

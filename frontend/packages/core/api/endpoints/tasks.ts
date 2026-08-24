@@ -8,6 +8,14 @@ import type {
 } from "../../types";
 import { normalizeTaskMessages } from "../../chat/normalize-message";
 import type { HttpClient } from "../http";
+import { parseStrictResponse, parseWithFallback } from "../schema";
+import {
+  EMPTY_TASK_STEER_LIST,
+  TaskSteerListResponseSchema,
+  TaskSteerResponseSchema,
+  type TaskSteerListResponse,
+  type TaskSteerResponse,
+} from "../schemas/tasks";
 
 export class TasksEndpoints {
   constructor(readonly http: HttpClient) {}
@@ -61,6 +69,34 @@ export class TasksEndpoints {
       method: "POST",
       body: JSON.stringify({ response }),
     });
+  }
+
+  async steerTask(
+    taskId: string,
+    input: { content?: string; force_answer?: boolean },
+  ): Promise<TaskSteerResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/tasks/${encodeURIComponent(taskId)}/steer`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+    return parseStrictResponse(raw, TaskSteerResponseSchema, {
+      endpoint: "POST /api/tasks/:id/steer",
+    });
+  }
+
+  async listTaskSteers(taskId: string): Promise<TaskSteerListResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/tasks/${encodeURIComponent(taskId)}/steer`,
+    );
+    return parseWithFallback(
+      raw,
+      TaskSteerListResponseSchema,
+      EMPTY_TASK_STEER_LIST,
+      { endpoint: "GET /api/tasks/:id/steer" },
+    );
   }
 
   async listTasksByIssue(issueId: string): Promise<AgentTask[]> {

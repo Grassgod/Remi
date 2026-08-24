@@ -477,6 +477,26 @@
     "stop_tooltip": "Stop agent",
     "cancel_failed": "Failed to cancel task"
   },
+  "task_steer": {
+    "steer_button": "Steer",
+    "steer_tooltip": "Send a new instruction",
+    "force_answer_button": "Deliver now",
+    "force_answer_tooltip": "Finish with the best current answer",
+    "steer_title": "Steer task",
+    "steer_description": "Send a new instruction into this active task.",
+    "steer_content_label": "New instruction",
+    "steer_content_placeholder": "What should the agent change or consider?",
+    "steer_submit": "Send instruction",
+    "force_answer_title": "Deliver now",
+    "force_answer_description": "Ask the agent to stop exploring and finish with its best current answer.",
+    "force_answer_note_label": "Note (optional)",
+    "force_answer_note_placeholder": "Add any final constraint or emphasis",
+    "force_answer_submit": "Request delivery",
+    "cancel": "Cancel",
+    "steer_sent": "Instruction sent",
+    "force_answer_sent": "Delivery requested",
+    "send_failed": "Failed to intervene in task"
+  },
   "execution_log": {
     "section": "Execution log",
     "show_past": "Show past runs ({{count}})",

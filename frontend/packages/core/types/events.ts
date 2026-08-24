@@ -243,6 +243,7 @@ export type KnownTaskMessageType =
   | "tool_result"
   | "usage"
   | "plan"
+  | "steer"
   | "error"
   | "permission_request"
   | "permission_response"

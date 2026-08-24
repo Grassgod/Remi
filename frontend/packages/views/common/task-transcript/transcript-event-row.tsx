@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertCircle, Brain, Check, ChevronRight } from "lucide-react";
+import { AlertCircle, Brain, Check, ChevronRight, MessageSquareMore } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
 import { Markdown } from "../markdown";
@@ -63,6 +63,7 @@ export const TranscriptEventRow = ({
           >
             {item.type === "thinking" && <Brain className="h-3 w-3 mr-1 shrink-0" />}
             {item.type === "error" && <AlertCircle className="h-3 w-3 mr-1 shrink-0" />}
+            {item.type === "steer" && <MessageSquareMore className="h-3 w-3 mr-1 shrink-0" />}
             {label}
           </span>
 
@@ -71,7 +72,11 @@ export const TranscriptEventRow = ({
             className={cn(
               "flex-1 text-left text-xs min-w-0 py-0.5 transition-colors",
               hasDetail ? "cursor-pointer hover:text-foreground" : "cursor-default",
-              item.type === "error" ? "text-destructive" : "text-muted-foreground",
+              item.type === "error"
+                ? "text-destructive"
+                : item.type === "steer"
+                  ? "font-medium text-foreground"
+                  : "text-muted-foreground",
             )}
             disabled={!hasDetail}
           >
@@ -137,6 +142,7 @@ function EventDetailContent({ item }: { item: TimelineItem }) {
     }
     case "thinking":
     case "text":
+    case "steer":
       // Agent prose is markdown — render code blocks / tables / lists instead
       // of a flat <pre>. Content is already redacted upstream.
       return (

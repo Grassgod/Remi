@@ -467,6 +467,26 @@
     "stop_tooltip": "エージェントを停止",
     "cancel_failed": "タスクをキャンセルできませんでした"
   },
+  "task_steer": {
+    "steer_button": "方向転換",
+    "steer_tooltip": "新しい指示を送信",
+    "force_answer_button": "今すぐ提出",
+    "force_answer_tooltip": "現時点で最善の回答を提出",
+    "steer_title": "タスクの方向転換",
+    "steer_description": "実行中のタスクに新しい指示を送信します。",
+    "steer_content_label": "新しい指示",
+    "steer_content_placeholder": "エージェントに何を変更または検討してほしいですか？",
+    "steer_submit": "指示を送信",
+    "force_answer_title": "今すぐ提出",
+    "force_answer_description": "探索を終了し、現時点で最善の回答をまとめるよう依頼します。",
+    "force_answer_note_label": "メモ（任意）",
+    "force_answer_note_placeholder": "最後の制約や重点を追加",
+    "force_answer_submit": "提出を依頼",
+    "cancel": "キャンセル",
+    "steer_sent": "指示を送信しました",
+    "force_answer_sent": "提出を依頼しました",
+    "send_failed": "タスクに介入できませんでした"
+  },
   "execution_log": {
     "section": "実行ログ",
     "show_past": "過去の実行を表示 ({{count}})",

@@ -61,6 +61,30 @@ describe("AcpClient process death", () => {
     await client.stop();
   });
 
+  it("notifies onProcessExit even with zero in-flight requests", async () => {
+    // Between-turns death: nothing pending to reject, so without the explicit
+    // death callback nobody learns the session is gone (MUL-63 wedge).
+    const executable = fakeAgent("#!/bin/sh\nexit 0\n");
+    const reasons: string[] = [];
+    const client = new AcpClient({ executable, onProcessExit: (reason) => reasons.push(reason) });
+    await client.start();
+    await waitFor(() => reasons.length > 0);
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/exit code 0|stdout EOF/);
+    expect(client.alive).toBe(false);
+  });
+
+  it("does not fire onProcessExit on graceful stop", async () => {
+    const executable = fakeAgent("#!/bin/sh\nwhile read line; do :; done\n");
+    const reasons: string[] = [];
+    const client = new AcpClient({ executable, onProcessExit: (reason) => reasons.push(reason) });
+    await client.start();
+    await client.stop();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(reasons).toHaveLength(0);
+  });
+
   it("stops a launcher and the native child that inherits its stdio", async () => {
     if (process.platform === "win32") return;
     const dir = tempDir();

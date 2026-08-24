@@ -372,6 +372,8 @@ function mappedResourceCommand(route: string): string | null {
     [/^GET \/api\/multiremi\/tasks\/:id$/, "task.get"],
     [/^POST \/api\/multiremi\/tasks\/:id\/cancel$/, "task.cancel"],
     [/^POST \/api\/tasks\/:id\/cancel$/, "task.cancel"],
+    [/^POST \/api\/(?:multiremi\/)?tasks\/:id\/steer$/, "task.steer"],
+    [/^GET \/api\/(?:multiremi\/)?tasks\/:id\/steer$/, "task.steer.list"],
     [/^GET \/api\/(?:multiremi\/tasks\/:id|tasks\/:taskId)\/messages$/, "task.message.list"],
     [/^GET \/api\/tasks\/:taskId\/prompt$/, "task.prompt"],
     [/^GET \/api\/(?:multiremi\/)?tasks\/:id\/human-requests$/, "task.request.list"],
