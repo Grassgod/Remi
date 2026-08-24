@@ -11,8 +11,14 @@
 // execution. At most one summary call is in flight per task.
 import type { TaskMessageInput } from "@multiremi/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 
 const log = createLogger("multiremi-progress");
+
+export type ProgressSummaryTransport = "auto" | "api" | "cli";
 
 export interface ProgressSummaryConfig {
   enabled: boolean;
@@ -24,6 +30,8 @@ export interface ProgressSummaryConfig {
   /** Total character budget for the compressed activity digest sent to the model. */
   maxDigestChars: number;
   requestTimeoutMs: number;
+  /** Model transport. `auto` starts with API and switches to Claude CLI after HTTP errors. */
+  transport: ProgressSummaryTransport;
 }
 
 export const PROGRESS_SUMMARY_DEFAULTS = {
@@ -32,6 +40,7 @@ export const PROGRESS_SUMMARY_DEFAULTS = {
   model: "claude-haiku-4-5-20251001",
   maxDigestChars: 12_000,
   requestTimeoutMs: 30_000,
+  transport: "auto" as ProgressSummaryTransport,
 } as const;
 
 function positiveInt(raw: string | undefined, fallback: number): number {
@@ -45,9 +54,14 @@ function positiveInt(raw: string | undefined, fallback: number): number {
  *   MULTIREMI_PROGRESS_SUMMARY_MESSAGES=20    N — new messages per summary
  *   MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS=45000  T — debounce between summaries
  *   MULTIREMI_PROGRESS_SUMMARY_MODEL=...      summary model id
+ *   MULTIREMI_PROGRESS_SUMMARY_TRANSPORT=auto API first, then CLI on HTTP errors
  */
 export function resolveProgressSummaryConfig(env: Record<string, string | undefined> = process.env): ProgressSummaryConfig {
   const disabled = env.MULTIREMI_PROGRESS_SUMMARY_DISABLED;
+  const configuredTransport = env.MULTIREMI_PROGRESS_SUMMARY_TRANSPORT?.trim().toLowerCase();
+  const transport: ProgressSummaryTransport = configuredTransport === "api" || configuredTransport === "cli"
+    ? configuredTransport
+    : "auto";
   return {
     enabled: !(disabled === "1" || disabled === "true"),
     minNewMessages: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_MESSAGES, PROGRESS_SUMMARY_DEFAULTS.minNewMessages),
@@ -55,6 +69,7 @@ export function resolveProgressSummaryConfig(env: Record<string, string | undefi
     model: env.MULTIREMI_PROGRESS_SUMMARY_MODEL?.trim() || PROGRESS_SUMMARY_DEFAULTS.model,
     maxDigestChars: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_MAX_DIGEST_CHARS, PROGRESS_SUMMARY_DEFAULTS.maxDigestChars),
     requestTimeoutMs: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_TIMEOUT_MS, PROGRESS_SUMMARY_DEFAULTS.requestTimeoutMs),
+    transport,
   };
 }
 
@@ -241,8 +256,8 @@ async function callSummaryModel(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`summary model HTTP ${response.status}: ${body.slice(0, 300)}`);
+    await response.body?.cancel().catch(() => undefined);
+    throw new SummaryModelHttpError(response.status);
   }
   const payload = await response.json() as { content?: Array<{ type?: string; text?: string }> };
   const text = (payload.content ?? [])
@@ -251,6 +266,101 @@ async function callSummaryModel(
     .trim();
   if (!text) throw new Error("summary model returned no text");
   return parseSummaryText(text);
+}
+
+class SummaryModelHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`summary model HTTP ${status}`);
+    this.name = "SummaryModelHttpError";
+  }
+}
+
+interface SummaryCliProcess {
+  stdout: ReadableStream<Uint8Array>;
+  stderr: ReadableStream<Uint8Array>;
+  exited: Promise<number>;
+  kill(): void;
+}
+
+export type SummaryCliSpawn = (
+  command: string[],
+  options: {
+    cwd: string;
+    env: Record<string, string | undefined>;
+    stdout: "pipe";
+    stderr: "pipe";
+  },
+) => SummaryCliProcess;
+
+const defaultSummaryCliSpawn: SummaryCliSpawn = (command, options) => (
+  Bun.spawn(command, options) as unknown as SummaryCliProcess
+);
+
+function findClaudeExecutable(whichImpl: (binary: string) => string | null): string | null {
+  try {
+    return whichImpl("claude")?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function findClaudeExecutableOnMachine(binary: string): string | null {
+  const pathExecutable = (Bun.which(binary) as string | null) ?? null;
+  if (pathExecutable || binary !== "claude") return pathExecutable;
+  const candidates = [
+    join(homedir(), ".local", "bin", "claude"),
+    join(homedir(), ".claude", "local", "claude"),
+    join(homedir(), ".npm-global", "bin", "claude"),
+    "/usr/local/bin/claude",
+    "/opt/homebrew/bin/claude",
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+async function callSummaryCli(input: {
+  executable: string;
+  model: string;
+  prompt: string;
+  timeoutMs: number;
+  providerEnv?: Record<string, string>;
+  spawnImpl: SummaryCliSpawn;
+}): Promise<ProgressSummaryResult> {
+  const cwd = await mkdtemp(join(tmpdir(), "multiremi-progress-"));
+  let processHandle: SummaryCliProcess | null = null;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const cliPrompt = `${SUMMARY_SYSTEM_PROMPT}\n\n${input.prompt}`;
+    processHandle = input.spawnImpl(
+      [input.executable, "-p", cliPrompt, "--model", input.model],
+      {
+        cwd,
+        env: { ...process.env, ...input.providerEnv },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const stdoutText = new Response(processHandle.stdout).text().catch(() => "");
+    const stderrDrain = new Response(processHandle.stderr).text().catch(() => "");
+    const timeoutExit = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        try {
+          processHandle?.kill();
+        } catch {
+          // The timeout remains authoritative even if the process already exited.
+        }
+        reject(new Error(`summary CLI timed out after ${input.timeoutMs}ms`));
+      }, input.timeoutMs);
+    });
+    const exitCode = await Promise.race([processHandle.exited, timeoutExit]);
+    await stderrDrain;
+    if (exitCode !== 0) throw new Error(`summary CLI exited with code ${exitCode}`);
+    const text = (await stdoutText).trim();
+    if (!text) throw new Error("summary CLI returned no text");
+    return parseSummaryText(text);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    await rm(cwd, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export function parseSummaryText(text: string): ProgressSummaryResult {
@@ -283,7 +393,11 @@ export interface TaskProgressSummarizerOptions {
   taskTitle: string;
   taskPrompt: string;
   report: (result: ProgressSummaryResult, options: { final: boolean }) => Promise<void>;
+  /** Task-scoped Relay/provider environment inherited by the Claude CLI. */
+  providerEnv?: Record<string, string>;
   fetchImpl?: FetchLike;
+  spawnImpl?: SummaryCliSpawn;
+  whichImpl?: (binary: string) => string | null;
   now?: () => number;
 }
 
@@ -297,6 +411,10 @@ export class TaskProgressSummarizer {
   private readonly tracker: TaskProgressTracker;
   private readonly now: () => number;
   private readonly fetchImpl: FetchLike;
+  private readonly spawnImpl: SummaryCliSpawn;
+  private readonly whichImpl: (binary: string) => string | null;
+  private activeTransport: "api" | "cli";
+  private claudeExecutable: string | null | undefined;
   private inFlight: Promise<void> | null = null;
   private lastSummary: string | null = null;
   private finalized = false;
@@ -304,6 +422,14 @@ export class TaskProgressSummarizer {
   constructor(private readonly options: TaskProgressSummarizerOptions) {
     this.now = options.now ?? Date.now;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.spawnImpl = options.spawnImpl ?? defaultSummaryCliSpawn;
+    this.whichImpl = options.whichImpl ?? findClaudeExecutableOnMachine;
+    this.claudeExecutable = options.config.transport === "cli"
+      ? findClaudeExecutable(this.whichImpl)
+      : undefined;
+    this.activeTransport = options.config.transport === "cli" && this.claudeExecutable
+      ? "cli"
+      : "api";
     this.tracker = new TaskProgressTracker(
       options.config.minNewMessages,
       options.config.minIntervalMs,
@@ -343,18 +469,45 @@ export class TaskProgressSummarizer {
         outcome,
         outcomeDetail: detail,
       });
-      const result = await callSummaryModel(
-        this.options.credentials,
-        this.options.config.model,
-        prompt,
-        this.options.config.requestTimeoutMs,
-        this.fetchImpl,
-      );
+      const result = await this.requestSummary(prompt);
       this.lastSummary = result.summary;
       await this.options.report(result, { final: outcome !== undefined });
     } catch (err) {
       // Never let summarization failures touch task execution.
       log.warn(`Progress summary skipped: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  private async requestSummary(prompt: string): Promise<ProgressSummaryResult> {
+    if (this.activeTransport === "cli") return this.requestSummaryWithCli(prompt);
+    try {
+      return await callSummaryModel(
+        this.options.credentials,
+        this.options.config.model,
+        prompt,
+        this.options.config.requestTimeoutMs,
+        this.fetchImpl,
+      );
+    } catch (err) {
+      if (this.options.config.transport !== "auto" || !(err instanceof SummaryModelHttpError)) throw err;
+      if (this.claudeExecutable === undefined) {
+        this.claudeExecutable = findClaudeExecutable(this.whichImpl);
+      }
+      if (!this.claudeExecutable) throw err;
+      this.activeTransport = "cli";
+      return this.requestSummaryWithCli(prompt);
+    }
+  }
+
+  private requestSummaryWithCli(prompt: string): Promise<ProgressSummaryResult> {
+    if (!this.claudeExecutable) throw new Error("Claude CLI executable is unavailable");
+    return callSummaryCli({
+      executable: this.claudeExecutable,
+      model: this.options.config.model,
+      prompt,
+      timeoutMs: this.options.config.requestTimeoutMs,
+      providerEnv: this.options.providerEnv,
+      spawnImpl: this.spawnImpl,
+    });
   }
 }

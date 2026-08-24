@@ -2432,6 +2432,7 @@ export class MultiremiDaemon {
       return new TaskProgressSummarizer({
         config,
         credentials,
+        providerEnv,
         taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
         taskPrompt: task.prompt ?? "",
         report: async (result, { final }) => {

@@ -10,6 +10,7 @@ import {
   TaskProgressTracker,
   type ProgressSummaryConfig,
   type ProgressSummaryResult,
+  type SummaryCliSpawn,
 } from "@multiremi/worker/progress-summarizer.js";
 import type { TaskMessageInput } from "@multiremi/contracts/types.js";
 
@@ -27,7 +28,27 @@ function config(overrides: Partial<ProgressSummaryConfig> = {}): ProgressSummary
     model: "test-model",
     maxDigestChars: 12_000,
     requestTimeoutMs: 5000,
+    transport: "api",
     ...overrides,
+  };
+}
+
+function byteStream(text = ""): ReadableStream<Uint8Array> {
+  return new Blob([text]).stream();
+}
+
+function successfulCliSpawn(
+  summary: string,
+  onSpawn?: (command: string[], options: Parameters<SummaryCliSpawn>[1]) => void,
+): SummaryCliSpawn {
+  return (command, options) => {
+    onSpawn?.(command, options);
+    return {
+      stdout: byteStream(JSON.stringify({ summary })),
+      stderr: byteStream(),
+      exited: Promise.resolve(0),
+      kill: () => {},
+    };
   };
 }
 
@@ -46,6 +67,7 @@ describe("resolveProgressSummaryConfig", () => {
     expect(resolved.minNewMessages).toBe(PROGRESS_SUMMARY_DEFAULTS.minNewMessages);
     expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
     expect(resolved.model).toBe(PROGRESS_SUMMARY_DEFAULTS.model);
+    expect(resolved.transport).toBe("auto");
   });
 
   it("honors N/T/model/disable overrides", () => {
@@ -54,20 +76,24 @@ describe("resolveProgressSummaryConfig", () => {
       MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "5",
       MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "9000",
       MULTIREMI_PROGRESS_SUMMARY_MODEL: "claude-x",
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "cli",
     });
     expect(resolved.enabled).toBe(false);
     expect(resolved.minNewMessages).toBe(5);
     expect(resolved.minIntervalMs).toBe(9000);
     expect(resolved.model).toBe("claude-x");
+    expect(resolved.transport).toBe("cli");
   });
 
   it("falls back to defaults on invalid numbers", () => {
     const resolved = resolveProgressSummaryConfig({
       MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "not-a-number",
       MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "-5",
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "other",
     });
     expect(resolved.minNewMessages).toBe(PROGRESS_SUMMARY_DEFAULTS.minNewMessages);
     expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
+    expect(resolved.transport).toBe("auto");
   });
 });
 
@@ -317,5 +343,126 @@ describe("TaskProgressSummarizer", () => {
     expect(requests[0]!.model).toBe("claude-haiku-test");
     expect(requests[0]!.headers.authorization).toBe("Bearer tok");
     expect(requests[0]!.headers["x-api-key"]).toBe("key");
+  });
+
+  it("auto-switches to Claude CLI after an API HTTP error and remembers the choice", async () => {
+    const reports: string[] = [];
+    let apiCalls = 0;
+    let cliCalls = 0;
+    let reportReady: (() => void) | undefined;
+    let waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    let now = 1000;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ minNewMessages: 1, minIntervalMs: 0, transport: "auto" }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => {
+        reports.push(result.summary);
+        reportReady?.();
+      },
+      fetchImpl: async () => {
+        apiCalls++;
+        return modelResponse({ error: "Claude Code clients only" }, 503);
+      },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("CLI 摘要", () => { cliCalls++; }),
+      now: () => now,
+    });
+
+    summarizer.onMessages([textMessage("first")]);
+    await waitForReport;
+    await Bun.sleep(0);
+    waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    now++;
+    summarizer.onMessages([textMessage("second")]);
+    await waitForReport;
+
+    expect(reports).toEqual(["CLI 摘要", "CLI 摘要"]);
+    expect(apiCalls).toBe(1);
+    expect(cliCalls).toBe(2);
+  });
+
+  it("runs the CLI in an isolated cwd with the provider env and combined prompt", async () => {
+    const calls: Array<{ command: string[]; options: Parameters<SummaryCliSpawn>[1] }> = [];
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "cli", model: "claude-haiku-test" }),
+      credentials: CREDENTIALS,
+      providerEnv: { MULTIREMI_TEST_PROVIDER_ENV: "task-value" },
+      taskTitle: "修复 Relay",
+      taskPrompt: "增加 CLI 通道",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => { throw new Error("API should not be called"); },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("已通过 CLI 生成摘要", (command, options) => {
+        calls.push({ command, options });
+      }),
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "已通过 CLI 生成摘要" }]);
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.command[0]).toBe("/opt/claude/bin/claude");
+    expect(calls[0]!.command.slice(-2)).toEqual(["--model", "claude-haiku-test"]);
+    expect(calls[0]!.command[2]).toContain("你是任务进度播报员");
+    expect(calls[0]!.command[2]).toContain("修复 Relay");
+    expect(calls[0]!.options.env.MULTIREMI_TEST_PROVIDER_ENV).toBe("task-value");
+    expect(calls[0]!.options.cwd).toContain("multiremi-progress-");
+    expect(calls[0]!.options.cwd).not.toContain(process.cwd());
+  });
+
+  it("kills a CLI subprocess when the request timeout expires", async () => {
+    let kills = 0;
+    const reported: ProgressSummaryResult[] = [];
+    const spawnImpl: SummaryCliSpawn = () => ({
+      stdout: byteStream(),
+      stderr: byteStream(),
+      exited: new Promise<number>(() => {}),
+      kill: () => { kills++; },
+    });
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "cli", requestTimeoutMs: 5 }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl,
+      now: () => 0,
+    });
+
+    await summarizer.finalize("failed");
+
+    expect(kills).toBe(1);
+    expect(reported).toEqual([]);
+  });
+
+  it("falls back to the API when CLI transport cannot find the binary", async () => {
+    let apiCalls = 0;
+    let cliCalls = 0;
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "cli" }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => {
+        apiCalls++;
+        return summaryResponse("API 摘要");
+      },
+      whichImpl: () => null,
+      spawnImpl: successfulCliSpawn("unexpected", () => { cliCalls++; }),
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "API 摘要" }]);
+    expect(apiCalls).toBe(1);
+    expect(cliCalls).toBe(0);
   });
 });
