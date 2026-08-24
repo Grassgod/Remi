@@ -7404,6 +7404,11 @@
     "GET /api/cli/context": {
       "command": "context.get"
     },
+    "GET /api/cli/latest-version": {
+      "cli_exempt": true,
+      "category": "platform_updater_internal",
+      "reason": "Dashboard-only release discovery gates the CLI update control; CLI update workflows use runtime release commands."
+    },
     "GET /api/cloud-billing/balance": {
       "command": "billing.balance"
     },

@@ -600,6 +600,9 @@ function exemptRoute(route: string): CliManifestRoute | null {
   if (path.startsWith("/api/platform-updater/")) {
     return exempt("platform_updater_internal", "Platform updater callback is an internal deployment control-plane protocol.");
   }
+  if (path === "/api/cli/latest-version") {
+    return exempt("platform_updater_internal", "Dashboard-only release discovery gates the CLI update control; CLI update workflows use runtime release commands.");
+  }
   if (path === "/api/config" || path === "/api/contact-sales") {
     return exempt("pure_ui", "Browser bootstrap or presentation-only action has no meaningful CLI workflow.");
   }
