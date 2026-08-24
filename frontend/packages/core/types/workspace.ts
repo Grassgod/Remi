@@ -27,6 +27,15 @@ export interface WorkspacePromptSettings {
   updatedBy: string | null;
 }
 
+export interface PlatformPromptTemplatePreview {
+  bootstrap: string;
+  delta: string;
+  sha256: {
+    bootstrap: string;
+    delta: string;
+  };
+}
+
 export interface UpdateWorkspacePromptSettingsRequest {
   bootstrapPrompt: string;
   deltaPrompt: string;

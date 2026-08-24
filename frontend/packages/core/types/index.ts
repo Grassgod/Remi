@@ -74,6 +74,7 @@ export type {
   Workspace,
   WorkspaceRepo,
   WorkspacePromptSettings,
+  PlatformPromptTemplatePreview,
   UpdateWorkspacePromptSettingsRequest,
   Member,
   MemberRole,

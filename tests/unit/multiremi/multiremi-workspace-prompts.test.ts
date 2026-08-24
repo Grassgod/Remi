@@ -8,6 +8,27 @@ afterEach(resetMultiremiTestEnv);
 const MASTER = { Authorization: "Bearer MASTER", "content-type": "application/json" };
 
 describe("workspace prompt settings", () => {
+  it("returns a read-only platform template preview to workspace members", async () => {
+    const store = createLocalStore();
+    store.createWorkspaceMember({ id: "mem_template_reader", workspaceId: "local", userId: "reader", name: "Reader", role: "member" });
+    const token = await store.createAccessToken({ workspaceId: "local", type: "pat", name: "reader", userId: "reader" });
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+
+    const response = await app.request("/api/workspaces/local/prompt-template", {
+      headers: { Authorization: `Bearer ${token.token}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      bootstrap: expect.stringContaining("{{workspace_bootstrap_prompt}}"),
+      delta: expect.stringContaining("{{workspace_delta_prompt}}"),
+      sha256: {
+        bootstrap: expect.stringMatching(/^[a-f0-9]{64}$/),
+        delta: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    });
+  });
+
   it("returns the delivery contract by default and round-trips both prompt modes", async () => {
     const store = createLocalStore();
     const app = createMultiremiApp({ store, authToken: "MASTER" });

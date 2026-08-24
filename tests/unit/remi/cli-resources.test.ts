@@ -133,6 +133,34 @@ describe("native CLI resource contracts", () => {
     expect(bodies.get("/api/workspaces/ws_1/issue-archive")).toEqual({ ttl_ms: 86400000, sweep_interval_ms: 60000 });
   });
 
+  it("reads the platform prompt template through the workspace command", async () => {
+    useCliEnv();
+    const spec = specById("workspace.prompt.template");
+    const requests: Request[] = [];
+    globalThis.fetch = mockFetch(spec.id, requests, (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") {
+        return Response.json({ id: "ws_1", name: "Workspace" });
+      }
+      if (path === "/api/workspaces/ws_1/prompt-template") {
+        return Response.json({
+          bootstrap: "# Bootstrap Prompt",
+          delta: "# Delta Prompt",
+          sha256: { bootstrap: "a".repeat(64), delta: "b".repeat(64) },
+        });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+
+    await execute(spec, ["ws_1", "--output", "json"]);
+
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/api/cli/capabilities",
+      "/api/workspaces/ws_1",
+      "/api/workspaces/ws_1/prompt-template",
+    ]);
+  });
+
   it("lists repositories from the API without contacting the local Git helper", async () => {
     useCliEnv();
     const spec = specById("repo.list");

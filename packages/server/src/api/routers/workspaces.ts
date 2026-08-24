@@ -61,6 +61,7 @@ import {
   readWorkspacePromptSettings,
   WorkspacePromptRevisionConflictError,
 } from "../../prompts/workspace-settings.js";
+import { buildPlatformPromptTemplatePreview } from "../../prompts/platform-template.js";
 import { listWorkspaceRepositories } from "../helpers/repositories.js";
 import {
   discoverGatewayModels,
@@ -109,6 +110,14 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const workspace = store.getWorkspace(workspaceId);
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     return c.json(readWorkspacePromptSettings(workspace));
+  });
+  app.get("/api/workspaces/:id/prompt-template", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    return c.json(buildPlatformPromptTemplatePreview());
   });
   app.put("/api/workspaces/:id/prompts", async (c) => {
     const workspaceId = c.req.param("id");
