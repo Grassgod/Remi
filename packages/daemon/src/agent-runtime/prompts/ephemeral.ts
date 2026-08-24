@@ -552,6 +552,12 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
   } else {
     sections.push("No other runnable agent teammates are currently configured.");
   }
+  const instructions = squad.instructions?.trim();
+  if (instructions) {
+    sections.push("");
+    sections.push("## Squad Instructions");
+    sections.push(instructions);
+  }
   sections.push("Delegate when there are independent workstreams, a teammate has relevant specialization, or parallel work will materially shorten delivery. Keep small or tightly coupled work yourself.");
   if (teammates.length) {
     const example = teammates[0]!;
