@@ -5337,7 +5337,7 @@
           "accent": "info",
           "skills": [],
           "recommendedProvider": "claude",
-          "recommendedModel": "opus5",
+          "recommendedModel": "claude-opus-5",
           "requiredPlugins": [
             "code-to-wiki"
           ]
@@ -13366,7 +13366,7 @@
             "accent": "info",
             "skills": [],
             "recommendedProvider": "claude",
-            "recommendedModel": "opus5",
+            "recommendedModel": "claude-opus-5",
             "requiredPlugins": [
               "code-to-wiki"
             ]

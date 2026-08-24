@@ -32,6 +32,19 @@ describe("AgentsSkillsRepo", () => {
     expect(repo.listAgents().map((entry) => entry.id)).toContain(agent.id);
   });
 
+  it("normalizes blank avatar_url to NULL on create and update", () => {
+    const repo = createRepo();
+    const created = repo.createAgent({ name: "Faceless", provider: "claude", avatar_url: "" });
+    expect(created.avatarUrl).toBeNull();
+
+    const withAvatar = repo.updateAgent(created.id, { avatar_url: "/api/attachments/att_1/content" });
+    expect(withAvatar.avatarUrl).toBe("/api/attachments/att_1/content");
+
+    // Clearing from the edit dialog submits "" — it must not persist as ''.
+    const cleared = repo.updateAgent(created.id, { avatar_url: "  " });
+    expect(cleared.avatarUrl).toBeNull();
+  });
+
   it("archives an agent out of listAgents and restores it", () => {
     const repo = createRepo();
     const agent = repo.createAgent({ name: "Temp worker", provider: "claude" });

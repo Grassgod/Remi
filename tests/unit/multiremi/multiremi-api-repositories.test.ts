@@ -68,7 +68,7 @@ describe("Multiremi API - workspace repositories", () => {
     }
 
     const atlas = store.getAgentByWorkspaceAndName(workspace.id, "Atlas · LLM Wiki");
-    expect(atlas).toMatchObject({ provider: "claude", model: "opus5", visibility: "workspace" });
+    expect(atlas).toMatchObject({ provider: "claude", model: "claude-opus-5", visibility: "workspace" });
     expect(store.listAgentPluginBindings(atlas!.id)).toHaveLength(1);
     const automations = store.listAutopilots(workspace.id).filter((item) => item.assigneeId === atlas!.id);
     expect(automations.map((item) => item.title).sort()).toEqual([
