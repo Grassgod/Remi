@@ -527,14 +527,19 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
   });
   app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
-    const body = await readJsonStrict<{ summary?: string; step?: number; total?: number }>(c);
+    const body = await readJsonStrict<{ summary?: string; step?: number; total?: number; final?: boolean }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
     const existing = store.getTask(taskId);
     if (!existing) return c.json({ error: "task not found" }, 404);
-    if (!isTerminalTaskStatus(existing.status)) store.reportProgress(taskId, body.summary ?? "", body.step, body.total);
+    // A `final` summary describes the run's terminal outcome and is produced
+    // after the status flip, so it may land on an already-terminal task.
+    const final = body.final === true;
+    if (!isTerminalTaskStatus(existing.status) || final) {
+      store.reportProgress(taskId, body.summary ?? "", body.step, body.total, { allowTerminal: final });
+    }
     return c.json({ status: "ok" });
   });
   app.post("/api/daemon/tasks/:taskId/messages", async (c) => {

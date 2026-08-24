@@ -116,7 +116,7 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       expect(logs[0]).toContain("2026-06-20");
       expect(tableHeaders(logs[1])).toEqual(["KEY", "TITLE", "STATUS", "MATCH"]);
       expect(logs[1]).toContain("title: checkout cache");
-      expect(tableHeaders(logs[2])).toEqual(["ID", "AGENT", "STATUS", "STARTED", "COMPLETED", "ERROR"]);
+      expect(tableHeaders(logs[2])).toEqual(["ID", "AGENT", "STATUS", "PROGRESS", "STARTED", "COMPLETED", "ERROR"]);
       expect(logs[2]).toContain("tsk_1234567");
       expect(tableHeaders(logs[3])).toEqual(["SEQ", "TYPE", "TOOL", "CONTENT"]);
       expect(logs[3]).toContain("Bash");

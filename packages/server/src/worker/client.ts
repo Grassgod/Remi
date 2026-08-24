@@ -335,8 +335,15 @@ export class MultiremiDaemonClient {
     await this.post(`/api/daemon/tasks/${taskId}/wait-local-directory`, { reason });
   }
 
-  async reportProgress(taskId: string, summary: string, step?: number, total?: number): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/progress`, { summary, step, total });
+  async reportProgress(taskId: string, summary: string, step?: number, total?: number, options?: { final?: boolean }): Promise<void> {
+    // `final: true` marks a terminal summary, which the server accepts even
+    // after the task reached a terminal status.
+    await this.post(`/api/daemon/tasks/${taskId}/progress`, {
+      summary,
+      step,
+      total,
+      ...(options?.final ? { final: true } : {}),
+    });
   }
 
   async reportTaskMessages(taskId: string, messages: TaskMessageInput[]): Promise<void> {

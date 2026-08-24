@@ -1297,11 +1297,20 @@ export class TasksRepo {
     return null;
   }
 
-  reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null): MultiremiTask {
+  reportProgress(
+    taskId: string,
+    summary: string,
+    step?: number | null,
+    total?: number | null,
+    options?: { allowTerminal?: boolean },
+  ): MultiremiTask {
+    // allowTerminal admits the run's final LLM summary, which is written after
+    // the task already flipped to completed/failed/cancelled.
+    const statusGuard = options?.allowTerminal ? "" : " AND status NOT IN ('completed', 'failed', 'cancelled')";
     const result = this.ctx.db.run(
       `UPDATE multiremi_tasks
        SET progress_summary = ?, progress_step = ?, progress_total = ?, updated_at = ?
-       WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+       WHERE id = ?${statusGuard}`,
       [summary, step ?? null, total ?? null, nowIso(), taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
