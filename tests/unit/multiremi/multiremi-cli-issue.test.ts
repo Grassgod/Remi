@@ -111,14 +111,6 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        if (url.pathname === "/api/projects/prj_1" && request.method === "GET") {
-          // Project without a default assignee.
-          return Response.json({ project: { id: "prj_1", title: "No defaults" } });
-        }
-        if (url.pathname === "/api/projects/prj_down" && request.method === "GET") {
-          // Project lookup outage: the CLI must not claim "not configured".
-          return Response.json({ error: "boom" }, { status: 500 });
-        }
         if (url.pathname === "/api/issues" && request.method === "POST") {
           await request.json();
           return new Response(JSON.stringify(createResponse), { status: 201 });
@@ -137,7 +129,9 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       const create = (...extra: string[]) =>
         runMultiremi(["issue", "create", "--title", "Silent?", "--server", serverUrl, "--token", "tok_cli", "--output", "json", ...extra], { programName: "multiremi" });
 
-      // No assignee + project without default assignee: warn, with the config hint.
+      // No assignee fields at all: the server had the chance to backfill the
+      // project default, so no_assignee confirms none is configured — warn with
+      // the config hint.
       createResponse = { id: "iss_1", identifier: "MUL-9", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee" };
       await create("--project", "prj_1");
       expect(JSON.parse(logs.at(-1)!)).toMatchObject({ dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee" });
@@ -146,11 +140,11 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       expect(warnings.join("\n")).toContain("no default assignee");
       expect(warnings.join("\n")).toContain("issue assign MUL-9");
 
-      // Project lookup failed: still warn about the missing assignee, but never
-      // report the project as "not configured" — that was not confirmed.
+      // Explicit opt-out: the caller asked for no assignee, so the "project has
+      // no default assignee" note would be misleading — warn without it.
       warnings.length = 0;
       createResponse = { id: "iss_1b", identifier: "MUL-9", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee" };
-      await create("--project", "prj_down");
+      await create("--project", "prj_1", "--no-project-defaults");
       expect(warnings.join("\n")).toContain("NOT dispatched");
       expect(warnings.join("\n")).not.toContain("no default assignee");
 
