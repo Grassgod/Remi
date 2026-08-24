@@ -529,6 +529,11 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
   sections.push("");
   sections.push("## Squad Coordination");
   sections.push(`You are the lead agent for squad ${squad.name}. You own the final answer and integration.`);
+  const squadInstructions = squad.instructions?.trim();
+  if (squadInstructions) {
+    sections.push("Squad instructions:");
+    sections.push(squadInstructions);
+  }
   const teammates = squad.members.filter((member) => member.agentId !== task.agent!.id);
   if (teammates.length) {
     sections.push("Available agent teammates:");

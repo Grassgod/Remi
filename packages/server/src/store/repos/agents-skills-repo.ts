@@ -51,7 +51,7 @@ export class AgentsSkillsRepo {
           workspaceId,
           input.name,
           input.description ?? "",
-          input.avatarUrl ?? input.avatar_url ?? null,
+          cleanOptionalString(input.avatarUrl ?? input.avatar_url),
           input.provider,
           ownerId,
           visibility,
@@ -731,7 +731,10 @@ function mergeAgentSkills(inlineSkills: MultiremiSkill[], structuredSkills: Mult
 }
 
 function stringFieldOrCurrent(value: unknown, current: string | null): string | null {
-  return typeof value === "string" ? value : current;
+  // Empty/whitespace strings normalize to NULL so "cleared" and "never set"
+  // are indistinguishable downstream (frontend clear sends "").
+  if (typeof value !== "string") return current;
+  return cleanOptionalString(value);
 }
 
 function normalizeAgentVisibility(value: unknown): MultiremiAgent["visibility"] {

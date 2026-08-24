@@ -288,6 +288,29 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).not.toContain("remi issue create");
   });
 
+  it("injects squad instructions for the leader and omits them when blank", () => {
+    const store = createStore();
+    const { agent, task } = createProjectTask(store);
+    const squadContext = {
+      id: "sqd_core",
+      name: "Core squad",
+      leaderAgentId: agent.id,
+      members: [{ agentId: agent.id, name: agent.name, role: "leader" }],
+    };
+    const withInstructions = buildTaskPrompt({
+      ...task,
+      squadContext: { ...squadContext, instructions: "  Ship behind a feature flag.  " },
+    } as any);
+    expect(withInstructions).toContain("Squad instructions:");
+    expect(withInstructions).toContain("Ship behind a feature flag.");
+
+    const withoutInstructions = buildTaskPrompt({
+      ...task,
+      squadContext: { ...squadContext, instructions: "   " },
+    } as any);
+    expect(withoutInstructions).not.toContain("Squad instructions:");
+  });
+
   it("does not teach squad mention syntax to a non-leader agent", () => {
     const store = createStore();
     const { agent, task } = createProjectTask(store);

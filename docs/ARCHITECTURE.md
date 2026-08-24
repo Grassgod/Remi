@@ -28,7 +28,7 @@
 - **前端无家可归**:真正在用的 Next.js 漂亮 UI 在 **gitignore 的 `multiremi/` 运行时副本**里(CI 看不见,改动不入库)。同时还存在 `web/frontend`(Vite SPA,已跟踪)和 `dashboard.ts`——**三套 UI 干一件事**。
 - **命名残留**:`multica`/`Multimira`(gitignore 前端里 ~144 文件含 `multimira`)。
 - **PG 桥**:`sql-database.ts` 用 Worker+SharedArrayBuffer+Atomics 把异步 Postgres 同步化 + 正则翻译 SQL 方言,**CI 未覆盖**。
-- **跨树泄漏**:`src/multiremi/builtin-skills.ts` 直接读 `pipeline/skills/*`(评审发现,层模型必须显式纳入)。
+- **跨树泄漏**:`src/multiremi/builtin-skills.ts` 直接读 `pipeline/skills/*`(评审发现,层模型必须显式纳入)。*(已解决:`builtin-skills.ts` 与 `.remi/pipeline/skills/` 均已删除,此条仅存档。)*
 
 ---
 
@@ -115,7 +115,7 @@ scripts/   docs/
 
 ## 6. 人 & Agent 协作规则(可执行)
 
-1. **依赖方向(硬规则 + lint)**:import 只能向下。`src/multiremi/*` 永不 import `src/assistant/*`/`connectors`/`mission`。**先用 `scripts/check-layers.ts` 跑出真实 import 图**(评审发现 `pipeline/skills` 是真实跨树边——必须显式归类,否则 lint 是摆设),CI 先 WARN、迁移末期转 ERROR。
+1. **依赖方向(硬规则 + lint)**:import 只能向下。`src/multiremi/*` 永不 import `src/assistant/*`/`connectors`/`mission`。**先用 `scripts/check-layers.ts` 跑出真实 import 图**(评审时 `pipeline/skills` 曾是真实跨树边,该目录现已删除——新出现的跨树边同样必须显式归类,否则 lint 是摆设),CI 先 WARN、迁移末期转 ERROR。
 2. **X 住哪(定位规则)**:`<feature>.<layer>`。改 issues 的数据访问 → `store/issues.ts`;改 issues 的路由 → `api/routers/issues.ts`;改 issues 的类型 → `contracts/types/issues.ts`。同一词跨层,agent 凭名定位。
 3. **新代码进能拥有它的最低层**。想往 `api.ts` 加 SQL?停——它属于 `store/`。
 4. **一处序列化**:所有 snake↔camel / Go-wire 翻译只在 `contracts/wire.ts`。改字段=改一处。
