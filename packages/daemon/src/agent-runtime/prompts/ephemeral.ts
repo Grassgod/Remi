@@ -89,6 +89,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     if (checkouts.length && checkouts.length < task.repos.length) {
       sections.push("For repositories without a path above, use `remi repo checkout <url> [--ref <branch-or-sha>]`.");
     }
+    if (checkouts.length) appendRepositoryPublishingSection(sections);
   }
 
   if (mode === "bootstrap") appendSquadContextSection(sections, task);
@@ -169,6 +170,24 @@ function appendProjectPromptSections(sections: string[], task: AgentTask, mode: 
     sections.push(projectInstructions);
   }
   appendProjectKnowledgeSections(sections, task.project.id);
+}
+
+function appendRepositoryPublishingSection(sections: string[]): void {
+  sections.push("");
+  sections.push("Publishing changes: `git push` on the task branch works as-is — each checkout's HTTPS remote is backed by the on-demand `remi git-credential` helper. A logged-out `gh auth status` or an unset `GH_TOKEN` does not mean you cannot push or open a pull request; do not report missing Git credentials without first trying the helper.");
+  if (process.platform === "win32") {
+    sections.push("To call the SCM provider API (for example creating a pull request), mint a short-lived token: write `protocol=https`, `host=<remote-host>`, and `path=<owner>/<repo>.git` on separate lines followed by a blank line to a UTF-8 file, run `remi git-credential get` with that file as stdin, and use the `password=` value as the provider API token (GitHub: `GH_TOKEN` for `gh pr create`).");
+  } else {
+    sections.push([
+      "To call the SCM provider API (for example creating a pull request), mint a short-lived token from the same helper. For a GitHub remote:",
+      "",
+      "    GH_TOKEN=\"$(printf 'protocol=https\\nhost=github.com\\npath=<owner>/<repo>.git\\n\\n' | remi git-credential get | sed -n 's/^password=//p')\" \\",
+      "      gh pr create --repo <owner>/<repo> --head <task-branch> ...",
+      "",
+      "For other hosts, swap `host`/`path` for that repository's remote; the returned token authenticates against that provider's API.",
+    ].join("\n"));
+  }
+  sections.push("The token is short-lived and scoped; never print it into logs, comments, or command output. If the helper returns no `password=` line, that repository has no SCM credential configured — push the branch, share its pull-request creation link instead, and say so explicitly.");
 }
 
 function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[]): void {

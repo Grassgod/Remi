@@ -323,6 +323,35 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain("at `./knowledge` on branch `agent/codex/REMI-1`");
   });
 
+  it("tells agents how to publish branches and mint SCM API tokens for checkouts", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const prompt = buildTaskPrompt(task, {
+      repoCheckouts: [{
+        repoUrl: "https://github.com/example/knowledge",
+        path: "/tmp/work/knowledge",
+        branch: "agent/codex/REMI-1",
+      }],
+    });
+
+    expect(prompt).toContain("Publishing changes: `git push` on the task branch works as-is");
+    expect(prompt).toContain("`remi git-credential` helper");
+    expect(prompt).toContain("does not mean you cannot push or open a pull request");
+    expect(prompt).toContain("remi git-credential get");
+    expect(prompt).toContain("never print it into logs, comments, or command output");
+    expect(prompt).toContain("If the helper returns no `password=` line");
+  });
+
+  it("omits publishing guidance when the daemon materialized no checkouts", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const prompt = buildTaskPrompt(task);
+
+    expect(prompt).toContain("## Available Repositories");
+    expect(prompt).not.toContain("Publishing changes:");
+    expect(prompt).not.toContain("remi git-credential get");
+  });
+
   it("injects bounded repository failure diagnostics into the agent prompt", () => {
     const store = createStore();
     const { task } = createProjectTask(store);
