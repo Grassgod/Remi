@@ -83,6 +83,7 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite("workspace.relay.update", ["workspace", "relay", "update"], "Update a relay engine", "/relay-config/:engine", "PUT", [refPositional("engine")]),
     scopedWrite("workspace.relay.reveal", ["workspace", "relay", "reveal"], "Reveal a relay engine credential", "/relay-config/:engine/reveal", "POST", [refPositional("engine")]),
     scopedRead("workspace.prompt.get", ["workspace", "prompt", "get"], "Read workspace prompt appendices", "/prompts"),
+    scopedRead("workspace.prompt.template", ["workspace", "prompt", "template"], "Read the platform prompt template", "/prompt-template"),
     scopedWrite("workspace.prompt.update", ["workspace", "prompt", "update"], "Update workspace prompt appendices", "/prompts", "PUT", [
       { name: "bootstrap-prompt", type: "string", valueName: "text", description: "Bootstrap prompt appendix" },
       { name: "delta-prompt", type: "string", valueName: "text", description: "Delta prompt appendix" },
