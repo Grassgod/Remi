@@ -488,7 +488,7 @@ export async function issueMetadata(positional: string[], options: CliOptions): 
 
 export async function issueCreate(options: CliOptions): Promise<void> {
   const title = rawStringOption(options, "title");
-  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>] [--project <id>] [--parent <id>] [--assignee <id|name|email> --assignee-type <type>] [--use-project-defaults] [--start-date <date>] [--due-date <date>] [--attachment <path>]... [--allow-duplicate]");
+  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>] [--project <id>] [--parent <id>] [--assignee <id|name|email> --assignee-type <type>] [--no-project-defaults] [--start-date <date>] [--due-date <date>] [--attachment <path>]... [--allow-duplicate]");
   const attachments = readAttachmentFiles(options);
   const body: Record<string, unknown> = { title };
   const description = await readOptionalTextBody(options, "description");
@@ -503,31 +503,20 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   const hasExplicitAssignee = hasOption(options, "assignee-id")
     || hasOption(options, "assigneeId")
     || hasOption(options, "assignee");
+  // The server backfills the project's default assignee whenever the request
+  // carries no assignee fields, so inheriting defaults needs no client work.
+  // --use-project-defaults is kept as a compatible no-op; --no-project-defaults
+  // opts out by sending explicit nulls.
   const useProjectDefaults = booleanFlag(options, "use-project-defaults", "useProjectDefaults");
+  const noProjectDefaults = booleanFlag(options, "no-project-defaults", "noProjectDefaults");
   const projectId = rawStringOption(options, "project", "project-id");
+  if (useProjectDefaults && noProjectDefaults) throw new Error("--use-project-defaults and --no-project-defaults are mutually exclusive");
   if (useProjectDefaults && !projectId) throw new Error("--use-project-defaults requires --project");
-  let projectDefaults: { type: string; id: string } | null = null;
-  // Distinguishes "queried the project and it has no default assignee" from
-  // "the query itself failed": only a confirmed absence may be reported as a
-  // configuration problem later.
-  let projectDefaultsKnown = false;
-  if (!hasExplicitAssignee && projectId) {
-    try {
-      projectDefaults = await readProjectDefaultAssignee(projectId, options);
-      projectDefaultsKnown = true;
-    } catch (error) {
-      if (useProjectDefaults) throw error;
-      // Not fatal without the opt-in, but never silent: a task token that
-      // cannot read the project would otherwise lose the defaults hint with
-      // no trace of why.
-      console.error(`warning: could not read project defaults for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  if (useProjectDefaults && projectDefaults) {
-    body.assignee_type = projectDefaults.type;
-    body.assignee_id = projectDefaults.id;
-  } else {
+  if (hasExplicitAssignee) {
     addAssigneeBodyFields(body, options, "assignee-id", "assignee-type", "assignee");
+  } else if (noProjectDefaults) {
+    body.assignee_type = null;
+    body.assignee_id = null;
   }
   const response = await multiremiApiRequest("POST", "/api/issues", body, options);
   if (attachments.length) {
@@ -541,13 +530,8 @@ export async function issueCreate(options: CliOptions): Promise<void> {
       }
     }
   }
-  if (!useProjectDefaults && !hasExplicitAssignee && projectDefaults) {
-    console.error(
-      `Project default assignee is ${projectDefaults.type}:${projectDefaults.id}; pass --use-project-defaults to apply it or assign the issue explicitly.`,
-    );
-  }
   printJson(response);
-  warnUndispatchedIssue(response, projectId ?? null, projectDefaultsKnown && !projectDefaults);
+  warnUndispatchedIssue(response, projectId ?? null, !hasExplicitAssignee && !noProjectDefaults);
 }
 
 // Assign-on-create can silently end without a task (no assignee, no runnable
@@ -557,7 +541,7 @@ export async function issueCreate(options: CliOptions): Promise<void> {
 function warnUndispatchedIssue(
   response: unknown,
   projectId: string | null,
-  projectConfirmedWithoutDefaultAssignee: boolean,
+  serverInheritanceAttempted: boolean,
 ): void {
   if (!isRecord(response) || response.dispatch_status !== "skipped") return;
   const reason = typeof response.dispatch_skipped_reason === "string" ? response.dispatch_skipped_reason : null;
@@ -570,7 +554,10 @@ function warnUndispatchedIssue(
   console.error(`⚠ Issue ${ref} was created but NOT dispatched — no agent will pick it up.`);
   if (reason === "no_assignee") {
     console.error("  Reason: the issue has no assignee.");
-    if (projectId && projectConfirmedWithoutDefaultAssignee) {
+    // The server backfills the project's default assignee whenever the request
+    // omits assignee fields, so reaching no_assignee on such a request means
+    // the project has none configured.
+    if (projectId && serverInheritanceAttempted) {
       console.error(`  Note: project ${projectId} has no default assignee configured, so none was inherited.`);
     }
     console.error(`  To start execution, assign an agent: issue assign ${ref} --to <agent>`);
@@ -579,54 +566,6 @@ function warnUndispatchedIssue(
     console.error(`  Reassign it to a runnable agent: issue assign ${ref} --to <agent>`);
   } else {
     console.error(`  Reason: ${error ?? reason ?? "unknown"}`);
-  }
-}
-
-async function readProjectDefaultAssignee(
-  projectId: string,
-  options: CliOptions,
-): Promise<{ type: string; id: string } | null> {
-  let project: unknown;
-  try {
-    const response = await multiremiApiRequest<unknown>(
-      "GET",
-      `/api/projects/${encodeURIComponent(projectId)}`,
-      undefined,
-      options,
-    );
-    project = isRecord(response) && isRecord(response.project) ? response.project : response;
-  } catch (error) {
-    // Task tokens may only GET their own issue's project by id; the workspace
-    // list stays readable and carries every project's default assignee.
-    project = await readProjectSummaryFromList(projectId, options);
-    if (!project) throw error;
-  }
-  if (!isRecord(project)) return null;
-  const type = field(project, "default_assignee_type", "defaultAssigneeType");
-  const id = field(project, "default_assignee_id", "defaultAssigneeId");
-  return typeof type === "string" && type && typeof id === "string" && id ? { type, id } : null;
-}
-
-async function readProjectSummaryFromList(
-  projectId: string,
-  options: CliOptions,
-): Promise<Record<string, unknown> | null> {
-  try {
-    const workspaceId = multiremiApiConnection(options).workspaceId;
-    const params = new URLSearchParams();
-    addQueryParam(params, "workspace_id", workspaceId);
-    const query = params.toString();
-    const response = await multiremiApiRequest<unknown>(
-      "GET",
-      `/api/projects${query ? `?${query}` : ""}`,
-      undefined,
-      options,
-    );
-    const projects = isRecord(response) && Array.isArray(response.projects) ? response.projects : [];
-    const match = projects.find((entry) => isRecord(entry) && entry.id === projectId);
-    return isRecord(match) ? match : null;
-  } catch {
-    return null;
   }
 }
 

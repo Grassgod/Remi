@@ -140,15 +140,12 @@ describe("native collaboration CLI contracts", () => {
     ]);
   });
 
-  it("applies project defaults only with explicit opt-in and otherwise emits a post-create hint", async () => {
+  it("leaves default-assignee inheritance to the server and opts out with --no-project-defaults", async () => {
     useCliEnv();
     const bodies: Record<string, unknown>[] = [];
     globalThis.fetch = (async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init);
       const path = new URL(request.url).pathname;
-      if (path === "/api/projects/prj_1") {
-        return Response.json({ id: "prj_1", default_assignee_type: "agent", default_assignee_id: "agt_default" });
-      }
       if (path === "/api/issues" && request.method === "POST") {
         const body = await request.json() as Record<string, unknown>;
         bodies.push(body);
@@ -157,63 +154,17 @@ describe("native collaboration CLI contracts", () => {
       throw new Error(`unexpected request ${request.method} ${path}`);
     }) as typeof fetch;
     const spec = specById("issue.create");
-    const hinted = await capture(() => registryFor([spec]).execute(["issue", "create", "--title", "Hinted", "--project", "prj_1"]));
-    const optedIn = await capture(() => registryFor([spec]).execute(["issue", "create", "--title", "Assigned", "--project", "prj_1", "--use-project-defaults"]));
+    // Default: no assignee fields at all — the server inherits the project default.
+    const inherited = await capture(() => registryFor([spec]).execute(["issue", "create", "--title", "Inherited", "--project", "prj_1"]));
     expect(bodies[0]).not.toHaveProperty("assignee_id");
-    expect(hinted.stderr).toContain("Project default assignee is agent:agt_default");
-    expect(bodies[1]).toMatchObject({ assignee_type: "agent", assignee_id: "agt_default" });
-    expect(optedIn.stderr).not.toContain("Project default assignee is");
-  });
-
-  it("reads project defaults from the workspace list when the by-id GET is denied", async () => {
-    // Task tokens 404 on foreign projects' by-id GET; the defaults lookup must
-    // fall back to the workspace list instead of silently dropping the hint.
-    useCliEnv();
-    const bodies: Record<string, unknown>[] = [];
-    globalThis.fetch = (async (input, init) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      const path = new URL(request.url).pathname;
-      if (path === "/api/projects/prj_foreign") {
-        return Response.json({ error: "project not found" }, { status: 404 });
-      }
-      if (path === "/api/projects" && request.method === "GET") {
-        return Response.json({ projects: [
-          { id: "prj_foreign", title: "Foreign", default_assignee_type: "squad", default_assignee_id: "sqd_7" },
-        ] });
-      }
-      if (path === "/api/issues" && request.method === "POST") {
-        const body = await request.json() as Record<string, unknown>;
-        bodies.push(body);
-        return Response.json({ id: `iss_${bodies.length}`, ...body }, { status: 201 });
-      }
-      throw new Error(`unexpected request ${request.method} ${path}`);
-    }) as typeof fetch;
-    const spec = specById("issue.create");
-    const optedIn = await capture(() => registryFor([spec]).execute(["issue", "create", "--title", "Cross", "--project", "prj_foreign", "--use-project-defaults"]));
-    expect(bodies[0]).toMatchObject({ assignee_type: "squad", assignee_id: "sqd_7" });
-    expect(optedIn.stderr).not.toContain("warning:");
-  });
-
-  it("warns instead of silently swallowing an unreadable project defaults lookup", async () => {
-    useCliEnv();
-    const bodies: Record<string, unknown>[] = [];
-    globalThis.fetch = (async (input, init) => {
-      const request = input instanceof Request ? input : new Request(input, init);
-      const path = new URL(request.url).pathname;
-      if (path === "/api/projects/prj_gone" || path === "/api/projects") {
-        return Response.json({ error: "project not found" }, { status: 404 });
-      }
-      if (path === "/api/issues" && request.method === "POST") {
-        const body = await request.json() as Record<string, unknown>;
-        bodies.push(body);
-        return Response.json({ id: `iss_${bodies.length}`, ...body }, { status: 201 });
-      }
-      throw new Error(`unexpected request ${request.method} ${path}`);
-    }) as typeof fetch;
-    const spec = specById("issue.create");
-    const hinted = await capture(() => registryFor([spec]).execute(["issue", "create", "--title", "Blind", "--project", "prj_gone"]));
-    expect(bodies[0]).not.toHaveProperty("assignee_id");
-    expect(hinted.stderr).toContain("warning: could not read project defaults for prj_gone");
+    expect(bodies[0]).not.toHaveProperty("assignee_type");
+    expect(inherited.stderr).not.toContain("Project default assignee is");
+    // --use-project-defaults stays accepted as a no-op (server-side default).
+    await capture(() => registryFor([spec]).execute(["issue", "create", "--title", "Legacy opt-in", "--project", "prj_1", "--use-project-defaults"]));
+    expect(bodies[1]).not.toHaveProperty("assignee_id");
+    // --no-project-defaults sends explicit nulls so the issue stays unassigned.
+    await capture(() => registryFor([spec]).execute(["issue", "create", "--title", "Unassigned", "--project", "prj_1", "--no-project-defaults"]));
+    expect(bodies[2]).toMatchObject({ assignee_type: null, assignee_id: null });
   });
 
   it("restores an archived issue through the native command", async () => {
