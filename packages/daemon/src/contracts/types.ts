@@ -210,6 +210,7 @@ export interface AgentTaskSquadContext {
   id: string;
   name: string;
   leaderAgentId: string;
+  instructions?: string | null;
   members: Array<{
     agentId: string;
     name: string;

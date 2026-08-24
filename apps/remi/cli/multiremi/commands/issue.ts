@@ -16,6 +16,7 @@ import {
 import {
   MultiremiCliHttpError,
   attachmentStringField,
+  multiremiApiConnection,
   multiremiApiFetch,
   multiremiApiRequest,
   multiremiApiUploadFile,
@@ -506,11 +507,20 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   const projectId = rawStringOption(options, "project", "project-id");
   if (useProjectDefaults && !projectId) throw new Error("--use-project-defaults requires --project");
   let projectDefaults: { type: string; id: string } | null = null;
+  // Distinguishes "queried the project and it has no default assignee" from
+  // "the query itself failed": only a confirmed absence may be reported as a
+  // configuration problem later.
+  let projectDefaultsKnown = false;
   if (!hasExplicitAssignee && projectId) {
     try {
       projectDefaults = await readProjectDefaultAssignee(projectId, options);
+      projectDefaultsKnown = true;
     } catch (error) {
       if (useProjectDefaults) throw error;
+      // Not fatal without the opt-in, but never silent: a task token that
+      // cannot read the project would otherwise lose the defaults hint with
+      // no trace of why.
+      console.error(`warning: could not read project defaults for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   if (useProjectDefaults && projectDefaults) {
@@ -537,23 +547,87 @@ export async function issueCreate(options: CliOptions): Promise<void> {
     );
   }
   printJson(response);
+  warnUndispatchedIssue(response, projectId ?? null, projectDefaultsKnown && !projectDefaults);
+}
+
+// Assign-on-create can silently end without a task (no assignee, no runnable
+// agent, assignment error). The JSON on stdout carries dispatch_status /
+// dispatch_skipped_reason for scripts; this prints a human-facing warning so
+// an interactive caller cannot mistake "201 created" for "an agent is on it".
+function warnUndispatchedIssue(
+  response: unknown,
+  projectId: string | null,
+  projectConfirmedWithoutDefaultAssignee: boolean,
+): void {
+  if (!isRecord(response) || response.dispatch_status !== "skipped") return;
+  const reason = typeof response.dispatch_skipped_reason === "string" ? response.dispatch_skipped_reason : null;
+  // Expected outcomes: a member assignee gets an inbox notification instead of
+  // a task, and backlog is a parking lot for pre-assignment issues.
+  if (reason === "member_assignee" || reason === "backlog_status") return;
+  const ref = (typeof response.identifier === "string" && response.identifier) || String(response.id ?? "");
+  const error = typeof response.dispatch_error === "string" ? response.dispatch_error : null;
+  console.error("");
+  console.error(`⚠ Issue ${ref} was created but NOT dispatched — no agent will pick it up.`);
+  if (reason === "no_assignee") {
+    console.error("  Reason: the issue has no assignee.");
+    if (projectId && projectConfirmedWithoutDefaultAssignee) {
+      console.error(`  Note: project ${projectId} has no default assignee configured, so none was inherited.`);
+    }
+    console.error(`  To start execution, assign an agent: issue assign ${ref} --to <agent>`);
+  } else if (reason === "no_runnable_agent") {
+    console.error(`  Reason: no runnable agent for the assignee${error ? ` (${error})` : ""}.`);
+    console.error(`  Reassign it to a runnable agent: issue assign ${ref} --to <agent>`);
+  } else {
+    console.error(`  Reason: ${error ?? reason ?? "unknown"}`);
+  }
 }
 
 async function readProjectDefaultAssignee(
   projectId: string,
   options: CliOptions,
 ): Promise<{ type: string; id: string } | null> {
-  const response = await multiremiApiRequest<unknown>(
-    "GET",
-    `/api/projects/${encodeURIComponent(projectId)}`,
-    undefined,
-    options,
-  );
-  const project = isRecord(response) && isRecord(response.project) ? response.project : response;
+  let project: unknown;
+  try {
+    const response = await multiremiApiRequest<unknown>(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}`,
+      undefined,
+      options,
+    );
+    project = isRecord(response) && isRecord(response.project) ? response.project : response;
+  } catch (error) {
+    // Task tokens may only GET their own issue's project by id; the workspace
+    // list stays readable and carries every project's default assignee.
+    project = await readProjectSummaryFromList(projectId, options);
+    if (!project) throw error;
+  }
   if (!isRecord(project)) return null;
   const type = field(project, "default_assignee_type", "defaultAssigneeType");
   const id = field(project, "default_assignee_id", "defaultAssigneeId");
   return typeof type === "string" && type && typeof id === "string" && id ? { type, id } : null;
+}
+
+async function readProjectSummaryFromList(
+  projectId: string,
+  options: CliOptions,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const workspaceId = multiremiApiConnection(options).workspaceId;
+    const params = new URLSearchParams();
+    addQueryParam(params, "workspace_id", workspaceId);
+    const query = params.toString();
+    const response = await multiremiApiRequest<unknown>(
+      "GET",
+      `/api/projects${query ? `?${query}` : ""}`,
+      undefined,
+      options,
+    );
+    const projects = isRecord(response) && Array.isArray(response.projects) ? response.projects : [];
+    const match = projects.find((entry) => isRecord(entry) && entry.id === projectId);
+    return isRecord(match) ? match : null;
+  } catch {
+    return null;
+  }
 }
 
 function booleanFlag(options: CliOptions, ...keys: string[]): boolean {

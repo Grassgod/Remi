@@ -170,6 +170,9 @@ describe("task-level agent delegation return", () => {
     });
     expect(leaderReturn.prompt).toContain("QA completed a task you delegated");
     expect(leaderReturn.prompt).toContain("QA passed; verified the permission boundary.");
+    expect(leaderReturn.prompt).toContain("other delegated tasks that are still queued or running");
+    expect(leaderReturn.prompt).toContain("one round delivery summary");
+    expect(leaderReturn.prompt).not.toContain("communicate the final outcome to the user");
     expect(fixture.store.getIssue(fixture.issue.id)?.status).toBe("todo");
 
     expect(fixture.store.claimTask(fixture.leaderRuntime.id)?.id).toBe(leaderReturn.id);

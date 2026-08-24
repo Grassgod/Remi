@@ -108,6 +108,23 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("`remi wiki push`");
   });
 
+  it("tells issue tasks how to pick a project before creating an issue", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const prompt = buildTaskPrompt(task as any);
+
+    expect(prompt).toContain("## Creating Follow-up Issues");
+    expect(prompt).toContain("`remi project list`");
+    expect(prompt).toContain("`remi project defaults <project>`");
+    expect(prompt).toContain("--use-project-defaults");
+
+    const deltaPrompt = buildTaskPrompt({
+      ...task,
+      sessionProjection: { mode: "delta", jsonl: '{"type":"noop"}' },
+    } as any);
+    expect(deltaPrompt).not.toContain("## Creating Follow-up Issues");
+  });
+
   it("injects Project Instructions exactly once after Project Context in bootstrap", () => {
     const store = createStore();
     const { task } = createProjectTask(store);
@@ -272,6 +289,7 @@ describe("bootstrap and delta task prompts", () => {
         id: "sqd_core",
         name: "Core squad",
         leaderAgentId: agent.id,
+        instructions: "Open a draft PR early and summarize only after the current round is complete.",
         members: [
           { agentId: agent.id, name: agent.name, role: "leader" },
           { agentId: "agt_reviewer", name: "Reviewer", role: "reviewer", description: "Owns security reviews" },
@@ -280,12 +298,17 @@ describe("bootstrap and delta task prompts", () => {
     } as any);
 
     expect(prompt).toContain("## Squad Coordination");
+    expect(prompt).toContain("## Squad Instructions");
+    expect(prompt).toContain("Open a draft PR early and summarize only after the current round is complete.");
     expect(prompt).toContain("Reviewer (agent: agt_reviewer) - reviewer - Owns security reviews");
     expect(prompt).toContain("`[@Reviewer](mention://agent/agt_reviewer)`");
     expect(prompt).toContain("independent workstreams");
     expect(prompt).toContain(`remi comment add ${issue.id} --content-stdin`);
     expect(prompt).toContain("cat <<'MULTIREMI_COMMENT'");
-    expect(prompt).not.toContain("remi issue create");
+    // Delegation happens via comments inside this issue; the squad block must
+    // never teach issue creation (the follow-up-issue guidance lives elsewhere).
+    const squadSection = prompt.slice(prompt.indexOf("## Squad Coordination"), prompt.indexOf("## Agent Instructions"));
+    expect(squadSection).not.toContain("remi issue create");
   });
 
   it("does not teach squad mention syntax to a non-leader agent", () => {
@@ -297,6 +320,7 @@ describe("bootstrap and delta task prompts", () => {
         id: "sqd_core",
         name: "Core squad",
         leaderAgentId: "agt_leader",
+        instructions: "This must only reach the leader.",
         members: [
           { agentId: "agt_leader", name: "Leader", role: "leader" },
           { agentId: agent.id, name: agent.name, role: "member" },
@@ -305,6 +329,7 @@ describe("bootstrap and delta task prompts", () => {
     } as any);
 
     expect(prompt).not.toContain("## Squad Coordination");
+    expect(prompt).not.toContain("This must only reach the leader.");
     expect(prompt).not.toContain("mention://agent/");
   });
 

@@ -70,6 +70,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   appendRepositoryWarnings(sections, opts.repoWarnings ?? []);
 
   appendProjectPromptSections(sections, task, mode);
+  if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);
 
   if (mode === "bootstrap" && task.repos.length) {
     const checkouts = opts.repoCheckouts ?? [];
@@ -169,6 +170,18 @@ function appendProjectPromptSections(sections: string[], task: AgentTask, mode: 
     sections.push(projectInstructions);
   }
   appendProjectKnowledgeSections(sections, task.project.id);
+}
+
+function appendProjectDiscoverySection(sections: string[]): void {
+  sections.push("");
+  sections.push("## Creating Follow-up Issues");
+  sections.push(
+    "Pick the target project explicitly before creating an issue: `remi project list` lists every project"
+      + " (`--output json` includes each project's `default_assignee_type`/`default_assignee_id`),"
+      + " and `remi project defaults <project>` prints one project's default assignee."
+      + " Then run `remi issue create --title <title> --project <id> --use-project-defaults`"
+      + " to route the new issue to that project's default assignee.",
+  );
 }
 
 function appendRepositoryWarnings(sections: string[], warnings: TaskRepoWarning[]): void {
@@ -538,6 +551,12 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
     }
   } else {
     sections.push("No other runnable agent teammates are currently configured.");
+  }
+  const instructions = squad.instructions?.trim();
+  if (instructions) {
+    sections.push("");
+    sections.push("## Squad Instructions");
+    sections.push(instructions);
   }
   sections.push("Delegate when there are independent workstreams, a teammate has relevant specialization, or parallel work will materially shorten delivery. Keep small or tightly coupled work yourself.");
   if (teammates.length) {

@@ -104,7 +104,13 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const workspaceName = useCurrentWorkspace()?.name;
   const navigation = useNavigation();
   const platformStatus = useQuery(platformStatusOptions());
-  const showPlatformTab = platformStatus.isSuccess && platformStatus.data.canManage;
+  // Render the System group optimistically while the status query is still in
+  // flight, so the tab doesn't pop into the sidebar after load. A resolved
+  // query without manage permission (or a 403) collapses it. `data?.canManage`
+  // (not `isSuccess && …`) keeps the tab visible when a background poll fails
+  // while stale data is retained.
+  const showPlatformTab =
+    platformStatus.isPending || platformStatus.data?.canManage === true;
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
   // the default. Whitelisting also blocks junk like ?tab=<script> from

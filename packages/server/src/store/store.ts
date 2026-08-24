@@ -2158,6 +2158,15 @@ runMigrations(this.db);
     return this.issues.listIssueActivity(issueId);
   }
 
+  recordIssueDispatchSkipped(issueId: string, input: {
+    reason: string;
+    error?: string | null;
+    assigneeType?: string | null;
+    assigneeId?: string | null;
+  }): MultiremiIssueActivity {
+    return this.issues.recordDispatchSkipped(issueId, input);
+  }
+
   recordSquadLeaderEvaluation(issueId: string, input: {
     outcome: "action" | "no_action" | "failed" | string;
     reason?: string | null;
