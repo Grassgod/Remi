@@ -12,7 +12,7 @@
 import type { TaskMessageInput } from "@multiremi/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,6 +49,7 @@ export const PROGRESS_SUMMARY_DEFAULTS = {
   maxDigestChars: 12_000,
   requestTimeoutMs: 30_000,
   transport: "auto" as ProgressSummaryTransport,
+  openAiModel: "gpt-5.6-luna",
   openAi: null,
 } as const;
 
@@ -68,7 +69,13 @@ function positiveInt(raw: string | undefined, fallback: number): number {
  *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL=...    OpenAI-compatible model id
  *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY=...  dedicated endpoint key
  */
-export function resolveProgressSummaryConfig(env: Record<string, string | undefined> = process.env): ProgressSummaryConfig {
+export function resolveProgressSummaryConfig(
+  env: Record<string, string | undefined> = process.env,
+  defaults: {
+    providerEnv?: Record<string, string>;
+    codexAuthApiKey?: string | null;
+  } = {},
+): ProgressSummaryConfig {
   const disabled = env.MULTIREMI_PROGRESS_SUMMARY_DISABLED;
   const configuredTransport = env.MULTIREMI_PROGRESS_SUMMARY_TRANSPORT?.trim().toLowerCase();
   const transport: ProgressSummaryTransport = configuredTransport === "api"
@@ -76,9 +83,17 @@ export function resolveProgressSummaryConfig(env: Record<string, string | undefi
     || configuredTransport === "openai"
     ? configuredTransport
     : "auto";
-  const openAiBaseUrl = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL?.trim().replace(/\/+$/, "");
-  const openAiModel = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL?.trim();
-  const openAiApiKey = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY?.trim();
+  const openAiBaseUrl = (
+    env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL?.trim()
+    || defaults.providerEnv?.ANTHROPIC_BASE_URL?.trim()
+    || env.ANTHROPIC_BASE_URL?.trim()
+  )?.replace(/\/+$/, "");
+  const openAiModel = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL?.trim()
+    || PROGRESS_SUMMARY_DEFAULTS.openAiModel;
+  const openAiApiKey = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY?.trim()
+    || defaults.providerEnv?.OPENAI_API_KEY?.trim()
+    || env.OPENAI_API_KEY?.trim()
+    || defaults.codexAuthApiKey?.trim();
   const openAi = openAiBaseUrl && openAiModel && openAiApiKey
     ? { baseUrl: openAiBaseUrl, model: openAiModel, apiKey: openAiApiKey }
     : null;
@@ -92,6 +107,39 @@ export function resolveProgressSummaryConfig(env: Record<string, string | undefi
     transport,
     openAi,
   };
+}
+
+/** Read the Codex API key from `$HOME` without exposing it in errors or logs. */
+export async function readCodexAuthApiKey(
+  env: Record<string, string | undefined> = process.env,
+): Promise<string | null> {
+  const home = env.HOME?.trim();
+  if (!home) return null;
+  try {
+    const raw = await readFile(join(home, ".codex", "auth.json"), "utf8");
+    const auth = JSON.parse(raw) as Record<string, unknown>;
+    const key = typeof auth.OPENAI_API_KEY === "string" ? auth.OPENAI_API_KEY.trim() : "";
+    return key || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve task/provider overlays and load Codex auth only when no env key exists. */
+export async function resolveTaskProgressSummaryConfig(
+  providerEnv: Record<string, string> | undefined,
+  processEnv: Record<string, string | undefined> = process.env,
+  authKeyReader: (env: Record<string, string | undefined>) => Promise<string | null> = readCodexAuthApiKey,
+): Promise<ProgressSummaryConfig> {
+  const envConfig = resolveProgressSummaryConfig(processEnv, { providerEnv });
+  if (!envConfig.enabled || envConfig.transport === "api" || envConfig.transport === "cli" || envConfig.openAi) {
+    return envConfig;
+  }
+  const configuredKey = processEnv.MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY?.trim()
+    || providerEnv?.OPENAI_API_KEY?.trim()
+    || processEnv.OPENAI_API_KEY?.trim();
+  const codexAuthApiKey = configuredKey ? null : await authKeyReader(processEnv);
+  return resolveProgressSummaryConfig(processEnv, { providerEnv, codexAuthApiKey });
 }
 
 export interface SummarizerCredentials {
@@ -373,6 +421,10 @@ function findClaudeExecutableOnMachine(binary: string): string | null {
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
+function isSummaryTimeoutError(err: unknown): boolean {
+  return err instanceof Error && err.name === "TimeoutError";
+}
+
 async function callSummaryCli(input: {
   executable: string;
   model: string;
@@ -486,7 +538,8 @@ export class TaskProgressSummarizer {
     this.claudeExecutable = options.config.transport === "cli"
       ? findClaudeExecutable(this.whichImpl)
       : undefined;
-    this.activeTransport = options.config.transport === "openai" && options.config.openAi
+    this.activeTransport = (options.config.transport === "auto" || options.config.transport === "openai")
+      && options.config.openAi
       ? "openai"
       : options.config.transport === "cli" && this.claudeExecutable
         ? "cli"
@@ -542,15 +595,27 @@ export class TaskProgressSummarizer {
   private async requestSummary(prompt: string): Promise<ProgressSummaryResult> {
     if (this.activeTransport === "cli") return this.requestSummaryWithCli(prompt);
     if (this.activeTransport === "openai") {
-      return callOpenAiSummaryModel(
-        this.options.config.openAi!,
-        prompt,
-        this.options.config.requestTimeoutMs,
-        this.fetchImpl,
-      );
+      try {
+        return await callOpenAiSummaryModel(
+          this.options.config.openAi!,
+          prompt,
+          this.options.config.requestTimeoutMs,
+          this.fetchImpl,
+        );
+      } catch (err) {
+        const canFallback = this.options.config.transport === "auto"
+          && (err instanceof SummaryModelHttpError || isSummaryTimeoutError(err));
+        if (!canFallback) throw err;
+        this.activeTransport = "api";
+        return this.requestSummary(prompt);
+      }
     }
     try {
-      if (!this.options.credentials) throw new Error("Anthropic summary credentials are unavailable");
+      if (!this.options.credentials) {
+        const missingCredentials = new Error("Anthropic summary credentials are unavailable");
+        if (this.options.config.transport === "auto") return this.requestSummaryWithCliFallback(prompt, missingCredentials);
+        throw missingCredentials;
+      }
       return await callSummaryModel(
         this.options.credentials,
         this.options.config.model,
@@ -562,13 +627,17 @@ export class TaskProgressSummarizer {
       const autoFallback = this.options.config.transport === "auto"
         || (this.options.config.transport === "openai" && !this.options.config.openAi);
       if (!autoFallback || !(err instanceof SummaryModelHttpError)) throw err;
-      if (this.claudeExecutable === undefined) {
-        this.claudeExecutable = findClaudeExecutable(this.whichImpl);
-      }
-      if (!this.claudeExecutable) throw err;
-      this.activeTransport = "cli";
-      return this.requestSummaryWithCli(prompt);
+      return this.requestSummaryWithCliFallback(prompt, err);
     }
+  }
+
+  private requestSummaryWithCliFallback(prompt: string, originalError: unknown): Promise<ProgressSummaryResult> {
+    if (this.claudeExecutable === undefined) {
+      this.claudeExecutable = findClaudeExecutable(this.whichImpl);
+    }
+    if (!this.claudeExecutable) throw originalError;
+    this.activeTransport = "cli";
+    return this.requestSummaryWithCli(prompt);
   }
 
   private requestSummaryWithCli(prompt: string): Promise<ProgressSummaryResult> {

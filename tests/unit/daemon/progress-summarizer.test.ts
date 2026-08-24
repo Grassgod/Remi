@@ -1,11 +1,16 @@
 import { describe, expect, it } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildSummaryPrompt,
   digestTaskMessage,
   parseSummaryText,
   PROGRESS_SUMMARY_DEFAULTS,
+  readCodexAuthApiKey,
   resolveProgressSummaryConfig,
   resolveSummarizerCredentials,
+  resolveTaskProgressSummaryConfig,
   TaskProgressSummarizer,
   TaskProgressTracker,
   type ProgressSummaryConfig,
@@ -115,6 +120,70 @@ describe("resolveProgressSummaryConfig", () => {
     });
     expect(resolved.transport).toBe("openai");
     expect(resolved.openAi).toBeNull();
+  });
+
+  it("builds the zero-config OpenAI defaults from provider and process env", () => {
+    const resolved = resolveProgressSummaryConfig(
+      { OPENAI_API_KEY: "environment-key" },
+      { providerEnv: { ANTHROPIC_BASE_URL: "https://relay.example/" } },
+    );
+    expect(resolved.transport).toBe("auto");
+    expect(resolved.openAi).toEqual({
+      baseUrl: "https://relay.example",
+      model: "gpt-5.6-luna",
+      apiKey: "environment-key",
+    });
+  });
+
+  it("falls back to $HOME/.codex/auth.json when no OpenAI env key exists", async () => {
+    const home = await mkdtemp(join(tmpdir(), "multiremi-progress-home-"));
+    try {
+      await mkdir(join(home, ".codex"));
+      await writeFile(join(home, ".codex", "auth.json"), JSON.stringify({ OPENAI_API_KEY: "auth-file-key" }));
+      expect(await readCodexAuthApiKey({ HOME: home })).toBe("auth-file-key");
+      const resolved = await resolveTaskProgressSummaryConfig(
+        { ANTHROPIC_BASE_URL: "https://relay.example/v1" },
+        { HOME: home },
+      );
+      expect(resolved.openAi).toEqual({
+        baseUrl: "https://relay.example/v1",
+        model: "gpt-5.6-luna",
+        apiKey: "auth-file-key",
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a missing or invalid Codex auth file", async () => {
+    const home = await mkdtemp(join(tmpdir(), "multiremi-progress-empty-home-"));
+    try {
+      expect(await readCodexAuthApiKey({ HOME: home })).toBeNull();
+      await mkdir(join(home, ".codex"));
+      await writeFile(join(home, ".codex", "auth.json"), "not-json");
+      const resolved = await resolveTaskProgressSummaryConfig(
+        { ANTHROPIC_BASE_URL: "https://relay.example" },
+        { HOME: home },
+      );
+      expect(resolved.openAi).toBeNull();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read Codex auth for an explicit non-OpenAI transport", async () => {
+    let authReads = 0;
+    const resolved = await resolveTaskProgressSummaryConfig(
+      { ANTHROPIC_BASE_URL: "https://relay.example" },
+      { MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "api", HOME: "/unused" },
+      async () => {
+        authReads++;
+        return "unexpected-key";
+      },
+    );
+    expect(resolved.transport).toBe("api");
+    expect(resolved.openAi).toBeNull();
+    expect(authReads).toBe(0);
   });
 });
 
@@ -435,6 +504,78 @@ describe("TaskProgressSummarizer", () => {
     expect(reported).toEqual([{ summary: "CLI fallback 摘要" }]);
     expect(apiCalls).toBe(1);
     expect(cliCalls).toBe(1);
+  });
+
+  it("auto prefers OpenAI then remembers an HTTP fallback through API to CLI", async () => {
+    const reports: string[] = [];
+    let openAiCalls = 0;
+    let anthropicCalls = 0;
+    let cliCalls = 0;
+    let reportReady: (() => void) | undefined;
+    let waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    let now = 1000;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({
+        minNewMessages: 1,
+        minIntervalMs: 0,
+        transport: "auto",
+        openAi: { baseUrl: "https://relay.example", model: "gpt-5.6-luna", apiKey: "openai-key" },
+      }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => {
+        reports.push(result.summary);
+        reportReady?.();
+      },
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/chat/completions")) openAiCalls++;
+        else anthropicCalls++;
+        return modelResponse({ error: "unavailable" }, 503);
+      },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("CLI final fallback", () => { cliCalls++; }),
+      now: () => now,
+    });
+
+    summarizer.onMessages([textMessage("first")]);
+    await waitForReport;
+    await Bun.sleep(0);
+    waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    now++;
+    summarizer.onMessages([textMessage("second")]);
+    await waitForReport;
+
+    expect(reports).toEqual(["CLI final fallback", "CLI final fallback"]);
+    expect(openAiCalls).toBe(1);
+    expect(anthropicCalls).toBe(1);
+    expect(cliCalls).toBe(2);
+  });
+
+  it("auto falls back to the Anthropic API after an OpenAI timeout", async () => {
+    const reported: ProgressSummaryResult[] = [];
+    let calls = 0;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({
+        transport: "auto",
+        openAi: { baseUrl: "https://relay.example", model: "gpt-5.6-luna", apiKey: "openai-key" },
+      }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => {
+        calls++;
+        if (calls === 1) throw new DOMException("request timed out", "TimeoutError");
+        return summaryResponse("Anthropic fallback");
+      },
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "Anthropic fallback" }]);
+    expect(calls).toBe(2);
   });
 
   it("auto-switches to Claude CLI after an API HTTP error and remembers the choice", async () => {

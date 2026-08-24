@@ -149,7 +149,7 @@ import {
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
 import {
-  resolveProgressSummaryConfig,
+  resolveTaskProgressSummaryConfig,
   resolveSummarizerCredentials,
   TaskProgressSummarizer,
   type ProgressRunOutcome,
@@ -1961,7 +1961,7 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "start", {});
       this.enqueueTaskReport(task.id, "progress", { summary: "Agent execution started", step: 1, total: 3 });
-      progressSummarizer = this.createTaskProgressSummarizer(task, providerEnv);
+      progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
         // The run loop only leaves a task unfinalized when the output was
@@ -2417,15 +2417,16 @@ export class MultiremiDaemon {
    * credentials for Anthropic transports or a dedicated OpenAI-compatible
    * config; returns null when disabled or no selected transport can authenticate.
    */
-  private createTaskProgressSummarizer(
+  private async createTaskProgressSummarizer(
     task: MultiremiTaskWithAgent,
     providerEnv?: Record<string, string>,
-  ): TaskProgressSummarizer | null {
+  ): Promise<TaskProgressSummarizer | null> {
     try {
-      const config = resolveProgressSummaryConfig();
+      const config = await resolveTaskProgressSummaryConfig(providerEnv);
       if (!config.enabled) return null;
       const credentials = resolveSummarizerCredentials(providerEnv);
-      const hasOpenAiTransport = config.transport === "openai" && config.openAi !== null;
+      const hasOpenAiTransport = (config.transport === "auto" || config.transport === "openai")
+        && config.openAi !== null;
       if (!credentials && !hasOpenAiTransport) {
         log.info(`Progress summaries unavailable for task ${task.id}: no usable model credential`);
         return null;
