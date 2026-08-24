@@ -94,7 +94,7 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 | `packages/daemon/src/agent-runtime/plugins/` | **机制**：Remi host 插件 registry（in-tree 表当前为空） | ❌ |
 | `packages/daemon/src/agent-runtime/agent-plugins/` | **机制**：云友挂载的 provider 原生 bundle 的拉取/物化（与上一行刻意分离） | ❌ |
 | `packages/plugin-sdk/` | Remi host 插件的 manifest 类型与 SDK | ❌（只有类型） |
-| `.remi/pipeline/skills/` | Remi 流水线 skill 定义（intake/rfc/execute 等 7 个）的 SSOT | ✅ |
+| `.remi/pipeline/skills/` | 历史 Remi 流水线 skill 定义（intake/rfc/execute 等 7 个）。MUL-80 审计确认读取链路已删（死目录，待清理单处理）；清理前仍按本规范校验 | ✅（存量） |
 | `frontend/.agents/skills/` | frontend 仓库开发用 skill | ✅ |
 | `packages/server/src/api/agent-templates/*.json` | 云友模板（含内嵌 skill 引用） | ✅ |
 
