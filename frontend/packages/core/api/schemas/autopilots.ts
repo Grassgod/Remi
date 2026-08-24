@@ -93,6 +93,21 @@ export const AutopilotTriggerSchema = z.object({
   updated_at: z.string(),
 }).loose();
 
+// Slim trigger context on runs list rows (MUL-86). Kept lenient: a malformed
+// summary degrades to null so the row still renders with the generic
+// per-source label instead of dropping the whole list.
+export const AutopilotRunTriggerSummarySchema = z.object({
+  event_type: z.string().nullable().optional().default(null),
+  repository_id: z.string().nullable().optional().default(null),
+  repository_name: z.string().nullable().optional().default(null),
+  change_number: z.number().nullable().optional().default(null),
+  change_title: z.string().nullable().optional().default(null),
+  target_branch: z.string().nullable().optional().default(null),
+  source_revision: z.string().nullable().optional().default(null),
+  occurred_at: z.string().nullable().optional().default(null),
+  wiki_build: z.boolean().catch(false).default(false),
+}).loose();
+
 export const AutopilotRunSchema = z.object({
   id: z.string(),
   autopilot_id: z.string(),
@@ -108,6 +123,7 @@ export const AutopilotRunSchema = z.object({
   trigger_payload: z.unknown().default(null),
   result: z.unknown().default(null),
   created_at: z.string(),
+  trigger_summary: AutopilotRunTriggerSummarySchema.nullable().catch(null).default(null),
 }).loose();
 
 export const ListAutopilotsResponseSchema = z.object({

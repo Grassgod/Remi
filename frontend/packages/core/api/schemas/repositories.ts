@@ -40,6 +40,22 @@ export const repositoryInspectionResponseSchema = z.object({
 
 export const repositoryWikiStatusSchema = z.enum(["unbuilt", "building", "healthy", "stale", "failed"]);
 
+// A future build state downgrades to "idle" (generic, non-blocking) instead
+// of dropping the whole summary — see API Response Compatibility rules.
+export const repositoryWikiBuildStatusSchema = z
+  .enum(["idle", "queued", "building", "failed"])
+  .catch("idle");
+
+export const repositoryWikiBuildInfoSchema = z.object({
+  status: repositoryWikiBuildStatusSchema,
+  run_id: z.string().nullable().optional().default(null),
+  task_id: z.string().nullable().optional().default(null),
+  failure_reason: z.string().nullable().optional().default(null),
+  started_at: z.string().nullable().optional().default(null),
+  updated_at: z.string().nullable().optional().default(null),
+  source_revision: z.string().nullable().optional().default(null),
+}).loose();
+
 export const repositoryWikiSummarySchema = z.object({
   repository_id: z.string(),
   repository_name: z.string(),
@@ -48,6 +64,9 @@ export const repositoryWikiSummarySchema = z.object({
   source_revision: z.string().nullable().default(null),
   page_count: z.number().int().nonnegative(),
   updated_at: z.string().nullable().default(null),
+  // Older servers omit `build`; a malformed one degrades to null rather than
+  // discarding the summary row.
+  build: repositoryWikiBuildInfoSchema.nullable().catch(null).default(null),
 }).loose();
 
 export const repositoryWikiDocSchema = z.object({

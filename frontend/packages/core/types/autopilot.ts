@@ -118,6 +118,23 @@ export interface AutopilotTrigger {
   updated_at: string;
 }
 
+// Slim, denormalized description of what fired a run. Present on runs list
+// responses from servers that support it (MUL-86); older servers omit it and
+// the UI falls back to the generic per-source label. `event_type` is a
+// CanonicalScmEventType for SCM-triggered runs but kept as string so future
+// event kinds degrade gracefully.
+export interface AutopilotRunTriggerSummary {
+  event_type: string | null;
+  repository_id: string | null;
+  repository_name: string | null;
+  change_number: number | null;
+  change_title: string | null;
+  target_branch: string | null;
+  source_revision: string | null;
+  occurred_at: string | null;
+  wiki_build: boolean;
+}
+
 export interface AutopilotRun {
   id: string;
   autopilot_id: string;
@@ -133,6 +150,8 @@ export interface AutopilotRun {
   trigger_payload: unknown;
   result: unknown;
   created_at: string;
+  // Optional — only servers that ship trigger summaries populate it.
+  trigger_summary?: AutopilotRunTriggerSummary | null;
 }
 
 export interface CreateAutopilotRequest {
