@@ -500,7 +500,30 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       const sourceIssueId = issueInput.source_issue_id ?? null;
       if (sourceIssueId) {
         const existing = store.findGeneratedIssueByTitle(sourceIssueId, issueInput.title);
-        if (existing) return c.json(issueCompatibilityResponse(existing), 200);
+        // The idempotent replay must satisfy the same dispatch-outcome contract
+        // as a fresh create: a retrying agent otherwise reads a 200 with no
+        // dispatch fields and stays blind to an issue nobody is executing.
+        // Reported from the existing issue's CURRENT state, since this request
+        // itself dispatched nothing.
+        if (existing) {
+          const latestTask = store.listTasksForIssue(existing.id)[0] ?? null;
+          return c.json({
+            ...issueCompatibilityResponse(existing),
+            task_id: latestTask?.id ?? null,
+            dispatch_status: latestTask ? "dispatched" : "skipped",
+            dispatch_skipped_reason: latestTask
+              ? null
+              : !existing.assigneeType || !existing.assigneeId
+                ? "no_assignee"
+                : existing.status === "backlog"
+                  ? "backlog_status"
+                  : existing.assigneeType === "member"
+                    ? "member_assignee"
+                    // Agent/squad assignee with no task: the original dispatch
+                    // never produced one (runnable-agent resolution failed).
+                    : "no_runnable_agent",
+          }, 200);
+        }
       }
       const issue = store.createIssue(issueInput);
       publishIssueCreated(c, store, issue, issueCompatibilityResponse(issue));

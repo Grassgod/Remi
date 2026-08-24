@@ -115,6 +115,10 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
           // Project without a default assignee.
           return Response.json({ project: { id: "prj_1", title: "No defaults" } });
         }
+        if (url.pathname === "/api/projects/prj_down" && request.method === "GET") {
+          // Project lookup outage: the CLI must not claim "not configured".
+          return Response.json({ error: "boom" }, { status: 500 });
+        }
         if (url.pathname === "/api/issues" && request.method === "POST") {
           await request.json();
           return new Response(JSON.stringify(createResponse), { status: 201 });
@@ -142,6 +146,14 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       expect(warnings.join("\n")).toContain("no default assignee");
       expect(warnings.join("\n")).toContain("issue assign MUL-9");
 
+      // Project lookup failed: still warn about the missing assignee, but never
+      // report the project as "not configured" — that was not confirmed.
+      warnings.length = 0;
+      createResponse = { id: "iss_1b", identifier: "MUL-9", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee" };
+      await create("--project", "prj_down");
+      expect(warnings.join("\n")).toContain("NOT dispatched");
+      expect(warnings.join("\n")).not.toContain("no default assignee");
+
       // No runnable agent: warn with the server's error.
       warnings.length = 0;
       createResponse = {
@@ -167,6 +179,26 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       createResponse = { id: "iss_4", identifier: "MUL-12", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "member_assignee" };
       await create("--assignee", "mem_1", "--assignee-type", "member");
       expect(warnings.join("\n")).not.toContain("NOT dispatched");
+
+      // Backlog is a parking lot: skipped on purpose, no warning.
+      warnings.length = 0;
+      createResponse = { id: "iss_5", identifier: "MUL-13", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "backlog_status" };
+      await create("--status", "backlog", "--assignee", "agt_1", "--assignee-type", "agent");
+      expect(warnings.join("\n")).not.toContain("NOT dispatched");
+
+      // Generic assignment failure: warn with the server's error message.
+      warnings.length = 0;
+      createResponse = {
+        id: "iss_6",
+        identifier: "MUL-14",
+        task_id: null,
+        dispatch_status: "skipped",
+        dispatch_skipped_reason: "assign_failed",
+        dispatch_error: "Simulated dispatch outage",
+      };
+      await create("--assignee", "agt_1", "--assignee-type", "agent");
+      expect(warnings.join("\n")).toContain("NOT dispatched");
+      expect(warnings.join("\n")).toContain("Simulated dispatch outage");
     } finally {
       console.log = originalLog;
       console.error = originalError;

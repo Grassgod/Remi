@@ -1103,4 +1103,90 @@ describe("Multiremi API — issue endpoints", () => {
     expect(typeof dispatchedTaskId).toBe("string");
     expect(store.getTask(dispatchedTaskId)?.issueId).toBe(dispatchedBody.id);
   });
+
+  it("reports a generic assignment failure as assign_failed with a dispatch_skipped activity", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Broken dispatch agent", provider: "claude" });
+    const app = createMultiremiApp({ store });
+    // Force the non-"No runnable agent" error path: any store-level assignment
+    // failure (races, integrity checks) must surface, not just the known one.
+    store.assignIssue = () => {
+      throw new Error("Simulated dispatch outage");
+    };
+
+    const response = await app.request("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Doomed dispatch", assignee_type: "agent", assignee_id: agent.id }),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "assign_failed",
+      dispatch_error: "Simulated dispatch outage",
+      task_id: null,
+    });
+    const skipActivity = store.listIssueActivity(body.id).find((activity) => activity.type === "dispatch_skipped");
+    expect(skipActivity).toBeDefined();
+    expect(skipActivity!.data).toMatchObject({ reason: "assign_failed", error: "Simulated dispatch outage" });
+  });
+
+  it("keeps the dispatch-outcome contract on the idempotent generated-issue replay", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Intake agent", provider: "claude" });
+    const intake = store.createIssue({ title: "Intake source", workspaceId: "local", issueKind: "intake" });
+    const intakeTask = store.createTask({
+      workspaceId: "local",
+      issueId: intake.id,
+      agentId: agent.id,
+      prompt: "triage",
+    });
+    const taskToken = await store.createTaskAccessToken(intakeTask, "local");
+    const app = createMultiremiApp({ store });
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/issues", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${taskToken.token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+    // Unassigned generated issue: the replay must repeat the explicit
+    // "skipped" outcome, not fall back to the bare compatibility shape.
+    const first = await create({ title: "Generated unassigned" });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody).toMatchObject({ dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee", task_id: null });
+    const replay = await create({ title: "Generated unassigned" });
+    expect(replay.status).toBe(200);
+    const replayBody = await replay.json();
+    expect(replayBody.id).toBe(firstBody.id);
+    expect(replayBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_assignee",
+      task_id: null,
+    });
+
+    // Dispatched generated issue: the replay reports the existing task.
+    const assigned = await create({ title: "Generated assigned", assignee_type: "agent", assignee_id: agent.id });
+    expect(assigned.status).toBe(201);
+    const assignedBody = await assigned.json();
+    const assignedTaskId = assignedBody.task_id;
+    expect(assignedBody.dispatch_status).toBe("dispatched");
+    expect(typeof assignedTaskId).toBe("string");
+    const assignedReplay = await create({ title: "Generated assigned", assignee_type: "agent", assignee_id: agent.id });
+    expect(assignedReplay.status).toBe(200);
+    const assignedReplayBody = await assignedReplay.json();
+    expect(assignedReplayBody.id).toBe(assignedBody.id);
+    expect(assignedReplayBody).toMatchObject({
+      dispatch_status: "dispatched",
+      dispatch_skipped_reason: null,
+      task_id: assignedTaskId,
+    });
+  });
 });

@@ -506,9 +506,14 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   const projectId = rawStringOption(options, "project", "project-id");
   if (useProjectDefaults && !projectId) throw new Error("--use-project-defaults requires --project");
   let projectDefaults: { type: string; id: string } | null = null;
+  // Distinguishes "queried the project and it has no default assignee" from
+  // "the query itself failed": only a confirmed absence may be reported as a
+  // configuration problem later.
+  let projectDefaultsKnown = false;
   if (!hasExplicitAssignee && projectId) {
     try {
       projectDefaults = await readProjectDefaultAssignee(projectId, options);
+      projectDefaultsKnown = true;
     } catch (error) {
       if (useProjectDefaults) throw error;
     }
@@ -537,7 +542,7 @@ export async function issueCreate(options: CliOptions): Promise<void> {
     );
   }
   printJson(response);
-  warnUndispatchedIssue(response, projectId ?? null, projectDefaults, hasExplicitAssignee);
+  warnUndispatchedIssue(response, projectId ?? null, projectDefaultsKnown && !projectDefaults);
 }
 
 // Assign-on-create can silently end without a task (no assignee, no runnable
@@ -547,8 +552,7 @@ export async function issueCreate(options: CliOptions): Promise<void> {
 function warnUndispatchedIssue(
   response: unknown,
   projectId: string | null,
-  projectDefaults: { type: string; id: string } | null,
-  hasExplicitAssignee: boolean,
+  projectConfirmedWithoutDefaultAssignee: boolean,
 ): void {
   if (!isRecord(response) || response.dispatch_status !== "skipped") return;
   const reason = typeof response.dispatch_skipped_reason === "string" ? response.dispatch_skipped_reason : null;
@@ -561,7 +565,7 @@ function warnUndispatchedIssue(
   console.error(`⚠ Issue ${ref} was created but NOT dispatched — no agent will pick it up.`);
   if (reason === "no_assignee") {
     console.error("  Reason: the issue has no assignee.");
-    if (projectId && !projectDefaults && !hasExplicitAssignee) {
+    if (projectId && projectConfirmedWithoutDefaultAssignee) {
       console.error(`  Note: project ${projectId} has no default assignee configured, so none was inherited.`);
     }
     console.error(`  To start execution, assign an agent: issue assign ${ref} --to <agent>`);
