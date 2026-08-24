@@ -137,37 +137,60 @@ export function withIssueCreateRequestContext(
 
   const taskToken = currentTaskAccessToken(c);
   const task = taskToken?.taskId && store ? store.getTask(taskToken.taskId) : null;
-  const intakeIssue = task?.issueId && store ? store.getIssue(task.issueId) : null;
-  if (intakeIssue?.issueKind === "intake") {
-    out.workspace_id = intakeIssue.workspaceId;
+  const sourceIssue = task?.issueId && store ? store.getIssue(task.issueId) : null;
+  const isIntake = sourceIssue?.issueKind === "intake";
+  if (sourceIssue) {
+    // Any task-run creation (intake or follow-up) stays in the source issue's
+    // workspace and project scope; a projectless request inherits the source
+    // issue's project instead of dropping to an orphan.
+    out.workspace_id = sourceIssue.workspaceId;
     const requestedProjectId = cleanString(input.project_id);
-    const selectedProjectId = intakeIssue.projectId;
-    const projectId = selectedProjectId ?? requestedProjectId ?? null;
-    if (selectedProjectId && requestedProjectId && requestedProjectId !== selectedProjectId) {
+    const inheritedProjectId = sourceIssue.projectId;
+    if (isIntake && inheritedProjectId && requestedProjectId && requestedProjectId !== inheritedProjectId) {
       throw new Error("Generated issues must stay in the intake project's scope");
     }
+    const projectId = (isIntake ? inheritedProjectId ?? requestedProjectId : requestedProjectId ?? inheritedProjectId) ?? null;
     if (projectId) {
       const project = store!.getProject(projectId);
-      if (!project || project.workspaceId !== intakeIssue.workspaceId || project.archivedAt) {
+      if (!project || project.workspaceId !== sourceIssue.workspaceId || project.archivedAt) {
         throw new Error(`Project is not active in this workspace: ${projectId}`);
       }
       out.project_id = projectId;
-      if (!hasRequestField(input, "assignee_type") && project.defaultAssigneeType && project.defaultAssigneeId) {
-        out.assignee_type = project.defaultAssigneeType;
-        out.assignee_id = project.defaultAssigneeId;
-      }
-    } else if (store!.listProjects(intakeIssue.workspaceId).some((project) => !project.archivedAt)) {
+    } else if (store!.listProjects(sourceIssue.workspaceId).some((project) => !project.archivedAt)) {
       throw new Error("project_id is required when active projects are available");
     }
-    out.status = "todo";
-    out.issue_kind = "execution";
-    out.source_issue_id = intakeIssue.id;
-    out.context_refs = [
-      ...(out.context_refs ?? []),
-      { type: "generated_from", issueId: intakeIssue.id, taskId: task!.id },
-    ];
+    if (isIntake) {
+      out.status = "todo";
+      out.issue_kind = "execution";
+      out.source_issue_id = sourceIssue.id;
+      out.context_refs = [
+        ...(out.context_refs ?? []),
+        { type: "generated_from", issueId: sourceIssue.id, taskId: task!.id },
+      ];
+    }
   }
+  applyProjectDefaultAssignee(input, out, store);
   return out;
+}
+
+// A request that carries no assignee fields at all inherits the project's
+// default executor — assign-on-create is what dispatches the first task, so
+// dropping the default here would strand the issue. Explicitly sending
+// assignee_type/assignee_id (even as null) opts out.
+function applyProjectDefaultAssignee(
+  input: CreateIssueWithTaskInput,
+  out: CreateIssueWithTaskInput,
+  store?: MultiremiStore,
+): void {
+  if (!store) return;
+  if (hasRequestField(input, "assignee_type") || hasRequestField(input, "assignee_id")) return;
+  const projectId = cleanString(out.project_id);
+  const project = projectId ? store.getProject(projectId) : null;
+  if (!project || project.archivedAt) return;
+  if (project.defaultAssigneeType && project.defaultAssigneeId) {
+    out.assignee_type = project.defaultAssigneeType;
+    out.assignee_id = project.defaultAssigneeId;
+  }
 }
 
 export function normalizeSubscriptionReason(value: unknown): MultiremiSubscriptionReason {

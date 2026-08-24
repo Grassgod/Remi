@@ -64,7 +64,8 @@ const ISSUE_FIELDS: readonly CliOptionSpec[] = [
   { name: "due-date", type: "string", valueName: "date", description: "Due date" },
   { name: "attachment", type: "string", valueName: "path", repeatable: true, description: "Attachment file" },
   { name: "allow-duplicate", type: "boolean", description: "Allow duplicate issue titles" },
-  { name: "use-project-defaults", type: "boolean", description: "Explicitly apply the project's default assignee" },
+  { name: "use-project-defaults", type: "boolean", description: "Deprecated no-op: the server applies the project's default assignee unless assignee fields are sent" },
+  { name: "no-project-defaults", type: "boolean", description: "Create unassigned: do not inherit the project's default assignee" },
 ];
 
 const COMMENT_BODY_OPTIONS: readonly CliOptionSpec[] = [

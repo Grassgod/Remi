@@ -1022,4 +1022,139 @@ describe("Multiremi API — issue endpoints", () => {
     const missing = await app.request(`/api/labels/${createdBody.label.id}`);
     expect(missing.status).toBe(404);
   });
+
+  it("inherits project scope and default assignee for non-intake task creations and dispatches a task", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const executor = store.createAgent({ name: "Default executor", provider: "claude" });
+    const worker = store.createAgent({ name: "Follow-up worker", provider: "codex" });
+    const project = store.createProject({
+      title: "Delivery project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: executor.id,
+    });
+    const otherProject = store.createProject({ title: "Sibling project" });
+    const sourceIssue = store.createIssue({
+      title: "Execution parent",
+      workspaceId: "local",
+      projectId: project.id,
+      status: "in_progress",
+    });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: sourceIssue.id,
+      agentId: worker.id,
+      prompt: "follow up",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${taskToken.token}`,
+    };
+
+    // No project + no assignee: inherits the source issue's project, backfills
+    // its default executor, and assign-on-create dispatches a task.
+    const inherited = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Follow-up inherits scope" }),
+    });
+    expect(inherited.status).toBe(201);
+    const inheritedBody = await inherited.json();
+    expect(inheritedBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+    });
+    expect(inheritedBody.issue_kind).not.toBe("intake");
+    expect(inheritedBody.source_issue_id).toBeNull();
+    expect(store.listTasksForIssue(inheritedBody.id)).toHaveLength(1);
+
+    // Explicit assignee wins over the project default.
+    const explicit = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Follow-up explicit assignee",
+        project_id: project.id,
+        assignee_type: "agent",
+        assignee_id: worker.id,
+      }),
+    });
+    expect(explicit.status).toBe(201);
+    const explicitBody = await explicit.json();
+    expect(explicitBody).toMatchObject({ assignee_type: "agent", assignee_id: worker.id });
+    expect(store.listTasksForIssue(explicitBody.id)).toHaveLength(1);
+
+    // Explicit null assignee opts out of inheritance: stays unassigned, no task.
+    const unassigned = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Follow-up explicitly unassigned",
+        project_id: project.id,
+        assignee_type: null,
+        assignee_id: null,
+      }),
+    });
+    expect(unassigned.status).toBe(201);
+    const unassignedBody = await unassigned.json();
+    expect(unassignedBody.assignee_type).toBeNull();
+    expect(unassignedBody.assignee_id).toBeNull();
+    expect(store.listTasksForIssue(unassignedBody.id)).toHaveLength(0);
+
+    // A non-intake creation may target another active project explicitly; the
+    // requested project (without defaults) leaves the issue unassigned.
+    const crossProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Follow-up other project", project_id: otherProject.id }),
+    });
+    expect(crossProject.status).toBe(201);
+    const crossProjectBody = await crossProject.json();
+    expect(crossProjectBody.project_id).toBe(otherProject.id);
+    expect(crossProjectBody.assignee_id).toBeNull();
+
+    // Human/API callers without a task token get the same backfill when they
+    // send a project and omit the assignee fields entirely.
+    const humanInherited = await app.request("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Human create inherits default", project_id: project.id }),
+    });
+    expect(humanInherited.status).toBe(201);
+    const humanInheritedBody = await humanInherited.json();
+    expect(humanInheritedBody).toMatchObject({ assignee_type: "agent", assignee_id: executor.id });
+    expect(store.listTasksForIssue(humanInheritedBody.id)).toHaveLength(1);
+  });
+
+  it("requires a project for task creations when the workspace has active projects", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const worker = store.createAgent({ name: "Projectless worker", provider: "codex" });
+    store.createProject({ title: "Some active project" });
+    const sourceIssue = store.createIssue({ title: "Projectless parent", workspaceId: "local" });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: sourceIssue.id,
+      agentId: worker.id,
+      prompt: "follow up",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+
+    const missingProject = await app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${taskToken.token}`,
+      },
+      body: JSON.stringify({ title: "Orphan follow-up" }),
+    });
+    expect(missingProject.status).toBe(400);
+    expect(await missingProject.json()).toEqual({
+      error: "project_id is required when active projects are available",
+    });
+  });
 });
