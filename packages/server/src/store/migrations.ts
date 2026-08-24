@@ -1107,6 +1107,8 @@ export function runMigrations(db: SqlDatabase): void {
       trigger_id TEXT,
       event_id TEXT,
       issue_session_id TEXT,
+      repository_id TEXT,
+      dedupe_key TEXT,
       triggered_at TEXT NOT NULL,
       completed_at TEXT,
       failure_reason TEXT,
@@ -1853,6 +1855,11 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_autopilot_runs", "trigger_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_runs", "event_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_runs", "issue_session_id TEXT");
+  // Repository-scoped Wiki build runs: the target repository plus an
+  // idempotency key (`repo:mode:revision`) that runAutopilot uses to dedupe
+  // concurrent and same-revision builds.
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "repository_id TEXT");
+  addColumnIfMissing(db, "multiremi_autopilot_runs", "dedupe_key TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_owner TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_until TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_token TEXT");
@@ -1898,6 +1905,9 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_system_event
       ON multiremi_autopilot_runs(trigger_id, event_id)
       WHERE trigger_id IS NOT NULL AND event_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_repository
+      ON multiremi_autopilot_runs(repository_id, created_at)
+      WHERE repository_id IS NOT NULL;
   `);
   addColumnIfMissing(db, "multiremi_runtime_update_requests", "scope TEXT NOT NULL DEFAULT 'cli'");
   // Source references on wiki/memory docs. The table itself is new enough that
