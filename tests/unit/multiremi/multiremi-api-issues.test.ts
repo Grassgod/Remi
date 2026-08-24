@@ -1188,5 +1188,43 @@ describe("Multiremi API — issue endpoints", () => {
       dispatch_skipped_reason: null,
       task_id: assignedTaskId,
     });
+
+    // Unassigning cancels the issue's task; the replay must flip back to an
+    // explicit "skipped" instead of resurfacing the cancelled task as
+    // dispatched.
+    store.assignIssue(assignedBody.id, {});
+    expect(store.getTask(assignedTaskId)?.status).toBe("cancelled");
+    const unassignedReplay = await create({ title: "Generated assigned", assignee_type: "agent", assignee_id: agent.id });
+    expect(unassignedReplay.status).toBe(200);
+    const unassignedReplayBody = await unassignedReplay.json();
+    expect(unassignedReplayBody.id).toBe(assignedBody.id);
+    expect(unassignedReplayBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_assignee",
+      task_id: null,
+    });
+
+    // A generic assignment failure must replay as assign_failed with its
+    // original error (recovered from the dispatch_skipped activity), not
+    // degrade into no_runnable_agent.
+    const realAssignIssue = store.assignIssue.bind(store);
+    store.assignIssue = () => {
+      throw new Error("Simulated dispatch outage");
+    };
+    const failed = await create({ title: "Generated failing", assignee_type: "agent", assignee_id: agent.id });
+    store.assignIssue = realAssignIssue;
+    expect(failed.status).toBe(201);
+    const failedBody = await failed.json();
+    expect(failedBody).toMatchObject({ dispatch_status: "skipped", dispatch_skipped_reason: "assign_failed" });
+    const failedReplay = await create({ title: "Generated failing", assignee_type: "agent", assignee_id: agent.id });
+    expect(failedReplay.status).toBe(200);
+    const failedReplayBody = await failedReplay.json();
+    expect(failedReplayBody.id).toBe(failedBody.id);
+    expect(failedReplayBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "assign_failed",
+      dispatch_error: "Simulated dispatch outage",
+      task_id: null,
+    });
   });
 });

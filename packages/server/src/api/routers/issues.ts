@@ -67,6 +67,7 @@ import {
   taskCompatibilityResponse,
   taskPublicResponse,
 } from "../wire/index.js";
+import type { MultiremiStore } from "@multiremi/store/store.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -80,6 +81,7 @@ import type {
   CreateMultiremiReactionInput,
   CreateSessionTaskInput,
   ListIssuesInput,
+  MultiremiIssue,
   MultiremiIssueWorkspaceArchiveBinding,
   PublishSessionResultInput,
   QuickCreateIssueInput,
@@ -93,6 +95,43 @@ import {
 } from "@multiremi/contracts/types.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import type { RouterDeps } from "./deps.js";
+
+// The idempotent generated-issue replay (source_issue_id + same title, 200)
+// must satisfy the same dispatch-outcome contract as a fresh create: a
+// retrying agent otherwise reads a response with no dispatch fields and stays
+// blind to an issue nobody is executing. This request dispatched nothing
+// itself, so the outcome is derived from the existing issue's CURRENT state —
+// assignment classification first (unassigning cancels the issue's tasks, so a
+// stale cancelled task must not resurface as "dispatched"), then the newest
+// still-standing task, and with no task left the recorded dispatch_skipped
+// activity supplies the original failure reason instead of a guess.
+function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIssue): Record<string, unknown> {
+  const response = issueCompatibilityResponse(issue);
+  const skipped = (reason: string, error?: string | null): Record<string, unknown> => ({
+    ...response,
+    task_id: null,
+    dispatch_status: "skipped",
+    dispatch_skipped_reason: reason,
+    ...(error ? { dispatch_error: error } : {}),
+  });
+  if (!issue.assigneeType || !issue.assigneeId) return skipped("no_assignee");
+  if (issue.status === "backlog") return skipped("backlog_status");
+  if (issue.assigneeType === "member") return skipped("member_assignee");
+  const standingTask = store.listTasksForIssue(issue.id).find((task) => task.status !== "cancelled") ?? null;
+  if (standingTask) {
+    return {
+      ...response,
+      task_id: standingTask.id,
+      dispatch_status: "dispatched",
+      dispatch_skipped_reason: null,
+    };
+  }
+  const skipActivity = store.listIssueActivity(issue.id).findLast((activity) => activity.type === "dispatch_skipped");
+  const data = (skipActivity?.data ?? null) as { reason?: unknown; error?: unknown } | null;
+  const reason = typeof data?.reason === "string" ? data.reason : "no_runnable_agent";
+  const error = typeof data?.error === "string" ? data.error : skipActivity?.body ?? null;
+  return skipped(reason, error);
+}
 
 export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const { store, sessionArchives } = deps;
@@ -500,30 +539,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       const sourceIssueId = issueInput.source_issue_id ?? null;
       if (sourceIssueId) {
         const existing = store.findGeneratedIssueByTitle(sourceIssueId, issueInput.title);
-        // The idempotent replay must satisfy the same dispatch-outcome contract
-        // as a fresh create: a retrying agent otherwise reads a 200 with no
-        // dispatch fields and stays blind to an issue nobody is executing.
-        // Reported from the existing issue's CURRENT state, since this request
-        // itself dispatched nothing.
-        if (existing) {
-          const latestTask = store.listTasksForIssue(existing.id)[0] ?? null;
-          return c.json({
-            ...issueCompatibilityResponse(existing),
-            task_id: latestTask?.id ?? null,
-            dispatch_status: latestTask ? "dispatched" : "skipped",
-            dispatch_skipped_reason: latestTask
-              ? null
-              : !existing.assigneeType || !existing.assigneeId
-                ? "no_assignee"
-                : existing.status === "backlog"
-                  ? "backlog_status"
-                  : existing.assigneeType === "member"
-                    ? "member_assignee"
-                    // Agent/squad assignee with no task: the original dispatch
-                    // never produced one (runnable-agent resolution failed).
-                    : "no_runnable_agent",
-          }, 200);
-        }
+        if (existing) return c.json(existingIssueDispatchResponse(store, existing), 200);
       }
       const issue = store.createIssue(issueInput);
       publishIssueCreated(c, store, issue, issueCompatibilityResponse(issue));
