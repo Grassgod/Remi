@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 566,
+    "routeCount": 595,
     "routeCountByPrefix": {
-      "native": 189,
-      "compat": 364,
+      "native": 195,
+      "compat": 387,
       "root": 13
     },
-    "getRoutes": 246,
-    "getRoutesWithBody": 243,
+    "getRoutes": 257,
+    "getRoutesWithBody": 254,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 320,
+    "mutationRoutes": 338,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -57,7 +57,7 @@
       "ISO-8601 timestamps (anywhere in a string) -> \"<timestamp>\"",
       "epoch-millisecond numbers (1.5e12..4e12) and *_ms/duration/elapsed/uptime/latency numeric keys -> 0",
       "absolute machine paths (repo root, $HOME, $TMPDIR, upload dir) -> \"<repo>\"/\"<home>\"/\"<tmp>\"/\"<uploads>\"",
-      "os.hostname() -> \"<hostname>\", os.userInfo().username -> \"<user>\"",
+      "hostname in URL/UNC authorities -> \"<hostname>\"; username in Unix/Windows home paths -> \"<user>\"",
       "package VERSION -> \"<version>\"",
       "non-JSON bodies larger than 2000 bytes -> { __body__: { contentType, bytes, sha256 } }"
     ]
@@ -117,6 +117,7 @@
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
     "DELETE /api/workspaces/:id/repos/:repositoryId",
+    "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -146,6 +147,8 @@
     "GET /api/chat/sessions/:sessionId/messages",
     "GET /api/chat/sessions/:sessionId/messages/page",
     "GET /api/chat/sessions/:sessionId/pending-task",
+    "GET /api/cli/capabilities",
+    "GET /api/cli/context",
     "GET /api/cloud-billing/balance",
     "GET /api/cloud-billing/batches",
     "GET /api/cloud-billing/checkout-sessions/:sessionId",
@@ -267,6 +270,8 @@
     "GET /api/multiremi/models",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
+    "GET /api/multiremi/platform/operations",
+    "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
     "GET /api/multiremi/projects/:id/resources",
@@ -347,11 +352,18 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+    "GET /api/workspaces/:id/repository-wikis",
+    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -381,6 +393,7 @@
     "PATCH /api/multiremi/issues/:id",
     "PATCH /api/multiremi/labels/:id",
     "PATCH /api/multiremi/members/:id",
+    "PATCH /api/multiremi/platform/settings",
     "PATCH /api/multiremi/projects/:id",
     "PATCH /api/multiremi/projects/:id/resources/:resourceId",
     "PATCH /api/multiremi/runtimes/:id",
@@ -469,6 +482,7 @@
     "POST /api/issues/:id/labels",
     "POST /api/issues/:id/reactions",
     "POST /api/issues/:id/rerun",
+    "POST /api/issues/:id/restore",
     "POST /api/issues/:id/sessions",
     "POST /api/issues/:id/sessions/:sessionId/messages",
     "POST /api/issues/:id/sessions/:sessionId/participants",
@@ -525,6 +539,7 @@
     "POST /api/multiremi/issues/:id/dependencies",
     "POST /api/multiremi/issues/:id/labels",
     "POST /api/multiremi/issues/:id/reactions",
+    "POST /api/multiremi/issues/:id/restore",
     "POST /api/multiremi/issues/:id/subscribers",
     "POST /api/multiremi/issues/batch-delete",
     "POST /api/multiremi/issues/batch-update",
@@ -532,6 +547,8 @@
     "POST /api/multiremi/labels",
     "POST /api/multiremi/members",
     "POST /api/multiremi/pins",
+    "POST /api/multiremi/platform/operations",
+    "POST /api/multiremi/platform/operations/:id/cancel",
     "POST /api/multiremi/projects",
     "POST /api/multiremi/projects/:id/resources",
     "POST /api/multiremi/projects/:id/restore",
@@ -552,6 +569,12 @@
     "POST /api/multiremi/tasks/:id/steer",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
+    "POST /api/platform-updater/drain/begin",
+    "POST /api/platform-updater/drain/release",
+    "POST /api/platform-updater/drain/renew",
+    "POST /api/platform-updater/heartbeat",
+    "POST /api/platform-updater/operations/:id/report",
+    "POST /api/platform-updater/operations/claim",
     "POST /api/project-knowledge/migration/backfill",
     "POST /api/project-knowledge/migration/retry-failed",
     "POST /api/project-knowledge/migration/verify",
@@ -584,7 +607,10 @@
     "POST /api/workspaces/:id/members",
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
     "POST /api/workspaces/:id/repos",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/inspect",
+    "POST /api/workspaces/:id/repository-wikis/atlas",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
     "POST /api/workspaces/:workspaceId/scm/connections",
@@ -624,8 +650,11 @@
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
+    "PUT /api/workspaces/:id/issue-archive",
+    "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
+    "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "PUT /api/workspaces/:id/session-archive",
     "PUT /api/workspaces/:id/ssh-mesh",
     "PUT /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId"
@@ -708,6 +737,8 @@
     "GET /api/chat/sessions/:sessionId/messages",
     "GET /api/chat/sessions/:sessionId/messages/page",
     "GET /api/chat/sessions/:sessionId/pending-task",
+    "GET /api/cli/capabilities",
+    "GET /api/cli/context",
     "GET /api/cloud-billing/balance",
     "GET /api/cloud-billing/batches",
     "GET /api/cloud-billing/checkout-sessions/:sessionId",
@@ -829,6 +860,8 @@
     "GET /api/multiremi/models",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
+    "GET /api/multiremi/platform/operations",
+    "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
     "GET /api/multiremi/projects/:id/resources",
@@ -909,11 +942,18 @@
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/env",
     "GET /api/workspaces/:id/invitations",
+    "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
     "GET /api/workspaces/:id/repos",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+    "GET /api/workspaces/:id/repository-wikis",
+    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -1607,7 +1647,11 @@
         "importedSkillIds": [],
         "imported_skill_ids": [],
         "reusedSkillIds": [],
-        "reused_skill_ids": []
+        "reused_skill_ids": [],
+        "attachedPluginIds": [],
+        "attached_plugin_ids": [],
+        "missingPlugins": [],
+        "missing_plugins": []
       }
     },
     {
@@ -3657,6 +3701,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -3732,6 +3778,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -3751,11 +3798,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "auth_token": "mat_b038d9ca1bef6a33b05d4c6943764dce2875d196"
         }
@@ -3821,17 +3880,7 @@
             ],
             "max_concurrent_tasks": 6
           },
-          "repos": [
-            {
-              "url": "https://example.invalid/snapshot.git"
-            },
-            {
-              "url": "https://example.invalid/compat.git"
-            },
-            {
-              "url": "https://example.invalid/native.git"
-            }
-          ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
           "auth_token": "mat_a6fb5d92bb4ab5920d4959679498a484831d3e7f"
@@ -3920,6 +3969,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -3975,6 +4026,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -3994,11 +4046,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "autopilot_id": "apl_snapshot",
           "autopilot_source": "manual",
@@ -4090,6 +4154,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -4145,6 +4211,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -4164,11 +4231,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "autopilot_id": "apl_snapshot",
           "autopilot_source": "webhook",
@@ -4525,6 +4604,10 @@
       "status": 200,
       "body": {
         "status": "ok",
+        "drain": {
+          "mode": "normal",
+          "generation": 0
+        },
         "workspace_settings": {},
         "relay": {
           "claude": null,
@@ -4620,6 +4703,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -4695,6 +4780,7 @@
             "resource_count": 1,
             "archived_at": null,
             "instructions": "",
+            "delta_instructions": "",
             "instructions_revision": 0,
             "instructions_updated_at": null,
             "instructions_updated_by": null
@@ -4714,11 +4800,23 @@
               "created_by": null
             }
           ],
+          "repository_wiki_contexts": [
+            {
+              "repository": {
+                "id": "repo_snapshot",
+                "name": "snapshot",
+                "url": "https://example.invalid/snapshot.git",
+                "default_branch": null
+              },
+              "docs": []
+            }
+          ],
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
             }
           ],
+          "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "auth_token": "mat_ca16787f03d2122eca4a5b30b038d9ca1bef6a33"
         }
@@ -5226,7 +5324,23 @@
           "category": "Engineering",
           "icon": "Scale",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
+        },
+        {
+          "slug": "atlas-llm-wiki",
+          "name": "Atlas · LLM Wiki",
+          "description": "Builds and incrementally maintains repository code facts and cross-repository Project Wiki synthesis.",
+          "category": "Engineering",
+          "icon": "LibraryBig",
+          "accent": "info",
+          "skills": [],
+          "recommendedProvider": "claude",
+          "recommendedModel": "opus5",
+          "requiredPlugins": [
+            "code-to-wiki"
+          ]
         },
         {
           "slug": "brainstormer",
@@ -5235,7 +5349,9 @@
           "category": "Writing",
           "icon": "Lightbulb",
           "accent": "primary",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "bug-fixer",
@@ -5253,7 +5369,9 @@
               "cachedDescription": "Systematically trace bugs backward through the call stack to find the original trigger.",
               "cached_description": "Systematically trace bugs backward through the call stack to find the original trigger."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "code-explainer",
@@ -5262,7 +5380,9 @@
           "category": "Engineering",
           "icon": "BookOpen",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "code-reviewer",
@@ -5280,7 +5400,9 @@
               "cachedDescription": "React and Next.js performance optimization guidelines from Vercel Engineering.",
               "cached_description": "React and Next.js performance optimization guidelines from Vercel Engineering."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "commit-message",
@@ -5289,7 +5411,9 @@
           "category": "Engineering",
           "icon": "GitCommit",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "email-reply",
@@ -5307,7 +5431,9 @@
               "cachedDescription": "Resources for writing internal communications in common company formats.",
               "cached_description": "Resources for writing internal communications in common company formats."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "frontend-builder",
@@ -5333,7 +5459,9 @@
               "cachedDescription": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui.",
               "cached_description": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "frontend-designer",
@@ -5359,7 +5487,9 @@
               "cachedDescription": "Review UI code for Web Interface Guidelines compliance.",
               "cached_description": "Review UI code for Web Interface Guidelines compliance."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "html-slides",
@@ -5385,7 +5515,9 @@
               "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
               "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "jd-writer",
@@ -5394,7 +5526,9 @@
           "category": "Team",
           "icon": "Briefcase",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "okr-drafter",
@@ -5403,7 +5537,9 @@
           "category": "Product",
           "icon": "Target",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "one-pager",
@@ -5429,7 +5565,9 @@
               "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
               "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "pr-description",
@@ -5438,7 +5576,9 @@
           "category": "Engineering",
           "icon": "GitPullRequest",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "prd-critic",
@@ -5447,7 +5587,9 @@
           "category": "Product",
           "icon": "Microscope",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "prd-drafter",
@@ -5456,7 +5598,9 @@
           "category": "Product",
           "icon": "ClipboardList",
           "accent": "primary",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "rca-writer",
@@ -5465,7 +5609,9 @@
           "category": "Engineering",
           "icon": "AlertTriangle",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "release-notes",
@@ -5474,7 +5620,9 @@
           "category": "Communication",
           "icon": "Megaphone",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "summarizer",
@@ -5483,7 +5631,9 @@
           "category": "Writing",
           "icon": "AlignLeft",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "translator-zh-en",
@@ -5492,7 +5642,9 @@
           "category": "Writing",
           "icon": "Languages",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "tutor",
@@ -5501,7 +5653,9 @@
           "category": "Writing",
           "icon": "GraduationCap",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "user-story-writer",
@@ -5510,7 +5664,9 @@
           "category": "Product",
           "icon": "UserRound",
           "accent": "info",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "ux-copywriter",
@@ -5519,7 +5675,9 @@
           "category": "Design",
           "icon": "Type",
           "accent": "success",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "webapp-tester",
@@ -5537,7 +5695,9 @@
               "cachedDescription": "Toolkit for testing local web applications with Playwright.",
               "cached_description": "Toolkit for testing local web applications with Playwright."
             }
-          ]
+          ],
+          "recommendedModel": null,
+          "requiredPlugins": []
         },
         {
           "slug": "writing-critic",
@@ -5546,7 +5706,9 @@
           "category": "Writing",
           "icon": "Highlighter",
           "accent": "warning",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         }
       ]
     },
@@ -5563,7 +5725,9 @@
         "icon": "Scale",
         "accent": "info",
         "instructions": "You write Architecture Decision Records. Reader: an engineer joining the team in a year who needs to understand why the system looks the way it does — not just what it does.\n\nFixed scaffold:\n\n```\n# ADR-NNN: <short title in present tense, e.g. \"Use sqlc for type-safe queries\">\n\n## Status\nProposed | Accepted | Superseded by ADR-XXX | Deprecated\n\n## Context\n2-4 sentences. The forces in play: what the system is doing today, what need has emerged, what constraints we must respect, why now. Not the answer — the question.\n\n## Decision\n1-3 sentences. The decision in active voice. \"We will use X\" — not \"Adoption of X is recommended\". Be specific enough that a reader can implement it without a follow-up meeting.\n\n## Alternatives considered\n- **Option B** — one-sentence rejection reason (e.g. \"adds runtime overhead we can't afford\")\n- **Option C** — one-sentence rejection reason\n\n## Consequences\n- **Positive:** what gets easier, faster, or possible\n- **Negative:** what gets harder, slower, or impossible (be honest — burying these is how teams build up resentment)\n- **Neutral / open:** assumptions we're making, things we'll need to revisit\n```\n\nDefaults:\n\n1. **One decision per ADR.** If you find yourself writing \"we also decided to ...\", stop — that's a second ADR.\n2. **Name 1-3 alternatives, no more.** An ADR with no rejected options reads like there was no real choice. An ADR comparing 8 options reads like a survey.\n3. **Consequences are not all positive.** Include the things this decision makes harder. The reader needs to know what they're trading away.\n4. **Keep it short.** Most ADRs fit on one screen. If yours is two pages, you're explaining the system, not the decision.\n5. **Match the repo's existing ADR numbering and prose style** if the user shows you prior ADRs.\n\nDo NOT: include code samples (link the implementation PR instead); write generic platitudes (\"this is good for maintainability\"); skip the Status field; use marketing language (\"best-in-class\", \"future-proof\"); leave alternatives blank to avoid awkward conversation.",
-        "skills": []
+        "skills": [],
+        "recommendedModel": null,
+        "requiredPlugins": []
       }
     },
     {
@@ -6404,6 +6568,4233 @@
       }
     },
     {
+      "key": "get-sweep GET /api/cli/capabilities",
+      "route": "GET /api/cli/capabilities",
+      "path": "/api/cli/capabilities",
+      "status": 200,
+      "body": {
+        "protocol_version": 1,
+        "manifest_version": "1",
+        "server_version": "<version>",
+        "identity": "human",
+        "features": {
+          "async_operations": true,
+          "capability_negotiation": true,
+          "jsonl_output": true,
+          "local_cwd_merge": true,
+          "resource_resolution": [
+            "full_id",
+            "unique_short_id",
+            "unique_name"
+          ]
+        },
+        "commands": [
+          {
+            "id": "agent.archive",
+            "command": "remi agent archive",
+            "capability": "agent.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.cancel-tasks",
+            "command": "remi agent cancel-tasks",
+            "capability": "agent.cancel-tasks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.create",
+            "command": "remi agent create",
+            "capability": "agent.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.default",
+            "command": "remi agent default",
+            "capability": "agent.default",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.env.get",
+            "command": "remi agent env get",
+            "capability": "agent.env.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.env.update",
+            "command": "remi agent env update",
+            "capability": "agent.env.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.get",
+            "command": "remi agent get",
+            "capability": "agent.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.list",
+            "command": "remi agent list",
+            "capability": "agent.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.plugin.bind",
+            "command": "remi agent plugin bind",
+            "capability": "agent.plugin.bind",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.plugin.list",
+            "command": "remi agent plugin list",
+            "capability": "agent.plugin.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.plugin.unbind",
+            "command": "remi agent plugin unbind",
+            "capability": "agent.plugin.unbind",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.plugin.update",
+            "command": "remi agent plugin update",
+            "capability": "agent.plugin.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.restore",
+            "command": "remi agent restore",
+            "capability": "agent.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.skill.add",
+            "command": "remi agent skill add",
+            "capability": "agent.skill.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.skill.list",
+            "command": "remi agent skill list",
+            "capability": "agent.skill.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.skill.set",
+            "command": "remi agent skill set",
+            "capability": "agent.skill.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.task.list",
+            "command": "remi agent task list",
+            "capability": "agent.task.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.template.create",
+            "command": "remi agent template create",
+            "capability": "agent.template.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.template.get",
+            "command": "remi agent template get",
+            "capability": "agent.template.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.template.list",
+            "command": "remi agent template list",
+            "capability": "agent.template.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.update",
+            "command": "remi agent update",
+            "capability": "agent.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.create",
+            "command": "remi autopilot create",
+            "capability": "autopilot.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delete",
+            "command": "remi autopilot delete",
+            "capability": "autopilot.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delivery.get",
+            "command": "remi autopilot delivery get",
+            "capability": "autopilot.delivery.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delivery.list",
+            "command": "remi autopilot delivery list",
+            "capability": "autopilot.delivery.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.delivery.replay",
+            "command": "remi autopilot delivery replay",
+            "capability": "autopilot.delivery.replay",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.get",
+            "command": "remi autopilot get",
+            "capability": "autopilot.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.list",
+            "command": "remi autopilot list",
+            "capability": "autopilot.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.run",
+            "command": "remi autopilot run",
+            "capability": "autopilot.run",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.run.get",
+            "command": "remi autopilot run get",
+            "capability": "autopilot.run.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.run.list",
+            "command": "remi autopilot run list",
+            "capability": "autopilot.run.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.scheduler",
+            "command": "remi autopilot scheduler",
+            "capability": "autopilot.scheduler",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.create",
+            "command": "remi autopilot trigger create",
+            "capability": "autopilot.trigger.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.delete",
+            "command": "remi autopilot trigger delete",
+            "capability": "autopilot.trigger.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.list",
+            "command": "remi autopilot trigger list",
+            "capability": "autopilot.trigger.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.rotate-token",
+            "command": "remi autopilot trigger rotate-token",
+            "capability": "autopilot.trigger.rotate-token",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.set-secret",
+            "command": "remi autopilot trigger set-secret",
+            "capability": "autopilot.trigger.set-secret",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.trigger.update",
+            "command": "remi autopilot trigger update",
+            "capability": "autopilot.trigger.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "autopilot.update",
+            "command": "remi autopilot update",
+            "capability": "autopilot.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.balance",
+            "command": "remi billing balance",
+            "capability": "billing.balance",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.batch.list",
+            "command": "remi billing batch list",
+            "capability": "billing.batch.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.checkout.create",
+            "command": "remi billing checkout create",
+            "capability": "billing.checkout.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.checkout.get",
+            "command": "remi billing checkout get",
+            "capability": "billing.checkout.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.portal.create",
+            "command": "remi billing portal create",
+            "capability": "billing.portal.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.tier.list",
+            "command": "remi billing tier list",
+            "capability": "billing.tier.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.topup.list",
+            "command": "remi billing topup list",
+            "capability": "billing.topup.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "billing.transaction.list",
+            "command": "remi billing transaction list",
+            "capability": "billing.transaction.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.create",
+            "command": "remi chat create",
+            "capability": "chat.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.delete",
+            "command": "remi chat delete",
+            "capability": "chat.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.get",
+            "command": "remi chat get",
+            "capability": "chat.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.list",
+            "command": "remi chat list",
+            "capability": "chat.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.message.create",
+            "command": "remi chat message create",
+            "capability": "chat.message.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.message.list",
+            "command": "remi chat message list",
+            "capability": "chat.message.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.pending",
+            "command": "remi chat pending",
+            "capability": "chat.pending",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.read",
+            "command": "remi chat read",
+            "capability": "chat.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "chat.update",
+            "command": "remi chat update",
+            "capability": "chat.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.add",
+            "command": "remi comment add",
+            "capability": "comment.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.attachment.list",
+            "command": "remi comment attachment list",
+            "capability": "comment.attachment.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.delete",
+            "command": "remi comment delete",
+            "capability": "comment.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.list",
+            "command": "remi comment list",
+            "capability": "comment.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.reaction.add",
+            "command": "remi comment reaction add",
+            "capability": "comment.reaction.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.reaction.list",
+            "command": "remi comment reaction list",
+            "capability": "comment.reaction.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.reaction.remove",
+            "command": "remi comment reaction remove",
+            "capability": "comment.reaction.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.resolve",
+            "command": "remi comment resolve",
+            "capability": "comment.resolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.unresolve",
+            "command": "remi comment unresolve",
+            "capability": "comment.unresolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "comment.update",
+            "command": "remi comment update",
+            "capability": "comment.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.google",
+            "command": "remi context auth google",
+            "capability": "context.auth.google",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.lark",
+            "command": "remi context auth lark",
+            "capability": "context.auth.lark",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.logout",
+            "command": "remi context auth logout",
+            "capability": "context.auth.logout",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.send-code",
+            "command": "remi context auth send-code",
+            "capability": "context.auth.send-code",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.auth.verify-code",
+            "command": "remi context auth verify-code",
+            "capability": "context.auth.verify-code",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "context.get",
+            "command": "remi context",
+            "capability": "context.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.list",
+            "command": "remi daemon list",
+            "capability": "daemon.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.retire",
+            "command": "remi daemon retire",
+            "capability": "daemon.retire",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.retirement-plan",
+            "command": "remi daemon retirement-plan",
+            "capability": "daemon.retirement-plan",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-activity",
+            "command": "remi dashboard agent-activity",
+            "capability": "dashboard.agent-activity",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-runs",
+            "command": "remi dashboard agent-runs",
+            "capability": "dashboard.agent-runs",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-runtime",
+            "command": "remi dashboard agent-runtime",
+            "capability": "dashboard.agent-runtime",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.agent-tasks",
+            "command": "remi dashboard agent-tasks",
+            "capability": "dashboard.agent-tasks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.assignee-frequency",
+            "command": "remi dashboard assignee-frequency",
+            "capability": "dashboard.assignee-frequency",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.runtime.daily",
+            "command": "remi dashboard runtime daily",
+            "capability": "dashboard.runtime.daily",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.by-agent",
+            "command": "remi dashboard usage by-agent",
+            "capability": "dashboard.usage.by-agent",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "dashboard.usage.daily",
+            "command": "remi dashboard usage daily",
+            "capability": "dashboard.usage.daily",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive",
+            "command": "remi inbox archive",
+            "capability": "inbox.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive-all",
+            "command": "remi inbox archive-all",
+            "capability": "inbox.archive-all",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive-all-read",
+            "command": "remi inbox archive-all-read",
+            "capability": "inbox.archive-all-read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.archive-completed",
+            "command": "remi inbox archive-completed",
+            "capability": "inbox.archive-completed",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.list",
+            "command": "remi inbox list",
+            "capability": "inbox.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.mark-all-read",
+            "command": "remi inbox mark-all-read",
+            "capability": "inbox.mark-all-read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.read",
+            "command": "remi inbox read",
+            "capability": "inbox.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "inbox.unread-count",
+            "command": "remi inbox unread-count",
+            "capability": "inbox.unread-count",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.accept",
+            "command": "remi invite accept",
+            "capability": "invite.accept",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.create",
+            "command": "remi invite create",
+            "capability": "invite.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.decline",
+            "command": "remi invite decline",
+            "capability": "invite.decline",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.get",
+            "command": "remi invite get",
+            "capability": "invite.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.list",
+            "command": "remi invite list",
+            "capability": "invite.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "invite.revoke",
+            "command": "remi invite revoke",
+            "capability": "invite.revoke",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.active-task",
+            "command": "remi issue active-task",
+            "capability": "issue.active-task",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.assign",
+            "command": "remi issue assign",
+            "capability": "issue.assign",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.delete",
+            "command": "remi issue attachment delete",
+            "capability": "issue.attachment.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.download",
+            "command": "remi issue attachment download",
+            "capability": "issue.attachment.download",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.get",
+            "command": "remi issue attachment get",
+            "capability": "issue.attachment.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.list",
+            "command": "remi issue attachment list",
+            "capability": "issue.attachment.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.attachment.upload",
+            "command": "remi issue attachment upload",
+            "capability": "issue.attachment.upload",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.batch-delete",
+            "command": "remi issue batch-delete",
+            "capability": "issue.batch-delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.batch-update",
+            "command": "remi issue batch-update",
+            "capability": "issue.batch-update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.cancel",
+            "command": "remi issue cancel-task",
+            "capability": "issue.cancel",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.child-progress",
+            "command": "remi issue child-progress",
+            "capability": "issue.child-progress",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.children",
+            "command": "remi issue children",
+            "capability": "issue.children",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.create",
+            "command": "remi issue create",
+            "capability": "issue.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.delete",
+            "command": "remi issue delete",
+            "capability": "issue.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.dependency.add",
+            "command": "remi issue dependency add",
+            "capability": "issue.dependency.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.dependency.list",
+            "command": "remi issue dependency list",
+            "capability": "issue.dependency.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.dependency.remove",
+            "command": "remi issue dependency remove",
+            "capability": "issue.dependency.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.get",
+            "command": "remi issue get",
+            "capability": "issue.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.grouped",
+            "command": "remi issue grouped",
+            "capability": "issue.grouped",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.label.add",
+            "command": "remi issue label add",
+            "capability": "issue.label.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.label.list",
+            "command": "remi issue label list",
+            "capability": "issue.label.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.label.remove",
+            "command": "remi issue label remove",
+            "capability": "issue.label.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.list",
+            "command": "remi issue list",
+            "capability": "issue.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.delete",
+            "command": "remi issue metadata delete",
+            "capability": "issue.metadata.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.get",
+            "command": "remi issue metadata get",
+            "capability": "issue.metadata.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.list",
+            "command": "remi issue metadata list",
+            "capability": "issue.metadata.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.metadata.set",
+            "command": "remi issue metadata set",
+            "capability": "issue.metadata.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.quick-create",
+            "command": "remi issue quick-create",
+            "capability": "issue.quick-create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.reaction.add",
+            "command": "remi issue reaction add",
+            "capability": "issue.reaction.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.reaction.list",
+            "command": "remi issue reaction list",
+            "capability": "issue.reaction.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.reaction.remove",
+            "command": "remi issue reaction remove",
+            "capability": "issue.reaction.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.rerun",
+            "command": "remi issue rerun",
+            "capability": "issue.rerun",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.restore",
+            "command": "remi issue restore",
+            "capability": "issue.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.search",
+            "command": "remi issue search",
+            "capability": "issue.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.squad-evaluated",
+            "command": "remi issue squad-evaluated",
+            "capability": "issue.squad-evaluated",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.status",
+            "command": "remi issue status",
+            "capability": "issue.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.subscriber.add",
+            "command": "remi issue subscriber add",
+            "capability": "issue.subscriber.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.subscriber.list",
+            "command": "remi issue subscriber list",
+            "capability": "issue.subscriber.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.subscriber.remove",
+            "command": "remi issue subscriber remove",
+            "capability": "issue.subscriber.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.task-runs",
+            "command": "remi issue runs",
+            "capability": "issue.task-runs",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.timeline",
+            "command": "remi issue timeline",
+            "capability": "issue.timeline",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.update",
+            "command": "remi issue update",
+            "capability": "issue.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.usage",
+            "command": "remi issue usage",
+            "capability": "issue.usage",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.workspace",
+            "command": "remi issue workspace",
+            "capability": "issue.workspace",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.create",
+            "command": "remi label create",
+            "capability": "label.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.delete",
+            "command": "remi label delete",
+            "capability": "label.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.get",
+            "command": "remi label get",
+            "capability": "label.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.list",
+            "command": "remi label list",
+            "capability": "label.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "label.update",
+            "command": "remi label update",
+            "capability": "label.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.binding.redeem",
+            "command": "remi lark binding redeem",
+            "capability": "lark.binding.redeem",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.daemon.install",
+            "command": "remi lark daemon install",
+            "capability": "lark.daemon.install",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.daemon.status",
+            "command": "remi lark daemon status",
+            "capability": "lark.daemon.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.install.begin",
+            "command": "remi lark install begin",
+            "capability": "lark.install.begin",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.install.status",
+            "command": "remi lark install status",
+            "capability": "lark.install.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.installation.delete",
+            "command": "remi lark installation delete",
+            "capability": "lark.installation.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "lark.installation.list",
+            "command": "remi lark installation list",
+            "capability": "lark.installation.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.create",
+            "command": "remi member create",
+            "capability": "member.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.delete",
+            "command": "remi member delete",
+            "capability": "member.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.get",
+            "command": "remi member get",
+            "capability": "member.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.list",
+            "command": "remi member list",
+            "capability": "member.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.cloud-waitlist",
+            "command": "remi member onboarding cloud-waitlist",
+            "capability": "member.onboarding.cloud-waitlist",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.complete",
+            "command": "remi member onboarding complete",
+            "capability": "member.onboarding.complete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.no-runtime-bootstrap",
+            "command": "remi member onboarding no-runtime-bootstrap",
+            "capability": "member.onboarding.no-runtime-bootstrap",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.runtime-bootstrap",
+            "command": "remi member onboarding runtime-bootstrap",
+            "capability": "member.onboarding.runtime-bootstrap",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.onboarding.update",
+            "command": "remi member onboarding update",
+            "capability": "member.onboarding.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "member.update",
+            "command": "remi member update",
+            "capability": "member.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.backlinks",
+            "command": "remi memory backlinks",
+            "capability": "memory.backlinks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.create",
+            "command": "remi memory create",
+            "capability": "memory.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.delete",
+            "command": "remi memory delete",
+            "capability": "memory.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.get",
+            "command": "remi memory get",
+            "capability": "memory.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.list",
+            "command": "remi memory list",
+            "capability": "memory.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.backfill",
+            "command": "remi memory migration backfill",
+            "capability": "memory.migration.backfill",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.retry",
+            "command": "remi memory migration retry",
+            "capability": "memory.migration.retry",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.status",
+            "command": "remi memory migration status",
+            "capability": "memory.migration.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.migration.verify",
+            "command": "remi memory migration verify",
+            "capability": "memory.migration.verify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.search",
+            "command": "remi memory search",
+            "capability": "memory.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "memory.update",
+            "command": "remi memory update",
+            "capability": "memory.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.get",
+            "command": "remi notification get",
+            "capability": "notification.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.update",
+            "command": "remi notification update",
+            "capability": "notification.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.create",
+            "command": "remi pin create",
+            "capability": "pin.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.delete",
+            "command": "remi pin delete",
+            "capability": "pin.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.list",
+            "command": "remi pin list",
+            "capability": "pin.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "pin.reorder",
+            "command": "remi pin reorder",
+            "capability": "pin.reorder",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.feedback.create",
+            "command": "remi platform feedback create",
+            "capability": "platform.feedback.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.feedback.list",
+            "command": "remi platform feedback list",
+            "capability": "platform.feedback.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.health",
+            "command": "remi platform health",
+            "capability": "platform.health",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.operation.cancel",
+            "command": "remi platform operation cancel",
+            "capability": "platform.operation.cancel",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.operation.create",
+            "command": "remi platform operation create",
+            "capability": "platform.operation.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.operation.list",
+            "command": "remi platform operation list",
+            "capability": "platform.operation.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.ready",
+            "command": "remi platform ready",
+            "capability": "platform.ready",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.realtime",
+            "command": "remi platform realtime",
+            "capability": "platform.realtime",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.release.get",
+            "command": "remi platform release get",
+            "capability": "platform.release.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.release.latest",
+            "command": "remi platform release latest",
+            "capability": "platform.release.latest",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.release.version",
+            "command": "remi platform release version",
+            "capability": "platform.release.version",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.settings.update",
+            "command": "remi platform settings update",
+            "capability": "platform.settings.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.status",
+            "command": "remi platform status",
+            "capability": "platform.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.activate",
+            "command": "remi plugin activate",
+            "capability": "plugin.activate",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.archive",
+            "command": "remi plugin archive",
+            "capability": "plugin.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.get",
+            "command": "remi plugin get",
+            "capability": "plugin.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.import",
+            "command": "remi plugin import",
+            "capability": "plugin.import",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.inspect",
+            "command": "remi plugin inspect",
+            "capability": "plugin.inspect",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.list",
+            "command": "remi plugin list",
+            "capability": "plugin.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.restore",
+            "command": "remi plugin restore",
+            "capability": "plugin.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.rollback",
+            "command": "remi plugin rollback",
+            "capability": "plugin.rollback",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.runtime.get",
+            "command": "remi plugin runtime get",
+            "capability": "plugin.runtime.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.runtime.list",
+            "command": "remi plugin runtime list",
+            "capability": "plugin.runtime.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.runtime.retry",
+            "command": "remi plugin runtime retry",
+            "capability": "plugin.runtime.retry",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.update",
+            "command": "remi plugin update",
+            "capability": "plugin.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.version.create",
+            "command": "remi plugin version create",
+            "capability": "plugin.version.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "plugin.version.list",
+            "command": "remi plugin version list",
+            "capability": "plugin.version.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.archive",
+            "command": "remi project archive",
+            "capability": "project.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.create",
+            "command": "remi project create",
+            "capability": "project.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.defaults",
+            "command": "remi project defaults",
+            "capability": "project.defaults",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.get",
+            "command": "remi project get",
+            "capability": "project.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.list",
+            "command": "remi project list",
+            "capability": "project.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.create",
+            "command": "remi project resource create",
+            "capability": "project.resource.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.delete",
+            "command": "remi project resource delete",
+            "capability": "project.resource.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.list",
+            "command": "remi project resource list",
+            "capability": "project.resource.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.resource.update",
+            "command": "remi project resource update",
+            "capability": "project.resource.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.restore",
+            "command": "remi project restore",
+            "capability": "project.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.search",
+            "command": "remi project search",
+            "capability": "project.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.update",
+            "command": "remi project update",
+            "capability": "project.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.checkout",
+            "command": "remi repo checkout",
+            "capability": "repo.checkout",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.create",
+            "command": "remi repo create",
+            "capability": "repo.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.delete",
+            "command": "remi repo delete",
+            "capability": "repo.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.get",
+            "command": "remi repo get",
+            "capability": "repo.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.inspect",
+            "command": "remi repo inspect",
+            "capability": "repo.inspect",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.list",
+            "command": "remi repo list",
+            "capability": "repo.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "repo.update",
+            "command": "remi repo update",
+            "capability": "repo.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.activity",
+            "command": "remi runtime activity",
+            "capability": "runtime.activity",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.archive-agents-and-delete",
+            "command": "remi runtime archive-agents-and-delete",
+            "capability": "runtime.archive-agents-and-delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.health",
+            "command": "remi runtime cloud health",
+            "capability": "runtime.cloud.health",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.create",
+            "command": "remi runtime cloud node create",
+            "capability": "runtime.cloud.node.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.delete",
+            "command": "remi runtime cloud node delete",
+            "capability": "runtime.cloud.node.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.exec",
+            "command": "remi runtime cloud node exec",
+            "capability": "runtime.cloud.node.exec",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.list",
+            "command": "remi runtime cloud node list",
+            "capability": "runtime.cloud.node.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.reboot",
+            "command": "remi runtime cloud node reboot",
+            "capability": "runtime.cloud.node.reboot",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.start",
+            "command": "remi runtime cloud node start",
+            "capability": "runtime.cloud.node.start",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.status",
+            "command": "remi runtime cloud node status",
+            "capability": "runtime.cloud.node.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.node.stop",
+            "command": "remi runtime cloud node stop",
+            "capability": "runtime.cloud.node.stop",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.ready",
+            "command": "remi runtime cloud ready",
+            "capability": "runtime.cloud.ready",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.cloud.status",
+            "command": "remi runtime cloud status",
+            "capability": "runtime.cloud.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.create",
+            "command": "remi runtime create",
+            "capability": "runtime.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.delete",
+            "command": "remi runtime delete",
+            "capability": "runtime.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.directory.scan",
+            "command": "remi runtime directory scan",
+            "capability": "runtime.directory.scan",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.directory.status",
+            "command": "remi runtime directory status",
+            "capability": "runtime.directory.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.get",
+            "command": "remi runtime get",
+            "capability": "runtime.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.list",
+            "command": "remi runtime list",
+            "capability": "runtime.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.catalog",
+            "command": "remi runtime model catalog",
+            "capability": "runtime.model.catalog",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.list",
+            "command": "remi runtime model list",
+            "capability": "runtime.model.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.refresh",
+            "command": "remi runtime model refresh",
+            "capability": "runtime.model.refresh",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.set",
+            "command": "remi runtime model set",
+            "capability": "runtime.model.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.model.status",
+            "command": "remi runtime model status",
+            "capability": "runtime.model.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.release.start",
+            "command": "remi runtime release start",
+            "capability": "runtime.release.start",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.release.status",
+            "command": "remi runtime release status",
+            "capability": "runtime.release.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.import",
+            "command": "remi runtime skill import",
+            "capability": "runtime.skill.import",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.import-status",
+            "command": "remi runtime skill import-status",
+            "capability": "runtime.skill.import-status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.scan",
+            "command": "remi runtime skill scan",
+            "capability": "runtime.skill.scan",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.skill.status",
+            "command": "remi runtime skill status",
+            "capability": "runtime.skill.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.task-activity",
+            "command": "remi runtime task-activity",
+            "capability": "runtime.task-activity",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.update",
+            "command": "remi runtime update",
+            "capability": "runtime.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.usage",
+            "command": "remi runtime usage",
+            "capability": "runtime.usage",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.usage.by-agent",
+            "command": "remi runtime usage by-agent",
+            "capability": "runtime.usage.by-agent",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "runtime.usage.by-hour",
+            "command": "remi runtime usage by-hour",
+            "capability": "runtime.usage.by-hour",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.capabilities",
+            "command": "remi scm capabilities",
+            "capability": "scm.capabilities",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.change-request.link",
+            "command": "remi scm change-request link",
+            "capability": "scm.change-request.link",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.change-request.list",
+            "command": "remi scm change-request list",
+            "capability": "scm.change-request.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.change-request.unlink",
+            "command": "remi scm change-request unlink",
+            "capability": "scm.change-request.unlink",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.create",
+            "command": "remi scm connection create",
+            "capability": "scm.connection.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.delete",
+            "command": "remi scm connection delete",
+            "capability": "scm.connection.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.get",
+            "command": "remi scm connection get",
+            "capability": "scm.connection.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.list",
+            "command": "remi scm connection list",
+            "capability": "scm.connection.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.update",
+            "command": "remi scm connection update",
+            "capability": "scm.connection.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.connection.verify",
+            "command": "remi scm connection verify",
+            "capability": "scm.connection.verify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.event.get",
+            "command": "remi scm event get",
+            "capability": "scm.event.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.event.list",
+            "command": "remi scm event list",
+            "capability": "scm.event.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.repository.bind",
+            "command": "remi scm repository bind",
+            "capability": "scm.repository.bind",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "scm.repository.unbind",
+            "command": "remi scm repository unbind",
+            "capability": "scm.repository.unbind",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.list",
+            "command": "remi session archive list",
+            "capability": "session.archive.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.retry",
+            "command": "remi session archive retry",
+            "capability": "session.archive.retry",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.status",
+            "command": "remi session archive status",
+            "capability": "session.archive.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.archive.verify",
+            "command": "remi session archive verify",
+            "capability": "session.archive.verify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.config.get",
+            "command": "remi session config get",
+            "capability": "session.config.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.config.update",
+            "command": "remi session config update",
+            "capability": "session.config.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.create",
+            "command": "remi session create",
+            "capability": "session.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.event.list",
+            "command": "remi session event list",
+            "capability": "session.event.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.get",
+            "command": "remi session get",
+            "capability": "session.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.list",
+            "command": "remi session list",
+            "capability": "session.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.message.create",
+            "command": "remi session message create",
+            "capability": "session.message.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.participant.add",
+            "command": "remi session participant add",
+            "capability": "session.participant.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.participant.list",
+            "command": "remi session participant list",
+            "capability": "session.participant.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.participant.remove",
+            "command": "remi session participant remove",
+            "capability": "session.participant.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.result.list",
+            "command": "remi session result list",
+            "capability": "session.result.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.result.publish",
+            "command": "remi session result publish",
+            "capability": "session.result.publish",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.task.create",
+            "command": "remi session task create",
+            "capability": "session.task.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.task.list",
+            "command": "remi session task list",
+            "capability": "session.task.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.update",
+            "command": "remi session update",
+            "capability": "session.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.create",
+            "command": "remi share create",
+            "capability": "share.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.delete",
+            "command": "remi share delete",
+            "capability": "share.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.extend",
+            "command": "remi share extend",
+            "capability": "share.extend",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.get",
+            "command": "remi share get",
+            "capability": "share.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.view",
+            "command": "remi share view",
+            "capability": "share.view",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.archive",
+            "command": "remi skill archive",
+            "capability": "skill.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.create",
+            "command": "remi skill create",
+            "capability": "skill.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.file.delete",
+            "command": "remi skill file delete",
+            "capability": "skill.file.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.file.list",
+            "command": "remi skill file list",
+            "capability": "skill.file.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.file.update",
+            "command": "remi skill file update",
+            "capability": "skill.file.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.get",
+            "command": "remi skill get",
+            "capability": "skill.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.import",
+            "command": "remi skill import",
+            "capability": "skill.import",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.list",
+            "command": "remi skill list",
+            "capability": "skill.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.search",
+            "command": "remi skill search",
+            "capability": "skill.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "skill.update",
+            "command": "remi skill update",
+            "capability": "skill.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.archive",
+            "command": "remi squad archive",
+            "capability": "squad.archive",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.create",
+            "command": "remi squad create",
+            "capability": "squad.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.get",
+            "command": "remi squad get",
+            "capability": "squad.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.list",
+            "command": "remi squad list",
+            "capability": "squad.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.member.add",
+            "command": "remi squad member add",
+            "capability": "squad.member.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.member.list",
+            "command": "remi squad member list",
+            "capability": "squad.member.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.member.remove",
+            "command": "remi squad member remove",
+            "capability": "squad.member.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.member.status",
+            "command": "remi squad member status",
+            "capability": "squad.member.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.member.update",
+            "command": "remi squad member update",
+            "capability": "squad.member.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "squad.update",
+            "command": "remi squad update",
+            "capability": "squad.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.cancel",
+            "command": "remi task cancel",
+            "capability": "task.cancel",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.create",
+            "command": "remi task create",
+            "capability": "task.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.get",
+            "command": "remi task get",
+            "capability": "task.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.list",
+            "command": "remi task list",
+            "capability": "task.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.message.list",
+            "command": "remi task message list",
+            "capability": "task.message.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.messages",
+            "command": "remi issue run-messages",
+            "capability": "task.messages",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.prompt",
+            "command": "remi task prompt",
+            "capability": "task.prompt",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.request.list",
+            "command": "remi task request list",
+            "capability": "task.request.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.request.respond",
+            "command": "remi task request respond",
+            "capability": "task.request.respond",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.steer",
+            "command": "remi task steer",
+            "capability": "task.steer",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.steer.list",
+            "command": "remi task steer list",
+            "capability": "task.steer.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.create",
+            "command": "remi token create",
+            "capability": "token.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.delete",
+            "command": "remi token delete",
+            "capability": "token.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.list",
+            "command": "remi token list",
+            "capability": "token.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "token.renew",
+            "command": "remi token renew",
+            "capability": "token.renew",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.backlinks",
+            "command": "remi wiki backlinks",
+            "capability": "wiki.backlinks",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.create",
+            "command": "remi wiki create",
+            "capability": "wiki.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.delete",
+            "command": "remi wiki delete",
+            "capability": "wiki.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.diff",
+            "command": "remi wiki diff",
+            "capability": "wiki.diff",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.get",
+            "command": "remi wiki get",
+            "capability": "wiki.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.list",
+            "command": "remi wiki list",
+            "capability": "wiki.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.pull",
+            "command": "remi wiki pull",
+            "capability": "wiki.pull",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.push",
+            "command": "remi wiki push",
+            "capability": "wiki.push",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.atlas.configure",
+            "command": "remi wiki repository atlas configure",
+            "capability": "wiki.repository.atlas.configure",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.atlas.status",
+            "command": "remi wiki repository atlas status",
+            "capability": "wiki.repository.atlas.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.build",
+            "command": "remi wiki repository build",
+            "capability": "wiki.repository.build",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.create",
+            "command": "remi wiki repository create",
+            "capability": "wiki.repository.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.delete",
+            "command": "remi wiki repository delete",
+            "capability": "wiki.repository.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.get",
+            "command": "remi wiki repository get",
+            "capability": "wiki.repository.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.list",
+            "command": "remi wiki repository list",
+            "capability": "wiki.repository.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.revisions",
+            "command": "remi wiki repository revisions",
+            "capability": "wiki.repository.revisions",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.repository.update",
+            "command": "remi wiki repository update",
+            "capability": "wiki.repository.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.revisions",
+            "command": "remi wiki revisions",
+            "capability": "wiki.revisions",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.search",
+            "command": "remi wiki search",
+            "capability": "wiki.search",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.status",
+            "command": "remi wiki status",
+            "capability": "wiki.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "wiki.update",
+            "command": "remi wiki update",
+            "capability": "wiki.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.create",
+            "command": "remi workspace create",
+            "capability": "workspace.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.delete",
+            "command": "remi workspace delete",
+            "capability": "workspace.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.env.get",
+            "command": "remi workspace env get",
+            "capability": "workspace.env.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.env.update",
+            "command": "remi workspace env update",
+            "capability": "workspace.env.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.get",
+            "command": "remi workspace get",
+            "capability": "workspace.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.issue-archive.get",
+            "command": "remi workspace issue-archive get",
+            "capability": "workspace.issue-archive.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.issue-archive.update",
+            "command": "remi workspace issue-archive update",
+            "capability": "workspace.issue-archive.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.leave",
+            "command": "remi workspace leave",
+            "capability": "workspace.leave",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.list",
+            "command": "remi workspace list",
+            "capability": "workspace.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.prompt.get",
+            "command": "remi workspace prompt get",
+            "capability": "workspace.prompt.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.prompt.update",
+            "command": "remi workspace prompt update",
+            "capability": "workspace.prompt.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.discovery",
+            "command": "remi workspace relay discovery",
+            "capability": "workspace.relay.discovery",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.get",
+            "command": "remi workspace relay get",
+            "capability": "workspace.relay.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.reveal",
+            "command": "remi workspace relay reveal",
+            "capability": "workspace.relay.reveal",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.relay.update",
+            "command": "remi workspace relay update",
+            "capability": "workspace.relay.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.get",
+            "command": "remi workspace ssh-mesh get",
+            "capability": "workspace.ssh-mesh.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.rotate",
+            "command": "remi workspace ssh-mesh rotate",
+            "capability": "workspace.ssh-mesh.rotate",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.test",
+            "command": "remi workspace ssh-mesh test",
+            "capability": "workspace.ssh-mesh.test",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.ssh-mesh.update",
+            "command": "remi workspace ssh-mesh update",
+            "capability": "workspace.ssh-mesh.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.update",
+            "command": "remi workspace update",
+            "capability": "workspace.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/cli/context",
+      "route": "GET /api/cli/context",
+      "path": "/api/cli/context",
+      "status": 200,
+      "body": {
+        "protocol_version": 1,
+        "identity": {
+          "type": "human",
+          "member": {
+            "id": "mem_local_local",
+            "name": "Local User",
+            "role": "owner"
+          }
+        },
+        "workspace": {
+          "id": "local",
+          "name": "Local Workspace",
+          "description": null
+        },
+        "current": {
+          "agent": null,
+          "task": null,
+          "chat": null,
+          "issue": null,
+          "session": null,
+          "project": null,
+          "runtime": null,
+          "runtimes": []
+        },
+        "catalog": {
+          "projects": [
+            {
+              "id": "prj_snapshot",
+              "name": "Snapshot Project",
+              "description": "Project used by the snapshot",
+              "status": "in_progress",
+              "repository_ids": [
+                "repo_snapshot"
+              ]
+            }
+          ],
+          "repositories": [
+            {
+              "id": "repo_snapshot",
+              "name": "snapshot",
+              "url": "https://example.invalid/snapshot.git",
+              "description": null,
+              "default_branch": null
+            },
+            {
+              "id": "repo_snapshot_compat",
+              "name": "compat",
+              "url": "https://example.invalid/compat.git",
+              "description": null,
+              "default_branch": null
+            },
+            {
+              "id": "repo_snapshot_native",
+              "name": "native",
+              "url": "https://example.invalid/native.git",
+              "description": null,
+              "default_branch": null
+            }
+          ],
+          "next_cursor": null
+        },
+        "allowed_operations": [
+          "context.read",
+          "workspace.manage",
+          "project.manage",
+          "repo.manage",
+          "collaboration.manage",
+          "runtime.manage"
+        ]
+      }
+    },
+    {
       "key": "get-sweep GET /api/cloud-billing/balance",
       "route": "GET /api/cloud-billing/balance",
       "path": "/api/cloud-billing/balance",
@@ -6924,6 +11315,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -6998,6 +11391,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7023,6 +11418,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7048,6 +11445,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7073,6 +11472,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -7109,6 +11510,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -7143,6 +11546,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {
@@ -7307,6 +11712,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -7399,6 +11806,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {
@@ -7425,6 +11834,8 @@
               "position": 0,
               "start_date": null,
               "due_date": null,
+              "completed_at": null,
+              "archived_at": null,
               "created_at": "<timestamp>",
               "updated_at": "<timestamp>",
               "metadata": {}
@@ -8162,6 +12573,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8207,6 +12620,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8241,6 +12656,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -8267,6 +12684,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -8293,6 +12712,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -8329,6 +12750,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8354,6 +12777,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8379,6 +12804,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8404,6 +12831,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -8432,6 +12861,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {},
@@ -8922,7 +13353,23 @@
             "category": "Engineering",
             "icon": "Scale",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
+          },
+          {
+            "slug": "atlas-llm-wiki",
+            "name": "Atlas · LLM Wiki",
+            "description": "Builds and incrementally maintains repository code facts and cross-repository Project Wiki synthesis.",
+            "category": "Engineering",
+            "icon": "LibraryBig",
+            "accent": "info",
+            "skills": [],
+            "recommendedProvider": "claude",
+            "recommendedModel": "opus5",
+            "requiredPlugins": [
+              "code-to-wiki"
+            ]
           },
           {
             "slug": "brainstormer",
@@ -8931,7 +13378,9 @@
             "category": "Writing",
             "icon": "Lightbulb",
             "accent": "primary",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "bug-fixer",
@@ -8949,7 +13398,9 @@
                 "cachedDescription": "Systematically trace bugs backward through the call stack to find the original trigger.",
                 "cached_description": "Systematically trace bugs backward through the call stack to find the original trigger."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "code-explainer",
@@ -8958,7 +13409,9 @@
             "category": "Engineering",
             "icon": "BookOpen",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "code-reviewer",
@@ -8976,7 +13429,9 @@
                 "cachedDescription": "React and Next.js performance optimization guidelines from Vercel Engineering.",
                 "cached_description": "React and Next.js performance optimization guidelines from Vercel Engineering."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "commit-message",
@@ -8985,7 +13440,9 @@
             "category": "Engineering",
             "icon": "GitCommit",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "email-reply",
@@ -9003,7 +13460,9 @@
                 "cachedDescription": "Resources for writing internal communications in common company formats.",
                 "cached_description": "Resources for writing internal communications in common company formats."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "frontend-builder",
@@ -9029,7 +13488,9 @@
                 "cachedDescription": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui.",
                 "cached_description": "Tools for creating elaborate, multi-component artifacts with React, Tailwind, shadcn/ui."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "frontend-designer",
@@ -9055,7 +13516,9 @@
                 "cachedDescription": "Review UI code for Web Interface Guidelines compliance.",
                 "cached_description": "Review UI code for Web Interface Guidelines compliance."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "html-slides",
@@ -9081,7 +13544,9 @@
                 "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
                 "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "jd-writer",
@@ -9090,7 +13555,9 @@
             "category": "Team",
             "icon": "Briefcase",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "okr-drafter",
@@ -9099,7 +13566,9 @@
             "category": "Product",
             "icon": "Target",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "one-pager",
@@ -9125,7 +13594,9 @@
                 "cachedDescription": "Apply design philosophy for visual composition, hierarchy, and type.",
                 "cached_description": "Apply design philosophy for visual composition, hierarchy, and type."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "pr-description",
@@ -9134,7 +13605,9 @@
             "category": "Engineering",
             "icon": "GitPullRequest",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "prd-critic",
@@ -9143,7 +13616,9 @@
             "category": "Product",
             "icon": "Microscope",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "prd-drafter",
@@ -9152,7 +13627,9 @@
             "category": "Product",
             "icon": "ClipboardList",
             "accent": "primary",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "rca-writer",
@@ -9161,7 +13638,9 @@
             "category": "Engineering",
             "icon": "AlertTriangle",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "release-notes",
@@ -9170,7 +13649,9 @@
             "category": "Communication",
             "icon": "Megaphone",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "summarizer",
@@ -9179,7 +13660,9 @@
             "category": "Writing",
             "icon": "AlignLeft",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "translator-zh-en",
@@ -9188,7 +13671,9 @@
             "category": "Writing",
             "icon": "Languages",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "tutor",
@@ -9197,7 +13682,9 @@
             "category": "Writing",
             "icon": "GraduationCap",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "user-story-writer",
@@ -9206,7 +13693,9 @@
             "category": "Product",
             "icon": "UserRound",
             "accent": "info",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "ux-copywriter",
@@ -9215,7 +13704,9 @@
             "category": "Design",
             "icon": "Type",
             "accent": "success",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "webapp-tester",
@@ -9233,7 +13724,9 @@
                 "cachedDescription": "Toolkit for testing local web applications with Playwright.",
                 "cached_description": "Toolkit for testing local web applications with Playwright."
               }
-            ]
+            ],
+            "recommendedModel": null,
+            "requiredPlugins": []
           },
           {
             "slug": "writing-critic",
@@ -9242,10 +13735,12 @@
             "category": "Writing",
             "icon": "Highlighter",
             "accent": "warning",
-            "skills": []
+            "skills": [],
+            "recommendedModel": null,
+            "requiredPlugins": []
           }
         ],
-        "total": 25
+        "total": 26
       }
     },
     {
@@ -9262,7 +13757,9 @@
           "icon": "Scale",
           "accent": "info",
           "instructions": "You write Architecture Decision Records. Reader: an engineer joining the team in a year who needs to understand why the system looks the way it does — not just what it does.\n\nFixed scaffold:\n\n```\n# ADR-NNN: <short title in present tense, e.g. \"Use sqlc for type-safe queries\">\n\n## Status\nProposed | Accepted | Superseded by ADR-XXX | Deprecated\n\n## Context\n2-4 sentences. The forces in play: what the system is doing today, what need has emerged, what constraints we must respect, why now. Not the answer — the question.\n\n## Decision\n1-3 sentences. The decision in active voice. \"We will use X\" — not \"Adoption of X is recommended\". Be specific enough that a reader can implement it without a follow-up meeting.\n\n## Alternatives considered\n- **Option B** — one-sentence rejection reason (e.g. \"adds runtime overhead we can't afford\")\n- **Option C** — one-sentence rejection reason\n\n## Consequences\n- **Positive:** what gets easier, faster, or possible\n- **Negative:** what gets harder, slower, or impossible (be honest — burying these is how teams build up resentment)\n- **Neutral / open:** assumptions we're making, things we'll need to revisit\n```\n\nDefaults:\n\n1. **One decision per ADR.** If you find yourself writing \"we also decided to ...\", stop — that's a second ADR.\n2. **Name 1-3 alternatives, no more.** An ADR with no rejected options reads like there was no real choice. An ADR comparing 8 options reads like a survey.\n3. **Consequences are not all positive.** Include the things this decision makes harder. The reader needs to know what they're trading away.\n4. **Keep it short.** Most ADRs fit on one screen. If yours is two pages, you're explaining the system, not the decision.\n5. **Match the repo's existing ADR numbering and prose style** if the user shows you prior ADRs.\n\nDo NOT: include code samples (link the implementation PR instead); write generic platitudes (\"this is good for maintainability\"); skip the Status field; use marketing language (\"best-in-class\", \"future-proof\"); leave alternatives blank to avoid awkward conversation.",
-          "skills": []
+          "skills": [],
+          "recommendedModel": null,
+          "requiredPlugins": []
         }
       }
     },
@@ -10445,6 +14942,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -10523,6 +15022,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
@@ -10552,6 +15053,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -10581,6 +15084,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 1,
@@ -10621,6 +15126,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 2,
@@ -10650,13 +15157,16 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "taskCount": 0,
             "latestTaskStatus": null,
             "latestTaskId": null
           }
-        ]
+        ],
+        "total": 5
       }
     },
     {
@@ -10699,6 +15209,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
           "tasks": [
@@ -10863,6 +15375,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             }
@@ -10913,6 +15427,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -10939,6 +15455,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -10970,6 +15488,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11020,6 +15540,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11046,6 +15568,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11252,6 +15776,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -11372,6 +15898,8 @@
                 }
               ],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11398,6 +15926,8 @@
               "metadata": {},
               "labels": [],
               "createdBy": "mem_snapshot_one",
+              "completedAt": null,
+              "archivedAt": null,
               "createdAt": "<timestamp>",
               "updatedAt": "<timestamp>"
             },
@@ -11717,6 +16247,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11762,6 +16294,8 @@
                   }
                 ],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11796,6 +16330,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -11822,6 +16358,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "apl_snapshot",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               },
@@ -11848,6 +16386,8 @@
                 "metadata": {},
                 "labels": [],
                 "createdBy": "mem_snapshot_one",
+                "completedAt": null,
+                "archivedAt": null,
                 "createdAt": "<timestamp>",
                 "updatedAt": "<timestamp>"
               }
@@ -11887,6 +16427,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -11914,6 +16456,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -11941,6 +16485,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "apl_snapshot",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -11979,6 +16525,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title",
@@ -12007,6 +16555,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -12157,6 +16707,43 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/platform/operations",
+      "route": "GET /api/multiremi/platform/operations",
+      "path": "/api/multiremi/platform/operations",
+      "status": 200,
+      "body": {
+        "operations": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/platform/status",
+      "route": "GET /api/multiremi/platform/status",
+      "path": "/api/multiremi/platform/status",
+      "status": 200,
+      "body": {
+        "canManage": true,
+        "driver": "systemd_release",
+        "currentRelease": null,
+        "latestRelease": null,
+        "updateAvailable": false,
+        "autoUpdateStable": false,
+        "updaterStatus": "offline",
+        "updaterHeartbeatAt": null,
+        "services": [],
+        "activeOperation": null,
+        "lastOperation": null,
+        "maintenance": {
+          "mode": "normal",
+          "generation": 0,
+          "operationId": null,
+          "startedAt": null,
+          "expiresAt": null,
+          "reason": null
+        },
+        "recentReleases": []
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/projects",
       "route": "GET /api/multiremi/projects",
       "path": "/api/multiremi/projects",
@@ -12198,6 +16785,7 @@
           "title": "Snapshot Project",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -13212,6 +17800,8 @@
               }
             ],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -13221,6 +17811,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "instructions": "",
+            "deltaInstructions": "",
             "instructionsRevision": 0,
             "instructionsUpdatedAt": null,
             "instructionsUpdatedBy": null,
@@ -13511,6 +18102,7 @@
         "resource_count": 1,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -14508,6 +19100,18 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/issue-archive",
+      "route": "GET /api/workspaces/:id/issue-archive",
+      "path": "/api/workspaces/local/issue-archive",
+      "status": 200,
+      "body": {
+        "config": {
+          "ttl_ms": 0,
+          "sweep_interval_ms": 0
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/lark/install/:sessionId/status",
       "route": "GET /api/workspaces/:id/lark/install/:sessionId/status",
       "path": "/api/workspaces/local/lark/install/lark_snapshot_session/status",
@@ -14567,6 +19171,19 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/prompts",
+      "route": "GET /api/workspaces/:id/prompts",
+      "path": "/api/workspaces/local/prompts",
+      "status": 200,
+      "body": {
+        "bootstrapPrompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
+        "deltaPrompt": "",
+        "revision": 0,
+        "updatedAt": null,
+        "updatedBy": null
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/relay-config",
       "route": "GET /api/workspaces/:id/relay-config",
       "path": "/api/workspaces/local/relay-config",
@@ -14616,6 +19233,88 @@
           }
         ],
         "total": 3
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki",
+      "status": 200,
+      "body": {
+        "docs": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec",
+      "status": 404,
+      "body": {
+        "error": "repository wiki doc not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "route": "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "path": "/api/workspaces/local/repos/repo_snapshot/wiki/spec/revisions",
+      "status": 404,
+      "body": {
+        "error": "repository wiki doc not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repository-wikis",
+      "route": "GET /api/workspaces/:id/repository-wikis",
+      "path": "/api/workspaces/local/repository-wikis",
+      "status": 200,
+      "body": {
+        "repositories": [
+          {
+            "repository_id": "repo_snapshot",
+            "repository_name": "snapshot",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          },
+          {
+            "repository_id": "repo_snapshot_compat",
+            "repository_name": "compat",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          },
+          {
+            "repository_id": "repo_snapshot_native",
+            "repository_name": "native",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repository-wikis/atlas",
+      "route": "GET /api/workspaces/:id/repository-wikis/atlas",
+      "path": "/api/workspaces/local/repository-wikis/atlas",
+      "status": 200,
+      "body": {
+        "state": "plugin_required",
+        "configured": false,
+        "required_plugin": "code-to-wiki",
+        "plugin_id": null,
+        "plugin_bound": false,
+        "agent_id": null,
+        "repository_autopilot_id": null,
+        "repository_trigger_id": null,
+        "project_autopilot_id": null,
+        "project_trigger_id": null
       }
     },
     {
@@ -14880,6 +19579,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -14938,6 +19639,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -14997,6 +19700,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15057,6 +19762,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -15216,6 +19923,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {
@@ -15242,6 +19951,8 @@
             "position": 0,
             "start_date": null,
             "due_date": null,
+            "completed_at": null,
+            "archived_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "metadata": {}
@@ -15405,6 +20116,8 @@
             },
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -15431,6 +20144,8 @@
             "metadata": {},
             "labels": [],
             "createdBy": "mem_snapshot_one",
+            "completedAt": null,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -15721,6 +20436,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -15751,6 +20468,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -15781,6 +20500,8 @@
         "position": 0,
         "start_date": null,
         "due_date": null,
+        "completed_at": null,
+        "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "metadata": {}
@@ -15813,6 +20534,8 @@
           "position": 0,
           "start_date": null,
           "due_date": null,
+          "completed_at": null,
+          "archived_at": null,
           "created_at": "<timestamp>",
           "updated_at": "<timestamp>",
           "metadata": {}
@@ -15899,6 +20622,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -15945,6 +20670,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -15990,6 +20717,8 @@
             }
           ],
           "createdBy": "mem_snapshot_one",
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -16088,6 +20817,8 @@
           "metadata": {},
           "labels": [],
           "createdBy": null,
+          "completedAt": null,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -16674,6 +21405,7 @@
         "resource_count": 0,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -16703,6 +21435,7 @@
         "resource_count": 0,
         "archived_at": null,
         "instructions": "",
+        "delta_instructions": "",
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
@@ -16772,6 +21505,7 @@
           "title": "Native project",
           "description": null,
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -16803,6 +21537,7 @@
           "title": "Native project patched",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,
@@ -16885,6 +21620,7 @@
           "title": "Native project patched",
           "description": "Project used by the snapshot",
           "instructions": "",
+          "deltaInstructions": "",
           "instructionsRevision": 0,
           "instructionsUpdatedAt": null,
           "instructionsUpdatedBy": null,

@@ -13,12 +13,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multiremi/ui/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
+import { Textarea } from "@multiremi/ui/components/ui/textarea";
 import { cn } from "@multiremi/ui/lib/utils";
-import {
-  ContentEditor,
-  ReadonlyContent,
-  type ContentEditorRef,
-} from "../../editor";
+import { ReadonlyContent } from "../../editor";
 import { useT } from "../../i18n";
 import { useFormatRelativeDate } from "./labels";
 
@@ -26,15 +24,17 @@ export const PROJECT_INSTRUCTIONS_MAX_LENGTH = 4000;
 
 interface ProjectInstructionsSectionProps {
   instructions: string;
+  deltaInstructions?: string;
   revision: number;
   updatedAt: string | null;
   updatedByName?: string;
   editable: boolean;
-  onSave: (instructions: string, expectedRevision: number) => Promise<void>;
+  onSave: (instructions: string, deltaInstructions: string, expectedRevision: number) => Promise<void>;
 }
 
 export function ProjectInstructionsSection({
   instructions,
+  deltaInstructions = "",
   revision,
   updatedAt,
   updatedByName,
@@ -44,65 +44,53 @@ export function ProjectInstructionsSection({
   const { t } = useT("projects");
   const formatRelativeDate = useFormatRelativeDate();
   const [open, setOpen] = useState(false);
+  const hasInstructions = instructions.trim() || deltaInstructions.trim();
 
   return (
     <section>
       <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-        <h3 className="min-w-0 text-xs font-medium">
-          {t(($) => $.instructions.title)}
-        </h3>
+        <h3 className="min-w-0 text-xs font-medium">{t(($) => $.instructions.title)}</h3>
         {editable && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-6 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground"
-            onClick={() => setOpen(true)}
-          >
+          <Button type="button" variant="ghost" size="sm" className="h-6 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground" onClick={() => setOpen(true)}>
             <Pencil className="size-3" />
             {t(($) => $.instructions.edit)}
           </Button>
         )}
       </div>
 
-      <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
-        {t(($) => $.instructions.summary)}
-      </p>
+      <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">{t(($) => $.instructions.summary)}</p>
 
-      {instructions.trim() ? (
-        <div className="max-h-24 overflow-hidden">
-          <ReadonlyContent
-            content={instructions}
-            className="text-xs leading-relaxed text-muted-foreground"
-          />
+      {hasInstructions ? (
+        <div className="space-y-2">
+          {instructions.trim() && (
+            <div className="max-h-24 overflow-hidden">
+              <ReadonlyContent content={instructions} className="text-xs leading-relaxed text-muted-foreground" />
+            </div>
+          )}
+          {deltaInstructions.trim() && (
+            <p className="text-[11px] text-muted-foreground">
+              {t(($) => $.instructions.delta_configured, { count: [...deltaInstructions].length })}
+            </p>
+          )}
         </div>
       ) : (
-        <p className="text-xs italic text-muted-foreground/70">
-          {t(($) => $.instructions.empty)}
-        </p>
+        <p className="text-xs italic text-muted-foreground/70">{t(($) => $.instructions.empty)}</p>
       )}
 
       {updatedAt && (
         <p className="mt-2 truncate text-[11px] text-muted-foreground/80">
           {updatedByName
-            ? t(($) => $.instructions.updated_by, {
-                when: formatRelativeDate(updatedAt),
-                name: updatedByName,
-              })
-            : t(($) => $.instructions.updated, {
-                when: formatRelativeDate(updatedAt),
-              })}
+            ? t(($) => $.instructions.updated_by, { when: formatRelativeDate(updatedAt), name: updatedByName })
+            : t(($) => $.instructions.updated, { when: formatRelativeDate(updatedAt) })}
         </p>
       )}
 
-      <Dialog
-        open={open}
-        onOpenChange={(nextOpen) => setOpen(nextOpen)}
-      >
+      <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-2xl">
           {open && (
             <ProjectInstructionsEditor
-              initialValue={instructions}
+              initialBootstrap={instructions}
+              initialDelta={deltaInstructions}
               initialRevision={revision}
               onSave={onSave}
               onClose={() => setOpen(false)}
@@ -115,48 +103,48 @@ export function ProjectInstructionsSection({
 }
 
 function ProjectInstructionsEditor({
-  initialValue,
+  initialBootstrap,
+  initialDelta,
   initialRevision,
   onSave,
   onClose,
 }: {
-  initialValue: string;
+  initialBootstrap: string;
+  initialDelta: string;
   initialRevision: number;
-  onSave: (instructions: string, expectedRevision: number) => Promise<void>;
+  onSave: (instructions: string, deltaInstructions: string, expectedRevision: number) => Promise<void>;
   onClose: () => void;
 }) {
   const { t } = useT("projects");
-  const editorRef = useRef<ContentEditorRef>(null);
-  const baseValueRef = useRef(initialValue);
+  const baseBootstrapRef = useRef(initialBootstrap);
+  const baseDeltaRef = useRef(initialDelta);
   const baseRevisionRef = useRef(initialRevision);
-  const [draft, setDraft] = useState(baseValueRef.current);
+  const [bootstrap, setBootstrap] = useState(baseBootstrapRef.current);
+  const [delta, setDelta] = useState(baseDeltaRef.current);
   const [saving, setSaving] = useState(false);
-  const length = [...draft].length;
-  const overLimit = length > PROJECT_INSTRUCTIONS_MAX_LENGTH;
-  const dirty = draft !== baseValueRef.current;
+  const bootstrapLength = [...bootstrap].length;
+  const deltaLength = [...delta].length;
+  const overLimit = bootstrapLength > PROJECT_INSTRUCTIONS_MAX_LENGTH || deltaLength > PROJECT_INSTRUCTIONS_MAX_LENGTH;
+  const dirty = bootstrap !== baseBootstrapRef.current || delta !== baseDeltaRef.current;
 
   const commit = async () => {
-    const current = (editorRef.current?.getMarkdown() ?? draft).trimEnd();
-    if ([...current].length > PROJECT_INSTRUCTIONS_MAX_LENGTH) return;
-    if (current === baseValueRef.current) {
+    const nextBootstrap = bootstrap.trimEnd();
+    const nextDelta = delta.trimEnd();
+    if (overLimit) return;
+    if (nextBootstrap === baseBootstrapRef.current && nextDelta === baseDeltaRef.current) {
       onClose();
       return;
     }
-
     setSaving(true);
     try {
-      await onSave(current, baseRevisionRef.current);
+      await onSave(nextBootstrap, nextDelta, baseRevisionRef.current);
       toast.success(t(($) => $.instructions.saved_toast));
       onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         toast.error(t(($) => $.instructions.revision_conflict));
       } else {
-        toast.error(
-          error instanceof Error && error.message
-            ? error.message
-            : t(($) => $.instructions.save_failed),
-        );
+        toast.error(error instanceof Error && error.message ? error.message : t(($) => $.instructions.save_failed));
       }
     } finally {
       setSaving(false);
@@ -167,74 +155,94 @@ function ProjectInstructionsEditor({
     <>
       <DialogHeader>
         <DialogTitle>{t(($) => $.instructions.dialog_title)}</DialogTitle>
-        <DialogDescription>
-          {t(($) => $.instructions.dialog_description)}
-        </DialogDescription>
+        <DialogDescription>{t(($) => $.instructions.dialog_description)}</DialogDescription>
       </DialogHeader>
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         <div className="rounded-md border border-info/30 bg-info/5 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-          {t(($) => $.instructions.effect_notice)}
+          {t(($) => $.instructions.inheritance_notice)}
         </div>
         <div className="flex items-start gap-2 text-xs leading-relaxed text-warning">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>{t(($) => $.instructions.secret_warning)}</span>
         </div>
-        <div
-          className={cn(
-            "min-h-64 max-h-[50vh] overflow-y-auto rounded-md border bg-background px-4 py-3 transition-colors focus-within:border-input",
-            overLimit && "border-destructive focus-within:border-destructive",
-          )}
-          aria-invalid={overLimit}
-        >
-          <ContentEditor
-            ref={editorRef}
-            defaultValue={draft}
-            onUpdate={setDraft}
-            placeholder={t(($) => $.instructions.placeholder)}
-            debounceMs={0}
-            disableMentions
-            className="min-h-56"
+
+        <Tabs defaultValue="bootstrap">
+          <TabsList>
+            <TabsTrigger value="bootstrap">{t(($) => $.instructions.bootstrap_tab)}</TabsTrigger>
+            <TabsTrigger value="delta">{t(($) => $.instructions.delta_tab)}</TabsTrigger>
+          </TabsList>
+          <ProjectPromptEditor
+            tab="bootstrap"
+            label={t(($) => $.instructions.bootstrap_label)}
+            hint={t(($) => $.instructions.bootstrap_hint)}
+            value={bootstrap}
+            onChange={setBootstrap}
+            placeholder={t(($) => $.instructions.bootstrap_placeholder)}
+            disabled={saving}
           />
-        </div>
-        <div
-          className={cn(
-            "text-right text-xs tabular-nums text-muted-foreground",
-            length >= PROJECT_INSTRUCTIONS_MAX_LENGTH * 0.9 && "text-warning",
-            overLimit && "text-destructive",
-          )}
-        >
-          {t(($) => $.instructions.character_count, {
-            count: length,
-            max: PROJECT_INSTRUCTIONS_MAX_LENGTH,
-          })}
-        </div>
+          <ProjectPromptEditor
+            tab="delta"
+            label={t(($) => $.instructions.delta_label)}
+            hint={t(($) => $.instructions.delta_hint)}
+            value={delta}
+            onChange={setDelta}
+            placeholder={t(($) => $.instructions.delta_placeholder)}
+            disabled={saving}
+          />
+        </Tabs>
       </div>
 
       <DialogFooter>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={saving}
-          onClick={onClose}
-        >
-          {t(($) => $.instructions.cancel)}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          disabled={saving || overLimit || !dirty}
-          onClick={() => void commit()}
-        >
-          {saving ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Save className="size-3.5" />
-          )}
+        <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={onClose}>{t(($) => $.instructions.cancel)}</Button>
+        <Button type="button" size="sm" disabled={saving || overLimit || !dirty} onClick={() => void commit()}>
+          {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
           {t(($) => $.instructions.save)}
         </Button>
       </DialogFooter>
     </>
+  );
+}
+
+function ProjectPromptEditor({
+  tab,
+  label,
+  hint,
+  value,
+  onChange,
+  placeholder,
+  disabled,
+}: {
+  tab: string;
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  disabled: boolean;
+}) {
+  const { t } = useT("projects");
+  const length = [...value].length;
+  const overLimit = length > PROJECT_INSTRUCTIONS_MAX_LENGTH;
+  return (
+    <TabsContent value={tab} className="mt-4 space-y-3">
+      <div>
+        <label htmlFor={`project-${tab}-prompt`} className="text-xs font-medium">{label}</label>
+        <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+      </div>
+      <Textarea
+        id={`project-${tab}-prompt`}
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        aria-invalid={overLimit}
+        className={cn("min-h-64 max-h-[50vh] resize-y font-mono text-xs leading-relaxed", overLimit && "border-destructive")}
+      />
+      <p className={cn("text-right text-xs tabular-nums text-muted-foreground", overLimit && "text-destructive")}>
+        {t(($) => $.instructions.character_count, { count: length, max: PROJECT_INSTRUCTIONS_MAX_LENGTH })}
+      </p>
+    </TabsContent>
   );
 }

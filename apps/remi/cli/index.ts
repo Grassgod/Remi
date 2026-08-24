@@ -6,25 +6,54 @@
  */
 
 import { VERSION } from "@shared/version.js";
+import { CommandRegistry, type CommandInventoryEntry, type CommandSource } from "./core/command-registry.js";
+import { agentExtensionCommandSpecs } from "./commands/agent-extensions.js";
+import { contextCommandSpec } from "./commands/context.js";
+import { collaborationCommandSpecs } from "./commands/collaboration.js";
+import { inviteCommandSpecs } from "./commands/invite.js";
+import { knowledgeCommandSpecs } from "./commands/knowledge.js";
+import { memberCommandSpecs } from "./commands/member.js";
+import { operationsCommandSpecs } from "./commands/operations.js";
+import { projectCommandSpecs } from "./commands/project.js";
+import { repoCommandSpecs } from "./commands/repo.js";
+import { tokenCommandSpecs } from "./commands/token.js";
+import { workspaceCommandSpecs } from "./commands/workspace.js";
 
-interface Command {
-  run: (args: string[]) => Promise<void>;
-  description: string;
-  hidden?: boolean;
-}
-
-const COMMANDS: Record<string, Command> = {};
+const commandRegistry = new CommandRegistry();
+commandRegistry.register(contextCommandSpec());
+for (const spec of [
+  ...workspaceCommandSpecs(),
+  ...memberCommandSpecs(),
+  ...inviteCommandSpecs(),
+  ...tokenCommandSpecs(),
+  ...projectCommandSpecs(),
+  ...repoCommandSpecs(),
+  ...knowledgeCommandSpecs(),
+  ...collaborationCommandSpecs(),
+  ...agentExtensionCommandSpecs(),
+  ...operationsCommandSpecs(),
+]) commandRegistry.register(spec);
 
 // Lazy-load commands to avoid importing heavy modules when not needed
-function register(name: string, description: string, loader: () => Promise<{ run: (args: string[]) => Promise<void> }>, hidden?: boolean): void {
-  COMMANDS[name] = {
+function register(
+  name: string,
+  description: string,
+  loader: () => Promise<{ run: (args: string[]) => Promise<void> }>,
+  hidden?: boolean,
+  source: CommandSource = { kind: "builtin" },
+): void {
+  commandRegistry.register({
+    id: source.kind === "plugin" ? `plugin-cli.${normalizeCommandId(source.pluginId)}.${normalizeCommandId(name)}` : `legacy.${name}`,
+    path: [name],
     description,
     hidden,
-    run: async (args: string[]) => {
+    source,
+    parse: "passthrough",
+    run: async (invocation) => {
       const mod = await loader();
-      await mod.run(args);
+      await mod.run([...invocation.rawArgs]);
     },
-  };
+  });
 }
 
 // Forward a `remi <name> …` command into the multiremi command layer (worker /
@@ -52,13 +81,8 @@ forward("setup", "Configure the multiremi server connection", ["setup"]);
 forward("config", "Get/set agent config keys", ["config"]);
 
 // ── multiremi server task/issue management (client → server) ──
-forward("repo", "Check out an allowed workspace repository", ["repo"]);
 forward("issue", "Manage issues on the multiremi server", ["issue"]);
 forward("attachment", "Download an attachment", ["attachment"]);
-forward("memory", "Recall and maintain workspace memory", ["memory"]);
-forward("wiki", "Search and maintain workspace wiki pages", ["wiki"]);
-forward("project", "Administer project knowledge migration", ["project"]);
-forward("seed", "Create a default local agent", ["seed"], true);
 
 // ── Monolith-native ──
 register("doctor", "Health check (runtime, config, auth)", async () => {
@@ -101,9 +125,16 @@ function showHelp(): void {
   console.log(`\nRemi v${VERSION} — Personal AI Assistant\n`);
   console.log("Usage: remi <command> [options]\n");
   console.log("Commands:");
-  for (const [name, cmd] of Object.entries(COMMANDS)) {
+  for (const cmd of commandRegistry.topLevelCommands()) {
     if (cmd.hidden) continue;
-    console.log(`  ${name.padEnd(12)} ${cmd.description}`);
+    const source = cmd.source.kind === "plugin" ? ` [plugin:${cmd.source.pluginId}]` : "";
+    console.log(`  ${cmd.path[0]!.padEnd(12)} ${cmd.description}${source}`);
+  }
+  for (const entry of commandRegistry.inventory()) {
+    for (const alias of entry.aliases.filter((candidate) => !candidate.hidden && candidate.path.length === 1)) {
+      const replacement = alias.replacement ?? `remi ${entry.path.join(" ")}`;
+      console.log(`  ${alias.path[0]!.padEnd(12)} Deprecated alias; use ${replacement}`);
+    }
   }
   console.log("");
 }
@@ -113,21 +144,39 @@ function loadPluginCommands(): void {
   try {
     const { loadConfig } = require("@shared/config.js");
     const { PluginRegistry } = require("@daemon/agent-runtime/plugins/registry.js");
-    const builtins = new Set(Object.keys(COMMANDS));
     // Guard: a plugin must not shadow a built-in command.
-    const safeRegister: typeof register = (name, description, loader, hidden) => {
-      if (builtins.has(name)) {
-        console.error(`[plugins] command "${name}" conflicts with a built-in command, ignored`);
-        return;
-      }
-      register(name, description, loader, hidden);
-    };
-    new PluginRegistry().load(loadConfig()).dispatchCli(safeRegister);
+    new PluginRegistry().load(loadConfig()).dispatchCli(registerPluginCliCommand);
   } catch (e) {
     // never block the dispatcher on plugin load issues — but say so, otherwise a
     // broken require path silently disables every plugin command forever.
     console.error(`[plugins] CLI command loading failed: ${e instanceof Error ? e.message : e}`);
   }
+}
+
+const builtinTopLevelCommands = new Set(commandRegistry.topLevelCommands().map((entry) => entry.path[0]!));
+
+export function registerPluginCliCommand(
+  name: string,
+  description: string,
+  loader: () => Promise<{ run: (args: string[]) => Promise<void> }>,
+  hidden = false,
+  source?: { kind: "plugin"; pluginId: string; pluginVersion: string },
+): boolean {
+  if (builtinTopLevelCommands.has(name)) {
+    console.error(`[plugins] command "${name}" conflicts with a built-in command, ignored`);
+    return false;
+  }
+  if (commandRegistry.hasPath([name])) return false;
+  if (!source) {
+    console.error(`[plugins] command "${name}" has no plugin source, ignored`);
+    return false;
+  }
+  register(name, description, loader, hidden, source);
+  return true;
+}
+
+function normalizeCommandId(value: string): string {
+  return value.trim().replace(/[^a-zA-Z0-9_.-]+/g, "-") || "unknown";
 }
 
 export async function dispatch(args: string[]): Promise<void> {
@@ -143,19 +192,38 @@ export async function dispatch(args: string[]): Promise<void> {
   // unknown command (might be plugin-provided). Skip the scan for known built-in
   // commands so `remi serve`/`status`/etc. don't run external plugin code.
   const isHelp = cmd === "--help" || cmd === "-h" || cmd === "help";
-  if (isHelp || !COMMANDS[cmd]) loadPluginCommands();
+  if (isHelp || !commandRegistry.hasPath([cmd])) loadPluginCommands();
 
   if (isHelp) {
-    showHelp();
+    if (cmd === "help" && cmdArgs.length) console.log(commandRegistry.renderHelpForArgv(cmdArgs));
+    else showHelp();
     return;
   }
 
-  const command = COMMANDS[cmd];
-  if (!command) {
+  const helpIndex = args.findIndex((arg) => arg === "--help" || arg === "-h");
+  if (helpIndex >= 0 && commandRegistry.supportsGeneratedHelp(args.slice(0, helpIndex))) {
+    console.log(commandRegistry.renderHelpForArgv(args.slice(0, helpIndex)));
+    return;
+  }
+
+  if (!commandRegistry.resolve(args)) {
     console.error(`Unknown command: ${cmd}`);
     showHelp();
     process.exit(1);
   }
 
-  await command.run(cmdArgs);
+  await commandRegistry.execute([cmd, ...cmdArgs], {
+    onDeprecatedAlias: (alias) => {
+      const replacement = alias.replacement ? `; use ${alias.replacement}` : "";
+      console.error(`Deprecated command alias: remi ${alias.path.join(" ")}${replacement}`);
+    },
+  });
+}
+
+export function cliCommandInventory(): readonly CommandInventoryEntry[] {
+  return commandRegistry.inventory();
+}
+
+export function cliCommandHelp(path: readonly string[]): string {
+  return commandRegistry.renderHelp(path);
 }

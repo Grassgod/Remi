@@ -12,7 +12,13 @@ import { ViewStoreProvider } from "@multiremi/core/issues/stores/view-store-cont
 import { filterIssues } from "../utils/filter";
 import { BOARD_STATUSES } from "@multiremi/core/issues/config";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { issueAssigneeGroupsOptions, issueListOptions, childIssueProgressOptions, type AssigneeGroupedIssuesFilter } from "@multiremi/core/issues/queries";
+import {
+  archivedIssueCountOptions,
+  childIssueProgressOptions,
+  issueAssigneeGroupsOptions,
+  issueListOptions,
+  type AssigneeGroupedIssuesFilter,
+} from "@multiremi/core/issues/queries";
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
@@ -95,6 +101,8 @@ export function IssuesPage() {
     ...assigneeGroupsOptions,
     enabled: usesAssigneeBoard,
   });
+  const archivedCountQuery = useQuery(archivedIssueCountOptions(wsId));
+  const archivedCount = archivedCountQuery.data ?? 0;
   const allIssues = useMemo(
     () => statusIssuesQuery.data ?? [],
     [statusIssuesQuery.data],
@@ -113,6 +121,11 @@ export function IssuesPage() {
   useEffect(() => {
     useIssueSelectionStore.getState().clear();
   }, [viewMode, scope]);
+
+  useEffect(() => {
+    useIssueViewStore.getState().hideArchivedColumn();
+    return () => useIssueViewStore.getState().hideArchivedColumn();
+  }, [wsId]);
 
   // Scope pre-filter: narrow by assignee type
   const scopedIssues = useMemo(() => {
@@ -198,7 +211,7 @@ export function IssuesPage() {
       <ViewStoreProvider store={useIssueViewStore}>
         <IssuesHeader scopedIssues={headerIssues} />
 
-        {loading ? contentSkeleton : headerIssues.length === 0 ? (
+        {loading || archivedCountQuery.isLoading ? contentSkeleton : headerIssues.length === 0 && archivedCount === 0 ? (
           <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-2 text-muted-foreground">
             <ListTodo className="h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm">{t(($) => $.page.empty_title)}</p>
@@ -217,6 +230,7 @@ export function IssuesPage() {
                 onMoveIssue={handleMoveIssue}
                 childProgressMap={childProgressMap}
                 sort={sort}
+                archivedTotal={archivedCount}
               />
             ) : viewMode === "swimlane" ? (
               <SwimLaneView
@@ -229,7 +243,14 @@ export function IssuesPage() {
                 sort={sort}
               />
             ) : (
-              <ListView issues={issues} visibleStatuses={visibleStatuses} childProgressMap={childProgressMap} sort={sort} onMoveIssue={handleMoveIssue} />
+              <ListView
+                issues={issues}
+                visibleStatuses={visibleStatuses}
+                childProgressMap={childProgressMap}
+                sort={sort}
+                onMoveIssue={handleMoveIssue}
+                archivedTotal={archivedCount}
+              />
             )}
           </div>
         )}

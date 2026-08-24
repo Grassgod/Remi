@@ -118,6 +118,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const invalidInstructions = validateProjectInstructions(c, body.instructions);
     if (invalidInstructions) return invalidInstructions;
+    const invalidDeltaInstructions = validateProjectInstructions(
+      c,
+      body.deltaInstructions ?? body.delta_instructions,
+      "delta_instructions",
+    );
+    if (invalidDeltaInstructions) return invalidDeltaInstructions;
     const projectInput = projectCreateCompatibilityInput(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
     if (denied) return denied;
@@ -143,6 +149,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const invalidInstructions = validateProjectInstructions(c, body.instructions);
     if (invalidInstructions) return invalidInstructions;
+    const invalidDeltaInstructions = validateProjectInstructions(
+      c,
+      body.deltaInstructions ?? body.delta_instructions,
+      "delta_instructions",
+    );
+    if (invalidDeltaInstructions) return invalidDeltaInstructions;
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
     const repositoryError = validateImportedProjectResources(
@@ -182,21 +194,29 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.delete("/api/multiremi/projects/:id", (c) => {
-    return c.json({ project: store.archiveProject(c.req.param("id")) });
+    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    return c.json({ project: store.archiveProject(project.id) });
   });
   app.post("/api/multiremi/projects/:id/restore", (c) => {
-    return c.json({ project: store.restoreProject(c.req.param("id")) });
+    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    return c.json({ project: store.restoreProject(project.id) });
   });
   app.get("/api/multiremi/projects/:id/resources", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     const resources = store.listProjectResources(c.req.param("id"));
     return c.json({ resources, total: resources.length });
   });
   app.post("/api/multiremi/projects/:id/resources", async (c) => {
+    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     const body = await readJsonStrict<CreateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (isLocalDirectoryResourceInput(body)) return c.json({ error: localDirectoryRemovedError() }, 400);
     try {
-      const resource = store.createProjectResource(c.req.param("id"), body);
+      const resource = store.createProjectResource(project.id, body);
       publishProjectResourceCreated(c, store, resource);
       return c.json({ resource }, 201);
     } catch (err) {
@@ -206,12 +226,14 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.patch("/api/multiremi/projects/:id/resources/:resourceId", async (c) => {
+    const resource = loadProjectResourceForMutation(c, store, c.req.param("id"), c.req.param("resourceId"));
+    if (resource instanceof Response) return resource;
     const body = await readJsonStrict<UpdateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const resource = store.updateProjectResource(c.req.param("id"), c.req.param("resourceId"), body);
-      publishProjectResourceUpdated(c, store, resource);
-      return c.json({ resource });
+      const updated = store.updateProjectResource(c.req.param("id"), resource.id, body);
+      publishProjectResourceUpdated(c, store, updated);
+      return c.json({ resource: updated });
     } catch (err) {
       const response = projectResourceErrorResponse(c, err);
       if (response) return response;
@@ -251,30 +273,34 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.delete("/api/projects/:id", (c) => {
-    const project = store.getProject(c.req.param("id"));
-    if (!project) return c.json({ error: "project not found" }, 404);
+    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     const archived = store.archiveProject(project.id);
     publishProjectUpdated(c, store, archived, projectCompatibilityResponse(archived));
     return c.body(null, 204);
   });
   app.post("/api/projects/:id/restore", (c) => {
-    const project = store.getProject(c.req.param("id"));
-    if (!project) return c.json({ error: "project not found" }, 404);
+    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     const restored = store.restoreProject(project.id);
     const response = projectCompatibilityResponse(restored);
     publishProjectUpdated(c, store, restored, response);
     return c.json(response);
   });
   app.get("/api/projects/:id/resources", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     const resources = store.listProjectResources(c.req.param("id")).map(projectResourceCompatibilityResponse);
     return c.json({ resources, total: resources.length });
   });
   app.post("/api/projects/:id/resources", async (c) => {
+    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
     const body = await readJsonStrict<CreateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (isLocalDirectoryResourceInput(body)) return c.json({ error: localDirectoryRemovedError() }, 400);
     try {
-      const resource = store.createProjectResource(c.req.param("id"), body);
+      const resource = store.createProjectResource(project.id, body);
       const response = projectResourceCompatibilityResponse(resource);
       publishProjectResourceCreated(c, store, resource, response);
       return c.json(response, 201);
@@ -285,12 +311,14 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.put("/api/projects/:id/resources/:resourceId", async (c) => {
+    const resource = loadProjectResourceForMutation(c, store, c.req.param("id"), c.req.param("resourceId"));
+    if (resource instanceof Response) return resource;
     const body = await readJsonStrict<UpdateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const resource = store.updateProjectResource(c.req.param("id"), c.req.param("resourceId"), body);
-      const response = projectResourceCompatibilityResponse(resource);
-      publishProjectResourceUpdated(c, store, resource, response);
+      const updated = store.updateProjectResource(c.req.param("id"), resource.id, body);
+      const response = projectResourceCompatibilityResponse(updated);
+      publishProjectResourceUpdated(c, store, updated, response);
       return c.json(response);
     } catch (err) {
       const response = projectResourceErrorResponse(c, err);

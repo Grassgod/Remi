@@ -9,7 +9,7 @@ whatever is sent and every reader degrades instead of failing.
 One of `mr` | `branch` | `report` | `deploy` | `decision` | `doc` | `other`.
 
 - Absent or unknown value → readers treat it as `other` (generic icon, generic label).
-- The CLI (`remi issue session result publish --type <kind>`) rejects a value outside the list
+- The CLI (`remi session result publish --type <kind>`) rejects a value outside the list
   with a usage error that names the valid kinds — the agent gets told, the API stays open.
 - `branch` is not offered by the CLI: the daemon publishes it itself after auto-checking-out an
   issue task's repos (worker/daemon.ts `publishBranchArtifact`), with the worktree branch as the

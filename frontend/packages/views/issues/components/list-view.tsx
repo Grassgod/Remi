@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ChevronRight, Plus } from "lucide-react";
 import { Accordion } from "@base-ui/react/accordion";
 import { DndContext, DragOverlay, useDroppable } from "@dnd-kit/core";
@@ -20,6 +20,7 @@ import { useT } from "../../i18n";
 import { type DragMoveUpdates, statusGroupId } from "../utils/drag-utils";
 import { useKanbanDrag } from "../hooks/use-kanban-drag";
 import type { BoardColumnGroup } from "./board-column";
+import { ARCHIVED_ACCORDION_VALUE, ArchivedListItem } from "./archived-issues";
 
 const EMPTY_PROGRESS_MAP = new Map<string, ChildProgress>();
 const EMPTY_IDS: string[] = [];
@@ -43,6 +44,7 @@ export function ListView({
   allowCreate = true,
   onMoveIssue,
   sort,
+  archivedTotal,
 }: {
   issues: Issue[];
   visibleStatuses: IssueStatus[];
@@ -53,6 +55,8 @@ export function ListView({
   allowCreate?: boolean;
   onMoveIssue?: (issueId: string, updates: DragMoveUpdates, onSettled?: () => void) => void;
   sort?: IssueSortParam;
+  /** Defined only on the workspace Issues page, which owns the archive entry. */
+  archivedTotal?: number;
 }) {
   const listCollapsedStatuses = useViewStore(
     (s) => s.listCollapsedStatuses
@@ -62,6 +66,7 @@ export function ListView({
   );
   const sortBy = useViewStore((s) => s.sortBy);
   const { t } = useT("issues");
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
 
   const sortFieldKey = sortBy === "created_at" ? "created" : sortBy;
   const sortLabel = sortBy !== "position"
@@ -108,7 +113,10 @@ export function ListView({
     <Accordion.Root
       multiple
       className="space-y-1"
-      value={expandedStatuses}
+      value={[
+        ...expandedStatuses,
+        ...(archivedExpanded ? [ARCHIVED_ACCORDION_VALUE] : []),
+      ]}
       onValueChange={(value: string[]) => {
         if (isDraggingRef.current) return;
         for (const status of visibleStatuses) {
@@ -117,6 +125,9 @@ export function ListView({
           if (wasExpanded !== isExpanded) {
             toggleListCollapsed(status as IssueStatus);
           }
+        }
+        if (archivedTotal !== undefined) {
+          setArchivedExpanded(value.includes(ARCHIVED_ACCORDION_VALUE));
         }
       }}
     >
@@ -139,6 +150,13 @@ export function ListView({
           />
         );
       })}
+      {archivedTotal !== undefined && (
+        <ArchivedListItem
+          expanded={archivedExpanded}
+          total={archivedTotal}
+          sort={sort}
+        />
+      )}
     </Accordion.Root>
   );
 

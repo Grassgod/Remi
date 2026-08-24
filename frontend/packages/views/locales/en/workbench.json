@@ -9,7 +9,11 @@
   "sections": {
     "awaiting_input": "Waiting for your reply",
     "awaiting_review": "Ready for review",
+    "blocked": "Blocked",
     "in_progress": "In progress — can wait"
+  },
+  "failure": {
+    "summary": "Failure: {{reason}}"
   },
   "time": {
     "just_now": "just now",

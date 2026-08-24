@@ -44,8 +44,11 @@ export function isDaemonTokenAllowedRequest(request: Request): boolean {
   if (path === "/health" || path === "/healthz" || path === "/readyz" || path === "/api/multiremi/health") {
     return true;
   }
+  if ((path === "/api/cli/context" || path === "/api/cli/capabilities") && method === "GET") return true;
   if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
+  if (method === "GET" && (path === "/api/runtimes" || path === "/api/multiremi/runtimes"
+    || /^\/api\/(?:multiremi\/)?runtimes\/[^/]+(?:\/.*)?$/.test(path))) return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
   return false;
 }
@@ -55,6 +58,27 @@ export function isTaskTokenForbiddenRequest(request: Request): boolean {
   const path = url.pathname;
   const method = request.method.toUpperCase();
   if (path === "/api/daemon/scm/git-credentials" && method === "POST") return false;
+  // Preserve the route's stable human_admin_required error contract.
+  if (/^\/api\/workspaces\/[^/]+$/.test(path) && method === "DELETE") return false;
+  if (path === "/api/workspaces" || path === "/api/me" || path.startsWith("/api/me/")
+    || path === "/api/invitations" || path.startsWith("/api/invitations/")
+    || path === "/api/tokens" || path.startsWith("/api/tokens/") || path === "/api/cli-token"
+    || path.startsWith("/api/multiremi/members") || path.startsWith("/api/multiremi/tokens")) return true;
+  if (path.startsWith("/api/workspaces/")) {
+    if (/^\/api\/workspaces\/[^/]+\/repos$/.test(path) && method === "GET") return false;
+    return true;
+  }
+  if (path === "/api/runtimes" || path.startsWith("/api/runtimes/")
+    || path === "/api/multiremi/runtimes" || path.startsWith("/api/multiremi/runtimes/")
+    || path === "/api/cloud-runtime" || path.startsWith("/api/cloud-runtime/")
+    || path === "/api/autopilots" || path.startsWith("/api/autopilots/")
+    || path === "/api/multiremi/autopilots" || path.startsWith("/api/multiremi/autopilots/")
+    || path === "/api/cloud-billing" || path.startsWith("/api/cloud-billing/")
+    || path === "/api/multiremi/platform" || path.startsWith("/api/multiremi/platform/")
+    || path === "/api/lark/binding/redeem" || path === "/api/multiremi/install/daemon") return true;
+  if (/^\/api\/(?:multiremi\/)?projects(?:\/[^/]+)?$/.test(path) && method !== "GET") return true;
+  if (/^\/api\/(?:multiremi\/)?projects\/[^/]+\/restore$/.test(path)) return true;
+  if (/^\/api\/(?:multiremi\/)?projects\/[^/]+\/resources(?:\/[^/]+)?$/.test(path) && method !== "GET") return true;
   if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
@@ -278,6 +302,18 @@ export function denyTaskTokenCommentAccess(
   ) {
     return c.json({ error: "forbidden" }, 403);
   }
+  return null;
+}
+
+export function denyTaskTokenIssueMutation(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  if (!task || task.issueId !== issueId) return c.json({ error: "forbidden" }, 403);
   return null;
 }
 

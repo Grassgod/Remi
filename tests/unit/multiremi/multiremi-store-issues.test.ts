@@ -3,7 +3,9 @@
 // attachments, labels, pinned shortcuts, and search.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { runMigrations } from "@multiremi/store/migrations.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -318,7 +320,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const issue = store.createIssue({ title: "Mention routing" });
 
     store.createIssueComment(issue.id, {
-      body: `Please inspect this [@Review Bot](mention://agent/${reviewer.id}) and @Frontend Squad`,
+      body: `Please inspect this [@Review Bot](mention://agent/${reviewer.id}) and [@Frontend Squad](mention://squad/${squad.id})`,
     });
 
     const tasks = store.listTasks();
@@ -326,6 +328,19 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.getIssue(issue.id)?.assigneeId).toBeNull();
     expect(store.getIssue(issue.id)?.status).toBe("todo");
     expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(2);
+  });
+
+  it("treats plain agent and squad @names as display text", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });
+    store.createAgent({ name: "Review Bot", provider: "codex" });
+    store.createSquad({ name: "Frontend Squad", leaderId: leader.id });
+    const issue = store.createIssue({ title: "Plain mentions" });
+
+    store.createIssueComment(issue.id, { body: "Please ask @Review Bot and @Frontend Squad to inspect this." });
+
+    expect(store.listTasks()).toHaveLength(0);
+    expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(0);
   });
 
   it("routes un-mentioned human comments to the issue's assigned agent or squad leader", () => {
@@ -494,8 +509,15 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     stamp(r2b.id, 12);
 
     const ids = (rows: any[]) => rows.map((comment) => comment.id);
+    const requestComments = (query: string) => {
+      const token = process.env.MULTIREMI_TOKEN;
+      return app.request(
+        `/api/issues/${issue.id}/comments${query ? `?${query}` : ""}`,
+        token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+      );
+    };
     const getComments = async (query: string) => {
-      const response = await app.request(`/api/issues/${issue.id}/comments${query ? `?${query}` : ""}`);
+      const response = await requestComments(query);
       return { response, rows: await response.json() as any[] };
     };
 
@@ -536,7 +558,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const olderReply = await getComments(nextReply.toString());
     expect(ids(olderReply.rows)).toEqual([root1.id, r1b.id]);
 
-    const invalid = await app.request(`/api/issues/${issue.id}/comments?roots_only=true&thread=${root1.id}`);
+    const invalid = await requestComments(`roots_only=true&thread=${root1.id}`);
     expect(invalid.status).toBe(400);
   });
 
@@ -652,6 +674,99 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const projects = store.searchProjects({ q: "needle", workspaceId: "local" });
     expect(projects.projects[0]?.matchSource).toBe("description");
     expect(projects.projects[0]?.matchedSnippet).toContain("needle");
+  });
+
+  it("archives terminal issues after the workspace TTL and supports both restore paths", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      settings: {
+        issue_archive: {
+          ttl_ms: 60 * 60 * 1000,
+          sweep_interval_ms: 60 * 1000,
+        },
+      },
+    });
+    const slowerWorkspace = store.createWorkspace({
+      name: "Slower issue archive",
+      slug: "slower-issue-archive",
+      settings: {
+        issue_archive: {
+          ttl_ms: 2 * 60 * 60 * 1000,
+          sweep_interval_ms: 2 * 60 * 1000,
+        },
+      },
+    });
+    const parent = store.createIssue({ title: "Archive parent" });
+    const oldDone = store.createIssue({ title: "Old done", status: "done" });
+    const recentCancelled = store.createIssue({
+      title: "Recent cancelled",
+      status: "cancelled",
+      parentIssueId: parent.id,
+    });
+    const active = store.createIssue({ title: "Still active", status: "in_progress" });
+    const slowerDone = store.createIssue({
+      title: "Slower workspace done",
+      workspaceId: slowerWorkspace.id,
+      status: "done",
+    });
+    const now = new Date("2026-08-22T08:00:00.000Z");
+    db!.run(
+      "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
+      ["2026-08-22T07:00:00.000Z", oldDone.id],
+    );
+    db!.run(
+      "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
+      ["2026-08-22T07:30:00.000Z", recentCancelled.id],
+    );
+    db!.run(
+      "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
+      ["2026-08-22T06:30:00.000Z", slowerDone.id],
+    );
+    const pendingSystemEventsBefore = Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_system_events",
+    ).get() as { count: number }).count);
+    const realtimeEvents: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    store.onWorkspaceEvent((event) => realtimeEvents.push(event));
+
+    expect(store.archiveEligibleIssues(now).map((issue) => issue.id)).toEqual([oldDone.id]);
+    expect(store.getIssue(oldDone.id)?.archivedAt).toBe(now.toISOString());
+    expect(store.getIssue(recentCancelled.id)?.archivedAt).toBeNull();
+    expect(store.getIssue(slowerDone.id)?.archivedAt).toBeNull();
+    expect(store.listIssues({ workspaceId: "local" }).map((issue) => issue.id).sort())
+      .toEqual([active.id, parent.id, recentCancelled.id].sort());
+    expect(store.listIssues({ archivedOnly: true }).map((issue) => issue.id)).toEqual([oldDone.id]);
+    expect(store.countIssues({ archivedOnly: true })).toBe(1);
+    expect(store.listIssues({ workspaceId: "local", include_archived: true }).map((issue) => issue.id).sort())
+      .toEqual([active.id, oldDone.id, parent.id, recentCancelled.id].sort());
+    expect(store.searchIssues({ q: "Old done" }).issues.map((issue) => issue.id)).toEqual([oldDone.id]);
+    expect(Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_system_events",
+    ).get() as { count: number }).count)).toBe(pendingSystemEventsBefore);
+    expect(realtimeEvents).toContainEqual(expect.objectContaining({
+      type: "issue:updated",
+      payload: expect.objectContaining({ status_changed: false }),
+    }));
+
+    store.createIssueComment(oldDone.id, { body: "Historical note" });
+    expect(store.getIssue(oldDone.id)?.archivedAt).toBe(now.toISOString());
+    expect(store.listChildIssues(parent.id).map((issue) => issue.id)).toEqual([recentCancelled.id]);
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 1, done: 1 });
+    expect(store.restoreIssue(oldDone.id)).toMatchObject({ completedAt: null, archivedAt: null, status: "done" });
+    expect(store.listIssues().map((issue) => issue.id)).toContain(oldDone.id);
+    runMigrations(db! as unknown as SqlDatabase);
+    expect(store.getIssue(oldDone.id)).toMatchObject({ completedAt: null, archivedAt: null, status: "done" });
+    expect(store.archiveEligibleIssues(now).map((issue) => issue.id)).not.toContain(oldDone.id);
+
+    db!.run(
+      "UPDATE multiremi_issues SET completed_at = ?, archived_at = ? WHERE id = ?",
+      ["2026-08-20T00:00:00.000Z", "2026-08-21T00:00:00.000Z", recentCancelled.id],
+    );
+    expect(store.updateIssue(recentCancelled.id, { status: "in_progress" })).toMatchObject({
+      completedAt: null,
+      archivedAt: null,
+      status: "in_progress",
+    });
   });
 
   it("skips agent self-mentions", () => {

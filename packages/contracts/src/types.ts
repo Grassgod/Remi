@@ -50,6 +50,9 @@ export interface MultiremiAgentTemplateSummary {
   icon?: string;
   accent?: string;
   skills: MultiremiAgentTemplateSkill[];
+  recommendedProvider?: MultiremiAgentProvider;
+  recommendedModel?: string | null;
+  requiredPlugins?: string[];
 }
 
 export interface MultiremiAgentTemplate extends MultiremiAgentTemplateSummary {
@@ -161,6 +164,8 @@ export interface CreateAgentFromTemplateInput {
   runtime_id?: string | null;
   provider?: MultiremiAgentProvider | null;
   model?: string | null;
+  thinkingLevel?: string | null;
+  thinking_level?: string | null;
   visibility?: string;
   maxConcurrentTasks?: number;
   max_concurrent_tasks?: number;
@@ -182,6 +187,10 @@ export interface CreateAgentFromTemplateResult {
   imported_skill_ids: string[];
   reusedSkillIds: string[];
   reused_skill_ids: string[];
+  attachedPluginIds?: string[];
+  attached_plugin_ids?: string[];
+  missingPlugins?: string[];
+  missing_plugins?: string[];
 }
 
 export interface CreateSkillInput {
@@ -751,6 +760,14 @@ export interface MultiremiDaemonHeartbeatAck {
     skill_key: string;
   }>;
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
+  /** Platform maintenance directive: daemons must pause task claims while draining. */
+  drain?: MultiremiDaemonDrainDirective;
+}
+
+/** Server → daemon drain instruction carried in every heartbeat ack. */
+export interface MultiremiDaemonDrainDirective {
+  mode: MultiremiPlatformMaintenanceMode;
+  generation: number;
 }
 
 export const MULTIREMI_SSH_MESH_PROTOCOL_VERSION = 1;
@@ -1203,8 +1220,19 @@ export interface MultiremiTaskWithAgent extends MultiremiTask {
   projectDocs: MultiremiProjectDocsIndex | null;
   /** Full Wiki bodies used only to materialize the Issue workspace working copy. */
   projectWikiDocs?: MultiremiProjectDoc[];
+  repositoryWikiContexts?: MultiremiTaskRepositoryWikiContext[];
   projectContexts: MultiremiTaskProjectContext[];
   repos: MultiremiRepoData[];
+}
+
+export interface MultiremiTaskRepositoryWikiContext {
+  repository: {
+    id: string;
+    name: string;
+    url: string;
+    defaultBranch: string | null;
+  };
+  docs: MultiremiRepositoryWikiDoc[];
 }
 
 export interface MultiremiTaskProjectContext {
@@ -1320,6 +1348,12 @@ export type MultiremiAssigneeType = "agent" | "member" | "squad";
 
 export type MultiremiIssueKind = "execution" | "intake";
 
+export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_TTL_MS = 72 * 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MAX_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+export const MULTIREMI_ISSUE_ARCHIVE_MIN_SWEEP_INTERVAL_MS = 60 * 1000;
+
 export interface MultiremiIssue {
   id: string;
   key: string;
@@ -1343,6 +1377,8 @@ export interface MultiremiIssue {
   metadata: Record<string, string | number | boolean>;
   labels: MultiremiLabel[];
   createdBy: string | null;
+  completedAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1731,6 +1767,10 @@ export interface ListIssuesInput {
   metadata?: Record<string, string | number | boolean> | null;
   includeNoAssignee?: boolean;
   includeNoProject?: boolean;
+  includeArchived?: boolean;
+  include_archived?: boolean;
+  archivedOnly?: boolean;
+  archived_only?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -2161,6 +2201,7 @@ export interface MultiremiProject {
   title: string;
   description: string | null;
   instructions: string;
+  deltaInstructions: string;
   instructionsRevision: number;
   instructionsUpdatedAt: string | null;
   instructionsUpdatedBy: string | null;
@@ -2240,6 +2281,105 @@ export interface MultiremiProjectDocRevision {
   contentUri?: string | null;
 }
 
+export type MultiremiRepositoryWikiStatus =
+  | "unbuilt"
+  | "building"
+  | "healthy"
+  | "stale"
+  | "failed";
+
+/** Repository-scoped code facts. Bodies live in OpenViking in production. */
+export interface MultiremiRepositoryWikiDoc {
+  id: string;
+  repositoryId: string;
+  workspaceId: string;
+  path: string;
+  /** Legacy-friendly leaf reference; clients should prefer path. */
+  slug: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  tags: string[];
+  refs: MultiremiProjectDocRef[];
+  sourceTaskId: string | null;
+  sourceIssueId: string | null;
+  authorType: "member" | "agent" | null;
+  authorId: string | null;
+  updatedByType: "member" | "agent" | null;
+  updatedById: string | null;
+  sourceRevision: string | null;
+  status: MultiremiRepositoryWikiStatus;
+  statusMessage: string | null;
+  version: number;
+  storageBackend: "sql" | "openviking";
+  contentUri: string | null;
+  contentSha256: string | null;
+  syncStatus: "sql" | "pending" | "ready" | "failed" | "deleting";
+  syncError: string | null;
+  snapshotOid: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiRepositoryWikiDocRevision {
+  id: string;
+  docId: string;
+  version: number;
+  path: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  sourceRevision: string | null;
+  authorType: "member" | "agent" | null;
+  authorId: string | null;
+  contentUri: string | null;
+  contentSha256: string | null;
+  snapshotOid: string | null;
+  createdAt: string;
+}
+
+export interface CreateRepositoryWikiDocInput {
+  id?: string;
+  path?: string | null;
+  slug?: string | null;
+  title?: string;
+  summary?: string | null;
+  body?: string | null;
+  tags?: string[] | null;
+  refs?: MultiremiProjectDocRef[] | null;
+  sourceTaskId?: string | null;
+  source_task_id?: string | null;
+  sourceIssueId?: string | null;
+  source_issue_id?: string | null;
+  sourceRevision?: string | null;
+  source_revision?: string | null;
+  authorType?: "member" | "agent" | null;
+  author_type?: "member" | "agent" | null;
+  authorId?: string | null;
+  author_id?: string | null;
+}
+
+export interface UpdateRepositoryWikiDocInput {
+  path?: string | null;
+  slug?: string | null;
+  title?: string;
+  summary?: string | null;
+  body?: string | null;
+  tags?: string[] | null;
+  refs?: MultiremiProjectDocRef[] | null;
+  sourceRevision?: string | null;
+  source_revision?: string | null;
+  status?: MultiremiRepositoryWikiStatus;
+  statusMessage?: string | null;
+  status_message?: string | null;
+  expectedVersion?: number | null;
+  expected_version?: number | null;
+  updatedByType?: "member" | "agent" | null;
+  updated_by_type?: "member" | "agent" | null;
+  updatedById?: string | null;
+  updated_by_id?: string | null;
+}
+
 /** Workspace-wide doc listing entry: a doc plus its project's title for grouping. */
 export interface MultiremiWorkspaceProjectDoc extends MultiremiProjectDoc {
   projectTitle: string;
@@ -2281,6 +2421,8 @@ export interface CreateProjectInput {
   title: string;
   description?: string | null;
   instructions?: string;
+  deltaInstructions?: string;
+  delta_instructions?: string;
   icon?: string | null;
   workspaceId?: string | null;
   workspace_id?: string | null;
@@ -2301,6 +2443,8 @@ export interface UpdateProjectInput {
   title?: string;
   description?: string | null;
   instructions?: string;
+  deltaInstructions?: string;
+  delta_instructions?: string;
   expectedInstructionsRevision?: number;
   expected_instructions_revision?: number;
   icon?: string | null;
@@ -2712,6 +2856,23 @@ export interface MultiremiWorkspace {
   created_at: string;
   updatedAt: string;
   updated_at: string;
+}
+
+export interface MultiremiPromptSettings {
+  bootstrapPrompt: string;
+  deltaPrompt: string;
+  revision: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface UpdateMultiremiPromptSettingsInput {
+  bootstrapPrompt?: string;
+  bootstrap_prompt?: string;
+  deltaPrompt?: string;
+  delta_prompt?: string;
+  expectedRevision?: number;
+  expected_revision?: number;
 }
 
 export type MultiremiWorkspaceInvitationStatus = "pending" | "accepted" | "declined" | "revoked" | "expired";
@@ -3257,6 +3418,13 @@ export interface MultiremiScmChangeRequest {
   updatedAt: string;
 }
 
+/** Change request joined with its repository binding identity, so multi-repo issue surfaces can label the source repo. */
+export interface MultiremiScmChangeRequestWithRepository extends MultiremiScmChangeRequest {
+  repositoryName: string | null;
+  repositoryOwner: string | null;
+  repositoryUrl: string | null;
+}
+
 export type MultiremiScmIssueLinkSource = "auto" | "manual" | "legacy";
 
 export interface MultiremiScmIssueLink {
@@ -3475,6 +3643,137 @@ export interface MultiremiAgentActivityBucket {
   task_count?: number;
   failedCount: number;
   failed_count?: number;
+}
+
+// ─── Platform lifecycle ─────────────────────────────────────────────────────
+
+export type MultiremiPlatformDeploymentDriver = "systemd_release" | "docker_compose";
+
+export type MultiremiPlatformOperationKind =
+  | "check_updates"
+  | "restart"
+  | "update"
+  | "rollback";
+
+export type MultiremiPlatformOperationStatus =
+  | "queued"
+  | "preparing"
+  | "pulling"
+  | "draining"
+  | "switching"
+  | "restarting"
+  | "verifying"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "rolling_back"
+  | "rolled_back";
+
+export type MultiremiPlatformMaintenanceMode = "normal" | "draining";
+
+/** Persistent platform maintenance (drain) state — one row, survives API restarts. */
+export interface MultiremiPlatformMaintenance {
+  mode: MultiremiPlatformMaintenanceMode;
+  generation: number;
+  operationId: string | null;
+  startedAt: string | null;
+  expiresAt: string | null;
+  reason: string | null;
+}
+
+/** Aggregated drain progress used by the updater wait loop and the dashboard. */
+export interface MultiremiPlatformDrainStatus {
+  maintenance: MultiremiPlatformMaintenance;
+  onlineDaemons: number;
+  ackedDaemons: number;
+  /** Server-authoritative count of in-flight tasks (dispatched/running/waiting/awaiting). */
+  activeTasks: number;
+  /** Online runtimes that have not acknowledged the current generation. */
+  pendingRuntimes: Array<{ id: string; name: string; daemonId: string | null }>;
+  /** All online daemons acked the current generation and no task is in flight. */
+  ready: boolean;
+}
+
+export type MultiremiPlatformServiceId =
+  | "api"
+  | "web"
+  | "ssh-mesh-control-plane"
+  | "postgres"
+  | "openviking";
+export type MultiremiPlatformServiceStatus = "ready" | "degraded" | "stopped" | "unknown";
+
+export interface MultiremiPlatformService {
+  id: MultiremiPlatformServiceId;
+  name: string;
+  status: MultiremiPlatformServiceStatus;
+  detail: string | null;
+  version: string | null;
+  checkedAt: string | null;
+}
+
+export interface MultiremiPlatformRelease {
+  version: string;
+  ref: string;
+  publishedAt: string | null;
+  releaseUrl: string | null;
+  manifestUrl: string | null;
+  apiImage: string | null;
+  webImage: string | null;
+}
+
+export interface MultiremiPlatformOperation {
+  id: string;
+  kind: MultiremiPlatformOperationKind;
+  status: MultiremiPlatformOperationStatus;
+  driver: MultiremiPlatformDeploymentDriver;
+  targetVersion: string | null;
+  targetRef: string | null;
+  targetManifest: Record<string, unknown>;
+  progress: Record<string, unknown>;
+  requestedBy: string;
+  output: string | null;
+  error: string | null;
+  previousRelease: MultiremiPlatformRelease | null;
+  resultRelease: MultiremiPlatformRelease | null;
+  /** Set by the cancel endpoint; the updater honors it before the switch phase. */
+  cancelRequested: boolean;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface MultiremiPlatformStatus {
+  canManage: boolean;
+  driver: MultiremiPlatformDeploymentDriver;
+  currentRelease: MultiremiPlatformRelease | null;
+  latestRelease: MultiremiPlatformRelease | null;
+  updateAvailable: boolean;
+  autoUpdateStable: boolean;
+  updaterStatus: "ready" | "stale" | "offline";
+  updaterHeartbeatAt: string | null;
+  services: MultiremiPlatformService[];
+  activeOperation: MultiremiPlatformOperation | null;
+  /** Most recent operation (may equal activeOperation); shows terminal outcomes after the banner clears. */
+  lastOperation: MultiremiPlatformOperation | null;
+  maintenance: MultiremiPlatformMaintenance;
+  recentReleases: MultiremiPlatformRelease[];
+}
+
+export interface CreatePlatformOperationInput {
+  kind: MultiremiPlatformOperationKind;
+  targetVersion?: string | null;
+  targetRef?: string | null;
+  targetManifest?: Record<string, unknown>;
+}
+
+export interface ReportPlatformOperationInput {
+  status: MultiremiPlatformOperationStatus;
+  progress?: Record<string, unknown>;
+  output?: string | null;
+  error?: string | null;
+  previousRelease?: MultiremiPlatformRelease | null;
+  resultRelease?: MultiremiPlatformRelease | null;
 }
 
 export interface MultiremiAnalyticsEvent {

@@ -70,6 +70,41 @@ describe("intake workspace", () => {
       read_only: true,
     });
   });
+
+  it("degrades a repo without a usable snapshot to an error entry instead of failing the round", async () => {
+    const source = createRepo();
+    const cache = new MultiremiRepoCache(tempDir("intake-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const workDir = tempDir("intake-workspace-");
+    const snapshotsRoot = tempDir("intake-snapshots-");
+    const missing = join(tempDir("intake-missing-"), "gone.git");
+    const task = {
+      id: "tsk_intake_degraded",
+      workspaceId: "local",
+      issueId: "iss_intake",
+      issue: { id: "iss_intake", key: "MUL-75", title: "Triage request" },
+      projectContexts: [{
+        project: { id: "prj_remi", title: "Remi", description: "Remi project" },
+        resources: [],
+        docs: [],
+        repos: [{ url: source }, { url: missing }],
+      }],
+    } as unknown as AgentTask;
+
+    const prepared = await prepareIntakeWorkspace(workDir, task, cache, { snapshotsRoot, skipRepoFetch: true });
+
+    expect(prepared.repos).toHaveLength(2);
+    const ready = prepared.repos.find((repo) => repo.repoUrl === source);
+    const failed = prepared.repos.find((repo) => repo.repoUrl === missing);
+    expect(ready).toMatchObject({ status: "ready", error: null });
+    expect(failed).toMatchObject({ status: "error", baseRef: "" });
+    expect(failed?.error).toContain("repo not found in cache");
+    const projectRoot = join(workDir, "projects", "Remi");
+    expect(readdirSync(join(projectRoot, "repos"))).toEqual(["repo"]);
+    const manifest = JSON.parse(readFileSync(join(workDir, "manifest.json"), "utf8"));
+    expect(manifest.projects[0].repos).toHaveLength(1);
+    expect(manifest.projects[0].repos[0].url).toBe(source);
+  });
 });
 
 function createRepo(): string {

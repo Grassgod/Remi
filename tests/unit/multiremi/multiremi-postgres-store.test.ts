@@ -212,10 +212,16 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       runtimeId: qaRuntime.id,
       workspaceId,
     });
+    const squad = store.createSquad({
+      name: `PG delegation squad ${wsCounter}`,
+      leaderId: leader.id,
+      memberIds: [qa.id],
+      workspaceId,
+    });
     const issue = store.createIssue({
       title: `PG delegation ${wsCounter}`,
-      assigneeType: "agent",
-      assigneeId: leader.id,
+      assigneeType: "squad",
+      assigneeId: squad.id,
       workspaceId,
     });
     const leaderTask = store.createTask({
@@ -242,11 +248,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       authorType: "agent",
       authorId: qa.id,
       taskId: childTask.id,
-      body: `[@Leader](mention://agent/${leader.id}) Intermediate PG report.`,
+      body: "Intermediate PG report.",
     });
-    const explicitReturn = store.listTasksForIssue(issue.id).find((task) => (
-      task.agentId === leader.id && task.delegationId === childTask.delegationId
-    ))!;
+    const explicitReturn = store.ensureDelegationWakeup({
+      sourceTaskId: childTask.id,
+      requiredEventSeq: 1_000_000,
+      triggerCommentId: report.id,
+    }).task!;
     return { workspaceId, leader, qa, issue, childTask, report, explicitReturn };
   };
 
@@ -1474,6 +1482,39 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(run).toMatchObject({ issueId: issue.id, source: "system_event", status: "running" });
     expect(run.issueSessionId).toBeString();
     expect(store.getTask(run.taskId!)?.issueSessionId).toBe(run.issueSessionId);
+  });
+
+  it("archives eligible terminal issues and counts archived lists on Postgres", () => {
+    const ws = freshWorkspace();
+    store.updateWorkspace(ws, {
+      settings: {
+        issue_archive: {
+          ttl_ms: 60 * 60 * 1000,
+          sweep_interval_ms: 60 * 1000,
+        },
+      },
+    });
+    const archived = store.createIssue({ title: "Archive PG", workspaceId: ws, status: "done" });
+    const active = store.createIssue({ title: "Active PG", workspaceId: ws });
+    db.run(
+      "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
+      ["2026-08-22T06:00:00.000Z", archived.id],
+    );
+
+    expect(store.archiveEligibleIssues(new Date("2026-08-22T08:00:00.000Z")))
+      .toContainEqual(expect.objectContaining({ id: archived.id }));
+    expect(store.listIssues({ workspaceId: ws }).map((issue) => issue.id)).toEqual([active.id]);
+    expect(store.countIssues({ workspaceId: ws, archivedOnly: true })).toBe(1);
+
+    expect(store.restoreIssue(archived.id)).toMatchObject({
+      status: "done",
+      completedAt: null,
+      archivedAt: null,
+    });
+    runMigrations(db);
+    expect(store.getIssue(archived.id)).toMatchObject({ completedAt: null, archivedAt: null });
+    expect(store.archiveEligibleIssues(new Date("2026-08-22T08:00:00.000Z")).map((issue) => issue.id))
+      .not.toContain(archived.id);
   });
 
   it("keeps a user terminal Issue committed while a worker status write waits on its row lock (PG)", async () => {

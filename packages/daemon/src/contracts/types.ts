@@ -119,6 +119,9 @@ export interface AgentTaskProject {
   description: string | null;
   /** Project-level rules injected only when bootstrapping a provider session. */
   instructions?: string;
+  /** Project-level rules injected on subsequent provider-session turns. */
+  deltaInstructions?: string;
+  delta_instructions?: string;
 }
 
 /** Project resource entry (github_repo / local_directory / ...). */
@@ -174,6 +177,33 @@ export interface AgentTaskProjectContext {
   resources: AgentTaskProjectResource[];
   docs: AgentTaskProjectDoc[];
   repos: AgentTaskRepo[];
+}
+
+export interface AgentTaskRepositoryWikiDoc {
+  id: string;
+  repositoryId?: string;
+  workspaceId?: string;
+  path: string;
+  slug: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  tags: string[];
+  refs?: Array<{ type: string; value: string }>;
+  sourceRevision?: string | null;
+  status?: string;
+  version?: number;
+  updatedAt: string;
+}
+
+export interface AgentTaskRepositoryWikiContext {
+  repository: {
+    id: string;
+    name: string;
+    url: string;
+    defaultBranch: string | null;
+  };
+  docs: AgentTaskRepositoryWikiDoc[];
 }
 
 export interface AgentTaskSquadContext {
@@ -234,6 +264,8 @@ export interface AgentTask {
   /** Full Wiki bodies transported outside the prompt for local workspace materialization. */
   projectWikiDocs?: AgentTaskProjectDoc[];
   project_wiki_docs?: AgentTaskProjectDoc[];
+  repositoryWikiContexts?: AgentTaskRepositoryWikiContext[];
+  repository_wiki_contexts?: AgentTaskRepositoryWikiContext[];
   projectContexts?: AgentTaskProjectContext[];
   project_contexts?: AgentTaskProjectContext[];
   squadContext?: AgentTaskSquadContext | null;
@@ -256,6 +288,10 @@ export interface AgentTask {
   // Claim-context fields (read via stringField/arrayField/unknownField).
   workspaceContext?: string | null;
   workspace_context?: string | null;
+  workspaceBootstrapPrompt?: string | null;
+  workspace_bootstrap_prompt?: string | null;
+  workspaceDeltaPrompt?: string | null;
+  workspace_delta_prompt?: string | null;
   /** Workspace-level env (env/injector.ts): below agent customEnv, above machine env. */
   workspaceEnv?: Record<string, string>;
   workspace_env?: Record<string, string>;
@@ -265,6 +301,8 @@ export interface AgentTask {
   requesting_user_profile_description?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
+  chatBootstrapTranscript?: string | null;
+  chat_bootstrap_transcript?: string | null;
   chatMessageAttachments?: unknown[];
   chat_message_attachments?: unknown[];
   autopilotTitle?: string | null;
@@ -372,7 +410,7 @@ export interface AutopilotFailureThresholdCandidate {
 
 export type { RunAutopilotInput };
 
-/** Store surface the scheduler depends on (8 methods). */
+/** Store surface the scheduler depends on. */
 export interface AutopilotStore {
   recoverLostScheduleTriggers(now?: Date): number;
   listAutopilots(workspaceId?: string | null): Autopilot[];
@@ -386,4 +424,6 @@ export interface AutopilotStore {
   pauseAutopilotsExceedingFailureThreshold(
     options?: AutopilotFailureThresholdOptions,
   ): AutopilotFailureThresholdCandidate[];
+  archiveEligibleIssues(now?: Date): Array<{ id: string }>;
+  issueArchiveSweepIntervalMs(): number;
 }

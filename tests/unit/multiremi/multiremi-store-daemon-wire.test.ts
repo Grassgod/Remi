@@ -431,6 +431,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
         prior_session_id: "sess-prior",
         prior_work_dir: "/tmp/prior-work",
         chat_message: "Normalized chat",
+        chat_bootstrap_transcript: "[user]\nCanonical chat",
         chat_message_attachments: [{ id: "att_1", filename: "brief.txt" }],
         autopilot_id: "ap_norm",
         autopilot_source: "webhook",
@@ -451,6 +452,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       priorSessionId: "sess-prior",
       priorWorkDir: "/tmp/prior-work",
       chatMessage: "Normalized chat",
+      chatBootstrapTranscript: "[user]\nCanonical chat",
       chatMessageAttachments: [{ id: "att_1", filename: "brief.txt" }],
       autopilotId: "ap_norm",
       autopilotSource: "webhook",
@@ -462,6 +464,43 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       requestingUserName: "Normalized Alice",
       requestingUserProfileDescription: "Normalized requester profile",
     });
+  });
+
+  it("claims a stale Chat retry with canonical product history instead of the dead session", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_stale_wire", name: "stale wire", provider: "claude" });
+    const agent = store.createAgent({ name: "Stale Wire", provider: "claude" });
+    const chat = store.createChatSession({ agentId: agent.id, title: "Recover" });
+    const first = store.sendChatMessage(chat.id, { body: "Original question" });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
+    store.startTask(first.task.id);
+    store.completeTask(first.task.id, {
+      output: "Original answer",
+      sessionId: "sess_stale_wire",
+      workDir: "/tmp/stale-wire",
+    });
+    const resumed = store.sendChatMessage(chat.id, { body: "Continue from that" });
+    expect(store.claimTask(runtime.id)?.id).toBe(resumed.task.id);
+    store.startTask(resumed.task.id);
+    store.failTask(resumed.task.id, {
+      error: "Stale provider session: no conversation found",
+      failureReason: "agent_error.stale_session",
+    });
+
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    expect(response.status).toBe(200);
+    const retry = (await response.json()).task;
+    expect(retry).toMatchObject({
+      parent_task_id: resumed.task.id,
+      chat_session_id: chat.id,
+    });
+    expect(retry).not.toHaveProperty("session_id");
+    expect(retry).not.toHaveProperty("work_dir");
+    expect(retry.chat_bootstrap_transcript).toContain("[user]\nOriginal question");
+    expect(retry.chat_bootstrap_transcript).toContain("[assistant]\nOriginal answer");
+    expect(retry.chat_bootstrap_transcript).toContain("[user]\nContinue from that");
+    expect(retry).not.toHaveProperty("chat_message");
   });
 
   it("includes Go pending task optional chat, autopilot, and workdir fields", async () => {

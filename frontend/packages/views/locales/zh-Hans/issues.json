@@ -141,6 +141,16 @@
     "empty_grouping": "没有匹配的 issue",
     "ordered_by": "按{{field}}排序"
   },
+  "archive": {
+    "label": "已归档",
+    "archived_ago": "归档于 {{time}}",
+    "restore_issue": "恢复 issue",
+    "restore_success": "Issue 已恢复",
+    "restore_failed": "恢复 issue 失败",
+    "hide_column": "隐藏已归档列",
+    "loading": "正在加载已归档 issue...",
+    "empty": "暂无已归档 issue"
+  },
   "detail": {
     "not_found": "这个 issue 不存在或已在该工作区被删除。",
     "breadcrumb_project_unknown": "未知项目",

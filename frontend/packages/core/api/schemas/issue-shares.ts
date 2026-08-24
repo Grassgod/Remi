@@ -140,6 +140,8 @@ export const EMPTY_SHARED_ISSUE_BUNDLE = {
     due_date: null,
     metadata: {},
     attachments: [],
+    completed_at: null,
+    archived_at: null,
     created_at: "",
     updated_at: "",
   },

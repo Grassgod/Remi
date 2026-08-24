@@ -65,6 +65,7 @@ const AUTO_RETRY_FAILURE_REASONS = new Set([
   "codex_semantic_inactivity",
   "agent_error.stale_session",
   "project_knowledge_unavailable",
+  "repo_sync_failed",
 ]);
 const RESUME_UNSAFE_FAILURE_REASONS = new Set([
   "iteration_limit",
@@ -547,9 +548,14 @@ export class TasksRepo {
       projectResources,
       projectDocs: project ? this.ctx.projects().getProjectDocsIndex(project.id) : null,
       projectContexts,
-      repos: projectContexts.length
-        ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
-        : this.resolveTaskRepos(task.workspaceId, projectResources),
+      // Homepage Chat discovers repositories through the database-backed CLI
+      // directory and checks out only on explicit request. Never attach the
+      // workspace repository catalog to its daemon claim as eager Git work.
+      repos: task.chatSessionId && !task.issueId
+        ? []
+        : projectContexts.length
+          ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
+          : this.resolveTaskRepos(task.workspaceId, projectResources),
     };
   }
 
@@ -1396,11 +1402,20 @@ export class TasksRepo {
     })();
   }
 
-  reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null): MultiremiTask {
+  reportProgress(
+    taskId: string,
+    summary: string,
+    step?: number | null,
+    total?: number | null,
+    options?: { allowTerminal?: boolean },
+  ): MultiremiTask {
+    // allowTerminal admits the run's final LLM summary, which is written after
+    // the task already flipped to completed/failed/cancelled.
+    const statusGuard = options?.allowTerminal ? "" : " AND status NOT IN ('completed', 'failed', 'cancelled')";
     const result = this.ctx.db.run(
       `UPDATE multiremi_tasks
        SET progress_summary = ?, progress_step = ?, progress_total = ?, updated_at = ?
-       WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+       WHERE id = ?${statusGuard}`,
       [summary, step ?? null, total ?? null, nowIso(), taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -1987,6 +2002,27 @@ export class TasksRepo {
     workspaceLockHeld = false,
   ): TaskTerminalFollowUps {
     const now = nowIso();
+    if (
+      status === "failed"
+      && task.chatSessionId
+      && task.failureReason === "agent_error.stale_session"
+    ) {
+      // The provider session and its machine-local directory are one lineage.
+      // Clear all five fields in the same terminal transaction before a cold
+      // retry is created. Match the failed session so an unrelated newer
+      // lineage can never be erased by a late terminal report.
+      this.ctx.db.run(
+        `UPDATE multiremi_chat_sessions
+         SET session_id = NULL,
+             work_dir = NULL,
+             session_runtime_id = NULL,
+             session_provider = NULL,
+             session_execution_fingerprint = NULL,
+             updated_at = ?
+         WHERE id = ? AND session_id = ?`,
+        [now, task.chatSessionId, task.sessionId],
+      );
+    }
     const retry = status === "failed" ? this.maybeRetryFailedTask(task, workspaceLockHeld) : null;
     let delegationReturn: MultiremiTask | null = null;
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
@@ -2353,9 +2389,10 @@ export class TasksRepo {
     if (issue?.status === "done" || issue?.status === "cancelled") return;
     if (!issue || issue.status === status) return;
     const now = nowIso();
+    const completedAt = status === "done" || status === "cancelled" ? now : null;
     this.ctx.db.run(
-      "UPDATE multiremi_issues SET status = ?, updated_at = ? WHERE id = ?",
-      [status, now, task.issueId],
+      "UPDATE multiremi_issues SET status = ?, completed_at = ?, archived_at = NULL, updated_at = ? WHERE id = ?",
+      [status, completedAt, now, task.issueId],
     );
     const updatedIssue = this.ctx.issues().getIssue(task.issueId);
     if (updatedIssue) {
@@ -2376,7 +2413,13 @@ export class TasksRepo {
       actorType: "agent",
       actorId: task.agentId,
       payload: {
-        issue: { id: task.issueId, status, updated_at: now },
+        issue: {
+          id: task.issueId,
+          status,
+          completed_at: completedAt,
+          archived_at: null,
+          updated_at: now,
+        },
         status_changed: true,
         prev_status: issue.status,
       },

@@ -1,0 +1,321 @@
+import { describe, expect, it } from "bun:test";
+import {
+  buildSummaryPrompt,
+  digestTaskMessage,
+  parseSummaryText,
+  PROGRESS_SUMMARY_DEFAULTS,
+  resolveProgressSummaryConfig,
+  resolveSummarizerCredentials,
+  TaskProgressSummarizer,
+  TaskProgressTracker,
+  type ProgressSummaryConfig,
+  type ProgressSummaryResult,
+} from "@multiremi/worker/progress-summarizer.js";
+import type { TaskMessageInput } from "@multiremi/contracts/types.js";
+
+function textMessage(content = "working on it"): TaskMessageInput {
+  return { type: "text", content };
+}
+
+const CREDENTIALS = { baseUrl: "https://relay.example", authToken: "tok" };
+
+function config(overrides: Partial<ProgressSummaryConfig> = {}): ProgressSummaryConfig {
+  return {
+    enabled: true,
+    minNewMessages: 3,
+    minIntervalMs: 1000,
+    model: "test-model",
+    maxDigestChars: 12_000,
+    requestTimeoutMs: 5000,
+    ...overrides,
+  };
+}
+
+function modelResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function summaryResponse(summary: string, extra: Record<string, unknown> = {}): Response {
+  return modelResponse({ content: [{ type: "text", text: JSON.stringify({ summary, ...extra }) }] });
+}
+
+describe("resolveProgressSummaryConfig", () => {
+  it("uses documented defaults", () => {
+    const resolved = resolveProgressSummaryConfig({});
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.minNewMessages).toBe(PROGRESS_SUMMARY_DEFAULTS.minNewMessages);
+    expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
+    expect(resolved.model).toBe(PROGRESS_SUMMARY_DEFAULTS.model);
+  });
+
+  it("honors N/T/model/disable overrides", () => {
+    const resolved = resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_DISABLED: "1",
+      MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "5",
+      MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "9000",
+      MULTIREMI_PROGRESS_SUMMARY_MODEL: "claude-x",
+    });
+    expect(resolved.enabled).toBe(false);
+    expect(resolved.minNewMessages).toBe(5);
+    expect(resolved.minIntervalMs).toBe(9000);
+    expect(resolved.model).toBe("claude-x");
+  });
+
+  it("falls back to defaults on invalid numbers", () => {
+    const resolved = resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "not-a-number",
+      MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "-5",
+    });
+    expect(resolved.minNewMessages).toBe(PROGRESS_SUMMARY_DEFAULTS.minNewMessages);
+    expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
+  });
+});
+
+describe("resolveSummarizerCredentials", () => {
+  it("prefers the task's provider env and its base URL", () => {
+    const credentials = resolveSummarizerCredentials(
+      { ANTHROPIC_AUTH_TOKEN: "relay-token", ANTHROPIC_BASE_URL: "https://relay.example/" },
+      { ANTHROPIC_API_KEY: "machine-key" },
+    );
+    expect(credentials).toEqual({ baseUrl: "https://relay.example", apiKey: undefined, authToken: "relay-token" });
+  });
+
+  it("skips tombstoned empty provider env values and falls back to the process env", () => {
+    const credentials = resolveSummarizerCredentials(
+      { ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "", ANTHROPIC_BASE_URL: "" },
+      { ANTHROPIC_API_KEY: "machine-key" },
+    );
+    expect(credentials).toEqual({ baseUrl: "https://api.anthropic.com", apiKey: "machine-key", authToken: undefined });
+  });
+
+  it("returns null when no credential exists anywhere", () => {
+    expect(resolveSummarizerCredentials({ OPENAI_API_KEY: "sk" }, {})).toBeNull();
+  });
+});
+
+describe("digestTaskMessage", () => {
+  it("compresses tool calls to name plus key input", () => {
+    const line = digestTaskMessage({ type: "tool_use", tool: "Bash", input: { command: "bun test" } });
+    expect(line).toBe('tool Bash {"command":"bun test"}');
+  });
+
+  it("keeps failed tool results but drops successful ones and usage", () => {
+    expect(digestTaskMessage({ type: "tool_result", tool: "Bash", status: "failed", output: "boom" })).toContain("failed");
+    expect(digestTaskMessage({ type: "tool_result", tool: "Bash", status: "completed", output: "ok" })).toBeNull();
+    expect(digestTaskMessage({ type: "usage", meta: {} })).toBeNull();
+  });
+
+  it("truncates long assistant text", () => {
+    const line = digestTaskMessage(textMessage("x".repeat(500)));
+    expect(line!.length).toBeLessThan(320);
+    expect(line!.endsWith("…")).toBe(true);
+  });
+});
+
+describe("TaskProgressTracker", () => {
+  it("triggers only when both N messages and T ms are satisfied", () => {
+    const tracker = new TaskProgressTracker(3, 1000, 12_000, 0);
+    tracker.record([textMessage(), textMessage()]);
+    expect(tracker.shouldTrigger(5000)).toBe(false); // N not reached
+    tracker.record([textMessage()]);
+    expect(tracker.shouldTrigger(500)).toBe(false); // T not reached
+    expect(tracker.shouldTrigger(1000)).toBe(true);
+  });
+
+  it("counts non-digestible messages toward N", () => {
+    const tracker = new TaskProgressTracker(2, 0, 12_000, 0);
+    tracker.record([{ type: "usage", meta: {} }, { type: "usage", meta: {} }]);
+    expect(tracker.shouldTrigger(1)).toBe(true);
+  });
+
+  it("drain resets the window and reports the digest", () => {
+    const tracker = new TaskProgressTracker(2, 1000, 12_000, 0);
+    tracker.record([textMessage("step one"), { type: "tool_use", tool: "Read", input: { file: "a.ts" } }]);
+    const { digest, messageCount } = tracker.drain(2000);
+    expect(messageCount).toBe(2);
+    expect(digest).toContain("assistant: step one");
+    expect(digest).toContain("tool Read");
+    expect(tracker.pendingMessageCount()).toBe(0);
+    tracker.record([textMessage(), textMessage()]);
+    expect(tracker.shouldTrigger(2500)).toBe(false); // debounce restarts at drain time
+    expect(tracker.shouldTrigger(3000)).toBe(true);
+  });
+
+  it("evicts oldest digest lines beyond the char budget and notes the omission", () => {
+    const tracker = new TaskProgressTracker(1, 0, 40, 0);
+    tracker.record([textMessage("first entry"), textMessage("second entry"), textMessage("third entry")]);
+    const { digest, messageCount } = tracker.drain(1);
+    expect(messageCount).toBe(3);
+    expect(digest).not.toContain("first entry");
+    expect(digest).toContain("third entry");
+    expect(digest).toContain("earlier entries omitted");
+  });
+});
+
+describe("parseSummaryText", () => {
+  it("parses plain JSON with step/total", () => {
+    expect(parseSummaryText('{"summary": "正在跑测试", "step": 2, "total": 5}'))
+      .toEqual({ summary: "正在跑测试", step: 2, total: 5 });
+  });
+
+  it("parses JSON wrapped in a code fence and drops invalid step/total", () => {
+    expect(parseSummaryText('```json\n{"summary": "分析代码", "step": 9, "total": 3}\n```'))
+      .toEqual({ summary: "分析代码" });
+  });
+
+  it("falls back to raw text when JSON is absent", () => {
+    expect(parseSummaryText("正在编译前端")).toEqual({ summary: "正在编译前端" });
+  });
+});
+
+describe("buildSummaryPrompt", () => {
+  it("includes title, requirement, previous summary and digest", () => {
+    const prompt = buildSummaryPrompt({
+      taskTitle: "修复登录",
+      taskPrompt: "用户报告登录失败，请排查并修复",
+      previousSummary: "已定位到 token 过期问题",
+      digest: "tool Bash {\"command\":\"bun test\"}",
+    });
+    expect(prompt).toContain("修复登录");
+    expect(prompt).toContain("已定位到 token 过期问题");
+    expect(prompt).toContain("bun test");
+    expect(prompt).toContain("当前进度");
+  });
+
+  it("switches to terminal wording for outcomes", () => {
+    const prompt = buildSummaryPrompt({
+      taskTitle: "t",
+      taskPrompt: "p",
+      previousSummary: null,
+      digest: "",
+      outcome: "cancelled",
+    });
+    expect(prompt).toContain("任务已被取消");
+    expect(prompt).toContain("终态摘要");
+  });
+});
+
+describe("TaskProgressSummarizer", () => {
+  it("reports a periodic summary once the dual trigger fires", async () => {
+    const reported: Array<{ result: ProgressSummaryResult; final: boolean }> = [];
+    let now = 0;
+    const summarizer = new TaskProgressSummarizer({
+      config: config(),
+      credentials: CREDENTIALS,
+      taskTitle: "标题",
+      taskPrompt: "需求",
+      report: async (result, { final }) => { reported.push({ result, final }); },
+      fetchImpl: async () => summaryResponse("已完成初始探索，开始修改代码", { step: 1, total: 3 }),
+      now: () => now,
+    });
+    summarizer.onMessages([textMessage(), textMessage()]);
+    expect(reported.length).toBe(0);
+    now = 2000;
+    summarizer.onMessages([textMessage()]);
+    await Bun.sleep(0);
+    expect(reported).toEqual([{
+      result: { summary: "已完成初始探索，开始修改代码", step: 1, total: 3 },
+      final: false,
+    }]);
+  });
+
+  it("keeps at most one summary call in flight", async () => {
+    let calls = 0;
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let now = 10_000;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ minNewMessages: 1, minIntervalMs: 0 }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async () => {},
+      fetchImpl: async () => {
+        calls++;
+        await gate;
+        return summaryResponse("s");
+      },
+      now: () => now,
+    });
+    summarizer.onMessages([textMessage()]);
+    now += 1000;
+    summarizer.onMessages([textMessage()]);
+    now += 1000;
+    summarizer.onMessages([textMessage()]);
+    release!();
+    await Bun.sleep(0);
+    expect(calls).toBe(1);
+  });
+
+  it("swallows model failures without reporting or throwing", async () => {
+    const reported: unknown[] = [];
+    let now = 0;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ minNewMessages: 1, minIntervalMs: 0 }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => { throw new Error("network down"); },
+      now: () => now,
+    });
+    summarizer.onMessages([textMessage()]);
+    await Bun.sleep(0);
+    expect(reported.length).toBe(0);
+    // A later terminal summary still works if the model recovers.
+    await summarizer.finalize("failed", "agent crashed");
+    expect(reported.length).toBe(0); // fetch still failing — finalize also swallows
+  });
+
+  it("finalize produces a terminal summary marked final", async () => {
+    const reported: Array<{ result: ProgressSummaryResult; final: boolean }> = [];
+    const prompts: string[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config(),
+      credentials: CREDENTIALS,
+      taskTitle: "标题",
+      taskPrompt: "需求",
+      report: async (result, { final }) => { reported.push({ result, final }); },
+      fetchImpl: async (_url, init) => {
+        const body = JSON.parse(String((init as RequestInit).body)) as { messages: Array<{ content: string }> };
+        prompts.push(body.messages[0]!.content);
+        return summaryResponse("任务已完成：修复了登录问题");
+      },
+      now: () => 0,
+    });
+    summarizer.onMessages([textMessage("fixed the bug")]);
+    await summarizer.finalize("completed", "PR ready");
+    expect(reported).toEqual([{ result: { summary: "任务已完成：修复了登录问题" }, final: true }]);
+    expect(prompts[0]).toContain("任务已正常结束");
+    // Once finalized, further messages and finalizes are ignored.
+    summarizer.onMessages([textMessage()]);
+    await summarizer.finalize("completed");
+    await Bun.sleep(0);
+    expect(reported.length).toBe(1);
+  });
+
+  it("sends relay bearer auth and the configured model", async () => {
+    const requests: Array<{ url: string; headers: Record<string, string>; model: string }> = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ minNewMessages: 1, minIntervalMs: 0, model: "claude-haiku-test" }),
+      credentials: { baseUrl: "https://relay.example", authToken: "tok", apiKey: "key" },
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async () => {},
+      fetchImpl: async (url, init) => {
+        const headers = (init as RequestInit).headers as Record<string, string>;
+        const body = JSON.parse(String((init as RequestInit).body)) as { model: string };
+        requests.push({ url: String(url), headers, model: body.model });
+        return summaryResponse("s");
+      },
+      now: () => 1000,
+    });
+    summarizer.onMessages([textMessage()]);
+    await Bun.sleep(0);
+    expect(requests.length).toBe(1);
+    expect(requests[0]!.url).toBe("https://relay.example/v1/messages");
+    expect(requests[0]!.model).toBe("claude-haiku-test");
+    expect(requests[0]!.headers.authorization).toBe("Bearer tok");
+    expect(requests[0]!.headers["x-api-key"]).toBe("key");
+  });
+});

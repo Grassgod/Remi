@@ -5,6 +5,8 @@ import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
+import { PlatformOperationsRepo } from "@multiremi/store/repos/platform-operations-repo.js";
+import { PlatformMaintenanceRepo } from "@multiremi/store/repos/platform-maintenance-repo.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
 import { AgentPluginsRepo } from "@multiremi/store/repos/agent-plugins-repo.js";
 import {
@@ -19,6 +21,10 @@ import type {
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
+import {
+  RepositoryWikiRepo,
+  type RepositoryWikiWriteControl,
+} from "@multiremi/store/repos/repository-wiki-repo.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
@@ -115,6 +121,7 @@ import type {
   CreateLabelInput,
   CreatePinnedItemInput,
   CreateProjectDocInput,
+  CreateRepositoryWikiDocInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateRuntimeUpdateInput,
@@ -186,6 +193,8 @@ import type {
   MultiremiProject,
   MultiremiProjectDoc,
   MultiremiProjectDocRevision,
+  MultiremiRepositoryWikiDoc,
+  MultiremiRepositoryWikiDocRevision,
   MultiremiProjectDocsIndex,
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
@@ -261,6 +270,7 @@ import type {
   UpdateLabelInput,
   UpdateMultiremiUserInput,
   UpdateProjectDocInput,
+  UpdateRepositoryWikiDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
   UpdateRuntimeInput,
@@ -269,6 +279,15 @@ import type {
   UpdateWorkspaceMemberInput,
 } from "@multiremi/contracts/types.js";
 import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/types.js";
+import type {
+  CreatePlatformOperationInput,
+  MultiremiPlatformDrainStatus,
+  MultiremiPlatformMaintenance,
+  MultiremiPlatformOperation,
+  MultiremiPlatformRelease,
+  MultiremiPlatformService,
+  ReportPlatformOperationInput,
+} from "@multiremi/contracts/types.js";
 import type {
   ClaimScmSyncStreamInput,
   CreateScmConnectionInput,
@@ -305,6 +324,8 @@ export class MultiremiStore {
   private accessTokens: AccessTokensRepo;
   private issueShares: IssueSharesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
+  private platformOperations: PlatformOperationsRepo;
+  private platformMaintenance: PlatformMaintenanceRepo;
   private agents: AgentsSkillsRepo;
   private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
@@ -313,6 +334,7 @@ export class MultiremiStore {
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
   private projects: ProjectsRepo;
+  private repositoryWiki: RepositoryWikiRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
   private issues: IssuesRepo;
@@ -331,6 +353,8 @@ export class MultiremiStore {
     this.accessTokens = new AccessTokensRepo(this.db);
     this.issueShares = new IssueSharesRepo(this.db);
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
+    this.platformOperations = new PlatformOperationsRepo(this.db);
+    this.platformMaintenance = new PlatformMaintenanceRepo(this.db);
     this.agents = new AgentsSkillsRepo(this.ctx);
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
@@ -342,6 +366,7 @@ export class MultiremiStore {
     // context rather than through `resolveHost`.
     this.ctx.registerAnalytics(this.analytics);
     this.projects = new ProjectsRepo(this.ctx);
+    this.repositoryWiki = new RepositoryWikiRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
     this.issues = new IssuesRepo(this.ctx);
@@ -400,6 +425,82 @@ export class MultiremiStore {
 
   migrate(): void {
 runMigrations(this.db);
+  }
+
+  getPlatformState() {
+    return this.platformOperations.getState();
+  }
+
+  setPlatformAutoUpdateStable(enabled: boolean) {
+    return this.platformOperations.setAutoUpdateStable(enabled);
+  }
+
+  heartbeatPlatformUpdater(input: {
+    driver: "systemd_release" | "docker_compose";
+    currentRelease?: MultiremiPlatformRelease | null;
+    latestRelease?: MultiremiPlatformRelease | null;
+    recentReleases?: MultiremiPlatformRelease[];
+    services?: MultiremiPlatformService[];
+  }) {
+    return this.platformOperations.heartbeat(input);
+  }
+
+  createPlatformOperation(
+    input: CreatePlatformOperationInput,
+    requestedBy: string,
+  ): MultiremiPlatformOperation {
+    return this.platformOperations.create(input, requestedBy);
+  }
+
+  getPlatformOperation(id: string): MultiremiPlatformOperation | null {
+    return this.platformOperations.get(id);
+  }
+
+  getActivePlatformOperation(): MultiremiPlatformOperation | null {
+    return this.platformOperations.active();
+  }
+
+  listPlatformOperations(limit?: number): MultiremiPlatformOperation[] {
+    return this.platformOperations.list(limit);
+  }
+
+  claimPlatformOperation(): MultiremiPlatformOperation | null {
+    return this.platformOperations.claim();
+  }
+
+  reportPlatformOperation(
+    id: string,
+    input: ReportPlatformOperationInput,
+  ): MultiremiPlatformOperation | null {
+    return this.platformOperations.report(id, input);
+  }
+
+  cancelPlatformOperation(id: string): MultiremiPlatformOperation {
+    return this.platformOperations.requestCancel(id);
+  }
+
+  getPlatformMaintenance(): MultiremiPlatformMaintenance {
+    return this.platformMaintenance.get();
+  }
+
+  beginPlatformDrain(input: { operationId: string; reason?: string | null; ttlMs?: number }): MultiremiPlatformMaintenance {
+    return this.platformMaintenance.beginDrain(input);
+  }
+
+  renewPlatformDrain(operationId: string, ttlMs?: number): MultiremiPlatformMaintenance | null {
+    return this.platformMaintenance.renewDrain(operationId, ttlMs);
+  }
+
+  releasePlatformDrain(operationId: string): MultiremiPlatformMaintenance {
+    return this.platformMaintenance.releaseDrain(operationId);
+  }
+
+  recordRuntimeDrainAck(runtimeId: string, generation: number, activeTasks: number | null): void {
+    this.platformMaintenance.recordRuntimeDrainAck(runtimeId, generation, activeTasks);
+  }
+
+  getPlatformDrainStatus(): MultiremiPlatformDrainStatus {
+    return this.platformMaintenance.drainStatus();
   }
 
   getSessionArchive(id: string): MultiremiSessionArchive | null {
@@ -749,8 +850,8 @@ runMigrations(this.db);
     return this.agents.getAgentByRef(ref, workspaceId);
   }
 
-  listAgents(): MultiremiAgent[] {
-    return this.agents.listAgents();
+  listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[] {
+    return this.agents.listAgents(options);
   }
 
   createWorkspaceMember(input: CreateWorkspaceMemberInput): MultiremiWorkspaceMember {
@@ -1902,6 +2003,10 @@ runMigrations(this.db);
     return this.issues.listIssues(input);
   }
 
+  countIssues(input: ListIssuesInput = {}): number {
+    return this.issues.countIssues(input);
+  }
+
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
     return this.issues.listGroupedIssues(input);
   }
@@ -1987,6 +2092,18 @@ runMigrations(this.db);
 
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
     return this.issues.updateIssue(id, input);
+  }
+
+  restoreIssue(id: string): MultiremiIssue {
+    return this.issues.restoreIssue(id);
+  }
+
+  archiveEligibleIssues(now?: Date): MultiremiIssue[] {
+    return this.issues.archiveEligibleIssues(now);
+  }
+
+  issueArchiveSweepIntervalMs(): number {
+    return this.issues.issueArchiveSweepIntervalMs();
   }
 
   assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
@@ -2452,6 +2569,43 @@ runMigrations(this.db);
     return this.projects.getProjectDocsIndex(projectId);
   }
 
+  listRepositoryWikiDocs(workspaceId: string, repositoryId: string): MultiremiRepositoryWikiDoc[] {
+    return this.repositoryWiki.list(workspaceId, repositoryId);
+  }
+
+  listWorkspaceRepositoryWikiDocs(workspaceId: string): MultiremiRepositoryWikiDoc[] {
+    return this.repositoryWiki.listWorkspace(workspaceId);
+  }
+
+  getRepositoryWikiDocByRef(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc | null {
+    return this.repositoryWiki.getByRef(workspaceId, repositoryId, ref);
+  }
+
+  createRepositoryWikiDoc(
+    workspaceId: string,
+    repositoryId: string,
+    input: CreateRepositoryWikiDocInput,
+    control?: RepositoryWikiWriteControl,
+  ): MultiremiRepositoryWikiDoc {
+    return this.repositoryWiki.create(workspaceId, repositoryId, input, control);
+  }
+
+  updateRepositoryWikiDoc(
+    current: MultiremiRepositoryWikiDoc,
+    input: UpdateRepositoryWikiDocInput,
+    control?: RepositoryWikiWriteControl,
+  ): MultiremiRepositoryWikiDoc {
+    return this.repositoryWiki.replaceExact(current, input, control);
+  }
+
+  deleteRepositoryWikiDoc(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc {
+    return this.repositoryWiki.delete(workspaceId, repositoryId, ref);
+  }
+
+  listRepositoryWikiDocRevisions(docId: string): MultiremiRepositoryWikiDocRevision[] {
+    return this.repositoryWiki.revisions(docId);
+  }
+
   createSquad(input: CreateSquadInput): MultiremiSquad {
     return this.squads.createSquad(input);
   }
@@ -2827,8 +2981,8 @@ runMigrations(this.db);
     return this.tasks.consumeTaskSteerMessages(taskId, steerIds);
   }
 
-  reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null): MultiremiTask {
-    return this.tasks.reportProgress(taskId, summary, step, total);
+  reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {
+    return this.tasks.reportProgress(taskId, summary, step, total, options);
   }
 
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {

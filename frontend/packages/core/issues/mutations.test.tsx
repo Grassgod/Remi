@@ -8,7 +8,12 @@ import type { ReactNode } from "react";
 
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import { useLoadMoreByAssigneeGroup, useLoadMoreByStatus } from "./mutations";
+import {
+  useLoadMoreArchivedIssues,
+  useLoadMoreByAssigneeGroup,
+  useLoadMoreByStatus,
+  useRestoreIssue,
+} from "./mutations";
 import {
   issueKeys,
   type IssueSortParam,
@@ -52,6 +57,8 @@ function makeIssue(idx: number, overrides: Partial<Issue> = {}): Issue {
     created_at: "2025-01-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
     ...overrides,
+    completed_at: overrides.completed_at ?? null,
+    archived_at: overrides.archived_at ?? null,
   };
 }
 
@@ -310,5 +317,71 @@ describe("useLoadMoreByAssigneeGroup", () => {
       "issue-1",
       "issue-2",
     ]);
+  });
+});
+
+describe("archived issue mutations", () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  });
+
+  afterEach(() => {
+    qc.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("paginates the independent archived list cache", async () => {
+    const listIssues = vi.fn().mockResolvedValue({
+      issues: [makeIssue(2, { archived_at: "2026-01-02T00:00:00Z" })],
+      total: 2,
+    });
+    setApiInstance({ listIssues } as unknown as ApiClient);
+    const key = issueKeys.archivedListSorted(WS_ID, undefined);
+    qc.setQueryData<ListIssuesResponse>(key, {
+      issues: [makeIssue(1, { archived_at: "2026-01-01T00:00:00Z" })],
+      total: 2,
+    });
+
+    const { result } = renderHook(() => useLoadMoreArchivedIssues(), {
+      wrapper: createWrapper(qc),
+    });
+    await act(async () => result.current.loadMore());
+
+    expect(listIssues).toHaveBeenCalledWith({
+      archived_only: true,
+      limit: 50,
+      offset: 1,
+    });
+    expect(qc.getQueryData<ListIssuesResponse>(key)?.issues).toHaveLength(2);
+  });
+
+  it("optimistically removes a restored issue and returns it to the active status bucket", async () => {
+    const restored = makeIssue(1, { status: "done", completed_at: null, archived_at: null });
+    const restoreIssue = vi.fn().mockResolvedValue(restored);
+    setApiInstance({ restoreIssue } as unknown as ApiClient);
+    const archivedKey = issueKeys.archivedListSorted(WS_ID, undefined);
+    const archived = makeIssue(1, {
+      status: "done",
+      completed_at: "2026-01-01T00:00:00Z",
+      archived_at: "2026-01-04T00:00:00Z",
+    });
+    qc.setQueryData<ListIssuesResponse>(archivedKey, { issues: [archived], total: 1 });
+    qc.setQueryData(issueKeys.archivedCount(WS_ID), 1);
+    qc.setQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, undefined), {
+      byStatus: { done: { issues: [], total: 0 } },
+    });
+
+    const { result } = renderHook(() => useRestoreIssue(), {
+      wrapper: createWrapper(qc),
+    });
+    await act(async () => result.current.mutateAsync(archived.id));
+
+    expect(qc.getQueryData<ListIssuesResponse>(archivedKey)).toEqual({ issues: [], total: 0 });
+    expect(qc.getQueryData(issueKeys.archivedCount(WS_ID))).toBe(0);
+    expect(
+      qc.getQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, undefined))?.byStatus.done?.issues,
+    ).toEqual([restored]);
   });
 });

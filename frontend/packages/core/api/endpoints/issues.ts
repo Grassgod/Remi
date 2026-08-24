@@ -11,12 +11,13 @@ import type {
   UpdateIssueRequest,
 } from "../../types";
 import type { HttpClient } from "../http";
-import { parseWithFallback } from "../schema";
+import { parseStrictResponse, parseWithFallback } from "../schema";
 import {
   ChildIssuesResponseSchema,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   GroupedIssuesResponseSchema,
+  IssueSchema,
   ListIssuesResponseSchema,
 } from "../schemas/issues";
 
@@ -41,6 +42,8 @@ export class IssuesEndpoints {
     }
     if (params?.open_only) search.set("open_only", "true");
     if (params?.scheduled) search.set("scheduled", "true");
+    if (params?.include_archived) search.set("include_archived", "true");
+    if (params?.archived_only) search.set("archived_only", "true");
     if (params?.sort_by) search.set("sort", params.sort_by);
     if (params?.sort_direction) search.set("direction", params.sort_direction);
     const path = `/api/issues?${search}`;
@@ -78,6 +81,8 @@ export class IssuesEndpoints {
     if (params.label_ids?.length) search.set("label_ids", params.label_ids.join(","));
     if (params.group_assignee_type) search.set("group_assignee_type", params.group_assignee_type);
     if (params.group_assignee_id) search.set("group_assignee_id", params.group_assignee_id);
+    if (params.include_archived) search.set("include_archived", "true");
+    if (params.archived_only) search.set("archived_only", "true");
     if (params.sort_by) search.set("sort", params.sort_by);
     if (params.sort_direction) search.set("direction", params.sort_direction);
     const raw = await this.http.fetch<unknown>(`/api/issues/grouped?${search}`);
@@ -141,6 +146,15 @@ export class IssuesEndpoints {
     return this.http.fetch(`/api/issues/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
+    });
+  }
+
+  async restoreIssue(id: string): Promise<Issue> {
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}/restore`, {
+      method: "POST",
+    });
+    return parseStrictResponse<Issue>(raw, IssueSchema, {
+      endpoint: "POST /api/issues/:id/restore",
     });
   }
 

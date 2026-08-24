@@ -20,25 +20,30 @@ Commands:
   daemon status          Show daemon health
   daemon logs            Show daemon logs
   daemon service         Install, uninstall, or print a user-level service
-  repo checkout <url>    Check out an allowed workspace repository
+  repo checkout <url>    Check out an allowed workspace repository [--ref <branch-or-sha>]
   attachment download <id> Download an attachment to a local file
   agent list             List agents
   agent get <id>         Print an agent as JSON
   agent edit <id>        Edit agent identity and runtime metadata
   agent update <id>      Alias for agent edit
   issue get <id>         Print an issue as JSON
-  issue list             List issues
-  issue create           Create an issue
-  issue update <id>      Update an issue
+  issue list             List issues; filters: --workspace <id> --status <s>
+                         --priority <p> --assignee <id|name|email> --assignee-type <t>
+                         --project <id> --metadata k=v[,k=v] --limit <n> --offset <n>
+  issue create           Create an issue (--title required; see issue options below)
+  issue update <id>      Update an issue (same fields as create; see issue options)
   issue assign <id>      Assign or unassign an issue
   issue status <id> <s>  Change issue status
   issue delete <id>      Delete an issue
   issue search <query>   Search issues
-  issue comment list <id> List issue comments
-  issue comment add <id> Add an issue comment
+  issue comment list <id> List issue comments; filters: --thread <comment-id>
+                         --since <iso> --tail <n> --recent <n> --roots-only
+                         --summary --before <iso> --before-id <id>
+  issue comment add <id> Add an issue comment (--parent <comment-id> replies in a thread)
   issue comment update <comment-id>
   issue comment delete <comment-id>
   issue comment resolve <comment-id>
+  issue comment unresolve <comment-id>
   issue session list <id> List product Sessions for an issue
   issue session result list <id> List explicitly published cross-Session results
   issue session result publish <id> Publish a reusable result from one Session
@@ -51,8 +56,8 @@ Commands:
   issue subscriber add <id> [--user-id <member-id>]
   issue subscriber remove <id> [--user-id <member-id>]
   issue runs <id>        List task runs for an issue
-  issue run-messages <task-id>
-  issue rerun <id>       Enqueue a fresh issue task
+  issue run-messages <task-id> [--since <seq>]
+  issue rerun <id>       Enqueue a fresh issue task [--agent-id <id>] [--prompt <text>]
   issue cancel-task <task-id>
   issue task steer <task-id> (--content <text>|--content-file <path>|--content-stdin)
                          Inject new instructions into a running task (run keeps going)
@@ -64,26 +69,28 @@ Commands:
   issue metadata set <id> --key <k> --value <v> [--type string|number|bool]
   issue metadata delete <id> --key <k>
   memory list            List memory in the workspace or --project scope
-  memory recall <query>  Semantically recall memory
-  memory read <ref>      Read memory (requires --project)
-  memory remember        Store memory (requires --project and --title)
+  memory recall <query>  Semantically recall memory (alias: memory search)
+  memory read <ref>      Read memory (requires --project; alias: memory get)
+  memory remember        Store memory (requires --project and --title; alias: memory add)
   memory update <ref>    Update memory (requires --project)
-  memory forget <ref>    Delete memory (requires --project)
+  memory forget <ref>    Delete memory (requires --project; alias: memory delete)
   memory backlinks <ref> List pages linking to memory (requires --project)
   wiki list              List wiki pages in the workspace or --project scope
   wiki search <query>    Semantically search wiki pages
-  wiki read <ref>        Read a wiki page (requires --project)
+  wiki read <ref>        Read a wiki page (requires --project; alias: wiki get)
   wiki create            Create a wiki page (requires --project and --title)
   wiki update <ref>      Update a wiki page (requires --project)
   wiki delete <ref>      Delete a wiki page (requires --project)
-  wiki history <ref>     Read wiki revision history (requires --project)
+  wiki history <ref>     Read wiki revision history (requires --project; alias: wiki revisions)
   wiki backlinks <ref>   List pages linking to a wiki page (requires --project)
   wiki pull              Materialize the project Wiki into ./wiki
   wiki status            Compare the local Wiki, base snapshot, and remote
   wiki diff              Show local Wiki changes against the base snapshot
   wiki push              Three-way merge and write local Wiki changes back
   project knowledge status|backfill|verify|retry-failed [project-id]
+  seed                   Create the default agent (--provider claude|codex)
   version                Print Multiremi version
+  help                   Show this help
 
 Options:
   --port <number>        API port for serve (default: 6120)
@@ -91,6 +98,7 @@ Options:
   --token <token>        Bearer token for server/daemon auth
   --server <url>         Daemon server URL (default: http://127.0.0.1:6120)
   --output json|table    Output format for supported read commands
+  --json                 JSON output for daemon status and daemon service status
   --full-id              Show full IDs in supported table output
   --attachment <path>    Attach a local file to issue create/comment add (repeatable)
   --session <id>         Select a product Session for Session result commands
@@ -99,6 +107,8 @@ Options:
   --content-stdin        Read a comment or published-result body from stdin
   --type <kind>          Published-result kind: mr|report|deploy|decision|doc|other
   --output-dir <dir>     Directory for attachment download
+  --ref <branch-or-sha>  Branch or commit for repo checkout (memory/wiki commands
+                         use --ref <type>:<value> as a citation; see below)
   --provider <name>      Limit daemon to one provider: claude or codex (default: auto-detect)
   --workspace <id>       Workspace id (default: local)
   --runtime-id <id>      Reuse a fixed runtime id
@@ -117,6 +127,21 @@ Options:
   --service-dir <dir>    Directory for daemon service files
   --enable               Enable service after daemon service install
   --disable              Disable service before daemon service uninstall
+
+Issue create/update options:
+  --title <text>         Issue title (required for create)
+  --description <text>   Issue description (or --description-file <path> /
+                         --description-stdin)
+  --status <s>           backlog|todo|in_progress|in_review|done|blocked|cancelled
+  --priority <p>         Issue priority
+  --project <id>         Project the issue belongs to
+  --parent <id>          Parent issue; for issue comment add, --parent is the
+                         parent comment id instead (reply in a thread)
+  --assignee <id|name|email> Assignee, with optional --assignee-type agent|member|squad
+  --start-date <date>    Start date
+  --due-date <date>      Due date
+  --attachment <path>    Attach a local file (repeatable; see Options above)
+  --allow-duplicate      Skip the duplicate-title guard (create only)
 
 Agent edit options:
   --name <name>          Change the display name
@@ -139,7 +164,8 @@ Memory and wiki options:
   --tags a,b             Comma-separated tags
   --pinned [true|false]  Pin the doc into the prompt injection index
   --ref <type>:<value>   Cite a source: issue:<id>, task:<id>, url:<url> (repeatable;
-                         also links a published Session result)
+                         also links a published Session result; repo checkout uses
+                         --ref <branch-or-sha> instead)
   --expected-version <n> Fail the update when the doc moved on (409)
   --limit <n>            Result cap for search or recall
   --dry-run              Report knowledge migration work without writing

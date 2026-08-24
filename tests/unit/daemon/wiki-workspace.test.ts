@@ -72,6 +72,88 @@ describe("Issue Wiki workspace", () => {
     expect(JSON.parse(readFileSync(join(root, ".multiremi", "wiki-base", "manifest.json"), "utf8")).docs)
       .toHaveLength(1);
   });
+
+  test("materializes repository Wiki pages and records empty repositories for first-page creation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-repository-wiki-"));
+    roots.push(root);
+    const value = task("project", 1);
+    value.repositoryWikiContexts = [
+      {
+        repository: {
+          id: "repo_alpha",
+          name: "alpha",
+          url: "git@github.com:org/alpha.git",
+          defaultBranch: "main",
+        },
+        docs: [{
+          id: "rwdoc_1",
+          workspaceId: "local",
+          repositoryId: "repo_alpha",
+          path: "architecture/overview.md",
+          slug: "architecture/overview",
+          title: "Architecture",
+          summary: null,
+          body: "repository facts",
+          tags: [],
+          refs: [],
+          sourceRevision: "abc123",
+          status: "healthy",
+          version: 1,
+          updatedAt: "2026-08-18T00:00:00.000Z",
+        }],
+      },
+      {
+        repository: {
+          id: "repo_empty",
+          name: "empty",
+          url: "git@github.com:org/empty.git",
+          defaultBranch: "main",
+        },
+        docs: [],
+      },
+    ];
+
+    await prepareIssueWikiWorkspace(root, value);
+    expect(readFileSync(join(root, "wiki", "repositories", "alpha-po_alpha", "architecture", "overview.md"), "utf8"))
+      .toBe("repository facts\n");
+    const manifest = JSON.parse(readFileSync(join(root, ".multiremi", "wiki-base", "repositories", "manifest.json"), "utf8"));
+    expect(manifest.repositories).toEqual([
+      { id: "repo_alpha", name: "alpha", directory: "alpha-po_alpha" },
+      { id: "repo_empty", name: "empty", directory: "empty-po_empty" },
+    ]);
+    expect(manifest.docs).toMatchObject([{ id: "rwdoc_1", repositoryId: "repo_alpha", path: "alpha-po_alpha/architecture/overview.md" }]);
+  });
+
+  test("materializes repository Wiki for an SCM task without an Issue or Project", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-repository-only-wiki-"));
+    roots.push(root);
+    const value = task("unused", 1);
+    value.issueId = null;
+    value.issueSessionId = null;
+    value.issue = null;
+    value.project = null;
+    value.projectWikiDocs = [];
+    value.repositoryWikiContexts = [{
+      repository: {
+        id: "repo_atlas",
+        name: "atlas",
+        url: "git@github.com:org/atlas.git",
+        defaultBranch: "main",
+      },
+      docs: [],
+    }];
+
+    expect(await prepareIssueWikiWorkspace(root, value)).toBeNull();
+    const manifest = JSON.parse(readFileSync(
+      join(root, ".multiremi", "wiki-base", "repositories", "manifest.json"),
+      "utf8",
+    ));
+    expect(manifest).toMatchObject({
+      workspaceId: "local",
+      repositories: [{ id: "repo_atlas", name: "atlas", directory: "atlas-po_atlas" }],
+      docs: [],
+    });
+  });
 });
 
 function task(

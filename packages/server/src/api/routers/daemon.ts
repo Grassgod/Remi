@@ -333,6 +333,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       agent_plugin_protocol?: number;
       ssh_mesh_protocol?: number;
       ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
+      drain_ack_generation?: number;
+      active_task_count?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -365,6 +367,19 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       if (meshAck) ack.ssh_mesh = meshAck;
     } else {
       store.recordSshMeshHeartbeat(runtimeId, 0);
+    }
+    // Reading the maintenance row also enforces the drain lease TTL lazily,
+    // so an expired lease flips back to normal on the very next heartbeat.
+    const maintenance = store.getPlatformMaintenance();
+    ack.drain = { mode: maintenance.mode, generation: maintenance.generation };
+    const ackGeneration = Number(body.drain_ack_generation);
+    if (Number.isSafeInteger(ackGeneration) && ackGeneration >= 0) {
+      const activeCount = Number(body.active_task_count);
+      store.recordRuntimeDrainAck(
+        runtimeId,
+        ackGeneration,
+        Number.isSafeInteger(activeCount) && activeCount >= 0 ? activeCount : null,
+      );
     }
     const response = daemonHeartbeatHttpResponse(ack);
     const runtime = store.getRuntime(runtimeId);
@@ -415,6 +430,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     let hydratedTask: typeof task;
     try {
       hydratedTask = await deps.projectKnowledge.hydrateTaskKnowledge(task);
+      hydratedTask = await deps.repositoryWiki.hydrateTaskWiki(hydratedTask);
     } catch (error) {
       store.failTask(task.id, {
         error: `Project knowledge unavailable before agent startup: ${safeProjectKnowledgeError(error)}`,
@@ -512,14 +528,19 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
   });
   app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
-    const body = await readJsonStrict<{ summary?: string; step?: number; total?: number }>(c);
+    const body = await readJsonStrict<{ summary?: string; step?: number; total?: number; final?: boolean }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
     const existing = store.getTask(taskId);
     if (!existing) return c.json({ error: "task not found" }, 404);
-    if (!isTerminalTaskStatus(existing.status)) store.reportProgress(taskId, body.summary ?? "", body.step, body.total);
+    // A `final` summary describes the run's terminal outcome and is produced
+    // after the status flip, so it may land on an already-terminal task.
+    const final = body.final === true;
+    if (!isTerminalTaskStatus(existing.status) || final) {
+      store.reportProgress(taskId, body.summary ?? "", body.step, body.total, { allowTerminal: final });
+    }
     return c.json({ status: "ok" });
   });
   app.post("/api/daemon/tasks/:taskId/messages", async (c) => {

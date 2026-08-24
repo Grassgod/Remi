@@ -1,11 +1,42 @@
 // Chat session persistence/resume plus the creator-scoped HTTP surfaces.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import {
+  buildChatBootstrapTranscript,
+  CHAT_BOOTSTRAP_MAX_BYTES,
+  CHAT_BOOTSTRAP_MAX_MESSAGES,
+  CHAT_BOOTSTRAP_OMITTED_NOTICE,
+} from "@multiremi/store/repos/chat-repo.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — chat sessions and private agent access", () => {
+  it("bounds cold bootstrap history by newest 64 messages and 64 KiB", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      id: `msg_${index}`,
+      chatSessionId: "chat_1",
+      taskId: `tsk_${index}`,
+      role: index % 2 ? "assistant" : "user",
+      body: `message-${index} ${"x".repeat(1400)}`,
+      failureReason: null,
+      elapsedMs: null,
+      createdAt: new Date(index * 1000).toISOString(),
+    })) as any;
+
+    const result = buildChatBootstrapTranscript(messages);
+    expect(result.omitted).toBe(true);
+    expect(result.includedMessages).toBeLessThanOrEqual(CHAT_BOOTSTRAP_MAX_MESSAGES);
+    expect(new TextEncoder().encode(result.transcript).byteLength).toBeLessThanOrEqual(CHAT_BOOTSTRAP_MAX_BYTES);
+    expect(result.transcript).toStartWith(CHAT_BOOTSTRAP_OMITTED_NOTICE);
+    expect(result.transcript).toContain("message-79");
+    expect(result.transcript).not.toContain("message-0 ");
+
+    const oversized = buildChatBootstrapTranscript([{ ...messages[0], body: "中文".repeat(50_000) }]);
+    expect(new TextEncoder().encode(oversized.transcript).byteLength).toBeLessThanOrEqual(CHAT_BOOTSTRAP_MAX_BYTES);
+    expect(oversized.transcript).toContain("[Message truncated.]");
+  });
+
   it("persists chat sessions and resumes provider context across turns", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });

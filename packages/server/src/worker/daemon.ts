@@ -35,6 +35,12 @@ import {
   TaskSteerFeed,
 } from "./steer.js";
 import {
+  MultiremiTaskReportOutbox,
+  type MultiremiOutboxKind,
+  type MultiremiOutboxRecord,
+  type MultiremiOutboxStats,
+} from "./outbox.js";
+import {
   browseRuntimeDirectory,
   listRuntimeLocalSkills,
   loadRuntimeLocalSkillBundle,
@@ -45,6 +51,7 @@ import { buildTaskPromptArtifact, type TaskRepoCheckout, type TaskRepoWarning } 
 import {
   MultiremiRepoCache,
   normalizeRepoList,
+  repoCacheTimeoutOverrides,
   type MultiremiRepoSyncResult,
 } from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
@@ -141,6 +148,12 @@ import {
   MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
+import {
+  resolveProgressSummaryConfig,
+  resolveSummarizerCredentials,
+  TaskProgressSummarizer,
+  type ProgressRunOutcome,
+} from "./progress-summarizer.js";
 
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
@@ -354,6 +367,12 @@ export interface MultiremiDaemonOptions {
   supervisorReady?: () => boolean;
   /** Updates the shared provider readiness barrier. */
   onReadyChange?: (ready: boolean) => void;
+  /** Full path of the durable report-outbox database (tests use ":memory:"). */
+  outboxPath?: string;
+  /** Injectable retry schedule for outbox delivery tests. */
+  outboxBackoffMs?: number[];
+  /** Soft on-disk cap for the report outbox. */
+  outboxMaxBytes?: number;
 }
 
 export interface MultiremiDaemonSshMeshRuntime {
@@ -435,7 +454,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -470,6 +489,18 @@ export class MultiremiDaemon {
   private inflight = new Set<Promise<void>>();
   private activeTaskAborts = new Set<AbortController>();
   private claimsPaused = false;
+  /**
+   * Server-driven platform drain. Unlike claimsPaused (local CLI self-update,
+   * which exits the poll loop), a drain keeps the loop alive: heartbeats and
+   * running tasks continue, only new claims stop until the server acks normal.
+   */
+  private serverDrainActive = false;
+  private appliedDrainGeneration = 0;
+  private outbox: MultiremiTaskReportOutbox | null = null;
+  private outboxAbort: AbortController | null = null;
+  private readonly outboxPath: string;
+  private readonly outboxBackoffMs: number[] | undefined;
+  private readonly outboxMaxBytes: number | undefined;
   private restartRequestedFlag = false;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
   private gcInFlight: Promise<MultiremiDaemonGcSummary> | null = null;
@@ -600,12 +631,32 @@ export class MultiremiDaemon {
         serverUrl: this.options.serverUrl,
         token: this.options.token,
       },
+      ...repoCacheTimeoutOverrides(process.env),
     });
     this.agentPluginCache = new AgentPluginCache({
       root: this.options.pluginCacheRoot,
       serverUrl: this.options.serverUrl,
       getAuthToken: () => this.options.token,
     });
+    // One durable outbox per (server, workspace, daemon, provider) identity so
+    // a restarted daemon reopens exactly its own undelivered reports, and
+    // co-resident provider daemons never contend for one file. Lives in the
+    // daemon's own state dir — never inside any Git worktree.
+    const outboxIdentity = createHash("sha256").update([
+      this.options.serverUrl,
+      this.options.workspaceId ?? "local",
+      this.options.daemonId ?? this.options.runtimeName,
+      this.options.provider,
+    ].join("|")).digest("hex").slice(0, 16);
+    this.outboxPath = options.outboxPath
+      ?? join(
+        process.env.MULTIREMI_OUTBOX_DIR
+          ?? join(process.env.MULTIREMI_STATE_DIR ?? join(homedir(), ".multiremi"), "outbox"),
+        `${this.options.provider}-${outboxIdentity}.db`,
+      );
+    this.outboxBackoffMs = options.outboxBackoffMs;
+    this.outboxMaxBytes = options.outboxMaxBytes
+      ?? numberEnv(process.env.MULTIREMI_OUTBOX_MAX_BYTES, 256 * 1024 * 1024);
     this.agentPluginReconciler = new AgentPluginRuntimeReconciler({
       cache: this.agentPluginCache,
       preflight: (snapshot, payloadPath, signal) =>
@@ -624,16 +675,23 @@ export class MultiremiDaemon {
     this.ready = false;
     this.stopped = false;
     this.claimsPaused = false;
+    this.serverDrainActive = false;
+    this.appliedDrainGeneration = 0;
     this.terminalAuthorityMode = false;
     this.terminalAuthorityCleanupAttempts = 0;
     this.restartRequestedFlag = false;
     this.workspaceOwnershipLost = false;
     this.onReadyChange(false);
     this.assertWorkspaceRootOwner();
+    const outbox = this.ensureOutbox();
     this.startRepoCheckoutServer();
     try {
       await this.registerCurrentRuntime();
       this.assertWorkspaceRootOwner();
+      // Replay reports left over from a previous run BEFORE recover-orphans:
+      // recoverOrphans marks in-flight tasks failed, so an undelivered
+      // complete/fail must land first or a finished task gets mislabelled.
+      await outbox.flushAll(this.outboxAbort?.signal);
       await this.refreshWorkspaceRepos(this.options.workspaceId);
       this.assertWorkspaceRootOwner();
       this.startGcLoop();
@@ -665,13 +723,17 @@ export class MultiremiDaemon {
           const ack = await this.client.heartbeatRuntime(
             this.options.runtimeId!,
             this.sshMeshManager.getHeartbeatStatus(),
+            {
+              ackGeneration: this.appliedDrainGeneration,
+              activeTaskCount: this.activeTaskCount,
+            },
           );
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
           if (!skipClaim && !this.stopped) {
             await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
           }
           if (this.stopped || this.claimsPaused) break;
-          if (skipClaim) {
+          if (skipClaim || this.serverDrainActive) {
             if (this.options.once) return;
             await sleep(this.options.pollIntervalMs);
             continue;
@@ -695,6 +757,7 @@ export class MultiremiDaemon {
             this.activeTaskCount < this.options.maxConcurrency
             && !this.stopped
             && !this.claimsPaused
+            && !this.serverDrainActive
             && this.supervisorReady()
           ) {
             const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
@@ -748,6 +811,16 @@ export class MultiremiDaemon {
       await this.drainGcInFlight();
       this.gitWorktreeInspector?.close();
       this.stopRepoCheckoutServer();
+      // Undelivered rows stay on disk and replay on the next start(). close()
+      // wakes retry sleepers, so a mid-backoff pump exits promptly.
+      this.outboxAbort?.abort();
+      const outbox = this.outbox;
+      this.outbox = null;
+      if (outbox) {
+        await outbox.close().catch((error) => {
+          log.warn(`outbox close failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     }
   }
 
@@ -836,6 +909,23 @@ export class MultiremiDaemon {
 
   private async handleHeartbeatAck(runtimeId: string, ack: MultiremiDaemonHeartbeatConfigAck): Promise<boolean> {
     const workspaceId = this.options.workspaceId ?? "local";
+    if (ack.drain) {
+      const draining = ack.drain.mode === "draining";
+      if (draining !== this.serverDrainActive) {
+        log.info(
+          draining
+            ? `Platform drain generation ${ack.drain.generation} active: pausing task claims (running tasks continue)`
+            : "Platform drain released: resuming task claims",
+        );
+      }
+      this.serverDrainActive = draining;
+      // Track the highest generation seen so the next heartbeat acknowledges
+      // it. Acknowledging in normal mode too keeps the ack current when a new
+      // drain begins (the bumped generation is only acked after it is applied).
+      if (Number.isSafeInteger(ack.drain.generation) && ack.drain.generation > this.appliedDrainGeneration) {
+        this.appliedDrainGeneration = ack.drain.generation;
+      }
+    }
     if (ack.workspace_settings) this.applyWorkspaceSettings(workspaceId, ack.workspace_settings);
     if (ack.relay) {
       this.workspaceRelays.set(workspaceId, ack.relay);
@@ -1370,6 +1460,9 @@ export class MultiremiDaemon {
     this.terminalAuthorityCleanupRetryWake?.();
     this.agentPluginReconcileAbort?.abort();
     this.cancelRuntimeModelRefresh();
+    // Release any handleTask waiting on report delivery; undelivered rows are
+    // durable and replay on the next start().
+    this.outboxAbort?.abort();
   }
 
   stopForWorkspaceOwnershipLoss(error: unknown): void {
@@ -1638,6 +1731,103 @@ export class MultiremiDaemon {
     return this.repoServerPort;
   }
 
+  /**
+   * All task-scoped reports go through the durable outbox: enqueue is local
+   * and effectively instant, delivery happens in per-task order in the
+   * background with bounded-backoff retries. A transient API outage therefore
+   * never unwinds the agent's provider session.
+   */
+  private enqueueTaskReport(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): void {
+    this.ensureOutbox().enqueue(taskId, kind, payload);
+  }
+
+  /**
+   * Lazily construct the durable outbox. start() opens it eagerly; the lazy
+   * path exists for direct handleTask() invocations (tests, one-off harnesses)
+   * where no daemon lifecycle is running — those fall back to an in-memory
+   * queue when the constructor never resolved a durable path.
+   */
+  private ensureOutbox(): MultiremiTaskReportOutbox {
+    if (!this.outbox) {
+      this.outboxAbort ??= new AbortController();
+      this.outbox = new MultiremiTaskReportOutbox({
+        path: this.outboxPath ?? ":memory:",
+        deliver: (record) => this.deliverOutboxRecord(record),
+        ...(this.outboxBackoffMs ? { backoffScheduleMs: this.outboxBackoffMs } : {}),
+        ...(this.outboxMaxBytes ? { maxBytes: this.outboxMaxBytes } : {}),
+      });
+    }
+    return this.outbox;
+  }
+
+  private async awaitTaskReportDrain(taskId: string): Promise<void> {
+    const outbox = this.outbox;
+    if (!outbox) return;
+    const result = await outbox.waitForTaskDrain(taskId, this.outboxAbort?.signal);
+    if (result === "blocked") {
+      log.error(`task ${taskId} still has undelivered reports blocked on a permanent error`);
+    } else if (result === "aborted") {
+      log.warn(`task ${taskId} report delivery interrupted by shutdown; will replay on next start`);
+    }
+  }
+
+  /** Outbox → API dispatch. Each call is idempotent server-side (seq upsert / status guards). */
+  private async deliverOutboxRecord(record: MultiremiOutboxRecord): Promise<void> {
+    const payload = record.payload as Record<string, any>;
+    switch (record.kind) {
+      case "start":
+        await this.client.startTask(record.taskId);
+        return;
+      case "prompt":
+        await this.client.reportTaskPrompt(record.taskId, {
+          mode: payload.mode === "delta" ? "delta" : "bootstrap",
+          prompt: String(payload.prompt ?? ""),
+          sha256: String(payload.sha256 ?? ""),
+        });
+        return;
+      case "session_pin":
+        await this.client.pinTaskSession(record.taskId, payload.sessionId ?? null, payload.workDir ?? null);
+        return;
+      case "progress":
+        await this.client.reportProgress(record.taskId, String(payload.summary ?? ""), payload.step, payload.total);
+        return;
+      case "messages":
+        await this.client.reportTaskMessages(record.taskId, Array.isArray(payload.messages) ? payload.messages : []);
+        return;
+      case "usage":
+        await this.client.reportTaskUsage(record.taskId, Array.isArray(payload.usage) ? payload.usage : []);
+        return;
+      case "workspace":
+        await this.client.reportIssueWorkspace(record.taskId, {
+          runtimeId: String(payload.runtimeId ?? ""),
+          rootPath: String(payload.rootPath ?? ""),
+          branchName: String(payload.branchName ?? ""),
+          status: payload.status,
+          repos: Array.isArray(payload.repos) ? payload.repos : [],
+        });
+        return;
+      case "complete":
+        await this.client.completeTask(record.taskId, String(payload.output ?? ""), payload.sessionId ?? null, payload.workDir ?? null);
+        return;
+      case "fail":
+        await this.client.failTask(
+          record.taskId,
+          String(payload.error ?? "Task failed"),
+          payload.sessionId ?? null,
+          payload.workDir ?? null,
+          payload.failureReason ?? null,
+        );
+        return;
+      default:
+        throw new Error(`unknown outbox record kind: ${String(record.kind)}`);
+    }
+  }
+
+  /** Exposed on the local /health endpoint for observability. */
+  outboxStats(): MultiremiOutboxStats | null {
+    return this.outbox?.stats() ?? null;
+  }
+
   private tryPauseClaimsForUpdate(): boolean {
     if (this.claimsPaused || this.activeTaskCount > 0) return false;
     this.claimsPaused = true;
@@ -1676,6 +1866,7 @@ export class MultiremiDaemon {
     let providerEnv: Record<string, string> | undefined;
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
+    let progressSummarizer: TaskProgressSummarizer | null = null;
 
     try {
       this.assertWorkspaceRootOwner();
@@ -1707,7 +1898,7 @@ export class MultiremiDaemon {
         });
         const runtimeId = task.runtimeId ?? this.options.runtimeId;
         if (runtimeId) {
-          await this.client.reportIssueWorkspace(task.id, {
+          this.enqueueTaskReport(task.id, "workspace", {
             runtimeId,
             rootPath: issueRuntimeStateRoot,
             branchName: task.issue?.issueKind === "intake" ? "" : `agent/${task.issue?.key ?? task.id}`,
@@ -1768,29 +1959,51 @@ export class MultiremiDaemon {
           codexRelayUsesEnvApiKey: task.agent?.provider === "codex" && Boolean(providerInstallEnv?.OPENAI_API_KEY),
         });
       }
-      await this.client.startTask(task.id);
-      await this.client.reportProgress(task.id, "Agent execution started", 1, 3);
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv);
+      this.enqueueTaskReport(task.id, "start", {});
+      this.enqueueTaskReport(task.id, "progress", { summary: "Agent execution started", step: 1, total: 3 });
+      progressSummarizer = this.createTaskProgressSummarizer(task, providerEnv);
+      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
         // The run loop only leaves a task unfinalized when the output was
         // classified as poisoned (see runAgent's finalize path).
         const poisonedReason = classifyPoisonedOutput(summary.output) ?? "agent_fallback_message";
-        await this.client.reportTaskUsage(task.id, summary.usage);
-        await this.client.failTask(task.id, summary.output, summary.sessionId, summary.workDir, poisonedReason);
+        if (summary.usage.length) this.enqueueTaskReport(task.id, "usage", { usage: summary.usage });
+        this.enqueueTaskReport(task.id, "fail", {
+          error: summary.output,
+          sessionId: summary.sessionId,
+          workDir: summary.workDir,
+          failureReason: poisonedReason,
+        });
         log.warn(`Failed task ${task.id} with poisoned output: ${poisonedReason}`);
+        this.finalizeTaskProgress(progressSummarizer, "failed", poisonedReason);
+        await this.awaitTaskReportDrain(task.id);
         return;
       }
+      // Completion itself (progress 3/3, usage, completeTask with the steer
+      // barrier) already happened synchronously inside runAgent, while the
+      // provider session was still open — only the summarizer wrap-up and the
+      // outbox drain remain.
+      this.finalizeTaskProgress(progressSummarizer, "completed", summary.output);
+      await this.awaitTaskReportDrain(task.id);
     } catch (err) {
       const error = timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
       if (!timedOut && abort.signal.aborted && await this.wasTaskCancelledByServer(task.id)) {
         log.info(`Task ${task.id} was cancelled by the server`);
+        this.finalizeTaskProgress(progressSummarizer, "cancelled");
         return;
       }
       const failureReason = err instanceof LocalDirectoryError
         ? err.failureReason
         : classifyDaemonTaskFailure(task.agent?.provider ?? "", error);
-      await this.client.failTask(task.id, error, summary?.sessionId ?? task.sessionId, summary?.workDir ?? task.workDir, failureReason);
+      this.enqueueTaskReport(task.id, "fail", {
+        error,
+        sessionId: summary?.sessionId ?? task.sessionId,
+        workDir: summary?.workDir ?? task.workDir,
+        failureReason,
+      });
       log.error(`Failed task ${task.id}: ${error}`);
+      this.finalizeTaskProgress(progressSummarizer, "failed", error);
+      await this.awaitTaskReportDrain(task.id);
     } finally {
       if (pluginRuntimeBase && !task.issueId && !task.chatSessionId) {
         await cleanupNonIssueTaskPluginRuntime(
@@ -1888,13 +2101,13 @@ export class MultiremiDaemon {
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
     const branchName = `agent/${task.issue?.key ?? task.id}`;
     if (runtimeId) {
-      await this.client.reportIssueWorkspace(task.id, {
+      this.enqueueTaskReport(task.id, "workspace", {
         runtimeId,
         rootPath: resolvedWorkDir.workDir,
         branchName,
         status: "preparing",
         repos: [],
-      }).catch((err) => log.warn(`Failed to report workspace preparation for ${task.id}: ${err instanceof Error ? err.message : String(err)}`));
+      });
     }
     for (const repo of repos) {
       try {
@@ -1945,13 +2158,13 @@ export class MultiremiDaemon {
       }
     }
     if (runtimeId) {
-      await this.client.reportIssueWorkspace(task.id, {
+      this.enqueueTaskReport(task.id, "workspace", {
         runtimeId,
         rootPath: resolvedWorkDir.workDir,
         branchName,
         status: workspaceRepos.some((repo) => repo.status === "error") ? "error" : "in_use",
         repos: workspaceRepos,
-      }).catch((err) => log.warn(`Failed to report workspace for ${task.id}: ${err instanceof Error ? err.message : String(err)}`));
+      });
     }
     return { checkouts, repos: workspaceRepos, warnings };
   }
@@ -1974,7 +2187,7 @@ export class MultiremiDaemon {
     }
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
     if (runtimeId) {
-      await this.client.reportIssueWorkspace(task.id, {
+      this.enqueueTaskReport(task.id, "workspace", {
         runtimeId,
         rootPath: resolvedWorkDir.workDir,
         branchName: "",
@@ -1982,14 +2195,15 @@ export class MultiremiDaemon {
         repos: [],
       });
     }
+    // Intake prefers a fresh snapshot of every repo, but a refresh failure
+    // degrades to the cached (or absent) view with a prompt warning instead of
+    // failing the task: triage rarely depends on being at the exact tip.
+    const warnings = repoWarningsFromSyncResults(syncResults);
+    for (const warning of warnings) {
+      log.warn(`Intake workspace degraded for ${task.id}: ${warning.repoUrl} is ${warning.kind === "stale_cache" ? "stale" : "unavailable"}: ${warning.message}`);
+    }
     let prepared: PreparedIssueWorkspace;
     try {
-      const staleRepo = syncResults.find((result) => result.status !== "fresh");
-      if (staleRepo) {
-        throw new Error(
-          `Intake workspace requires a fresh repository snapshot, but ${staleRepo.repoUrl} is ${staleRepo.status}: ${staleRepo.error ?? "repository refresh failed"}`,
-        );
-      }
       prepared = await prepareIntakeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, {
         snapshotsRoot: join(this.options.workspacesRoot, ".snapshots"),
         skipRepoFetch: true,
@@ -1997,26 +2211,35 @@ export class MultiremiDaemon {
       });
     } catch (error) {
       if (runtimeId) {
-        await this.client.reportIssueWorkspace(task.id, {
+        this.enqueueTaskReport(task.id, "workspace", {
           runtimeId,
           rootPath: resolvedWorkDir.workDir,
           branchName: "",
           status: "error",
           repos: [],
-        }).catch(() => undefined);
+        });
       }
       throw error;
     }
+    for (const repo of prepared.repos) {
+      if (repo.status !== "error") continue;
+      upsertRepoWarning(warnings, {
+        repoUrl: repo.repoUrl,
+        kind: "unavailable",
+        message: repo.error ?? "repository preparation failed",
+      });
+      log.warn(`Intake snapshot of ${repo.repoUrl} unavailable for ${task.id}: ${repo.error ?? "repository preparation failed"}`);
+    }
     if (runtimeId) {
-      await this.client.reportIssueWorkspace(task.id, {
+      this.enqueueTaskReport(task.id, "workspace", {
         runtimeId,
         rootPath: resolvedWorkDir.workDir,
         branchName: "",
-        status: "in_use",
+        status: prepared.repos.some((repo) => repo.status === "error") ? "error" : "in_use",
         repos: prepared.repos,
       });
     }
-    return prepared;
+    return { ...prepared, warnings };
   }
 
   private async reportIssueWorkspaceAfterRun(
@@ -2027,11 +2250,14 @@ export class MultiremiDaemon {
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
     if (!task.issueId || !runtimeId) return;
     if (task.issue?.issueKind === "intake") {
-      await this.client.reportIssueWorkspace(task.id, {
+      // A degraded intake run keeps its error repos; the final report must not
+      // paper over them with "ready" or the workspace status would contradict
+      // the per-repo detail it carries.
+      this.enqueueTaskReport(task.id, "workspace", {
         runtimeId,
         rootPath,
         branchName: "",
-        status: "ready",
+        status: workspaceRepos.some((repo) => repo.status === "error") ? "error" : "ready",
         repos: workspaceRepos,
       });
       return;
@@ -2061,7 +2287,7 @@ export class MultiremiDaemon {
       : repos.some((repo) => repo.dirty)
         ? "dirty"
         : "ready";
-    await this.client.reportIssueWorkspace(task.id, { runtimeId, rootPath, branchName, status, repos });
+    this.enqueueTaskReport(task.id, "workspace", { runtimeId, rootPath, branchName, status, repos });
   }
 
   private localDirectoryDaemonIds(task: MultiremiTaskWithAgent): string[] {
@@ -2180,10 +2406,53 @@ export class MultiremiDaemon {
 
   private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {
     try {
-      await this.client.reportTaskMessages(taskId, [{ seq, type, content, input }]);
+      this.enqueueTaskReport(taskId, "messages", { messages: [{ seq, type, content, input }] });
     } catch (err) {
       log.warn(`Failed to report ${type} message for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Per-task LLM progress summarizer (MUL-67). Reuses the task's own provider
+   * credentials; returns null when the feature is disabled or no usable
+   * credential exists, in which case the run proceeds without summaries.
+   */
+  private createTaskProgressSummarizer(
+    task: MultiremiTaskWithAgent,
+    providerEnv?: Record<string, string>,
+  ): TaskProgressSummarizer | null {
+    try {
+      const config = resolveProgressSummaryConfig();
+      if (!config.enabled) return null;
+      const credentials = resolveSummarizerCredentials(providerEnv);
+      if (!credentials) {
+        log.info(`Progress summaries unavailable for task ${task.id}: no Anthropic-style credential`);
+        return null;
+      }
+      return new TaskProgressSummarizer({
+        config,
+        credentials,
+        taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
+        taskPrompt: task.prompt ?? "",
+        report: async (result, { final }) => {
+          await this.client.reportProgress(task.id, result.summary, result.step, result.total, { final });
+        },
+      });
+    } catch (err) {
+      log.warn(`Progress summarizer setup failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /** Terminal summary, detached from the task lifecycle — never blocks or fails it. */
+  private finalizeTaskProgress(
+    summarizer: TaskProgressSummarizer | null,
+    outcome: ProgressRunOutcome,
+    detail?: string,
+  ): void {
+    summarizer?.finalize(outcome, detail).catch((err) => {
+      log.warn(`Final progress summary failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
   }
 
   private async runAgent(
@@ -2193,6 +2462,7 @@ export class MultiremiDaemon {
     pluginRuntime?: PreparedAgentPluginRuntime,
     providerHome?: IssueSessionProviderHome | null,
     providerEnv?: Record<string, string>,
+    progressSummarizer?: TaskProgressSummarizer | null,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -2207,7 +2477,14 @@ export class MultiremiDaemon {
     // — if it vanished post-resolve the run fails loudly instead of mkdir-ing a
     // machine-local path on a pool machine that shouldn't have it.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
-    const repoSyncResults = await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
+    // Homepage Chat starts from the safe database directory and performs Git
+    // work only through an explicit `remi repo checkout`. Keep Issue task repo
+    // preparation unchanged, including for any task that also carries Chat
+    // metadata but is anchored to an Issue workspace.
+    const homepageChat = Boolean(task.chatSessionId && !task.issueId);
+    const repoSyncResults = homepageChat
+      ? []
+      : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal);
     this.assertWorkspaceRootOwner();
     try {
@@ -2218,7 +2495,9 @@ export class MultiremiDaemon {
     } catch (err) {
       log.warn(`Failed to write task context for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    await this.client.pinTaskSession(task.id, task.sessionId, workDir);
+    if (task.sessionId || workDir) {
+      this.enqueueTaskReport(task.id, "session_pin", { sessionId: task.sessionId, workDir });
+    }
 
     // Assemble config via AgentRuntime
     const runtime = new AgentRuntime();
@@ -2279,7 +2558,11 @@ export class MultiremiDaemon {
         repoCheckouts: preparedWorkspace.checkouts,
         repoWarnings: preparedWorkspace.warnings,
       });
-      await this.client.reportTaskPrompt(task.id, promptArtifact);
+      this.enqueueTaskReport(task.id, "prompt", {
+        mode: promptArtifact.mode,
+        prompt: promptArtifact.prompt,
+        sha256: promptArtifact.sha256,
+      });
       signal.throwIfAborted();
       steerFeed.start();
       let prompt = promptArtifact.prompt;
@@ -2351,7 +2634,12 @@ export class MultiremiDaemon {
               // Assistant text becomes the task result / issue activity body.
               if (message.type === "text" && message.content) output += message.content;
             }
-            if (emitted.length) await this.client.reportTaskMessages(task.id, emitted);
+            // Enqueue-only: a transient API outage must never unwind this loop and
+            // close the provider mid-session. The outbox delivers in seq order.
+            if (emitted.length) {
+              this.enqueueTaskReport(task.id, "messages", { messages: emitted });
+              progressSummarizer?.onMessages(emitted);
+            }
           }
         } catch (err) {
           turnError = err;
@@ -2399,6 +2687,10 @@ export class MultiremiDaemon {
           return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };
         }
         await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+        // Flush the outbox before flipping the task terminal: a queued
+        // "progress" record delivered after completion would be rejected by
+        // the server's terminal-status guard and wedge the outbox.
+        await this.awaitTaskReportDrain(task.id);
         await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
         await this.client.reportTaskUsage(task.id, usage);
         try {
@@ -2556,6 +2848,9 @@ export class MultiremiDaemon {
       workspace_cleanup_capability: cleanupSupport.capability,
       workspace_cleanup_error: cleanupSupport.error,
       restart_requested: this.restartRequestedFlag,
+      claims_paused_by_drain: this.serverDrainActive,
+      drain_ack_generation: this.appliedDrainGeneration,
+      outbox: this.outboxStats(),
     });
   }
 

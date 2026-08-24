@@ -67,6 +67,8 @@ export interface ListIssuesParams {
    * majority on the client.
    */
   scheduled?: boolean;
+  include_archived?: boolean;
+  archived_only?: boolean;
   sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
   sort_direction?: "asc" | "desc";
 }
@@ -100,6 +102,8 @@ export interface ListGroupedIssuesParams {
   label_ids?: string[];
   group_assignee_type?: IssueAssigneeType | "none";
   group_assignee_id?: string;
+  include_archived?: boolean;
+  archived_only?: boolean;
   sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
   sort_direction?: "asc" | "desc";
 }

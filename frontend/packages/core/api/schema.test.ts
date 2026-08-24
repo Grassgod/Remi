@@ -89,6 +89,23 @@ describe("ApiClient schema fallback", () => {
       const res = await client.listIssues();
       expect(res).toEqual({ issues: [], total: 0 });
     });
+
+    it("sends archived list flags as snake_case query parameters", async () => {
+      stubFetchJson({ issues: [], total: 0 });
+      const client = new ApiClient("https://api.example.test");
+      await client.listIssues({ archived_only: true, include_archived: true });
+      const url = String(vi.mocked(fetch).mock.calls[0]?.[0]);
+      expect(url).toContain("archived_only=true");
+      expect(url).toContain("include_archived=true");
+    });
+
+    it("rejects a malformed restore response", async () => {
+      stubFetchJson({ id: "issue-1" });
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.restoreIssue("issue-1")).rejects.toThrow(
+        "POST /api/issues/:id/restore",
+      );
+    });
   });
 
   describe("getConfig", () => {

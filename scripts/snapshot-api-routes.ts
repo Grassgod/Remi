@@ -66,7 +66,7 @@ const NORMALIZER_RULES = [
   "ISO-8601 timestamps (anywhere in a string) -> \"<timestamp>\"",
   "epoch-millisecond numbers (1.5e12..4e12) and *_ms/duration/elapsed/uptime/latency numeric keys -> 0",
   "absolute machine paths (repo root, $HOME, $TMPDIR, upload dir) -> \"<repo>\"/\"<home>\"/\"<tmp>\"/\"<uploads>\"",
-  "os.hostname() -> \"<hostname>\", os.userInfo().username -> \"<user>\"",
+  "hostname in URL/UNC authorities -> \"<hostname>\"; username in Unix/Windows home paths -> \"<user>\"",
   "package VERSION -> \"<version>\"",
   "non-JSON bodies larger than 2000 bytes -> { __body__: { contentType, bytes, sha256 } }",
 ];
@@ -199,15 +199,39 @@ const PATH_REPLACEMENTS: Array<[string, string]> = [
   [homedir(), "<home>"],
 ];
 
-function scrubString(value: string): string {
+export interface SnapshotMachineIdentity {
+  hostname?: string;
+  username?: string;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function scrubPathIdentity(
+  value: string,
+  identity: SnapshotMachineIdentity,
+): string {
+  let out = value;
+  const host = identity.hostname ?? hostname();
+  if (host && host.length > 2) {
+    const authority = new RegExp(`((?:https?:)?[/\\\\]{2})${escapeRegExp(host)}(?=[:/\\\\]|$)`, "g");
+    out = out.replace(authority, (_match, prefix: string) => `${prefix}<hostname>`);
+  }
+  const user = identity.username ?? userInfo().username;
+  if (user && user.length > 2) {
+    const homePath = new RegExp(`((?:^|[/\\\\])(?:home|Users)[/\\\\])${escapeRegExp(user)}(?=[/\\\\]|$)`, "g");
+    out = out.replace(homePath, (_match, prefix: string) => `${prefix}<user>`);
+  }
+  return out;
+}
+
+export function scrubString(value: string, identity: SnapshotMachineIdentity = {}): string {
   let out = value.replace(ISO_RE, "<timestamp>");
   for (const [needle, replacement] of PATH_REPLACEMENTS) {
     if (needle && out.includes(needle)) out = out.split(needle).join(replacement);
   }
-  const host = hostname();
-  if (host && out.includes(host)) out = out.split(host).join("<hostname>");
-  const user = userInfo().username;
-  if (user && user.length > 2 && out.includes(user)) out = out.split(user).join("<user>");
+  out = scrubPathIdentity(out, identity);
   if (VERSION && out.includes(VERSION)) out = out.split(VERSION).join("<version>");
   return out;
 }
@@ -314,6 +338,7 @@ export interface SeedRefs {
   skillFileId: string;
   runtimeId: string;
   projectId: string;
+  repositoryId: string;
   projectResourceId: string;
   projectDocRef: string;
   squadId: string;
@@ -633,6 +658,7 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
     skillFileId: skillFile?.id ?? "skf_snapshot",
     runtimeId: runtime.id,
     projectId: project.id,
+    repositoryId: "repo_snapshot",
     projectResourceId: projectResource.id,
     projectDocRef: "spec",
     squadId: squad.id,
@@ -703,6 +729,7 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
   labelId: "labelId",
   memberId: "memberId",
   projectId: "projectId",
+  repositoryId: "repositoryId",
   resourceId: "projectResourceId",
   runId: "autopilotRunId",
   runtimeId: "runtimeId",

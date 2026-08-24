@@ -25,12 +25,15 @@ export function WorkbenchListItem({
   issue,
   isSelected,
   urgent,
+  failureSummary,
   onClick,
 }: {
   issue: Issue;
   isSelected: boolean;
   /** Attention marker for issues where an agent is blocked waiting on a human. */
   urgent?: boolean;
+  /** Available failure context for a blocked issue. */
+  failureSummary?: string;
   onClick: () => void;
 }) {
   const timeAgo = useTimeAgo();
@@ -51,6 +54,11 @@ export function WorkbenchListItem({
           )}
           <span className="truncate text-sm">{issue.title}</span>
         </div>
+        {failureSummary && (
+          <p className="mt-0.5 truncate text-xs text-destructive/80">
+            {failureSummary}
+          </p>
+        )}
         <div className="mt-0.5 flex items-center gap-2">
           <span className="shrink-0 text-xs text-muted-foreground/70">
             {issue.identifier}

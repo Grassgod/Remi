@@ -168,11 +168,14 @@ export interface IssuesSurface {
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue;
+  restoreIssue(id: string): MultiremiIssue;
+  archiveEligibleIssues(now?: Date): MultiremiIssue[];
+  issueArchiveSweepIntervalMs(): number;
 }
 
 export interface AgentsSurface {
   getAgent(id: string): MultiremiAgent | null;
-  listAgents(): MultiremiAgent[];
+  listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[];
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;
@@ -208,6 +211,7 @@ export interface AnalyticsSurface {
 
 export interface WorkspacesSurface {
   getUser(id: string): MultiremiUser | null;
+  listWorkspaces(): MultiremiWorkspace[];
   getWorkspace(id: string): MultiremiWorkspace | null;
   findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null;
   getWorkspaceMember(id: string): MultiremiWorkspaceMember | null;

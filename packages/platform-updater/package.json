@@ -1,0 +1,17 @@
+{
+  "name": "@remi-platform/updater",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./client.js": "./src/client.ts",
+    "./compose-driver.js": "./src/compose-driver.ts",
+    "./drain.js": "./src/drain.ts",
+    "./release-feed.js": "./src/release-feed.ts",
+    "./systemd-release-driver.js": "./src/systemd-release-driver.ts",
+    "./types.js": "./src/types.ts"
+  },
+  "dependencies": {
+    "@multiremi/contracts": "workspace:*"
+  }
+}

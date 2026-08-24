@@ -23,6 +23,7 @@ import userStoryWriter from "./agent-templates/user-story-writer.json";
 import uxCopywriter from "./agent-templates/ux-copywriter.json";
 import webappTester from "./agent-templates/webapp-tester.json";
 import writingCritic from "./agent-templates/writing-critic.json";
+import atlasLlmWiki from "./agent-templates/atlas-llm-wiki.json";
 import { buildImportedSkillInput } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import type {
@@ -51,6 +52,9 @@ type RawTemplate = {
   accent?: string;
   instructions?: string;
   skills?: RawTemplateSkill[];
+  recommended_provider?: MultiremiAgentProvider;
+  recommended_model?: string | null;
+  required_plugins?: string[];
 };
 
 export class AgentTemplateError extends Error {
@@ -61,6 +65,7 @@ export class AgentTemplateError extends Error {
 }
 
 const RAW_TEMPLATES: RawTemplate[] = [
+  atlasLlmWiki,
   adrWriter,
   brainstormer,
   bugFixer,
@@ -110,7 +115,7 @@ export async function createAgentFromTemplate(
   if (!template) throw new AgentTemplateError(`template not found: ${templateSlug}`, 400);
   const name = String(input.name ?? "").trim();
   if (!name) throw new AgentTemplateError("name is required", 400);
-  const provider = normalizeAgentTemplateProvider(input.provider);
+  const provider = normalizeAgentTemplateProvider(input.provider ?? template.recommendedProvider);
   const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
   const createdBy = input.ownerId ?? input.owner_id ?? null;
   const extraSkillIds = input.extraSkillIds ?? input.extra_skill_ids ?? [];
@@ -182,11 +187,27 @@ export async function createAgentFromTemplate(
     visibility: input.visibility ?? "private",
     avatarUrl: templateAvatarUrl(input),
     instructions: input.instructions ?? template.instructions,
-    model: input.model ?? null,
+    model: input.model ?? template.recommendedModel ?? null,
     maxConcurrentTasks: normalizeTemplateMaxConcurrentTasks(input.maxConcurrentTasks ?? input.max_concurrent_tasks),
     skills: [],
+    thinkingLevel: input.thinkingLevel ?? input.thinking_level ?? null,
   });
   const skills = store.setAgentSkills(agent.id, uniqueStrings(attachedSkillIds));
+  const attachedPluginIds: string[] = [];
+  const missingPlugins: string[] = [];
+  for (const pluginName of template.requiredPlugins ?? []) {
+    const plugin = store.listAgentPlugins(workspaceId, { provider }).find((candidate) => candidate.name === pluginName);
+    if (!plugin) {
+      missingPlugins.push(pluginName);
+      continue;
+    }
+    store.createAgentPluginBinding(agent.id, {
+      pluginId: plugin.id,
+      versionPolicy: "follow_active",
+      enabled: true,
+    });
+    attachedPluginIds.push(plugin.id);
+  }
   const hydratedAgent = { ...store.getAgent(agent.id)!, skills };
   return {
     agent: hydratedAgent,
@@ -194,6 +215,10 @@ export async function createAgentFromTemplate(
     imported_skill_ids: importedSkillIds,
     reusedSkillIds,
     reused_skill_ids: reusedSkillIds,
+    attachedPluginIds,
+    attached_plugin_ids: attachedPluginIds,
+    missingPlugins,
+    missing_plugins: missingPlugins,
   };
 }
 
@@ -223,6 +248,9 @@ function normalizeTemplate(raw: RawTemplate): MultiremiAgentTemplate {
     accent: stringOrUndefined(raw.accent),
     instructions,
     skills: (raw.skills ?? []).map(normalizeTemplateSkill),
+    recommendedProvider: raw.recommended_provider,
+    recommendedModel: raw.recommended_model ?? null,
+    requiredPlugins: uniqueStrings(raw.required_plugins ?? []),
   };
 }
 

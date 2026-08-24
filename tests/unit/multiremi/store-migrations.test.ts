@@ -84,7 +84,7 @@ describe("store migrations", () => {
       "trigger_id", "event_id", "issue_session_id",
     ]));
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining([
-      "issue_kind", "source_issue_id", "lifecycle_state",
+      "issue_kind", "source_issue_id", "lifecycle_state", "completed_at", "archived_at",
     ]));
     expect(columnNames(database, "multiremi_issue_workspaces")).toEqual(expect.arrayContaining([
       "cleaned_archive_id", "cleaned_archive_source_revision", "cleaned_archive_sha256",
@@ -296,6 +296,49 @@ describe("store migrations", () => {
     expect(tableNames(database)).toEqual(first);
     const row = database.query("SELECT name FROM multiremi_agents WHERE id = ?").get("agt_keep") as { name?: string } | null;
     expect(row?.name).toBe("Keep me");
+  });
+
+  it("backfills completed_at for legacy terminal issues", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      DROP INDEX idx_multiremi_issues_archive;
+      ALTER TABLE multiremi_issues DROP COLUMN archived_at;
+      ALTER TABLE multiremi_issues DROP COLUMN completed_at;
+    `);
+    database.run(
+      `INSERT INTO multiremi_issues (
+         id, title, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+      [
+        "iss_legacy_done",
+        "Legacy done",
+        "done",
+        "2026-08-01T00:00:00.000Z",
+        "2026-08-04T12:00:00.000Z",
+      ],
+    );
+    database.run(
+      `INSERT INTO multiremi_issues (
+         id, title, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+      [
+        "iss_legacy_active",
+        "Legacy active",
+        "in_progress",
+        "2026-08-01T00:00:00.000Z",
+        "2026-08-05T12:00:00.000Z",
+      ],
+    );
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT id, completed_at FROM multiremi_issues WHERE id LIKE 'iss_legacy_%' ORDER BY id",
+    ).all()).toEqual([
+      { id: "iss_legacy_active", completed_at: null },
+      { id: "iss_legacy_done", completed_at: "2026-08-04T12:00:00.000Z" },
+    ]);
   });
 
   it("backfills each sole provider origin as the default and binds matching imported repositories", () => {

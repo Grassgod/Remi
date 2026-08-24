@@ -89,6 +89,25 @@ describe("Multiremi multi-user auth", () => {
     expect((await app.request("/api/workspaces/local", bearer(b.token))).status).toBe(404);
     expect((await app.request("/api/multiremi/runtimes", bearer(b.token))).status).toBe(404);
     expect((await app.request("/api/multiremi/runtimes/rt_pub", bearer(b.token))).status).toBe(404);
+
+    const project = store.createProject({ title: "Private project", workspaceId: "local" });
+    store.updateWorkspace("local", { repos: [{ url: "https://example.test/private.git" }] });
+    const resource = store.createProjectResource(project.id, {
+      resourceType: "github_repo",
+      resourceRef: { url: "https://example.test/private.git" },
+    });
+    expect((await app.request(`/api/projects/${project.id}`, { method: "DELETE", ...bearer(b.token) })).status).toBe(404);
+    expect((await app.request(`/api/projects/${project.id}/restore`, { method: "POST", ...bearer(b.token) })).status).toBe(404);
+    expect((await app.request(`/api/projects/${project.id}/resources`, {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ resource_type: "github_repo", resource_ref: { url: "https://example.test/other.git" } }),
+    })).status).toBe(404);
+    expect((await app.request(`/api/projects/${project.id}/resources/${resource.id}`, {
+      method: "PUT",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ label: "renamed" }),
+    })).status).toBe(404);
   });
 
   it("AC3: the owner sees the workspace and all runtimes", async () => {
@@ -129,6 +148,12 @@ describe("Multiremi multi-user auth", () => {
     });
     expect(invite.status).toBe(201);
     const invitation = await invite.json();
+
+    // Invite details are visible to the invitee and workspace members, but not
+    // to unrelated authenticated users who happen to know the invitation ID.
+    expect((await app.request(`/api/invitations/${invitation.id}`, bearer(b.token))).status).toBe(200);
+    const outsider = await login(store, { externalId: "ou_outsider", email: "outsider@corp.com", name: "Outsider" });
+    expect((await app.request(`/api/invitations/${invitation.id}`, bearer(outsider.token))).status).toBe(404);
 
     // B accepts the invitation as themselves.
     const accept = await app.request(`/api/invitations/${invitation.id}/accept`, { method: "POST", ...bearer(b.token) });

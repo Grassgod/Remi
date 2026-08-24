@@ -3,7 +3,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { MultiremiRepoCache, multiremiRepoCacheLockPath } from "@multiremi/repo-cache.js";
+import {
+  MultiremiRepoCache,
+  multiremiRepoCacheLockPath,
+  repoCacheTimeoutOverrides,
+  repoSyncBudgetMs,
+} from "@multiremi/repo-cache.js";
 
 const tempDirs: string[] = [];
 
@@ -279,10 +284,15 @@ describe("Multiremi repo cache", () => {
       processKillGraceMs: 20,
     });
     try {
+      // Initial materialization runs under repoSyncBudgetMs (sync + 2x clone),
+      // so the hung clone is bounded by its own cloneTimeoutMs, not the
+      // refresh budget — which would otherwise make cloneTimeoutMs unreachable.
+      const startedAt = Date.now();
       const result = await cache.sync("local", [{ url: source }]);
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({ repoUrl: source, status: "failed" });
-      expect(result[0]?.error).toContain("repository sync timed out after 40ms");
+      expect(result[0]?.error).toContain("timed out after 1000ms");
+      expect(Date.now() - startedAt).toBeLessThan(repoSyncBudgetMs({ cloneTimeoutMs: 1_000, repoSyncTimeoutMs: 40 }, false));
       expect(cache.lookup("local", source)).toBeNull();
       await expectRecordedProcessesToExit(wrapperRoot);
     } finally {
@@ -669,6 +679,30 @@ git interpret-trailers --in-place --trailer "User-Hook: preserved" "$1"
       taskId: "tsk_ambiguous",
     })).rejects.toThrow(/origin\/\* is empty or ambiguous/);
   }, 15_000);
+});
+
+describe("Multiremi repo sync budgets", () => {
+  it("gives initial materialization clone room on top of the refresh budget", () => {
+    // Defaults: refresh 300s; initial adds 2x clone (preferred + fallback URL).
+    expect(repoSyncBudgetMs({}, true)).toBe(300_000);
+    expect(repoSyncBudgetMs({}, false)).toBe(300_000 + 2 * 600_000);
+    expect(repoSyncBudgetMs({ repoSyncTimeoutMs: 1_000, cloneTimeoutMs: 2_000 }, true)).toBe(1_000);
+    expect(repoSyncBudgetMs({ repoSyncTimeoutMs: 1_000, cloneTimeoutMs: 2_000 }, false)).toBe(5_000);
+  });
+
+  it("parses timeout overrides from the environment and drops invalid values", () => {
+    expect(repoCacheTimeoutOverrides({})).toEqual({});
+    expect(repoCacheTimeoutOverrides({
+      MULTIREMI_REPO_FETCH_TIMEOUT_MS: "60000",
+      MULTIREMI_REPO_CLONE_TIMEOUT_MS: "120000",
+      MULTIREMI_REPO_SYNC_TIMEOUT_MS: "180000",
+    })).toEqual({ fetchTimeoutMs: 60_000, cloneTimeoutMs: 120_000, repoSyncTimeoutMs: 180_000 });
+    expect(repoCacheTimeoutOverrides({
+      MULTIREMI_REPO_FETCH_TIMEOUT_MS: "0",
+      MULTIREMI_REPO_CLONE_TIMEOUT_MS: "-5",
+      MULTIREMI_REPO_SYNC_TIMEOUT_MS: "not-a-number",
+    })).toEqual({});
+  });
 });
 
 function createRepo(branch: string, readme: string): string {

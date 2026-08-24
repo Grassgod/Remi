@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, MoreHorizontal } from "lucide-react";
+import { Archive, Eye, MoreHorizontal } from "lucide-react";
 import type { IssueStatus } from "@multiremi/core/types";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -26,9 +26,13 @@ import { useT } from "../../i18n";
 export function HiddenColumnsPanel({
   hiddenStatuses,
   renderRow,
+  archivedTotal,
+  onShowArchived,
 }: {
   hiddenStatuses: IssueStatus[];
   renderRow: (status: IssueStatus) => React.ReactNode;
+  archivedTotal?: number;
+  onShowArchived?: () => void;
 }) {
   const { t } = useT("issues");
   return (
@@ -40,6 +44,27 @@ export function HiddenColumnsPanel({
       </div>
       <div className="flex-1 space-y-0.5">
         {hiddenStatuses.map((status) => renderRow(status))}
+        {onShowArchived && (
+          <div className="flex items-center justify-between rounded-md px-2.5 py-2 hover:bg-muted/50">
+            <div className="flex min-w-0 items-center gap-2">
+              <Archive className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate text-sm">{t(($) => $.archive.label)}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="text-xs tabular-nums text-muted-foreground">{archivedTotal ?? 0}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+                onClick={onShowArchived}
+              >
+                <Eye className="size-3.5" />
+                {t(($) => $.board.show_column)}
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

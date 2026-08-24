@@ -32,6 +32,120 @@ function deferred<T>() {
 }
 
 describe("Multiremi API - workspace repositories", () => {
+  it("configures Atlas and its Wiki automations idempotently", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.importAgentPlugin({
+      provider: "claude",
+      name: "code-to-wiki",
+      manifest: { name: "code-to-wiki", version: "1.0.0" },
+      files: [{ path: "skills/code-to-wiki/SKILL.md", content: "# Code to Wiki\n" }],
+    });
+    store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+    store.updateWorkspaceRepositories(workspace.id, [{
+        id: "repo_atlas",
+        name: "atlas",
+        url: "git@github.com:acme/atlas.git",
+        source: "github",
+        default_branch: "main",
+    }]);
+    const app = createMultiremiApp({ store });
+    const path = `/api/workspaces/${workspace.id}/repository-wikis/atlas`;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await app.request(path, { method: "POST" });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        state: "ready",
+        configured: true,
+        plugin_bound: true,
+      });
+    }
+
+    const atlas = store.getAgentByWorkspaceAndName(workspace.id, "Atlas · LLM Wiki");
+    expect(atlas).toMatchObject({ provider: "claude", model: "opus5", visibility: "workspace" });
+    expect(store.listAgentPluginBindings(atlas!.id)).toHaveLength(1);
+    const automations = store.listAutopilots(workspace.id).filter((item) => item.assigneeId === atlas!.id);
+    expect(automations.map((item) => item.title).sort()).toEqual([
+      "Atlas · Project Knowledge",
+      "Atlas · Repository Wiki",
+    ]);
+    expect(automations.flatMap((item) => store.listAutopilotTriggers(item.id).map((trigger) => trigger.kind)).sort())
+      .toEqual(["scm_event", "system_event"]);
+
+    const build = await app.request(`/api/workspaces/${workspace.id}/repos/repo_atlas/wiki/build`, { method: "POST" });
+    expect(build.status).toBe(202);
+    const buildBody = await build.json();
+    expect(buildBody).toMatchObject({ status: "running" });
+    expect(typeof buildBody.run_id).toBe("string");
+    expect(typeof buildBody.task_id).toBe("string");
+    expect(store.getTask(buildBody.task_id)).toMatchObject({
+      workspaceId: workspace.id,
+      prompt: expect.stringContaining("repository LLM Wiki"),
+    });
+  });
+
+  it("does not create an unusable Atlas agent before code-to-wiki is imported", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/workspaces/${workspace.id}/repository-wikis/atlas`, { method: "POST" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ state: "plugin_required", code: "atlas_plugin_required" });
+    expect(store.getAgentByWorkspaceAndName(workspace.id, "Atlas · LLM Wiki")).toBeNull();
+  });
+
+  it("serves repository-scoped Wiki CRUD and summaries without crossing repository boundaries", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspace(workspace.id, {
+      repos: [
+        { id: "repo_alpha", name: "alpha", url: "git@github.com:acme/alpha.git", source: "github" },
+        { id: "repo_beta", name: "beta", url: "git@github.com:acme/beta.git", source: "github" },
+      ],
+    });
+    const app = createMultiremiApp({ store });
+    const root = `/api/workspaces/${workspace.id}/repos/repo_alpha/wiki`;
+
+    const createdResponse = await app.request(root, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path: "architecture/overview.md",
+        title: "Architecture",
+        body: "Alpha facts",
+        source_revision: "abc123",
+      }),
+    });
+    expect(createdResponse.status).toBe(201);
+    const created = (await createdResponse.json() as any).doc;
+    expect(created).toMatchObject({ repository_id: "repo_alpha", path: "architecture/overview.md", version: 1 });
+
+    expect((await (await app.request(root)).json() as any).docs).toMatchObject([{ id: created.id, body: "Alpha facts" }]);
+    expect((await app.request(`/api/workspaces/${workspace.id}/repos/repo_beta/wiki/${created.id}`)).status).toBe(404);
+
+    const updatedResponse = await app.request(`${root}/${created.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "Alpha facts v2", expected_version: 1, status: "healthy" }),
+    });
+    expect(updatedResponse.status).toBe(200);
+    expect((await updatedResponse.json() as any).doc).toMatchObject({ body: "Alpha facts v2", version: 2 });
+
+    const summaries = await (await app.request(`/api/workspaces/${workspace.id}/repository-wikis`)).json() as any;
+    expect(summaries.repositories).toEqual([
+      expect.objectContaining({ repository_id: "repo_alpha", status: "healthy", page_count: 1 }),
+      expect.objectContaining({ repository_id: "repo_beta", status: "unbuilt", page_count: 0 }),
+    ]);
+    expect((await (await app.request(`${root}/${created.id}/revisions`)).json() as any).revisions.map((revision: any) => revision.version))
+      .toEqual([2, 1]);
+  });
+
   it("rejects repository writes through generic workspace update routes", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();

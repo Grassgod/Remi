@@ -83,7 +83,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
   }
   if (action === "update") {
     const issueId = positional[1]?.trim();
-    if (!issueId) throw new Error("usage: multiremi issue update <issue-id> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--assignee <id|name|email> --assignee-type <type>] [--project <id>] [--parent <id>]");
+    if (!issueId) throw new Error("usage: multiremi issue update <issue-id> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--assignee <id|name|email> --assignee-type <type>] [--project <id>] [--parent <id>] [--start-date <date>] [--due-date <date>]");
     await issueUpdate(issueId, options);
     return;
   }
@@ -392,7 +392,7 @@ export async function issueComment(positional: string[], options: CliOptions): P
     return;
   }
   if (action === "add") {
-    if (!issueId) throw new Error("usage: multiremi issue comment add <issue-id> [--parent <comment-id>] (--content <text>|--content-file <path>|--content-stdin)");
+    if (!issueId) throw new Error("usage: multiremi issue comment add <issue-id> [--parent <comment-id>] [--attachment <path>]... (--content <text>|--content-file <path>|--content-stdin)");
     const body = await readCommentBody(options);
     if (!body.trim()) throw new Error("comment body is required");
     const attachmentIds: string[] = [];
@@ -487,7 +487,7 @@ export async function issueMetadata(positional: string[], options: CliOptions): 
 
 export async function issueCreate(options: CliOptions): Promise<void> {
   const title = rawStringOption(options, "title");
-  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>]");
+  if (!title?.trim()) throw new Error("usage: multiremi issue create --title <title> [--description <text>] [--status <status>] [--priority <priority>] [--project <id>] [--parent <id>] [--assignee <id|name|email> --assignee-type <type>] [--use-project-defaults] [--start-date <date>] [--due-date <date>] [--attachment <path>]... [--allow-duplicate]");
   const attachments = readAttachmentFiles(options);
   const body: Record<string, unknown> = { title };
   const description = await readOptionalTextBody(options, "description");
@@ -499,7 +499,26 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   addStringBodyField(body, options, "start_date", "start-date", false, true);
   addStringBodyField(body, options, "due_date", "due-date", false, true);
   if (Boolean(options.allowDuplicate ?? options["allow-duplicate"])) body.allow_duplicate = true;
-  addAssigneeBodyFields(body, options, "assignee-id", "assignee-type", "assignee");
+  const hasExplicitAssignee = hasOption(options, "assignee-id")
+    || hasOption(options, "assigneeId")
+    || hasOption(options, "assignee");
+  const useProjectDefaults = booleanFlag(options, "use-project-defaults", "useProjectDefaults");
+  const projectId = rawStringOption(options, "project", "project-id");
+  if (useProjectDefaults && !projectId) throw new Error("--use-project-defaults requires --project");
+  let projectDefaults: { type: string; id: string } | null = null;
+  if (!hasExplicitAssignee && projectId) {
+    try {
+      projectDefaults = await readProjectDefaultAssignee(projectId, options);
+    } catch (error) {
+      if (useProjectDefaults) throw error;
+    }
+  }
+  if (useProjectDefaults && projectDefaults) {
+    body.assignee_type = projectDefaults.type;
+    body.assignee_id = projectDefaults.id;
+  } else {
+    addAssigneeBodyFields(body, options, "assignee-id", "assignee-type", "assignee");
+  }
   const response = await multiremiApiRequest("POST", "/api/issues", body, options);
   if (attachments.length) {
     const issueId = responseIssueId(response);
@@ -512,7 +531,39 @@ export async function issueCreate(options: CliOptions): Promise<void> {
       }
     }
   }
+  if (!useProjectDefaults && !hasExplicitAssignee && projectDefaults) {
+    console.error(
+      `Project default assignee is ${projectDefaults.type}:${projectDefaults.id}; pass --use-project-defaults to apply it or assign the issue explicitly.`,
+    );
+  }
   printJson(response);
+}
+
+async function readProjectDefaultAssignee(
+  projectId: string,
+  options: CliOptions,
+): Promise<{ type: string; id: string } | null> {
+  const response = await multiremiApiRequest<unknown>(
+    "GET",
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    undefined,
+    options,
+  );
+  const project = isRecord(response) && isRecord(response.project) ? response.project : response;
+  if (!isRecord(project)) return null;
+  const type = field(project, "default_assignee_type", "defaultAssigneeType");
+  const id = field(project, "default_assignee_id", "defaultAssigneeId");
+  return typeof type === "string" && type && typeof id === "string" && id ? { type, id } : null;
+}
+
+function booleanFlag(options: CliOptions, ...keys: string[]): boolean {
+  for (const key of keys) {
+    if (!hasOption(options, key)) continue;
+    const value = options[key];
+    const last = Array.isArray(value) ? value.at(-1) : value;
+    return last === true || (typeof last === "string" && last.toLowerCase() !== "false" && last !== "0");
+  }
+  return false;
 }
 
 export async function issueUpdate(issueId: string, options: CliOptions): Promise<void> {

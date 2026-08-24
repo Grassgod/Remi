@@ -206,11 +206,14 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Worker", provider: "codex" });
     const reviewer = store.createAgent({ name: "Reviewer", provider: "codex" });
-    const issue = store.createIssue({ title: "Reply with context" });
+    const squad = store.createSquad({ name: "Review squad", leaderId: reviewer.id, memberIds: [agent.id] });
+    const issue = store.createIssue({ title: "Reply with context", assigneeType: "squad", assigneeId: squad.id });
+    const reviewerTask = store.createTask({ agentId: reviewer.id, issueId: issue.id, prompt: "Coordinate review." });
     const root = store.createIssueComment(issue.id, { body: "Root context." });
     const comment = store.createIssueComment(issue.id, {
       authorType: "agent",
       authorId: reviewer.id,
+      taskId: reviewerTask.id,
       parentId: root.id,
       body: `Please inspect \`$PATH\` handling.\nSecond line [@Worker](mention://agent/${agent.id}).`,
     });
@@ -232,8 +235,8 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(prompt).toContain("> Please inspect `$PATH` handling.");
     expect(prompt).toContain("> Second line");
     expect(prompt).toContain("do not reply");
-    expect(prompt).toContain(`remi issue comment list ${issue.id} --thread ${root.id} --since 2025-01-01T00:00:00.000Z --output json`);
-    expect(prompt).toContain(`remi issue comment add ${issue.id} --parent ${comment.id} --content-stdin`);
+    expect(prompt).toContain(`remi comment list ${issue.id} --thread ${root.id} --since 2025-01-01T00:00:00.000Z --output json`);
+    expect(prompt).toContain(`remi comment add ${issue.id} --parent ${comment.id} --content-stdin`);
     expect(prompt).toContain("<<'COMMENT'");
     expect(prompt).not.toContain("multimira");
   });

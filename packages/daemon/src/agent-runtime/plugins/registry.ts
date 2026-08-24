@@ -233,7 +233,17 @@ export class PluginRegistry {
     for (const p of this._plugins) {
       if (!p.registerCli) continue;
       try {
-        p.registerCli(register);
+        p.registerCli((name, description, loader, hidden) => register(
+          name,
+          description,
+          loader,
+          hidden,
+          {
+            kind: "plugin",
+            pluginId: p.manifest.id,
+            pluginVersion: p.manifest.version,
+          },
+        ));
       } catch (e) {
         log.warn(`Plugin ${p.manifest.id} registerCli failed:`, e);
       }

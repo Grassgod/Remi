@@ -6,7 +6,13 @@ import {
   safeAcceptInvitation,
   safeDeclineInvitation,
 } from "../helpers.js";
-import { acceptedInvitationMemberToGoResponse, currentRequestUserId, isMemberResponseError, workspaceNamePayload } from "../wire/index.js";
+import {
+  acceptedInvitationMemberToGoResponse,
+  authenticatedRequestUserId,
+  currentRequestUserId,
+  isMemberResponseError,
+  workspaceNamePayload,
+} from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerInvitationRoutes(app: Hono, deps: RouterDeps): void {
@@ -35,6 +41,14 @@ export function registerInvitationRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/invitations/:id", (c) => {
     const invitation = store.getInvitation(c.req.param("id"));
     if (!invitation) return c.json({ error: "invitation not found" }, 404);
+    const userId = authenticatedRequestUserId(c);
+    const user = userId ? store.getUser(userId) : null;
+    const isInvitee = userId !== null && (
+      invitation.inviteeUserId === userId
+      || invitation.inviteeEmail === user?.email.toLowerCase()
+    );
+    const isWorkspaceMember = userId !== null && store.getUserRoleInWorkspace(userId, invitation.workspaceId) !== null;
+    if (userId !== null && !isInvitee && !isWorkspaceMember) return c.json({ error: "invitation not found" }, 404);
     return c.json(invitation);
   });
   app.post("/api/invitations/:id/accept", (c) => {

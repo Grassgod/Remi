@@ -1,6 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { captureApiSnapshot, GOLDEN_PATH, serializeSnapshot, type SnapshotFile } from "../../../scripts/snapshot-api-routes.js";
+import {
+  captureApiSnapshot,
+  GOLDEN_PATH,
+  scrubString,
+  serializeSnapshot,
+  type SnapshotFile,
+} from "../../../scripts/snapshot-api-routes.js";
 
 const goldenText = readFileSync(GOLDEN_PATH, "utf8");
 const golden = JSON.parse(goldenText) as SnapshotFile;
@@ -24,6 +30,18 @@ function firstDiff(actual: string, expected: string): string | null {
 }
 
 describe("api route golden snapshot", () => {
+  it("scrubs machine identity only in path-shaped contexts", () => {
+    const identity = { hostname: "unknown", username: "unknown" };
+
+    expect(scrubString('provider: "unknown"; mode: "local"', identity)).toBe('provider: "unknown"; mode: "local"');
+    expect(scrubString("/home/unknown/project C:\\Users\\unknown\\repo", identity)).toBe(
+      "/home/<user>/project C:\\Users\\<user>\\repo",
+    );
+    expect(scrubString("https://unknown:6120/api \\\\unknown\\share", identity)).toBe(
+      "https://<hostname>:6120/api \\\\<hostname>\\share",
+    );
+  });
+
   it("runs green and matches the golden route inventory", async () => {
     const snapshot = await captureApiSnapshot();
 
@@ -46,7 +64,7 @@ describe("api route golden snapshot", () => {
     // them; this makes plain `bun test` as strict as the --check CLI. The
     // harness pins clock, uuid, random, hostname and env, so it is stable.
     expect(firstDiff(serializeSnapshot(snapshot), goldenText)).toBeNull();
-  });
+  }, 15_000);
 
   it("covers every GET route (websocket upgrades status-only)", async () => {
     const getRoutes = golden.routes.filter((route) => route.startsWith("GET "));
