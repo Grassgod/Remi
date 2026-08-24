@@ -39,6 +39,67 @@ import type {
 
 type Row = Record<string, unknown>;
 
+/** Title marking the Atlas repository Wiki autopilot (see workspaces router + repository-wiki service). */
+export const ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
+
+/**
+ * Store-level run input: RunAutopilotInput plus the optional repository scoping
+ * used by repository Wiki builds. `dedupeKey` is `${repositoryId}:${mode}:${revision|"head"}`.
+ * These fields live only in the server store (the contracts package is unchanged).
+ */
+export type RunAutopilotStoreInput = RunAutopilotInput & {
+  repositoryId?: string | null;
+  repository_id?: string | null;
+  dedupeKey?: string | null;
+  dedupe_key?: string | null;
+};
+
+/** Run row as persisted by this store, including repository Wiki build scoping. */
+export interface MultiremiAutopilotRunRecord extends MultiremiAutopilotRun {
+  repositoryId: string | null;
+  dedupeKey: string | null;
+  /** Set (not persisted) when runAutopilot returned an existing run instead of creating one. */
+  deduplicated?: boolean;
+}
+
+/** Autopilot run statuses that still occupy the "one build per repository" slot. */
+const ACTIVE_RUN_STATUSES = ["running", "issue_created"] as const;
+
+/** Build a repository Wiki build idempotency key. */
+export function repositoryWikiBuildDedupeKey(
+  repositoryId: string,
+  mode: string,
+  revision: string | null | undefined,
+): string {
+  return `${repositoryId}:${mode}:${cleanOptionalString(revision) ?? "head"}`;
+}
+
+/** Best-effort revision extraction from an SCM canonical event provider payload. */
+export function extractScmPayloadRevision(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  for (const field of ["merge_sha", "mergeSha", "head_sha", "headSha"]) {
+    const value = cleanOptionalString(payload[field]);
+    if (value) return value;
+  }
+  return null;
+}
+
+/**
+ * The revision a run built from: the pinned revision segment of its dedupe key
+ * when present ("head" is a moving target, not a revision), else the SCM
+ * provider payload's merge/head sha.
+ */
+export function autopilotRunSourceRevision(
+  run: Pick<MultiremiAutopilotRunRecord, "dedupeKey" | "payload">,
+): string | null {
+  if (run.dedupeKey) {
+    const revision = run.dedupeKey.split(":").slice(2).join(":");
+    if (revision && revision !== "head") return revision;
+  }
+  const payload = isRecord(run.payload) ? run.payload : null;
+  return extractScmPayloadRevision(payload?.data);
+}
+
 const AUTOPILOT_FAILURE_MONITOR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTOPILOT_FAILURE_MONITOR_MIN_RUNS = 50;
 const AUTOPILOT_FAILURE_MONITOR_FAIL_RATIO = 0.9;
@@ -622,11 +683,38 @@ export class AutopilotsRepo {
     return runs;
   }
 
-  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRun[] {
+  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRunRecord[] {
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_autopilot_runs WHERE autopilot_id = ? ORDER BY created_at DESC LIMIT 20",
     ).all(autopilotId) as Row[];
     return rows.map(toAutopilotRun);
+  }
+
+  /**
+   * Latest repository-scoped run (repository Wiki builds) per repository in a
+   * workspace — the source of the per-repository build status in summaries.
+   * Run ids are random, so created_at ties are broken by preferring the still
+   * active run (at most one exists per repository, enforced by runAutopilot).
+   */
+  listLatestRepositoryAutopilotRuns(workspaceId: string): MultiremiAutopilotRunRecord[] {
+    const rows = this.ctx.db.query(
+      `SELECT r.* FROM multiremi_autopilot_runs r
+       JOIN multiremi_autopilots a ON a.id = r.autopilot_id
+       WHERE a.workspace_id = ? AND r.repository_id IS NOT NULL
+       ORDER BY r.created_at DESC, r.id DESC`,
+    ).all(workspaceId) as Row[];
+    const isActive = (status: MultiremiAutopilotRun["status"]): boolean =>
+      (ACTIVE_RUN_STATUSES as readonly string[]).includes(status);
+    const latest = new Map<string, MultiremiAutopilotRunRecord>();
+    for (const row of rows.map(toAutopilotRun)) {
+      const current = latest.get(row.repositoryId!);
+      if (!current) {
+        latest.set(row.repositoryId!, row);
+      } else if (current.createdAt === row.createdAt && !isActive(current.status) && isActive(row.status)) {
+        latest.set(row.repositoryId!, row);
+      }
+    }
+    return [...latest.values()];
   }
 
   selectAutopilotsExceedingFailureThreshold(
@@ -826,11 +914,13 @@ export class AutopilotsRepo {
     }
   }
 
-  runAutopilot(autopilotId: string, input: RunAutopilotInput = {}): MultiremiAutopilotRun {
+  runAutopilot(autopilotId: string, input: RunAutopilotStoreInput = {}): MultiremiAutopilotRunRecord {
     const source = input.source ?? "manual";
     const triggerId = cleanOptionalString(input.triggerId ?? input.trigger_id) ?? null;
     const eventId = cleanOptionalString(input.eventId ?? input.event_id) ?? null;
     const triggerIssueId = cleanOptionalString(input.triggerIssueId ?? input.trigger_issue_id) ?? null;
+    const repositoryId = cleanOptionalString(input.repositoryId ?? input.repository_id) ?? null;
+    const dedupeKey = cleanOptionalString(input.dedupeKey ?? input.dedupe_key) ?? null;
     if ((triggerId == null) !== (eventId == null)) throw new Error("trigger_id and event_id must be provided together");
     if (source === "system_event" && (!triggerId || !eventId)) {
       throw new Error("system_event runs require trigger_id and event_id");
@@ -854,6 +944,35 @@ export class AutopilotsRepo {
         if (duplicate) return toAutopilotRun(duplicate);
       }
 
+      // Repository Wiki build idempotency (callers pass repositoryId/dedupeKey
+      // only for the Atlas Repository Wiki autopilot; other autopilots are
+      // unaffected). Two rules, both inside this transaction:
+      //  1. one non-terminal build per (autopilot, repository) — a second
+      //     request while a build is queued/running returns the existing run;
+      //  2. a completed run for the same pinned-revision dedupe key is
+      //     authoritative, so a late event for the same revision (for example
+      //     default_branch.updated after change.merged) reuses it. Keys ending
+      //     in ":head" target a moving revision and never dedupe on success,
+      //     so a manual rebuild after a completed build is always allowed.
+      // failed / skipped runs are terminal and never block a retry.
+      if (repositoryId) {
+        const active = this.ctx.db.query(
+          `SELECT * FROM multiremi_autopilot_runs
+           WHERE autopilot_id = ? AND repository_id = ?
+             AND status IN (${ACTIVE_RUN_STATUSES.map(() => "?").join(", ")})
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+        ).get(autopilotId, repositoryId, ...ACTIVE_RUN_STATUSES) as Row | null;
+        if (active) return { ...toAutopilotRun(active), deduplicated: true };
+      }
+      if (dedupeKey && !dedupeKey.endsWith(":head")) {
+        const completed = this.ctx.db.query(
+          `SELECT * FROM multiremi_autopilot_runs
+           WHERE autopilot_id = ? AND dedupe_key = ? AND status = 'completed'
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+        ).get(autopilotId, dedupeKey) as Row | null;
+        if (completed) return { ...toAutopilotRun(completed), deduplicated: true };
+      }
+
       const now = nowIso();
       const runId = createId("run");
       const explicitPrompt = cleanOptionalString(input.prompt);
@@ -870,8 +989,9 @@ export class AutopilotsRepo {
       const inserted = this.ctx.db.run(
         `INSERT OR IGNORE INTO multiremi_autopilot_runs (
           id, autopilot_id, source, status, issue_id, task_id, trigger_id, event_id,
-          issue_session_id, triggered_at, completed_at, failure_reason, payload, result, created_at
-        ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?, NULL, ?)`,
+          issue_session_id, repository_id, dedupe_key, triggered_at, completed_at,
+          failure_reason, payload, result, created_at
+        ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)`,
         [
           runId,
           autopilotId,
@@ -879,6 +999,8 @@ export class AutopilotsRepo {
           skippedReason ? "skipped" : "running",
           triggerId,
           eventId,
+          repositoryId,
+          dedupeKey,
           now,
           skippedReason ? now : null,
           skippedReason,
@@ -970,7 +1092,7 @@ export class AutopilotsRepo {
     return run;
   }
 
-  getAutopilotRun(id: string): MultiremiAutopilotRun | null {
+  getAutopilotRun(id: string): MultiremiAutopilotRunRecord | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_autopilot_runs WHERE id = ?").get(id) as Row | null;
     return row ? toAutopilotRun(row) : null;
   }
@@ -1673,7 +1795,7 @@ function toAutopilotTrigger(row: Row): MultiremiAutopilotTrigger {
   };
 }
 
-function toAutopilotRun(row: Row): MultiremiAutopilotRun {
+function toAutopilotRun(row: Row): MultiremiAutopilotRunRecord {
   return {
     id: String(row.id),
     autopilotId: String(row.autopilot_id),
@@ -1684,6 +1806,8 @@ function toAutopilotRun(row: Row): MultiremiAutopilotRun {
     triggerId: nullableString(row.trigger_id),
     eventId: nullableString(row.event_id),
     issueSessionId: nullableString(row.issue_session_id),
+    repositoryId: nullableString(row.repository_id),
+    dedupeKey: nullableString(row.dedupe_key),
     triggeredAt: String(row.triggered_at),
     completedAt: nullableString(row.completed_at),
     failureReason: nullableString(row.failure_reason),
