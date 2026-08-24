@@ -11,7 +11,11 @@
     "default_branch_placeholder": "ブランチを選択",
     "sync": "イベント収集",
     "not_connected": "未接続",
-    "sync_modes": { "poll": "ポーリング", "webhook": "Webhook", "hybrid": "ハイブリッド" },
+    "sync_modes": {
+      "poll": "ポーリング",
+      "webhook": "Webhook",
+      "hybrid": "ハイブリッド"
+    },
     "description": "説明",
     "imported": "インポート日",
     "wiki": "Wiki"
@@ -24,6 +28,11 @@
     "build_action": "Atlas で構築",
     "build_started": "Atlas がリポジトリ Wiki の構築を開始しました",
     "build_failed": "リポジトリ Wiki の構築を開始できませんでした",
+    "building_action": "Wiki を構築中",
+    "rebuild_action": "再構築",
+    "build_in_progress": "すでに構築が進行中です",
+    "build_failed_title": "Wiki の構築に失敗しました",
+    "view_build_log": "実行プロセスを表示",
     "no_match": "一致するページがありません。",
     "page_count": "{{count}} ページ",
     "source_revision": "リビジョン {{revision}}",

@@ -11,7 +11,11 @@
     "default_branch_placeholder": "브랜치 선택",
     "sync": "이벤트 수집",
     "not_connected": "연결 안 됨",
-    "sync_modes": { "poll": "폴링", "webhook": "Webhook", "hybrid": "혼합" },
+    "sync_modes": {
+      "poll": "폴링",
+      "webhook": "Webhook",
+      "hybrid": "혼합"
+    },
     "description": "설명",
     "imported": "가져온 날짜",
     "wiki": "위키"
@@ -24,6 +28,11 @@
     "build_action": "Atlas로 빌드",
     "build_started": "Atlas가 저장소 Wiki 빌드를 시작했습니다",
     "build_failed": "저장소 Wiki 빌드를 시작할 수 없습니다",
+    "building_action": "Wiki 빌드 중",
+    "rebuild_action": "다시 빌드",
+    "build_in_progress": "이미 빌드가 진행 중입니다",
+    "build_failed_title": "Wiki 빌드 실패",
+    "view_build_log": "실행 과정 보기",
     "no_match": "일치하는 페이지가 없습니다.",
     "page_count": "{{count}}개 페이지",
     "source_revision": "리비전 {{revision}}",

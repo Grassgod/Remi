@@ -12,7 +12,11 @@
     "sync": "事件采集",
     "wiki": "Wiki",
     "not_connected": "未连接",
-    "sync_modes": { "poll": "主动拉取", "webhook": "Webhook", "hybrid": "混合" },
+    "sync_modes": {
+      "poll": "主动拉取",
+      "webhook": "Webhook",
+      "hybrid": "混合"
+    },
     "description": "描述",
     "imported": "导入时间"
   },
@@ -24,6 +28,11 @@
     "build_action": "使用 Atlas 构建",
     "build_started": "Atlas 已开始构建仓库 Wiki",
     "build_failed": "无法启动仓库 Wiki 构建",
+    "building_action": "正在构建 Wiki",
+    "rebuild_action": "重新构建",
+    "build_in_progress": "已有构建进行中",
+    "build_failed_title": "Wiki 构建失败",
+    "view_build_log": "查看执行过程",
     "no_match": "没有匹配的 Wiki 页面。",
     "page_count": "{{count}} 个页面",
     "source_revision": "代码版本 {{revision}}",

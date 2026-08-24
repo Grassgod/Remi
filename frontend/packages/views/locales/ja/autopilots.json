@@ -108,12 +108,15 @@
     "skipped": "スキップ済み"
   },
   "run_source": {
-    "schedule": "スケジュール",
+    "schedule": "定期実行",
     "manual": "手動",
     "webhook": "Webhook",
     "system_event": "システムイベント",
     "scm_event": "コードイベント",
-    "api": "API"
+    "wiki_build": "手動ビルド",
+    "change_merged": "PR/MR マージ済み",
+    "default_branch_updated": "デフォルトブランチ更新",
+    "api": "API 呼び出し"
   },
   "run": {
     "issue_linked": "イシューをリンク済み",
@@ -329,7 +332,11 @@
       "all_repositories": "紐付け済みの全リポジトリ",
       "no_repositories": "利用可能なリポジトリがありません。先にソース管理設定で紐付けてください。",
       "events_label": "イベント",
-      "groups": { "changes": "変更", "collaboration": "コラボレーション", "delivery": "デリバリー" },
+      "groups": {
+        "changes": "変更",
+        "collaboration": "コラボレーション",
+        "delivery": "デリバリー"
+      },
       "events": {
         "change.opened": "変更を作成",
         "change.updated": "変更を更新",

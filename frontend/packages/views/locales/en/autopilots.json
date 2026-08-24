@@ -105,8 +105,7 @@
     "running": "Running",
     "skipped": "Skipped",
     "completed": "Completed",
-    "failed": "Failed",
-    "skipped": "Skipped"
+    "failed": "Failed"
   },
   "run_source": {
     "schedule": "Schedule",
@@ -114,7 +113,10 @@
     "webhook": "Webhook",
     "system_event": "System Event",
     "scm_event": "Code Event",
-    "api": "API"
+    "wiki_build": "Manual Build",
+    "change_merged": "PR/MR Merged",
+    "default_branch_updated": "Default Branch Updated",
+    "api": "API Call"
   },
   "run": {
     "issue_linked": "Issue linked",
@@ -330,7 +332,11 @@
       "all_repositories": "All bound repositories",
       "no_repositories": "No repositories available. Bind one in Source Control settings first.",
       "events_label": "Events",
-      "groups": { "changes": "Changes", "collaboration": "Collaboration", "delivery": "Delivery" },
+      "groups": {
+        "changes": "Changes",
+        "collaboration": "Collaboration",
+        "delivery": "Delivery"
+      },
       "events": {
         "change.opened": "Change opened",
         "change.updated": "Change updated",
