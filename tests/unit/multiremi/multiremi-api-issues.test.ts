@@ -1129,6 +1129,173 @@ describe("Multiremi API — issue endpoints", () => {
     expect(store.listTasksForIssue(humanInheritedBody.id)).toHaveLength(1);
   });
 
+  it("covers the intake matrix: project inheritance, explicit assignee, and explicit null opt-out", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const executor = store.createAgent({ name: "Intake default executor", provider: "claude" });
+    const worker = store.createAgent({ name: "Intake worker", provider: "codex" });
+    const project = store.createProject({
+      title: "Intake project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: executor.id,
+    });
+    const otherProject = store.createProject({ title: "Out-of-scope project" });
+    const intakeIssue = store.createIssue({
+      title: "Intake triage",
+      workspaceId: "local",
+      projectId: project.id,
+      issueKind: "intake",
+    });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: intakeIssue.id,
+      agentId: worker.id,
+      prompt: "triage",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${taskToken.token}`,
+    };
+
+    // No project + no assignee: inherits the intake project, backfills its
+    // default executor, and dispatches a task.
+    const inherited = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated inherits scope" }),
+    });
+    expect(inherited.status).toBe(201);
+    const inheritedBody = await inherited.json();
+    expect(inheritedBody).toMatchObject({
+      issue_kind: "execution",
+      source_issue_id: intakeIssue.id,
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+      status: "todo",
+    });
+    expect(store.listTasksForIssue(inheritedBody.id)).toHaveLength(1);
+
+    // Explicit project (same scope) + no assignee: same backfill.
+    const explicitProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated explicit project", project_id: project.id }),
+    });
+    expect(explicitProject.status).toBe(201);
+    const explicitProjectBody = await explicitProject.json();
+    expect(explicitProjectBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+    });
+    expect(store.listTasksForIssue(explicitProjectBody.id)).toHaveLength(1);
+
+    // No project + explicit assignee: the explicit executor wins over the default.
+    const explicitAssignee = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Generated explicit assignee",
+        assignee_type: "agent",
+        assignee_id: worker.id,
+      }),
+    });
+    expect(explicitAssignee.status).toBe(201);
+    const explicitAssigneeBody = await explicitAssignee.json();
+    expect(explicitAssigneeBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: worker.id,
+    });
+    expect(store.listTasksForIssue(explicitAssigneeBody.id)).toHaveLength(1);
+
+    // No project + explicit null assignee: opts out of inheritance, no task.
+    const unassigned = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Generated explicitly unassigned",
+        assignee_type: null,
+        assignee_id: null,
+      }),
+    });
+    expect(unassigned.status).toBe(201);
+    const unassignedBody = await unassigned.json();
+    expect(unassignedBody.assignee_type).toBeNull();
+    expect(unassignedBody.assignee_id).toBeNull();
+    expect(store.listTasksForIssue(unassignedBody.id)).toHaveLength(0);
+
+    // Explicit project outside the intake scope is rejected.
+    const crossProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated out of scope", project_id: otherProject.id }),
+    });
+    expect(crossProject.status).toBe(400);
+    expect(await crossProject.json()).toEqual({
+      error: "Generated issues must stay in the intake project's scope",
+    });
+  });
+
+  it("lets a projectless intake pick a project explicitly but rejects omitting it", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const executor = store.createAgent({ name: "Projectless intake executor", provider: "claude" });
+    const worker = store.createAgent({ name: "Projectless intake worker", provider: "codex" });
+    const project = store.createProject({
+      title: "Selectable project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: executor.id,
+    });
+    const intakeIssue = store.createIssue({
+      title: "Projectless intake",
+      workspaceId: "local",
+      issueKind: "intake",
+    });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: intakeIssue.id,
+      agentId: worker.id,
+      prompt: "triage",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${taskToken.token}`,
+    };
+
+    // The requested project binds the generated issue and supplies its default.
+    const chosen = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated with chosen project", project_id: project.id }),
+    });
+    expect(chosen.status).toBe(201);
+    const chosenBody = await chosen.json();
+    expect(chosenBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+      source_issue_id: intakeIssue.id,
+    });
+    expect(store.listTasksForIssue(chosenBody.id)).toHaveLength(1);
+
+    // Omitting the project while active projects exist stays an error.
+    const missingProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated without project" }),
+    });
+    expect(missingProject.status).toBe(400);
+    expect(await missingProject.json()).toEqual({
+      error: "project_id is required when active projects are available",
+    });
+  });
+
   it("requires a project for task creations when the workspace has active projects", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
