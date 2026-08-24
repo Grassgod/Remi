@@ -239,6 +239,61 @@ describe("native CLI resource contracts", () => {
     ])).rejects.toMatchObject({ code: "server", status: 500 });
   });
 
+  it("keeps project discovery open to task credentials and renders defaults columns", async () => {
+    useCliEnv();
+    for (const id of ["project.list", "project.get", "project.search", "project.defaults"]) {
+      expect(specById(id).auth, id).toContain("task");
+    }
+    const spec = specById("project.defaults");
+    globalThis.fetch = mockFetch(spec.id, [], (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/projects/prj_own") {
+        return Response.json({ id: "prj_own", title: "Own", default_assignee_type: "squad", default_assignee_id: "sqd_1" });
+      }
+      throw new Error(`unexpected request ${request.url}`);
+    });
+    const table = await execute(spec, ["prj_own"]);
+    expect(table).toContain("ASSIGNEE_TYPE");
+    expect(table).toContain("squad");
+    expect(table).toContain("sqd_1");
+    const json = await execute(spec, ["prj_own", "--output", "json"]);
+    expect(JSON.parse(json)).toEqual({
+      project_id: "prj_own",
+      default_assignee_type: "squad",
+      default_assignee_id: "sqd_1",
+    });
+  });
+
+  it("resolves a project the credential cannot GET by id through the workspace list", async () => {
+    // A task token may only GET its own issue's project by id; discovery of
+    // every other project falls back to search, then to the workspace list.
+    useCliEnv();
+    const spec = specById("project.defaults");
+    const requests: Request[] = [];
+    globalThis.fetch = mockFetch(spec.id, requests, (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/projects/prj_other") {
+        return Response.json({ error: "project not found" }, { status: 404 });
+      }
+      if (url.pathname === "/api/projects/search") {
+        return Response.json({ projects: [] });
+      }
+      if (url.pathname === "/api/projects") {
+        return Response.json({ projects: [
+          { id: "prj_own", title: "Own", default_assignee_type: "squad", default_assignee_id: "sqd_1" },
+          { id: "prj_other", title: "Other", default_assignee_type: "agent", default_assignee_id: "agt_9" },
+        ] });
+      }
+      throw new Error(`unexpected request ${request.url}`);
+    });
+    const output = await execute(spec, ["prj_other", "--output", "json"]);
+    expect(JSON.parse(output)).toEqual({
+      project_id: "prj_other",
+      default_assignee_type: "agent",
+      default_assignee_id: "agt_9",
+    });
+  });
+
   it("registers all legacy memory/wiki paths as deprecated aliases", () => {
     const registry = registryFor(SPECS);
     const aliases = [

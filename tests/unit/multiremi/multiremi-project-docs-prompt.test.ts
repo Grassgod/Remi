@@ -108,6 +108,23 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("`remi wiki push`");
   });
 
+  it("tells issue tasks how to pick a project before creating an issue", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const prompt = buildTaskPrompt(task as any);
+
+    expect(prompt).toContain("## Creating Follow-up Issues");
+    expect(prompt).toContain("`remi project list`");
+    expect(prompt).toContain("`remi project defaults <project>`");
+    expect(prompt).toContain("--use-project-defaults");
+
+    const deltaPrompt = buildTaskPrompt({
+      ...task,
+      sessionProjection: { mode: "delta", jsonl: '{"type":"noop"}' },
+    } as any);
+    expect(deltaPrompt).not.toContain("## Creating Follow-up Issues");
+  });
+
   it("injects Project Instructions exactly once after Project Context in bootstrap", () => {
     const store = createStore();
     const { task } = createProjectTask(store);
@@ -285,7 +302,10 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain("independent workstreams");
     expect(prompt).toContain(`remi comment add ${issue.id} --content-stdin`);
     expect(prompt).toContain("cat <<'MULTIREMI_COMMENT'");
-    expect(prompt).not.toContain("remi issue create");
+    // Delegation happens via comments inside this issue; the squad block must
+    // never teach issue creation (the follow-up-issue guidance lives elsewhere).
+    const squadSection = prompt.slice(prompt.indexOf("## Squad Coordination"), prompt.indexOf("## Agent Instructions"));
+    expect(squadSection).not.toContain("remi issue create");
   });
 
   it("does not teach squad mention syntax to a non-leader agent", () => {

@@ -16,6 +16,7 @@ import {
 import {
   MultiremiCliHttpError,
   attachmentStringField,
+  multiremiApiConnection,
   multiremiApiFetch,
   multiremiApiRequest,
   multiremiApiUploadFile,
@@ -511,6 +512,10 @@ export async function issueCreate(options: CliOptions): Promise<void> {
       projectDefaults = await readProjectDefaultAssignee(projectId, options);
     } catch (error) {
       if (useProjectDefaults) throw error;
+      // Not fatal without the opt-in, but never silent: a task token that
+      // cannot read the project would otherwise lose the defaults hint with
+      // no trace of why.
+      console.error(`warning: could not read project defaults for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   if (useProjectDefaults && projectDefaults) {
@@ -543,17 +548,48 @@ async function readProjectDefaultAssignee(
   projectId: string,
   options: CliOptions,
 ): Promise<{ type: string; id: string } | null> {
-  const response = await multiremiApiRequest<unknown>(
-    "GET",
-    `/api/projects/${encodeURIComponent(projectId)}`,
-    undefined,
-    options,
-  );
-  const project = isRecord(response) && isRecord(response.project) ? response.project : response;
+  let project: unknown;
+  try {
+    const response = await multiremiApiRequest<unknown>(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}`,
+      undefined,
+      options,
+    );
+    project = isRecord(response) && isRecord(response.project) ? response.project : response;
+  } catch (error) {
+    // Task tokens may only GET their own issue's project by id; the workspace
+    // list stays readable and carries every project's default assignee.
+    project = await readProjectSummaryFromList(projectId, options);
+    if (!project) throw error;
+  }
   if (!isRecord(project)) return null;
   const type = field(project, "default_assignee_type", "defaultAssigneeType");
   const id = field(project, "default_assignee_id", "defaultAssigneeId");
   return typeof type === "string" && type && typeof id === "string" && id ? { type, id } : null;
+}
+
+async function readProjectSummaryFromList(
+  projectId: string,
+  options: CliOptions,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const workspaceId = multiremiApiConnection(options).workspaceId;
+    const params = new URLSearchParams();
+    addQueryParam(params, "workspace_id", workspaceId);
+    const query = params.toString();
+    const response = await multiremiApiRequest<unknown>(
+      "GET",
+      `/api/projects${query ? `?${query}` : ""}`,
+      undefined,
+      options,
+    );
+    const projects = isRecord(response) && Array.isArray(response.projects) ? response.projects : [];
+    const match = projects.find((entry) => isRecord(entry) && entry.id === projectId);
+    return isRecord(match) ? match : null;
+  } catch {
+    return null;
+  }
 }
 
 function booleanFlag(options: CliOptions, ...keys: string[]): boolean {
