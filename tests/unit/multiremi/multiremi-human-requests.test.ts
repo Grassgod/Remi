@@ -115,7 +115,7 @@ describe("task human requests (store)", () => {
     expect(store.cancelTask(task2.id).status).toBe("cancelled");
   });
 
-  it("returns an issue to todo when a task fails while awaiting review", () => {
+  it("blocks an issue when a task fails while awaiting review", () => {
     const store = createStore();
     const runtime = store.registerRuntime({
       id: "rt_review_failure",
@@ -134,7 +134,7 @@ describe("task human requests (store)", () => {
 
     store.failTask(task.id, { error: "approval channel closed", failureReason: "agent_error" });
 
-    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(store.getIssue(issue.id)?.status).toBe("blocked");
   });
 
   it("derives issue state from sibling tasks when one task is cancelled", () => {

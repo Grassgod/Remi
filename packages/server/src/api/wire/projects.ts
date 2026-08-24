@@ -349,7 +349,7 @@ export function projectDocErrorResponse(c: Context, err: unknown): Response | nu
   const message = err.message;
   if (message.startsWith("Project not found")) return c.json({ error: "project not found" }, 404);
   if (message.startsWith("Project doc not found")) return c.json({ error: "project doc not found" }, 404);
-  if (message === "title is required" || message.startsWith("unknown kind")) {
+  if (message === "title is required" || message === "memory body is required" || message.startsWith("unknown kind")) {
     return c.json({ error: message }, 400);
   }
   if (message === "project doc version conflict") return c.json({ error: message }, 409);
