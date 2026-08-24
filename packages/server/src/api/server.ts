@@ -49,6 +49,7 @@ import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
+import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -355,6 +356,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     analytics_environment: process.env.NODE_ENV ?? "development",
   }));
   registerCliRoutes(app, deps);
+  registerCliLatestVersionRoutes(app, deps);
   registerAuthRoutes(app, deps);
   app.get("/health/realtime", (c) => c.json({
     connections: realtimeState.connections,

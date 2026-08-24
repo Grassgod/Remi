@@ -4,7 +4,13 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-export const MULTIREMI_RELEASE_REPO = process.env.MULTIREMI_RELEASE_REPO ?? "Grassgod/remi";
+export function multiremiReleaseRepository(): string {
+  return process.env.MULTIREMI_RELEASE_REPO?.trim()
+    || process.env.MULTIREMI_REPO?.trim()
+    || "Grassgod/remi";
+}
+
+export const MULTIREMI_RELEASE_REPO = multiremiReleaseRepository();
 
 export const MULTIREMI_INSTALL_SCRIPT = "install-remi.sh";
 
