@@ -406,7 +406,7 @@ describe("TaskProgressSummarizer", () => {
     expect(reported).toEqual([{ summary: "已通过 CLI 生成摘要" }]);
     expect(calls.length).toBe(1);
     expect(calls[0]!.command[0]).toBe("/opt/claude/bin/claude");
-    expect(calls[0]!.command.slice(-2)).toEqual(["--model", "claude-haiku-test"]);
+    expect(calls[0]!.command.slice(-4)).toEqual(["--model", "claude-haiku-test", "--tools", ""]);
     expect(calls[0]!.command[2]).toContain("你是任务进度播报员");
     expect(calls[0]!.command[2]).toContain("修复 Relay");
     expect(calls[0]!.options.env.MULTIREMI_TEST_PROVIDER_ENV).toBe("task-value");

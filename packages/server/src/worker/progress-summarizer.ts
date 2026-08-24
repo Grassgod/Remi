@@ -331,7 +331,10 @@ async function callSummaryCli(input: {
   try {
     const cliPrompt = `${SUMMARY_SYSTEM_PROMPT}\n\n${input.prompt}`;
     processHandle = input.spawnImpl(
-      [input.executable, "-p", cliPrompt, "--model", input.model],
+      // `--tools ""` disables all built-in tools: the digest embeds raw task
+      // messages, so the summary session must not be able to act on injected
+      // instructions (read files, fetch URLs) — text in, text out only.
+      [input.executable, "-p", cliPrompt, "--model", input.model, "--tools", ""],
       {
         cwd,
         env: { ...process.env, ...input.providerEnv },
