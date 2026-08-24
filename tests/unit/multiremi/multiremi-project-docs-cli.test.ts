@@ -329,6 +329,8 @@ describe("Multiremi CLI project knowledge commands", () => {
         .rejects.toThrow("usage: multiremi memory list|search|recall|read|remember|update|forget|backlinks");
       await expect(runMultiremi(["memory", "remember", ...base, "--title", "Missing scope"], { programName: "multiremi" }))
         .rejects.toThrow("--project <project-id> is required for memory remember");
+      await expect(runMultiremi(["memory", "remember", "--project", "prj_1", ...base, "--title", "Missing body"], { programName: "multiremi" }))
+        .rejects.toThrow("memory body is required");
       await expect(runMultiremi(["project", "doc", "list", "prj_1", ...base], { programName: "multiremi" }))
         .rejects.toThrow("usage: multiremi project knowledge");
       await expect(runMultiremi(["project", "memory", "recall", "prj_1", "query", ...base], { programName: "multiremi" }))

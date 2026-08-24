@@ -398,10 +398,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     try {
-      // Read the doc before deleting it: the WS payload needs its id and workspace.
-      const doc = await projectKnowledge.getProjectDocByRef(project.id, c.req.param("ref"));
-      if (!doc) return c.json({ error: "project doc not found" }, 404);
-      await projectKnowledge.deleteProjectDoc(project.id, c.req.param("ref"), {
+      const doc = await projectKnowledge.deleteProjectDoc(project.id, c.req.param("ref"), {
         expectedVersion: parseOptionalInt(c.req.query("expected_version")),
       });
       publishProjectDocDeleted(c, store, doc);

@@ -2141,7 +2141,7 @@ export class TasksRepo {
       // Compute status after the return task is present. Otherwise the child
       // completion can mark the Issue done and the queued leader follow-up is
       // deliberately unable to reopen that explicit terminal state.
-      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status);
+      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status, retry != null);
       if (issueStatus) {
         if (workspaceLockHeld) this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus);
         else this.syncIssueStatusFromTask(task, issueStatus);
@@ -2328,13 +2328,15 @@ export class TasksRepo {
   private nextIssueStatusAfterTaskTerminal(
     task: MultiremiTask,
     status: "completed" | "failed" | "cancelled",
+    retryCreated: boolean,
   ): string | null {
     if (!task.issueId) return null;
 
+    // An infrastructure retry is still the same active attempt chain. Ordinary
+    // queued siblings have not started yet and keep the historical todo state.
+    if (retryCreated) return "in_progress";
+
     // A terminal task must not overwrite the state implied by sibling work.
-    // This also covers auto-retries: maybeRetryFailedTask creates the queued
-    // child before this method runs, so a retry correctly leaves the issue in
-    // todo until a daemon actually starts it.
     const remainingStatus = this.issueStatusForRemainingTasks(task.issueId);
     if (remainingStatus) return remainingStatus;
 
@@ -2346,10 +2348,8 @@ export class TasksRepo {
       }
     }
     if (status === "completed") return "in_review";
-    if (
-      (issue?.status === "in_progress" || issue?.status === "in_review") &&
-      !this.hasActiveTaskForIssue(task.issueId)
-    ) return "todo";
+    if (status === "failed" && !this.hasActiveTaskForIssue(task.issueId)) return "blocked";
+    if (status === "cancelled" && !this.hasActiveTaskForIssue(task.issueId)) return "todo";
     return null;
   }
 

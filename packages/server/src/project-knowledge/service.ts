@@ -1,4 +1,5 @@
 import { createId, nowIso } from "@multiremi/ids.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   CreateProjectDocInput,
   MultiremiProject,
@@ -63,6 +64,8 @@ export interface ProjectKnowledgeServiceContract {
 
 export class ProjectKnowledgeUnavailableError extends Error {}
 
+const log = createLogger("project-knowledge");
+
 export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract {
   constructor(
     private readonly store: MultiremiStore,
@@ -75,7 +78,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
   async listProjectDocs(projectId: string, input: { kind?: string | null } = {}): Promise<ProjectKnowledgeDoc[]> {
     const docs = this.store.listProjectDocs(projectId, input);
     if (this.mode !== "openviking") return docs.map(asKnowledgeDoc);
-    return Promise.all(docs.map((doc) => this.hydrate(doc)));
+    return Promise.all(docs.filter(isReadyOpenVikingDoc).map((doc) => this.hydrate(doc)));
   }
 
   async getProjectDocByRef(projectId: string, ref: string): Promise<ProjectKnowledgeDoc | null> {
@@ -86,6 +89,9 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
   }
 
   async createProjectDoc(projectId: string, input: CreateProjectDocInput): Promise<ProjectKnowledgeDoc> {
+    if (normalizeProjectDocKind(input.kind ?? "wiki") === "memory" && !String(input.body ?? "").trim()) {
+      throw new Error("memory body is required");
+    }
     if (this.mode === "sql") return asKnowledgeDoc(this.store.createProjectDoc(projectId, input));
     if (this.mode === "shadow") {
       const created = this.store.createProjectDoc(projectId, input);
@@ -166,21 +172,37 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     ref: string,
     input: { expectedVersion?: number | null } = {},
   ): Promise<ProjectKnowledgeDoc> {
-    const existing = await this.requireDoc(projectId, ref);
+    const existing = this.store.getProjectDocByRef(projectId, ref);
+    if (!existing) throw new Error(`Project doc not found: ${ref}`);
     if (input.expectedVersion != null && input.expectedVersion !== existing.version) {
       throw new Error("project doc version conflict");
     }
     if (this.mode !== "sql") {
       const client = this.requireClient();
       const uri = this.docUri(existing);
-      if (await client.exists(uri)) {
-        this.store.setProjectDocSyncState(existing.id, { syncStatus: "deleting", syncError: null });
-        await client.remove(uri);
+      this.store.setProjectDocSyncState(existing.id, { syncStatus: "deleting", syncError: null });
+      try {
+        if (await client.exists(uri)) await client.remove(uri);
+      } catch (error) {
+        const stillExists = await client.exists(uri).catch(() => true);
+        if (stillExists) {
+          this.store.setProjectDocSyncState(existing.id, {
+            syncStatus: "failed",
+            syncError: safeError(error),
+          });
+          throw error;
+        }
+      }
+      try {
         await client.commit(`project_doc:${existing.id}:delete:v${existing.version}`, [uri]);
+      } catch (error) {
+        // The content is already absent. Keep deletion idempotent and do not
+        // retain a control-plane tombstone solely because snapshotting failed.
+        log.warn(`snapshot commit skipped while deleting ${existing.id}: ${safeError(error)}`);
       }
     }
     this.store.deleteProjectDoc(projectId, ref);
-    return existing;
+    return asKnowledgeDoc(existing);
   }
 
   async listProjectDocRevisions(projectId: string, ref: string): Promise<ProjectKnowledgeRevision[]> {
@@ -248,7 +270,8 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     const query = String(input.q ?? "").trim();
     if (this.mode !== "openviking" || !query) {
       const docs = this.store.listWorkspaceDocs(workspaceId, this.mode === "openviking" ? { ...input, q: null } : input);
-      const limited = docs.slice(0, clampLimit(input.limit, 200, 500));
+      const available = this.mode === "openviking" ? docs.filter(isReadyOpenVikingDoc) : docs;
+      const limited = available.slice(0, clampLimit(input.limit, 200, 500));
       if (this.mode !== "openviking") return limited.map(asWorkspaceKnowledgeDoc);
       return Promise.all(limited.map(async (doc) => ({ ...(await this.hydrate(doc)), projectTitle: doc.projectTitle })));
     }
@@ -264,7 +287,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     for (const hit of hits) {
       if (!hit.uri.endsWith(".md") || hit.uri.endsWith("/.abstract.md")) continue;
       const metadata = this.store.listProjectDocsForMigration(workspaceId).find((doc) => doc.contentUri === hit.uri);
-      if (!metadata) continue;
+      if (!metadata || !isReadyOpenVikingDoc(metadata)) continue;
       const project = byId.get(metadata.projectId);
       if (!project) continue;
       output.push({ ...(await this.hydrate(metadata)), projectTitle: project.title });
@@ -646,6 +669,10 @@ function projectDocsIndex(docs: ProjectKnowledgeDoc[]): { memory: MultiremiProje
     wiki: entries.filter((entry) => entry.kind === "wiki" && entry.slug !== PROJECT_DOC_SCHEMA_SLUG).sort(indexOrder).slice(0, 100),
     schema: trim(docs.find((doc) => doc.slug === PROJECT_DOC_SCHEMA_SLUG)?.body ?? null, 1500),
   };
+}
+
+function isReadyOpenVikingDoc(doc: Pick<MultiremiProjectDoc, "storageBackend" | "syncStatus" | "contentUri">): boolean {
+  return doc.storageBackend === "openviking" && doc.syncStatus === "ready" && Boolean(doc.contentUri);
 }
 
 function indexOrder(a: MultiremiProjectDocIndexEntry, b: MultiremiProjectDocIndexEntry): number {

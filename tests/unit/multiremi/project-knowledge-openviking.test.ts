@@ -25,6 +25,7 @@ class FakeOpenViking implements OpenVikingClientContract {
   failWrites = 0;
   failCommits = 0;
   failRemoves = 0;
+  failRemovesAfterDelete = 0;
   failHealth = false;
   findTargets: Array<string | string[]> = [];
 
@@ -48,6 +49,11 @@ class FakeOpenViking implements OpenVikingClientContract {
     this.files.set(uri, content);
   }
   async remove(uri: string): Promise<void> {
+    if (this.failRemovesAfterDelete > 0) {
+      this.failRemovesAfterDelete--;
+      this.files.delete(uri);
+      throw new Error("planned ambiguous OpenViking remove failure");
+    }
     if (this.failRemoves > 0) {
       this.failRemoves--;
       throw new Error("planned OpenViking remove failure");
@@ -183,6 +189,93 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     await service.deleteProjectDoc(project.id, moved.slug, { expectedVersion: moved.version });
     expect(store.getProjectDoc(moved.id)).toBeNull();
     expect([...client.files.keys()].some((uri) => uri.endsWith("/release-runbook.md"))).toBe(false);
+  });
+
+  it("finishes idempotent deletion after ambiguous remote and snapshot failures", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Delete recovery" });
+
+    const ambiguous = await service.createProjectDoc(project.id, {
+      kind: "memory",
+      title: "Ambiguous delete",
+      body: "durable fact",
+    });
+    client.failRemovesAfterDelete = 1;
+    client.failCommits = 1;
+    await expect(service.deleteProjectDoc(project.id, ambiguous.id)).resolves.toMatchObject({ id: ambiguous.id });
+    expect(store.getProjectDoc(ambiguous.id)).toBeNull();
+
+    const resumed = await service.createProjectDoc(project.id, {
+      kind: "memory",
+      title: "Interrupted delete",
+      body: "another durable fact",
+    });
+    store.setProjectDocSyncState(resumed.id, { syncStatus: "deleting" });
+    client.files.delete(resumed.contentUri!);
+    await expect(service.deleteProjectDoc(project.id, resumed.id)).resolves.toMatchObject({ id: resumed.id });
+    expect(store.getProjectDoc(resumed.id)).toBeNull();
+  });
+
+  it("records a removable failure and allows a later delete retry", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Delete retry" });
+    const doc = await service.createProjectDoc(project.id, {
+      kind: "memory",
+      title: "Retry delete",
+      body: "durable fact",
+    });
+
+    client.failRemoves = 1;
+    await expect(service.deleteProjectDoc(project.id, doc.id)).rejects.toThrow("planned OpenViking remove failure");
+    expect(store.getProjectDoc(doc.id)).toMatchObject({
+      syncStatus: "failed",
+      syncError: "planned OpenViking remove failure",
+    });
+    await expect(service.deleteProjectDoc(project.id, doc.id)).resolves.toMatchObject({ id: doc.id });
+    expect(store.getProjectDoc(doc.id)).toBeNull();
+  });
+
+  it("excludes non-ready documents from lists and task hydration", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Knowledge isolation" });
+    const healthy = await service.createProjectDoc(project.id, {
+      kind: "memory",
+      title: "Healthy memory",
+      body: "usable knowledge",
+    });
+    const deleting = await service.createProjectDoc(project.id, {
+      kind: "memory",
+      title: "Deleting memory",
+      body: "being removed",
+    });
+    store.setProjectDocSyncState(deleting.id, { syncStatus: "deleting" });
+    client.files.delete(deleting.contentUri!);
+
+    expect((await service.listProjectDocs(project.id)).map((doc) => doc.id)).toContain(healthy.id);
+    expect((await service.listProjectDocs(project.id)).map((doc) => doc.id)).not.toContain(deleting.id);
+    const hydrated = await service.hydrateTaskKnowledge({
+      project,
+      projectContexts: [],
+    } as any);
+    expect(hydrated.projectDocs?.memory.map((doc) => doc.id)).toContain(healthy.id);
+    expect(hydrated.projectDocs?.memory.map((doc) => doc.id)).not.toContain(deleting.id);
+  });
+
+  it("rejects empty memory bodies before writing OpenViking metadata", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Memory validation" });
+
+    await expect(service.createProjectDoc(project.id, { kind: "memory", title: "Empty", body: "  " }))
+      .rejects.toThrow("memory body is required");
+    expect(store.listProjectDocs(project.id).filter((doc) => doc.kind === "memory")).toHaveLength(0);
   });
 });
 

@@ -372,7 +372,7 @@ describe("native CLI resource contracts", () => {
     });
   });
 
-  it("preserves legacy memory body flags while routing through the native command", async () => {
+  it("preserves legacy memory body flags while rejecting empty content", async () => {
     useCliEnv();
     console.log = () => {};
     const spec = specById("memory.create");
@@ -393,7 +393,7 @@ describe("native CLI resource contracts", () => {
       "--title", "Compatibility",
       "--pinned", "false",
       "--summary=",
-      "--content=",
+      "--content=Durable fact",
       "--tags=",
       "--ref", "https://example.test/source",
       "--output", "json",
@@ -403,10 +403,17 @@ describe("native CLI resource contracts", () => {
       title: "Compatibility",
       pinned: false,
       summary: null,
-      body: "",
+      body: "Durable fact",
       tags: [],
       refs: [{ type: "url", value: "https://example.test/source" }],
     });
+
+    await expect(registryFor([spec]).execute([
+      "memory", "remember",
+      "--project", "prj_1",
+      "--title", "Empty placeholder",
+      "--content=",
+    ])).rejects.toThrow("memory body is required");
     expect(spec.options?.some((option) => option.name === "content-stdin")).toBe(true);
   });
 
