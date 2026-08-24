@@ -144,6 +144,24 @@ describe("formatActivity", () => {
     ).toBe("activity.squad_leader_evaluated");
   });
 
+  it("explains a skipped dispatch, with the specific no-runnable-agent variant", () => {
+    expect(
+      formatActivity(
+        activity("dispatch_skipped", { details: { reason: "no_runnable_agent", error: "No runnable agent for squad: sqd_1" } }),
+        t,
+      ),
+    ).toBe("activity.dispatch_skipped_no_runnable_agent");
+    expect(
+      formatActivity(
+        activity("dispatch_skipped", { details: { reason: "assign_failed", error: "Squad is archived: sqd_1" } }),
+        t,
+      ),
+    ).toBe('activity.dispatch_skipped_reason {"reason":"Squad is archived: sqd_1"}');
+    expect(formatActivity(activity("dispatch_skipped", { details: {} }), t)).toBe(
+      "activity.dispatch_skipped",
+    );
+  });
+
   it("echoes an unknown action instead of rendering a missing key", () => {
     expect(formatActivity(activity("teleported"), t)).toBe("teleported");
     expect(formatActivity(activity(undefined as unknown as string), t)).toBe("");

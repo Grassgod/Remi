@@ -1022,4 +1022,85 @@ describe("Multiremi API — issue endpoints", () => {
     const missing = await app.request(`/api/labels/${createdBody.label.id}`);
     expect(missing.status).toBe(404);
   });
+
+  it("reports the dispatch outcome on create instead of failing silently", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Dispatch agent", provider: "claude" });
+    const member = store.createWorkspaceMember({ name: "Dispatch member" });
+    const emptySquad = store.createSquad({ name: "Empty squad" });
+    const app = createMultiremiApp({ store });
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/issues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    // 1. No assignee: created, explicitly not dispatched, no failure activity.
+    const unassigned = await create({ title: "Nobody owns this" });
+    expect(unassigned.status).toBe(201);
+    const unassignedBody = await unassigned.json();
+    expect(unassignedBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_assignee",
+      task_id: null,
+    });
+    expect(unassignedBody.dispatch_error).toBeUndefined();
+    expect(store.listIssueActivity(unassignedBody.id).map((activity) => activity.type)).not.toContain("dispatch_skipped");
+
+    // 2. Assignee resolves to no runnable agent (squad with no agent members):
+    //    the skip reason lands in the response AND on the issue activity feed.
+    const squadIssue = await create({ title: "Squad has no agents", assignee_type: "squad", assignee_id: emptySquad.id });
+    expect(squadIssue.status).toBe(201);
+    const squadBody = await squadIssue.json();
+    expect(squadBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_runnable_agent",
+      task_id: null,
+    });
+    expect(squadBody.dispatch_error).toContain("No runnable agent");
+    const skipActivity = store.listIssueActivity(squadBody.id).find((activity) => activity.type === "dispatch_skipped");
+    expect(skipActivity).toBeDefined();
+    expect(skipActivity!.data).toMatchObject({
+      reason: "no_runnable_agent",
+      assignee_type: "squad",
+      assignee_id: emptySquad.id,
+    });
+    // The skip is user-visible on the timeline endpoint, not just in the store.
+    const timeline = await app.request(`/api/issues/${squadBody.id}/timeline`);
+    const timelineBody = await timeline.json();
+    const entries = Array.isArray(timelineBody) ? timelineBody : timelineBody.entries;
+    expect(entries.some((entry: any) => entry.action === "dispatch_skipped")).toBe(true);
+
+    // 3. Member assignee: no task by design (inbox notification instead).
+    const memberIssue = await create({ title: "Human work", assignee_type: "member", assignee_id: member.id });
+    expect(memberIssue.status).toBe(201);
+    expect(await memberIssue.json()).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "member_assignee",
+      task_id: null,
+    });
+
+    // 4. Backlog is a parking lot: assignment stands, dispatch waits.
+    const backlogIssue = await create({ title: "Parked", status: "backlog", assignee_type: "agent", assignee_id: agent.id });
+    expect(backlogIssue.status).toBe(201);
+    expect(await backlogIssue.json()).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "backlog_status",
+      task_id: null,
+    });
+
+    // 5. Runnable agent: dispatched, with the task id in the response.
+    const dispatched = await create({ title: "Agent work", assignee_type: "agent", assignee_id: agent.id });
+    expect(dispatched.status).toBe(201);
+    const dispatchedBody = await dispatched.json();
+    const dispatchedTaskId = dispatchedBody.task_id;
+    expect(dispatchedBody).toMatchObject({
+      dispatch_status: "dispatched",
+      dispatch_skipped_reason: null,
+    });
+    expect(typeof dispatchedTaskId).toBe("string");
+    expect(store.getTask(dispatchedTaskId)?.issueId).toBe(dispatchedBody.id);
+  });
 });

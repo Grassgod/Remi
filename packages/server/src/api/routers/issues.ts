@@ -503,23 +503,51 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         if (existing) return c.json(issueCompatibilityResponse(existing), 200);
       }
       const issue = store.createIssue(issueInput);
-      let response = issueCompatibilityResponse(issue);
-      publishIssueCreated(c, store, issue, response);
+      publishIssueCreated(c, store, issue, issueCompatibilityResponse(issue));
       // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
       // dispatches a task, unless it's in backlog (a parking lot for pre-assignment).
       // If no runnable agent is available the assignment stands without a task, matching
-      // the Go server's "not ready → skip" behavior.
-      if (issue.assigneeType && issue.assigneeId && issue.status !== "backlog") {
+      // the Go server's "not ready → skip" behavior — but the outcome is never silent:
+      // the response always says whether a task was dispatched and why not, and a
+      // dispatch failure leaves a dispatch_skipped activity on the issue.
+      let finalIssue = issue;
+      let task: { id: string } | null = null;
+      let dispatchSkippedReason: string | null = null;
+      let dispatchError: string | null = null;
+      if (!issue.assigneeType || !issue.assigneeId) {
+        dispatchSkippedReason = "no_assignee";
+      } else if (issue.status === "backlog") {
+        dispatchSkippedReason = "backlog_status";
+      } else {
         try {
           const assigned = store.assignIssue(issue.id, {
             assigneeType: issue.assigneeType,
             assigneeId: issue.assigneeId,
           });
-          response = issueCompatibilityResponse(assigned.issue);
+          finalIssue = assigned.issue;
+          task = assigned.task;
+          // A member assignee gets an inbox notification instead of a task.
+          if (!task) dispatchSkippedReason = "member_assignee";
         } catch (err) {
-          log.warn(`assign-on-create dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          dispatchSkippedReason = message.startsWith("No runnable agent") ? "no_runnable_agent" : "assign_failed";
+          dispatchError = message;
+          log.warn(`assign-on-create dispatch skipped for ${issue.id}: ${message}`);
+          store.recordIssueDispatchSkipped(issue.id, {
+            reason: dispatchSkippedReason,
+            error: message,
+            assigneeType: issue.assigneeType,
+            assigneeId: issue.assigneeId,
+          });
         }
       }
+      const response: Record<string, unknown> = {
+        ...issueCompatibilityResponse(finalIssue),
+        task_id: task?.id ?? null,
+        dispatch_status: task ? "dispatched" : "skipped",
+        dispatch_skipped_reason: task ? null : dispatchSkippedReason,
+      };
+      if (dispatchError) response.dispatch_error = dispatchError;
       return c.json(response, 201);
     } catch (err) {
       const response = issueErrorResponse(c, err);

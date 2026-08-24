@@ -20440,7 +20440,10 @@
         "archived_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "metadata": {}
+        "metadata": {},
+        "task_id": null,
+        "dispatch_status": "skipped",
+        "dispatch_skipped_reason": "no_assignee"
       }
     },
     {

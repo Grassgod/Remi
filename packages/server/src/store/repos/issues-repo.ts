@@ -1699,6 +1699,34 @@ export class IssuesRepo {
     return rows.map(toIssueActivity);
   }
 
+  // Assign-on-create could not queue a task. Persist the reason as a visible
+  // activity so the issue page can explain why nothing is running, instead of
+  // the outcome living only in server logs.
+  recordDispatchSkipped(issueId: string, input: {
+    reason: string;
+    error?: string | null;
+    assigneeType?: string | null;
+    assigneeId?: string | null;
+  }): MultiremiIssueActivity {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    // Via appendIssueActivity (not a raw INSERT) so browsers get the
+    // activity:created broadcast and the timeline updates live.
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: "system",
+      actorId: null,
+      type: "dispatch_skipped",
+      body: input.error ?? null,
+      data: {
+        reason: input.reason,
+        error: input.error ?? null,
+        assignee_type: input.assigneeType ?? null,
+        assignee_id: input.assigneeId ?? null,
+      },
+    });
+    return this.listIssueActivity(issue.id).findLast((activity) => activity.type === "dispatch_skipped")!;
+  }
+
   recordSquadLeaderEvaluation(issueId: string, input: {
     outcome: "action" | "no_action" | "failed" | string;
     reason?: string | null;

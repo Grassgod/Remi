@@ -104,6 +104,76 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
     }
   });
 
+  test("issue create warns loudly when the issue was created but not dispatched", async () => {
+    let createResponse: Record<string, unknown> = {};
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/projects/prj_1" && request.method === "GET") {
+          // Project without a default assignee.
+          return Response.json({ project: { id: "prj_1", title: "No defaults" } });
+        }
+        if (url.pathname === "/api/issues" && request.method === "POST") {
+          await request.json();
+          return new Response(JSON.stringify(createResponse), { status: 201 });
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    });
+    const logs: string[] = [];
+    const warnings: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    try {
+      console.log = (value?: unknown) => { logs.push(String(value)); };
+      console.error = (value?: unknown) => { warnings.push(String(value)); };
+      const serverUrl = `http://127.0.0.1:${server.port}`;
+      const create = (...extra: string[]) =>
+        runMultiremi(["issue", "create", "--title", "Silent?", "--server", serverUrl, "--token", "tok_cli", "--output", "json", ...extra], { programName: "multiremi" });
+
+      // No assignee + project without default assignee: warn, with the config hint.
+      createResponse = { id: "iss_1", identifier: "MUL-9", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee" };
+      await create("--project", "prj_1");
+      expect(JSON.parse(logs.at(-1)!)).toMatchObject({ dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee" });
+      expect(warnings.join("\n")).toContain("NOT dispatched");
+      expect(warnings.join("\n")).toContain("no assignee");
+      expect(warnings.join("\n")).toContain("no default assignee");
+      expect(warnings.join("\n")).toContain("issue assign MUL-9");
+
+      // No runnable agent: warn with the server's error.
+      warnings.length = 0;
+      createResponse = {
+        id: "iss_2",
+        identifier: "MUL-10",
+        task_id: null,
+        dispatch_status: "skipped",
+        dispatch_skipped_reason: "no_runnable_agent",
+        dispatch_error: "No runnable agent for squad: sqd_1",
+      };
+      await create("--assignee", "sqd_1", "--assignee-type", "squad");
+      expect(warnings.join("\n")).toContain("NOT dispatched");
+      expect(warnings.join("\n")).toContain("No runnable agent for squad: sqd_1");
+
+      // Dispatched: no warning at all.
+      warnings.length = 0;
+      createResponse = { id: "iss_3", identifier: "MUL-11", task_id: "tsk_1", dispatch_status: "dispatched", dispatch_skipped_reason: null };
+      await create("--assignee", "agt_1", "--assignee-type", "agent");
+      expect(warnings.join("\n")).not.toContain("NOT dispatched");
+
+      // Member assignee: expected outcome, no warning.
+      warnings.length = 0;
+      createResponse = { id: "iss_4", identifier: "MUL-12", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "member_assignee" };
+      await create("--assignee", "mem_1", "--assignee-type", "member");
+      expect(warnings.join("\n")).not.toContain("NOT dispatched");
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+      server.stop(true);
+    }
+  });
+
   test("issue read commands default to Go-style table output", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
