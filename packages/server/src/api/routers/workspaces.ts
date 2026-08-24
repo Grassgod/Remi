@@ -16,6 +16,7 @@ import {
   safeCreateWorkspace,
   safeLeaveWorkspace,
   updateWorkspaceRepository,
+  safeWorkspaceRepositoryData,
   WorkspaceRepositoryError,
 } from "../helpers.js";
 import type {
@@ -143,7 +144,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.put("/api/workspaces/:id", async (c) => {
-    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
+    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"))
+      ?? requireWorkspaceAdmin(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
     if (hasOwn(body, "settings")) {
@@ -156,7 +158,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
   app.patch("/api/workspaces/:id", async (c) => {
-    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
+    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"))
+      ?? requireWorkspaceAdmin(c, store, c.req.param("id"));
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
     if (hasOwn(body, "settings")) {
@@ -178,7 +181,10 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         workspaceId,
         deps.inspectGitRemoteRepository,
       );
-      return c.json({ repositories, total: repositories.length });
+      const visible = currentAccessToken(c)?.type === "task"
+        ? repositories.map(safeWorkspaceRepositoryData)
+        : repositories;
+      return c.json({ repositories: visible, total: visible.length });
     } catch (error) {
       if (error instanceof WorkspaceRepositoryError) {
         return c.json({ error: error.message }, error.status);

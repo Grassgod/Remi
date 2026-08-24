@@ -1,7 +1,7 @@
 import type { ProjectDocRef, SessionResult } from "../types";
 
 // A published Session result carries an open `metadata` bag. Two keys inside
-// it are a convention the CLI writes (`remi issue session result publish
+// it are a convention the CLI writes (`remi session result publish
 // --type … --ref …`) and the issue page reads — the server persists whatever
 // arrives, so both readers below degrade instead of trusting the shape.
 //

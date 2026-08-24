@@ -38,6 +38,8 @@
     "build:multiremi": "bun run scripts/build-multiremi.ts",
     "lock:clean": "bun run scripts/clean-lockfile.ts",
     "test": "bun test",
+    "cli:capabilities:generate": "bun run scripts/generate-cli-capabilities.ts",
+    "cli:capabilities:check": "bun run scripts/check-cli-capabilities.ts",
     "test:frontend": "bun run --filter '@multiremi/*' test",
     "typecheck:frontend": "bun run --filter '@multiremi/*' typecheck",
     "smoke:multiremi:acp": "bun run tests/integration/smoke-multiremi-acp.ts",

@@ -359,6 +359,103 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(codexB.id)?.id).toBe(retry.id);
   });
 
+  it("atomically clears stale Chat lineage before creating one cold retry", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_stale_chat", name: "stale chat", provider: "codex" });
+    const agent = store.createAgent({ name: "Stale Chat", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "stale" });
+    const first = store.sendChatMessage(session.id, { body: "first turn" });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
+    store.startTask(first.task.id);
+    store.completeTask(first.task.id, { output: "first answer", sessionId: "sess_dead", workDir: "/tmp/dead" });
+
+    const second = store.sendChatMessage(session.id, { body: "resume me" });
+    expect(store.claimTask(runtime.id)?.id).toBe(second.task.id);
+    store.startTask(second.task.id);
+    store.failTask(second.task.id, {
+      error: "Stale provider session: no conversation found",
+      failureReason: "agent_error.stale_session",
+    });
+
+    expect(store.getChatSession(session.id)).toMatchObject({
+      sessionId: null,
+      workDir: null,
+      sessionRuntimeId: null,
+      sessionProvider: null,
+      sessionExecutionFingerprint: null,
+    });
+    const retries = store.listTasks().filter((task) => task.parentTaskId === second.task.id);
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatchObject({
+      attempt: 2,
+      runtimeId: null,
+      sessionId: null,
+      workDir: null,
+      chatSessionId: session.id,
+    });
+    expect(store.listChatMessages(session.id).map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+  });
+
+  it("does not cold-retry Chat for server, auth, quota, or network failures", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_non_stale_chat", name: "non stale", provider: "codex" });
+    const agent = store.createAgent({ name: "Non-stale Chat", provider: "codex" });
+    for (const [index, failureReason] of [
+      "agent_error.provider_server_error",
+      "agent_error.provider_auth_or_access",
+      "agent_error.provider_quota_limit",
+      "agent_error.provider_network",
+    ].entries()) {
+      const session = store.createChatSession({ agentId: agent.id, title: failureReason });
+      const first = store.sendChatMessage(session.id, { body: `warm ${index}` });
+      expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
+      store.startTask(first.task.id);
+      store.completeTask(first.task.id, { output: "warm", sessionId: `sess_keep_${index}`, workDir: `/tmp/keep-${index}` });
+      const failed = store.sendChatMessage(session.id, { body: "try once" });
+      expect(store.claimTask(runtime.id)?.id).toBe(failed.task.id);
+      store.startTask(failed.task.id);
+      store.failTask(failed.task.id, { error: failureReason, failureReason });
+      expect(store.listTasks().filter((task) => task.parentTaskId === failed.task.id)).toHaveLength(0);
+      expect(store.getChatSession(session.id)).toMatchObject({
+        sessionId: `sess_keep_${index}`,
+        workDir: `/tmp/keep-${index}`,
+      });
+    }
+  });
+
+  it("stops stale Chat recovery at max_attempts without preserving the dead lineage", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_stale_limit", name: "stale limit", provider: "codex" });
+    const agent = store.createAgent({ name: "Stale Limit", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "limit" });
+    const warm = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "warm" });
+    expect(store.claimTask(runtime.id)?.id).toBe(warm.id);
+    store.startTask(warm.id);
+    store.completeTask(warm.id, { output: "warm", sessionId: "sess_limit", workDir: "/tmp/limit" });
+    const terminal = store.createTask({
+      agentId: agent.id,
+      chatSessionId: session.id,
+      prompt: "last try",
+      maxAttempts: 1,
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(terminal.id);
+    store.startTask(terminal.id);
+    store.failTask(terminal.id, {
+      error: "Stale provider session: no conversation found",
+      failureReason: "agent_error.stale_session",
+    });
+    expect(store.listTasks().filter((task) => task.parentTaskId === terminal.id)).toHaveLength(0);
+    expect(store.getChatSession(session.id)).toMatchObject({ sessionId: null, workDir: null });
+    expect(store.listChatMessages(session.id).at(-1)).toMatchObject({
+      role: "assistant",
+      failureReason: "agent_error.stale_session",
+    });
+  });
+
   it("forces a task into its agent's workspace, blocking cross-workspace claims", () => {
     const store = createStore();
     // Alice's agent lives in workspace "wsA" and carries a secret.

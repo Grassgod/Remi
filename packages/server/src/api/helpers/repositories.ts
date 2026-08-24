@@ -19,6 +19,10 @@ export interface WorkspaceRepositoryData {
   updated_at: string | null;
 }
 
+export function safeWorkspaceRepositoryData(repository: WorkspaceRepositoryData): WorkspaceRepositoryData {
+  return { ...repository, url: redactRepositoryCredentials(repository.url) };
+}
+
 export interface ImportWorkspaceRepositoryInput {
   url?: string;
   name?: string;
@@ -429,6 +433,21 @@ function normalizeGitRemoteUrl(value: unknown): string | null {
     return url.replace(/\/+$/, "");
   } catch {
     return null;
+  }
+}
+
+function redactRepositoryCredentials(value: string): string {
+  const scp = value.match(/^[^@\s]+@([^:\s]+):(.+)$/);
+  if (scp) return `ssh://${scp[1]}/${scp[2]}`;
+  try {
+    const parsed = new URL(value);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
   }
 }
 

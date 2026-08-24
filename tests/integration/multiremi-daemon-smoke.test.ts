@@ -1276,6 +1276,117 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("starts homepage Chat with zero Git work while preserving Issue auto-checkout", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-chat-no-git-");
+    const sourceRepo = createSourceRepo(join(workDir, "_source", "repo"));
+    const otherRepo = createSourceRepo(join(workDir, "_source", "other"));
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      settings: { github_enabled: false },
+      repos: [
+        { url: sourceRepo, description: "must stay lazy in Chat" },
+        { url: otherRepo, description: "must not be pulled by one checkout" },
+      ],
+    });
+    const agent = store.createAgent({ name: "Lazy Chat Claude", provider: "claude" });
+    const chat = store.createChatSession({ agentId: agent.id, title: "No Git" });
+    const hello = store.sendChatMessage(chat.id, { body: "你好" });
+    db!.run("UPDATE multiremi_tasks SET priority = 100 WHERE id = ?", [hello.task.id]);
+    const issue = store.createIssue({ title: "Still checkout" });
+    const issueTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Use the repository", priority: 50 });
+    const daemonToken = await store.createAccessToken({
+      name: "Chat no-git daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-chat-no-git-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const prompts: string[] = [];
+    let checkoutPath = "";
+    let turn = 0;
+    const providerFactory: MultiremiDaemonProviderFactory = (options) => {
+      const current = turn++;
+      const text = current === 0
+        ? "Hello without Git"
+        : current === 1
+          ? "Checked out one repository"
+          : "Issue used checkout";
+      return {
+        async *sendStream(message) {
+          prompts.push(message);
+          if (current === 1) {
+            const response = await fetch(`http://127.0.0.1:${options.env?.MULTIREMI_DAEMON_PORT}/repo/checkout`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                url: sourceRepo,
+                workspace_id: "local",
+                workdir: options.cwd,
+                agent_name: "Lazy Chat Claude",
+                task_id: options.env?.MULTIREMI_TASK_ID,
+              }),
+            });
+            expect(response.status).toBe(200);
+            checkoutPath = String((await response.json() as { path: string }).path);
+          }
+          yield {
+            sessionUpdate: "agent_message_chunk",
+            content: [{ type: "text", text }],
+          } as any;
+        },
+        getLastResponse: () => ({ text, sessionId: `sess-lazy-${current}`, requestId: `req-lazy-${current}` }),
+      };
+    };
+    const repoCacheRoot = join(workDir, ".repo-cache");
+    const runDaemonOnce = () => new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      runtimeName: "chat-no-git-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      daemonPort: 0,
+      workspacesRoot: join(workDir, "workspaces"),
+      repoCacheRoot,
+      providerFactory,
+    }).start();
+
+    try {
+      await runDaemonOnce();
+      expect(store.getTask(hello.task.id)?.status).toBe("completed");
+      expect(existsSync(join(repoCacheRoot, "local"))).toBe(false);
+      expect(prompts[0]).toContain("## Remi Context");
+      expect(prompts[0]).toContain("`remi context`");
+      expect(prompts[0]).toContain("`remi repo list|get|search`");
+      expect(prompts[0]).not.toContain("## Available Repositories");
+      expect(prompts[0]).not.toContain(sourceRepo);
+      expect(prompts[0]).not.toContain(otherRepo);
+
+      const checkout = store.sendChatMessage(chat.id, { body: "Check out only the primary repository" });
+      db!.run("UPDATE multiremi_tasks SET priority = 90 WHERE id = ?", [checkout.task.id]);
+      await runDaemonOnce();
+      expect(store.getTask(checkout.task.id)?.status).toBe("completed");
+      expect(existsSync(join(checkoutPath, "README.md"))).toBe(true);
+      const cache = new MultiremiRepoCache(repoCacheRoot);
+      expect(cache.lookup("local", sourceRepo)).not.toBeNull();
+      expect(cache.lookup("local", otherRepo)).toBeNull();
+
+      await runDaemonOnce();
+      expect(store.getTask(issueTask.id)?.status).toBe("completed");
+      expect(existsSync(join(repoCacheRoot, "local"))).toBe(true);
+      expect(prompts[2]).toContain("## Available Repositories");
+      expect(prompts[2]).toContain(sourceRepo);
+      expect(store.getIssueWorkspace(issue.id)?.repos[0]).toMatchObject({ status: "ready" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("auto-checks out repos into the stable Issue workspace and reports it", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-autorepo-");
     const sourceRepo = createSourceRepo(join(workDir, "_source", "repo"));
@@ -1535,21 +1646,28 @@ describe("Bun Multiremi daemon smoke", () => {
       providerCwds.push(options.cwd!);
       providerHomes.push(options.env?.CLAUDE_CONFIG_DIR);
       injectedMcpServers.push(options.getMcpServers?.() ?? []);
-      const text = turn === 0 ? "First answer" : "Second answer";
+      const text = turn === 0
+        ? "First answer"
+        : turn === 1
+          ? "Second answer"
+          : "Recovered answer";
       return {
         async *sendStream(message, options) {
           prompts.push(message);
           sendOptions.push(options ?? {});
+          if (turn === 2) throw new Error("no conversation found for session sess-chat-2");
           yield {
             sessionUpdate: "agent_message_chunk",
             content: [{ type: "text", text }],
           } as any;
         },
-        getLastResponse: () => ({
-          text,
-          sessionId: turn === 0 ? "sess-chat-1" : "sess-chat-2",
-          requestId: `req-chat-${turn + 1}`,
-        }),
+        getLastResponse: () => turn === 2
+          ? null
+          : ({
+              text,
+              sessionId: turn === 0 ? "sess-chat-1" : turn === 1 ? "sess-chat-2" : "sess-chat-3",
+              requestId: `req-chat-${turn + 1}`,
+            }),
       };
     };
     const runDaemonOnce = () => new MultiremiDaemon({
@@ -1641,6 +1759,50 @@ describe("Bun Multiremi daemon smoke", () => {
         sessionId: "sess-chat-2",
         workDir,
         latestTaskId: second.task.id,
+      });
+
+      const stale = store.sendChatMessage(session.id, { body: "Recover from product history" });
+      await runDaemonOnce();
+      expect(store.getTask(stale.task.id)).toMatchObject({
+        status: "failed",
+        failureReason: "agent_error.stale_session",
+      });
+      expect(store.getChatSession(session.id)).toMatchObject({
+        sessionId: null,
+        workDir: null,
+        sessionRuntimeId: null,
+        sessionProvider: null,
+        sessionExecutionFingerprint: null,
+      });
+      const retry = store.listTasks().find((task) => task.parentTaskId === stale.task.id)!;
+      expect(retry).toMatchObject({ attempt: 2, sessionId: null, workDir: null, runtimeId: null });
+
+      await runDaemonOnce();
+      expect(store.getTask(retry.id)).toMatchObject({
+        status: "completed",
+        result: "Recovered answer",
+        sessionId: "sess-chat-3",
+      });
+      expect(sendOptions).toHaveLength(4);
+      expect(sendOptions[2]?.sessionId).toBe("sess-chat-2");
+      expect(sendOptions[3]?.sessionId ?? null).toBeNull();
+      expect(prompts[3]).toContain("## Product Chat History");
+      expect(prompts[3]).toContain("[user]\nStart the chat");
+      expect(prompts[3]).toContain("[assistant]\nSecond answer");
+      expect(prompts[3]).toContain("[user]\nRecover from product history");
+      expect(prompts[3]).toContain("`remi context`");
+      expect(prompts[3]).not.toContain("## Available Repositories");
+      expect(store.listChatMessages(session.id).map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+      ]);
+      expect(store.getChatSession(session.id)).toMatchObject({
+        sessionId: "sess-chat-3",
+        latestTaskId: retry.id,
       });
     } finally {
       server.stop(true);

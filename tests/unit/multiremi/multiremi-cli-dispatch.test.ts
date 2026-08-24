@@ -12,7 +12,7 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { delimiter, join } from "node:path";
-import { dispatch } from "../../../apps/remi/cli/index.js";
+import { cliCommandInventory, dispatch } from "../../../apps/remi/cli/index.js";
 import { detectMultiremiProviders } from "../../../apps/remi/cli/multiremi.js";
 
 interface DispatchResult {
@@ -52,11 +52,66 @@ async function runDispatch(args: string[]): Promise<DispatchResult> {
 }
 
 describe("remi CLI dispatcher", () => {
-  it("routes `remi project` into the multiremi project command", async () => {
+  it("registers native resource groups and every legacy top-level entry", () => {
+    const inventory = cliCommandInventory();
+    expect(inventory.filter((entry) => entry.path.length === 1).map((entry) => entry.path.join(" "))).toEqual([
+      "context",
+      "workspace",
+      "member",
+      "invite",
+      "token",
+      "project",
+      "repo",
+      "memory",
+      "wiki",
+      "comment",
+      "session",
+      "share",
+      "label",
+      "chat",
+      "task",
+      "agent",
+      "squad",
+      "skill",
+      "plugin",
+      "runtime",
+      "daemon",
+      "autopilot",
+      "scm",
+      "inbox",
+      "notification",
+      "pin",
+      "dashboard",
+      "platform",
+      "billing",
+      "lark",
+      "start",
+      "stop",
+      "restart",
+      "status",
+      "logs",
+      "service",
+      "setup",
+      "config",
+      "issue",
+      "attachment",
+      "doctor",
+      "login",
+      "update",
+      "serve",
+      "git-credential",
+      "multiremi",
+    ]);
+    expect(inventory.find((entry) => entry.path[0] === "multiremi"))
+      .toMatchObject({ hidden: true, id: "legacy.multiremi" });
+    expect(inventory.find((entry) => entry.id === "memory.search")?.aliases)
+      .toContainEqual(expect.objectContaining({ path: ["memory", "recall"], deprecatedSince: "0.3.0" }));
+  });
+
+  it("routes `remi project` into the native resource group", async () => {
     const result = await runDispatch(["project"]);
 
-    // Reaching the project layer's own usage error proves the command resolved.
-    expect(String((result.error as Error | null)?.message ?? "")).toContain("usage: multiremi project knowledge");
+    expect(String((result.error as Error | null)?.message ?? "")).toContain("usage: remi project list|get|search");
     expect(result.exitCode).toBeNull();
     expect(result.stderr.join("\n")).not.toContain("Unknown command");
   });
@@ -65,10 +120,27 @@ describe("remi CLI dispatcher", () => {
     const memoryResult = await runDispatch(["memory", "read", "entry"]);
     const wikiResult = await runDispatch(["wiki", "read", "page"]);
 
-    expect(String((memoryResult.error as Error | null)?.message ?? "")).toContain("--project <project-id> is required");
-    expect(String((wikiResult.error as Error | null)?.message ?? "")).toContain("--project <project-id> is required");
+    expect(String((memoryResult.error as Error | null)?.message ?? "")).toContain("--project is required");
+    expect(String((wikiResult.error as Error | null)?.message ?? "")).toContain("--project is required");
     expect(memoryResult.stderr.join("\n")).not.toContain("Unknown command");
     expect(wikiResult.stderr.join("\n")).not.toContain("Unknown command");
+  });
+
+  it("renders generated help for native command paths without executing them", async () => {
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...parts: unknown[]) => { output.push(parts.map(String).join(" ")); };
+    try {
+      await dispatch(["repo", "checkout", "--help"]);
+      await dispatch(["help", "memory", "recall"]);
+      await dispatch(["--help"]);
+    } finally {
+      console.log = originalLog;
+    }
+    expect(output.join("\n")).toContain("Usage: remi repo checkout <repository-or-url> [options]");
+    expect(output.join("\n")).toContain("--ref <branch-or-sha>");
+    expect(output.join("\n")).toContain("Usage: remi memory search <query> [options]");
+    expect(output.join("\n")).toContain("seed         Deprecated alias; use remi agent default");
   });
 
   it("still rejects a command nobody registered", async () => {

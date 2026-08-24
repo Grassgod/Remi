@@ -2463,7 +2463,14 @@ export class MultiremiDaemon {
     // — if it vanished post-resolve the run fails loudly instead of mkdir-ing a
     // machine-local path on a pool machine that shouldn't have it.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
-    const repoSyncResults = await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
+    // Homepage Chat starts from the safe database directory and performs Git
+    // work only through an explicit `remi repo checkout`. Keep Issue task repo
+    // preparation unchanged, including for any task that also carries Chat
+    // metadata but is anchored to an Issue workspace.
+    const homepageChat = Boolean(task.chatSessionId && !task.issueId);
+    const repoSyncResults = homepageChat
+      ? []
+      : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal);
     this.assertWorkspaceRootOwner();
     try {

@@ -159,6 +159,7 @@ export function withSkillCreateRequestContext(
   store: MultiremiStore,
   input: CreateSkillInput,
 ): CreateSkillInput | Response {
+  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const workspaceId = requestedSkillWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -220,6 +221,7 @@ export function loadSkillForCurrentManager(
   store: MultiremiStore,
   skillId: string,
 ): { skill: MultiremiSkill } | Response {
+  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const loaded = loadSkillForCurrentUser(c, store, skillId);
   if (loaded instanceof Response) return loaded;
   const role = currentWorkspaceRoleStrict(c, store, skillWorkspaceId(loaded.skill));
@@ -291,6 +293,7 @@ export function parseExpectedActiveAgentIds(c: Context, value: unknown): string[
 }
 
 export function withAgentRequestContext(c: Context, store: MultiremiStore, input: CreateAgentInput): CreateAgentInput | Response {
+  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -469,6 +472,7 @@ export function withAgentTemplateRequestContext(
   store: MultiremiStore,
   input: CreateAgentFromTemplateInput,
 ): CreateAgentFromTemplateInput | Response {
+  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;

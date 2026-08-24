@@ -3,6 +3,7 @@ import {
   assigneeFrequencyQuery,
   canCurrentUserAccessAgent,
   denyCurrentUserWorkspaceAccess,
+  denyTaskTokenIssueMutation,
   denyTaskTokenSessionAccess,
   denyTaskTokenTaskAccess,
   isActiveTaskStatus,
@@ -417,10 +418,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ issues, total: issues.length });
   });
   app.post("/api/multiremi/issues/batch-update", async (c) => {
+    if (currentTaskAccessToken(c)) return c.json({ error: "forbidden" }, 403);
     const body = await readJson<BatchUpdateIssuesInput>(c);
     return c.json(store.batchUpdateIssues(body));
   });
   app.post("/api/issues/batch-update", async (c) => {
+    if (currentTaskAccessToken(c)) return c.json({ error: "forbidden" }, 403);
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
       const result = store.batchUpdateIssues(issueBatchUpdateCompatibilityInput(body));
@@ -431,6 +434,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.post("/api/multiremi/issues/batch-delete", async (c) => {
+    if (currentTaskAccessToken(c)) return c.json({ error: "forbidden" }, 403);
     const body = await readJson<BatchDeleteIssuesInput>(c);
     try {
       const result = await deleteIssueBatch(c, body);
@@ -444,6 +448,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.post("/api/issues/batch-delete", async (c) => {
+    if (currentTaskAccessToken(c)) return c.json({ error: "forbidden" }, 403);
     const body = await readJson<BatchDeleteIssuesInput>(c);
     try {
       const result = await deleteIssueBatch(c, issueBatchDeleteCompatibilityInput(body));
@@ -819,6 +824,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenIssueMutation(c, store, issue.id);
+    if (taskDenied) return taskDenied;
     const body = await readJson<UpdateIssueInput>(c);
     const updated = store.updateIssue(issue.id, body);
     return c.json({ issue: maybeDispatchOnIssueUpdate(store, issue, updated, body) });
@@ -828,6 +835,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenIssueMutation(c, store, issue.id);
+    if (taskDenied) return taskDenied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = issueUpdateCompatibilityInput(body);
@@ -869,6 +878,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = issueDeleteAccess(c, issue.workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenIssueMutation(c, store, issue.id);
+    if (taskDenied) return taskDenied;
     try {
       if (!(await deleteIssueWithArchives(issue.id))) return c.json({ error: "issue not found" }, 404);
       return c.json({ ok: true });
@@ -884,6 +895,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = issueDeleteAccess(c, issue.workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenIssueMutation(c, store, issue.id);
+    if (taskDenied) return taskDenied;
     try {
       if (!(await deleteIssueWithArchives(issue.id))) return c.json({ error: "issue not found" }, 404);
       return c.body(null, 204);
@@ -899,6 +912,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenIssueMutation(c, store, issue.id);
+    if (taskDenied) return taskDenied;
     const body = await readJson<AssignIssueInput>(c);
     const result = store.assignIssue(issue.id, body);
     return c.json({
@@ -1039,7 +1054,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<CreateIssueCommentInput>(c);
     try {
       return c.json(commentCompatibilityResponse(store.createIssueComment(issue.id, {
-        ...issueCommentCreateInput(c, body, store),
+        ...issueCommentCreateInput(c, body, store, issue.id),
         issueSessionId: session.id,
       })), 201);
     } catch (error) {
@@ -1155,7 +1170,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateIssueCommentInput>(c);
-    return c.json({ comment: store.createIssueComment(issue.id, issueCommentCreateInput(c, body, store)) }, 201);
+    return c.json({ comment: store.createIssueComment(issue.id, issueCommentCreateInput(c, body, store, issue.id)) }, 201);
   });
   app.post("/api/issues/:id/comments", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1165,7 +1180,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateIssueCommentInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      return c.json(commentCompatibilityResponse(store.createIssueComment(issue.id, issueCommentCreateInput(c, body, store))), 201);
+      return c.json(commentCompatibilityResponse(store.createIssueComment(issue.id, issueCommentCreateInput(c, body, store, issue.id))), 201);
     } catch (error) {
       return issueCommentMutationErrorResponse(c, error);
     }

@@ -214,11 +214,11 @@ Create/Update 输入类型接受 camel/snake 双写（store 层 `input.x ?? inpu
 runMultiremi switch 加 `case "memory"` 和 `case "wiki"`。模板 = issue metadata 块（926-959）+ issueComment 的 content 读取。
 
 ```
-remi memory list|recall <query> [--project <project-id>] [--output json]
-remi memory read <slug-or-id> --project <project-id>
-remi memory remember --project <project-id> --title <t>
+remi memory list|search <query> [--project <project-id>] [--output json]
+remi memory get <slug-or-id> --project <project-id>
+remi memory create --project <project-id> --title <t>
 remi wiki list|search <query> [--project <project-id>] [--output json]
-remi wiki read <slug-or-id> --project <project-id>
+remi wiki get <slug-or-id> --project <project-id>
 remi wiki create --project <project-id> --title <t>
     [--slug <s>] [--summary <s>] [--tags a,b] [--pinned]
     [--ref issue:<id>] [--ref task:<id>] [--ref url:<url>]   # 可重复，冒号前为 type
@@ -226,12 +226,12 @@ remi wiki create --project <project-id> --title <t>
 remi wiki update <slug-or-id> --project <project-id>
     [--title <t>] [--summary <s>] [--tags a,b] [--pinned true|false]
     [--expected-version <n>] [--content <text> | --content-stdin | --content-file <path>]
-remi wiki delete|history|backlinks <slug-or-id> --project <project-id>
-remi memory update|forget|backlinks <slug-or-id> --project <project-id>
+remi wiki delete|revisions|backlinks <slug-or-id> --project <project-id>
+remi memory update|delete|backlinks <slug-or-id> --project <project-id>
     [--content <text> | --content-stdin | --content-file <path>]
 ```
 
-- `memory remember` = doc create 的糖：kind=memory、pinned=true、**source_task_id 自动取 `process.env.MULTIREMI_TASK_ID`**（有则带）；同样支持 --ref。
+- `memory create`：kind=memory，**source_task_id 自动取 `process.env.MULTIREMI_TASK_ID`**（有则带）；同样支持 --ref。
 - `--ref` 解析：`stringListOption(options, "ref")`，按第一个冒号切 type:value，无冒号视为 url（http 开头）否则报用法错误。update 传 --ref 则整体替换 refs。
 - content 读取：create/memory add 用 `readContentBody(options, "doc content")`（必填三选一，multiremi.ts:1265），但 doc create 允许无 content（wiki 骨架页/纯 title memory）→ 用 `readOptionalTextBody(options, "content")`（1127）取可选值。
 - 请求走 `multiremiApiRequest(method, path, body, options)`（1424，Bearer token 自动带；in-task 由 daemon 注入的 `MULTIREMI_SERVER_URL`/`MULTIREMI_TOKEN` 生效）。
@@ -247,8 +247,8 @@ remi memory update|forget|backlinks <slug-or-id> --project <project-id>
   - `## Project Memory`：每条 `- <title>` + 若有 body 首行则 `: <body 首行截 200 字符>`。总字符预算 4000，超出截断并追加一行 `(more entries exist — use search)`。无条目则整段省略。
   - `## Project Wiki`：每条 `- <title> (slug: <slug>)` + summary 截 120；预算 2000，超出截断加提示。无页面省略。
   - `## Project Knowledge Commands`（**project 存在就给**，否则 agent 永远学不会第一条）：
-    - 读：`remi memory read <slug> --project <projectId>` / `remi wiki read <slug> --project <projectId>`；搜：`remi memory recall "<query>" --project <projectId>`
-    - **写回纪律（Karpathy 整合式维护，替代旧版"追加式"指引）**：完成任务若学到跨 issue 复用的持久事实（构建命令、架构决策、坑）——(1) 先 search/recall 查有没有相关条目；(2) 有相关条目 → `memory update` 或 `wiki update` 整合修订；(3) 确属新知识 → `remi memory remember`；(4) 沉淀成体系的理解 → `remi wiki create`；(5) 写入时用 --ref 引用来源，页面间用 [[slug]] 互链；(6) 不要记录一次性细节。
+    - 读：`remi memory get <slug> --project <projectId>` / `remi wiki get <slug> --project <projectId>`；搜：`remi memory search "<query>" --project <projectId>`
+    - **写回纪律（Karpathy 整合式维护，替代旧版"追加式"指引）**：完成任务若学到跨 issue 复用的持久事实（构建命令、架构决策、坑）——(1) 先 search 查有没有相关条目；(2) 有相关条目 → `memory update` 或 `wiki update` 整合修订；(3) 确属新知识 → `remi memory create`；(4) 沉淀成体系的理解 → `remi wiki create`；(5) 写入时用 --ref 引用来源，页面间用 [[slug]] 互链；(6) 不要记录一次性细节。
     - **schema 注入**：`projectDocs.schema` 存在时，在本段末尾附 `Maintenance rules for this project's wiki (from _schema):` + schema body（已截 1500），并注明可用 `doc update <projectId> _schema` 修订规则。
 - 读取顺序不动其他 section，将新段放在 Project Context 与 Available Repositories 之间。
 

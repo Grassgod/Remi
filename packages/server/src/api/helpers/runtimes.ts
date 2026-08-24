@@ -29,6 +29,8 @@ import {
   currentWorkspaceRole,
   denyCurrentUserRuntimeWorkspaceAccess,
   denyCurrentUserWorkspaceAccess,
+  denyDaemonTokenRuntimeIdentity,
+  denyDaemonTokenWorkspace,
   hasJwtWorkspaceAccess,
 } from "./auth-guards.js";
 import { MultiremiApiError, requestOrigin, shellArg, uniqueStrings } from "./common.js";
@@ -139,11 +141,16 @@ export function runtimeOwnerId(runtime: MultiremiRuntime): string {
 
 export function listRuntimesForCurrentUser(c: Context, store: MultiremiStore): { runtimes: MultiremiRuntime[] } | Response {
   const workspaceId = requestedRuntimeWorkspaceId(c);
-  const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  const daemonToken = currentAccessToken(c)?.type === "daemon";
+  const denied = daemonToken
+    ? denyDaemonTokenWorkspace(c, workspaceId)
+    : denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const ownerFilter = c.req.query("owner") === "me" ? currentRequestUserId(c) : null;
   const runtimes = store.listRuntimes().filter((runtime) => {
     if (runtimeWorkspaceId(runtime) !== workspaceId) return false;
+    const token = currentAccessToken(c);
+    if (token?.type === "daemon" && (!token.daemonId || runtime.daemonId !== token.daemonId)) return false;
     return ownerFilter ? runtimeOwnerId(runtime) === ownerFilter : true;
   });
   return { runtimes };
@@ -152,6 +159,9 @@ export function listRuntimesForCurrentUser(c: Context, store: MultiremiStore): {
 export function loadRuntimeForCurrentUser(c: Context, store: MultiremiStore, runtimeId: string): { runtime: MultiremiRuntime } | Response {
   const runtime = store.getRuntime(runtimeId);
   if (!runtime) return c.json({ error: "runtime not found" }, 404);
+  const daemonDenied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+  if (daemonDenied) return daemonDenied;
+  if (currentAccessToken(c)?.type === "daemon") return { runtime };
   const denied = denyCurrentUserRuntimeWorkspaceAccess(c, store, runtime);
   if (denied) return denied;
   return { runtime };

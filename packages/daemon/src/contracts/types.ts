@@ -301,6 +301,8 @@ export interface AgentTask {
   requesting_user_profile_description?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
+  chatBootstrapTranscript?: string | null;
+  chat_bootstrap_transcript?: string | null;
   chatMessageAttachments?: unknown[];
   chat_message_attachments?: unknown[];
   autopilotTitle?: string | null;
