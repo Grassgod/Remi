@@ -29,6 +29,7 @@ function config(overrides: Partial<ProgressSummaryConfig> = {}): ProgressSummary
     maxDigestChars: 12_000,
     requestTimeoutMs: 5000,
     transport: "api",
+    openAi: null,
     ...overrides,
   };
 }
@@ -68,6 +69,7 @@ describe("resolveProgressSummaryConfig", () => {
     expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
     expect(resolved.model).toBe(PROGRESS_SUMMARY_DEFAULTS.model);
     expect(resolved.transport).toBe("auto");
+    expect(resolved.openAi).toBeNull();
   });
 
   it("honors N/T/model/disable overrides", () => {
@@ -76,13 +78,21 @@ describe("resolveProgressSummaryConfig", () => {
       MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "5",
       MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "9000",
       MULTIREMI_PROGRESS_SUMMARY_MODEL: "claude-x",
-      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "cli",
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "openai",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: "https://openai.example/v1/",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-luna",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "openai-key",
     });
     expect(resolved.enabled).toBe(false);
     expect(resolved.minNewMessages).toBe(5);
     expect(resolved.minIntervalMs).toBe(9000);
     expect(resolved.model).toBe("claude-x");
-    expect(resolved.transport).toBe("cli");
+    expect(resolved.transport).toBe("openai");
+    expect(resolved.openAi).toEqual({
+      baseUrl: "https://openai.example/v1",
+      model: "gpt-luna",
+      apiKey: "openai-key",
+    });
   });
 
   it("falls back to defaults on invalid numbers", () => {
@@ -94,6 +104,17 @@ describe("resolveProgressSummaryConfig", () => {
     expect(resolved.minNewMessages).toBe(PROGRESS_SUMMARY_DEFAULTS.minNewMessages);
     expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
     expect(resolved.transport).toBe("auto");
+  });
+
+  it("treats an empty OpenAI key as unavailable", () => {
+    const resolved = resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "openai",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: "https://openai.example",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-luna",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "  ",
+    });
+    expect(resolved.transport).toBe("openai");
+    expect(resolved.openAi).toBeNull();
   });
 });
 
@@ -343,6 +364,77 @@ describe("TaskProgressSummarizer", () => {
     expect(requests[0]!.model).toBe("claude-haiku-test");
     expect(requests[0]!.headers.authorization).toBe("Bearer tok");
     expect(requests[0]!.headers["x-api-key"]).toBe("key");
+  });
+
+  it("calls an OpenAI-compatible chat completions endpoint", async () => {
+    const requests: Array<{
+      url: string;
+      headers: Record<string, string>;
+      body: { model: string; messages: Array<{ role: string; content: string }> };
+    }> = [];
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({
+        transport: "openai",
+        openAi: {
+          baseUrl: "https://openai.example/v1",
+          model: "gpt-5.6-luna",
+          apiKey: "openai-key",
+        },
+      }),
+      taskTitle: "Luna 摘要",
+      taskPrompt: "走 OpenAI 兼容接口",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async (url, init) => {
+        requests.push({
+          url: String(url),
+          headers: (init as RequestInit).headers as Record<string, string>,
+          body: JSON.parse(String((init as RequestInit).body)),
+        });
+        return modelResponse({
+          choices: [{ message: { content: '{"summary":"Luna 摘要成功","step":2,"total":3}' } }],
+        });
+      },
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "Luna 摘要成功", step: 2, total: 3 }]);
+    expect(requests.length).toBe(1);
+    expect(requests[0]!.url).toBe("https://openai.example/v1/chat/completions");
+    expect(requests[0]!.headers.authorization).toBe("Bearer openai-key");
+    expect(requests[0]!.body.model).toBe("gpt-5.6-luna");
+    expect(requests[0]!.body.messages[0]).toEqual({ role: "system", content: expect.any(String) });
+    expect(requests[0]!.body.messages[0]!.content).toContain("任务进度播报员");
+    expect(requests[0]!.body.messages[1]!.role).toBe("user");
+    expect(requests[0]!.body.messages[1]!.content).toContain("Luna 摘要");
+  });
+
+  it("falls back to auto when OpenAI transport has no usable key", async () => {
+    let apiCalls = 0;
+    let cliCalls = 0;
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "openai", openAi: null }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => {
+        apiCalls++;
+        return modelResponse({ error: "Claude Code clients only" }, 503);
+      },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("CLI fallback 摘要", () => { cliCalls++; }),
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "CLI fallback 摘要" }]);
+    expect(apiCalls).toBe(1);
+    expect(cliCalls).toBe(1);
   });
 
   it("auto-switches to Claude CLI after an API HTTP error and remembers the choice", async () => {

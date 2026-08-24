@@ -2413,9 +2413,9 @@ export class MultiremiDaemon {
   }
 
   /**
-   * Per-task LLM progress summarizer (MUL-67). Reuses the task's own provider
-   * credentials; returns null when the feature is disabled or no usable
-   * credential exists, in which case the run proceeds without summaries.
+   * Per-task LLM progress summarizer (MUL-67). Reuses the task's provider
+   * credentials for Anthropic transports or a dedicated OpenAI-compatible
+   * config; returns null when disabled or no selected transport can authenticate.
    */
   private createTaskProgressSummarizer(
     task: MultiremiTaskWithAgent,
@@ -2425,13 +2425,14 @@ export class MultiremiDaemon {
       const config = resolveProgressSummaryConfig();
       if (!config.enabled) return null;
       const credentials = resolveSummarizerCredentials(providerEnv);
-      if (!credentials) {
-        log.info(`Progress summaries unavailable for task ${task.id}: no Anthropic-style credential`);
+      const hasOpenAiTransport = config.transport === "openai" && config.openAi !== null;
+      if (!credentials && !hasOpenAiTransport) {
+        log.info(`Progress summaries unavailable for task ${task.id}: no usable model credential`);
         return null;
       }
       return new TaskProgressSummarizer({
         config,
-        credentials,
+        credentials: credentials ?? undefined,
         providerEnv,
         taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
         taskPrompt: task.prompt ?? "",

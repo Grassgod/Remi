@@ -18,7 +18,13 @@ import { join } from "node:path";
 
 const log = createLogger("multiremi-progress");
 
-export type ProgressSummaryTransport = "auto" | "api" | "cli";
+export type ProgressSummaryTransport = "auto" | "api" | "cli" | "openai";
+
+export interface OpenAiProgressSummaryConfig {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
 
 export interface ProgressSummaryConfig {
   enabled: boolean;
@@ -32,6 +38,8 @@ export interface ProgressSummaryConfig {
   requestTimeoutMs: number;
   /** Model transport. `auto` starts with API and switches to Claude CLI after HTTP errors. */
   transport: ProgressSummaryTransport;
+  /** Dedicated OpenAI-compatible endpoint. Null unless all three env values are usable. */
+  openAi: OpenAiProgressSummaryConfig | null;
 }
 
 export const PROGRESS_SUMMARY_DEFAULTS = {
@@ -41,6 +49,7 @@ export const PROGRESS_SUMMARY_DEFAULTS = {
   maxDigestChars: 12_000,
   requestTimeoutMs: 30_000,
   transport: "auto" as ProgressSummaryTransport,
+  openAi: null,
 } as const;
 
 function positiveInt(raw: string | undefined, fallback: number): number {
@@ -55,13 +64,24 @@ function positiveInt(raw: string | undefined, fallback: number): number {
  *   MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS=45000  T — debounce between summaries
  *   MULTIREMI_PROGRESS_SUMMARY_MODEL=...      summary model id
  *   MULTIREMI_PROGRESS_SUMMARY_TRANSPORT=auto API first, then CLI on HTTP errors
+ *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL=... OpenAI-compatible endpoint
+ *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL=...    OpenAI-compatible model id
+ *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY=...  dedicated endpoint key
  */
 export function resolveProgressSummaryConfig(env: Record<string, string | undefined> = process.env): ProgressSummaryConfig {
   const disabled = env.MULTIREMI_PROGRESS_SUMMARY_DISABLED;
   const configuredTransport = env.MULTIREMI_PROGRESS_SUMMARY_TRANSPORT?.trim().toLowerCase();
-  const transport: ProgressSummaryTransport = configuredTransport === "api" || configuredTransport === "cli"
+  const transport: ProgressSummaryTransport = configuredTransport === "api"
+    || configuredTransport === "cli"
+    || configuredTransport === "openai"
     ? configuredTransport
     : "auto";
+  const openAiBaseUrl = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL?.trim().replace(/\/+$/, "");
+  const openAiModel = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL?.trim();
+  const openAiApiKey = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY?.trim();
+  const openAi = openAiBaseUrl && openAiModel && openAiApiKey
+    ? { baseUrl: openAiBaseUrl, model: openAiModel, apiKey: openAiApiKey }
+    : null;
   return {
     enabled: !(disabled === "1" || disabled === "true"),
     minNewMessages: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_MESSAGES, PROGRESS_SUMMARY_DEFAULTS.minNewMessages),
@@ -70,6 +90,7 @@ export function resolveProgressSummaryConfig(env: Record<string, string | undefi
     maxDigestChars: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_MAX_DIGEST_CHARS, PROGRESS_SUMMARY_DEFAULTS.maxDigestChars),
     requestTimeoutMs: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_TIMEOUT_MS, PROGRESS_SUMMARY_DEFAULTS.requestTimeoutMs),
     transport,
+    openAi,
   };
 }
 
@@ -85,8 +106,8 @@ export interface SummarizerCredentials {
  * Reuse the task's own provider credentials (workspace Relay overlay or the
  * machine's ~/.claude settings env that `loadIssueSessionProviderEnv` already
  * resolved), falling back to the daemon process env. No new auth system.
- * Returns null when no usable Anthropic-style credential exists — the
- * summarizer is then disabled for this task.
+ * Returns null when no usable Anthropic-style credential exists; an explicitly
+ * configured OpenAI-compatible transport can still run without this value.
  */
 export function resolveSummarizerCredentials(
   providerEnv: Record<string, string> | undefined,
@@ -268,6 +289,41 @@ async function callSummaryModel(
   return parseSummaryText(text);
 }
 
+async function callOpenAiSummaryModel(
+  config: OpenAiProgressSummaryConfig,
+  prompt: string,
+  timeoutMs: number,
+  fetchImpl: FetchLike,
+): Promise<ProgressSummaryResult> {
+  const apiRoot = config.baseUrl.endsWith("/v1") ? config.baseUrl : `${config.baseUrl}/v1`;
+  const response = await fetchImpl(`${apiRoot}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_tokens: 300,
+      messages: [
+        { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+        { role: "user", content: prompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new SummaryModelHttpError(response.status);
+  }
+  const payload = await response.json() as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const text = payload.choices?.[0]?.message?.content?.trim() ?? "";
+  if (!text) throw new Error("OpenAI-compatible summary model returned no text");
+  return parseSummaryText(text);
+}
+
 class SummaryModelHttpError extends Error {
   constructor(readonly status: number) {
     super(`summary model HTTP ${status}`);
@@ -392,7 +448,7 @@ export function parseSummaryText(text: string): ProgressSummaryResult {
 
 export interface TaskProgressSummarizerOptions {
   config: ProgressSummaryConfig;
-  credentials: SummarizerCredentials;
+  credentials?: SummarizerCredentials;
   taskTitle: string;
   taskPrompt: string;
   report: (result: ProgressSummaryResult, options: { final: boolean }) => Promise<void>;
@@ -416,7 +472,7 @@ export class TaskProgressSummarizer {
   private readonly fetchImpl: FetchLike;
   private readonly spawnImpl: SummaryCliSpawn;
   private readonly whichImpl: (binary: string) => string | null;
-  private activeTransport: "api" | "cli";
+  private activeTransport: "api" | "cli" | "openai";
   private claudeExecutable: string | null | undefined;
   private inFlight: Promise<void> | null = null;
   private lastSummary: string | null = null;
@@ -430,9 +486,11 @@ export class TaskProgressSummarizer {
     this.claudeExecutable = options.config.transport === "cli"
       ? findClaudeExecutable(this.whichImpl)
       : undefined;
-    this.activeTransport = options.config.transport === "cli" && this.claudeExecutable
-      ? "cli"
-      : "api";
+    this.activeTransport = options.config.transport === "openai" && options.config.openAi
+      ? "openai"
+      : options.config.transport === "cli" && this.claudeExecutable
+        ? "cli"
+        : "api";
     this.tracker = new TaskProgressTracker(
       options.config.minNewMessages,
       options.config.minIntervalMs,
@@ -483,7 +541,16 @@ export class TaskProgressSummarizer {
 
   private async requestSummary(prompt: string): Promise<ProgressSummaryResult> {
     if (this.activeTransport === "cli") return this.requestSummaryWithCli(prompt);
+    if (this.activeTransport === "openai") {
+      return callOpenAiSummaryModel(
+        this.options.config.openAi!,
+        prompt,
+        this.options.config.requestTimeoutMs,
+        this.fetchImpl,
+      );
+    }
     try {
+      if (!this.options.credentials) throw new Error("Anthropic summary credentials are unavailable");
       return await callSummaryModel(
         this.options.credentials,
         this.options.config.model,
@@ -492,7 +559,9 @@ export class TaskProgressSummarizer {
         this.fetchImpl,
       );
     } catch (err) {
-      if (this.options.config.transport !== "auto" || !(err instanceof SummaryModelHttpError)) throw err;
+      const autoFallback = this.options.config.transport === "auto"
+        || (this.options.config.transport === "openai" && !this.options.config.openAi);
+      if (!autoFallback || !(err instanceof SummaryModelHttpError)) throw err;
       if (this.claudeExecutable === undefined) {
         this.claudeExecutable = findClaudeExecutable(this.whichImpl);
       }
