@@ -90,6 +90,124 @@ describe("Multiremi API - workspace repositories", () => {
     });
   });
 
+  it("dedupes repository Wiki builds and derives the per-repository build status", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    const plugin = store.importAgentPlugin({
+      provider: "claude",
+      name: "code-to-wiki",
+      manifest: { name: "code-to-wiki", version: "1.0.0" },
+      files: [{ path: "skills/code-to-wiki/SKILL.md", content: "# Code to Wiki\n" }],
+    });
+    store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+    store.updateWorkspaceRepositories(workspace.id, [{
+      id: "repo_atlas",
+      name: "atlas",
+      url: "git@github.com:acme/atlas.git",
+      source: "github",
+      default_branch: "main",
+    }]);
+    const runtime = store.registerRuntime({
+      name: "wiki-build-runtime",
+      provider: "claude",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const app = createMultiremiApp({ store });
+    expect((await app.request(`/api/workspaces/${workspace.id}/repository-wikis/atlas`, { method: "POST" })).status).toBe(200);
+    // Atlas tasks snapshot the code-to-wiki plugin; the runtime must report it
+    // ready before it can claim a build task.
+    store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready",
+      observedDigest: plugin.activeVersion!.artifactDigest,
+      retryGeneration: 0,
+    });
+
+    // A pre-existing healthy doc must survive every build-state transition.
+    const doc = await app.request(`/api/workspaces/${workspace.id}/repos/repo_atlas/wiki`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "overview.md", title: "Overview", body: "Atlas facts" }),
+    });
+    expect(doc.status).toBe(201);
+
+    const buildPath = `/api/workspaces/${workspace.id}/repos/repo_atlas/wiki/build`;
+    const summariesPath = `/api/workspaces/${workspace.id}/repository-wikis`;
+    const summary = async () => ((await (await app.request(summariesPath)).json() as any).repositories[0]);
+
+    const first = await app.request(buildPath, { method: "POST" });
+    expect(first.status).toBe(202);
+    const firstBody = await first.json() as any;
+    expect(firstBody).toMatchObject({ status: "running" });
+
+    // A second click while the build is in flight returns the existing run.
+    const duplicate = await app.request(buildPath, { method: "POST" });
+    expect(duplicate.status).toBe(409);
+    expect(await duplicate.json()).toEqual({
+      error: expect.stringContaining("already in progress"),
+      code: "repository_wiki_build_in_progress",
+      run_id: firstBody.run_id,
+      task_id: firstBody.task_id,
+    });
+    const autopilot = store.listAutopilots(workspace.id).find((item) => item.title === "Atlas · Repository Wiki")!;
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
+
+    const queued = await summary();
+    expect(queued).toMatchObject({
+      repository_id: "repo_atlas",
+      status: "building",
+      page_count: 1,
+      build: {
+        status: "queued",
+        run_id: firstBody.run_id,
+        task_id: firstBody.task_id,
+        failure_reason: null,
+      },
+    });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(firstBody.task_id);
+    store.startTask(firstBody.task_id);
+    const building = await summary();
+    expect(building.status).toBe("building");
+    expect(building.build.status).toBe("building");
+
+    store.failTask(firstBody.task_id, { error: "clone failed" });
+    const failed = await summary();
+    expect(failed.status).toBe("failed");
+    expect(failed.page_count).toBe(1);
+    expect(failed.build).toMatchObject({
+      status: "failed",
+      run_id: firstBody.run_id,
+      failure_reason: "clone failed",
+    });
+
+    // A failed build never blocks a retry. (Sleep so the retry gets a strictly
+    // newer created_at millisecond than the failed run.)
+    await Bun.sleep(2);
+    const retry = await app.request(buildPath, { method: "POST" });
+    expect(retry.status).toBe(202);
+    const retryBody = await retry.json() as any;
+    expect(retryBody.run_id).not.toBe(firstBody.run_id);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(2);
+
+    expect(store.claimTask(runtime.id)?.id).toBe(retryBody.task_id);
+    store.startTask(retryBody.task_id);
+    store.completeTask(retryBody.task_id, { output: "wiki updated" });
+    const healthy = await summary();
+    expect(healthy.status).toBe("healthy");
+    expect(healthy.page_count).toBe(1);
+    expect(healthy.build).toMatchObject({ status: "idle", run_id: retryBody.run_id });
+
+    // Manual rebuilds target the moving HEAD, so a completed build never blocks one.
+    const rebuild = await app.request(buildPath, { method: "POST" });
+    expect(rebuild.status).toBe(202);
+    expect((await rebuild.json() as any).run_id).not.toBe(retryBody.run_id);
+  });
+
   it("does not create an unusable Atlas agent before code-to-wiki is imported", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
