@@ -428,6 +428,7 @@ function appendDaemonClaimSquadContext(
     id: squad.id,
     name: squad.name,
     leaderAgentId: task.agent.id,
+    instructions: squad.instructions,
     members,
   };
 }

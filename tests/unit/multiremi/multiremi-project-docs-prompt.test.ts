@@ -289,6 +289,7 @@ describe("bootstrap and delta task prompts", () => {
         id: "sqd_core",
         name: "Core squad",
         leaderAgentId: agent.id,
+        instructions: "Open a draft PR early and summarize only after the current round is complete.",
         members: [
           { agentId: agent.id, name: agent.name, role: "leader" },
           { agentId: "agt_reviewer", name: "Reviewer", role: "reviewer", description: "Owns security reviews" },
@@ -297,6 +298,8 @@ describe("bootstrap and delta task prompts", () => {
     } as any);
 
     expect(prompt).toContain("## Squad Coordination");
+    expect(prompt).toContain("## Squad Instructions");
+    expect(prompt).toContain("Open a draft PR early and summarize only after the current round is complete.");
     expect(prompt).toContain("Reviewer (agent: agt_reviewer) - reviewer - Owns security reviews");
     expect(prompt).toContain("`[@Reviewer](mention://agent/agt_reviewer)`");
     expect(prompt).toContain("independent workstreams");
@@ -317,6 +320,7 @@ describe("bootstrap and delta task prompts", () => {
         id: "sqd_core",
         name: "Core squad",
         leaderAgentId: "agt_leader",
+        instructions: "This must only reach the leader.",
         members: [
           { agentId: "agt_leader", name: "Leader", role: "leader" },
           { agentId: agent.id, name: agent.name, role: "member" },
@@ -325,6 +329,7 @@ describe("bootstrap and delta task prompts", () => {
     } as any);
 
     expect(prompt).not.toContain("## Squad Coordination");
+    expect(prompt).not.toContain("This must only reach the leader.");
     expect(prompt).not.toContain("mention://agent/");
   });
 

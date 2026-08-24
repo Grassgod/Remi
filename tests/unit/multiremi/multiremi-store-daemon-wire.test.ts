@@ -315,6 +315,59 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(prompt).not.toContain("Use the instructions from task creation time.");
   });
 
+  it("ships the latest Squad Instructions to the assigned leader at claim time", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_latest_squad_instructions",
+      name: "Latest Squad Instructions runtime",
+      provider: "codex",
+      workspaceId: "local",
+    });
+    const leader = store.createAgent({
+      name: "Delivery leader",
+      provider: "codex",
+      runtimeId: runtime.id,
+    });
+    const teammate = store.createAgent({ name: "Delivery teammate", provider: "codex" });
+    const squad = store.createSquad({
+      name: "Delivery squad",
+      leaderId: leader.id,
+      memberIds: [teammate.id],
+      instructions: "Use the instructions from task creation time.",
+    });
+    const issue = store.createIssue({
+      title: "Queued before Squad Instructions change",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    const task = store.createTask({
+      agentId: leader.id,
+      issueId: issue.id,
+      prompt: "Lead the delivery",
+    });
+
+    const latestInstructions = "Open a draft PR early and summarize after the current round is complete.";
+    store.updateSquad(squad.id, { instructions: latestInstructions });
+
+    const app = createMultiremiApp({ store });
+    mockFetch((url, init) => {
+      const parsed = new URL(url);
+      return app.request(`${parsed.pathname}${parsed.search}`, init);
+    });
+    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+
+    expect(claimed?.id).toBe(task.id);
+    expect(claimed?.squadContext).toMatchObject({
+      id: squad.id,
+      name: "Delivery squad",
+      leaderAgentId: leader.id,
+      instructions: latestInstructions,
+    });
+    const prompt = buildTaskPrompt(claimed!);
+    expect(prompt).toContain(`## Squad Instructions\n${latestInstructions}`);
+    expect(prompt).not.toContain("Use the instructions from task creation time.");
+  });
+
   it("serves daemon claim execution context for chat, autopilot, and quick-create", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
