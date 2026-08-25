@@ -1105,9 +1105,14 @@ export function resolvePromptUsage(
   },
   settle: PromptResult["usage"],
 ): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; totalTokens: number } {
+  // Settle is authoritative: an explicit 0 is a legitimate value (a cancelled
+  // turn settles with all-zero sessionUsage) and must NOT fall back to the
+  // streamed context-occupancy numbers — only a missing/null field (codex has
+  // no cachedWriteTokens) or a non-finite/negative value falls back.
   const settled = (value: number | null | undefined, fallback: number): number => {
-    const parsed = Number(value ?? Number.NaN);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    if (value == null) return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
   };
   return {
     inputTokens: settled(settle?.inputTokens, streamed.inputTokens),

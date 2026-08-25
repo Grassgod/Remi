@@ -1914,6 +1914,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageByAgent[] {
     return this.usage.listUsageByAgent(input);
   }
@@ -1953,6 +1954,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiAgentRuntime[] {
     return this.usage.listAgentRuntime(input);
   }

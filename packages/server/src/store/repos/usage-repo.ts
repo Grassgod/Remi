@@ -101,6 +101,7 @@ export class UsageRepo {
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageByAgent[] {
     const rows = this.filteredUsageTaskRows(input);
     const buckets = new Map<string, MultiremiUsageByAgent & { taskIds: Set<string> }>();
@@ -214,6 +215,7 @@ export class UsageRepo {
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiAgentRuntime[] {
     const rows = this.filteredUsageTaskRows(input, { includeTasksWithoutUsage: true });
     const buckets = new Map<string, MultiremiAgentRuntime>();
@@ -238,6 +240,7 @@ export class UsageRepo {
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   }, options: { includeTasksWithoutUsage?: boolean } = {}): Row[] {
     const clauses = ["1 = 1"];
     const params: Array<string | number | null> = [];
@@ -259,7 +262,7 @@ export class UsageRepo {
         params.push(input.runtimeId);
       }
     }
-    const since = usageSince(input.days);
+    const since = usageSince(input.days, input.tz);
     if (since) {
       clauses.push("COALESCE(t.completed_at, t.failed_at, t.cancelled_at, t.started_at, t.dispatched_at, t.updated_at, t.created_at) >= ?");
       params.push(since);
@@ -330,11 +333,54 @@ function tzFormatter(tz: string, kind: "date" | "hour"): Intl.DateTimeFormat | n
   return formatter;
 }
 
-function usageSince(days: number | undefined): string | null {
+/**
+ * Cutoff for the "last N days" window. With a viewer tz this is the LOCAL
+ * CALENDAR boundary — midnight (in tz) of the day (N-1) days before the
+ * viewer's today — so `days=1` means "the viewer's today", matching how the
+ * frontend slices the tz-bucketed daily rows. A rolling `now - N*24h` cutoff
+ * would disagree with those buckets at the window edge and make the by-agent
+ * leaderboard sum exceed the daily-chart totals. Without a (valid) tz the
+ * cutoff falls back to UTC calendar days for the same consistency reason.
+ */
+function usageSince(days: number | undefined, tz?: string | null): string | null {
   const value = Number(days ?? 30);
   if (!Number.isFinite(value) || value <= 0) return null;
   const capped = Math.min(365, Math.floor(value));
-  return new Date(Date.now() - capped * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date();
+  const formatter = tz ? tzFormatter(tz, "date") : null;
+  const today = formatter ? formatter.format(now) : now.toISOString().slice(0, 10);
+  const [year, month, day] = today.split("-").map(Number);
+  if (!year || !month || day === undefined) return new Date(now.getTime() - capped * 24 * 60 * 60 * 1000).toISOString();
+  // Start of the window as a calendar date, then resolved to the instant of
+  // local midnight in tz. Two refinement passes converge for any fixed or
+  // DST-shifting offset (offset changes between passes are at most one DST
+  // step, and the second pass re-reads the offset at the corrected instant).
+  const windowStartUtc = Date.UTC(year, month - 1, day - (capped - 1));
+  let instant = windowStartUtc;
+  if (formatter && tz) {
+    for (let pass = 0; pass < 2; pass++) {
+      const offset = tzWallClockUtc(new Date(instant), tz) - instant;
+      instant = windowStartUtc - offset;
+    }
+  }
+  return new Date(instant).toISOString();
+}
+
+/** The instant's wall-clock time in tz, re-encoded as if it were UTC — the
+ *  difference to the instant itself is the zone's UTC offset at that moment. */
+function tzWallClockUtc(date: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"), get("second"));
 }
 
 function taskRunSeconds(row: Row): number {

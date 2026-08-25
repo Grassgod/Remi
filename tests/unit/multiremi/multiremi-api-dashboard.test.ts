@@ -305,6 +305,40 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     expect(invalid[0].date).toBe("2026-08-20");
   });
 
+  it("cuts the days window at the viewer's local calendar midnight, not a rolling 24h offset", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const before = seedRuntimeWithUsage(store, { runtimeId: "rt_cutoff_before", model: "sonnet" });
+    const after = seedRuntimeWithUsage(store, { runtimeId: "rt_cutoff_after", model: "opus" });
+
+    // Asia/Shanghai is fixed UTC+8: compute today's local midnight as an instant.
+    const shanghaiToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+    const midnight = new Date(`${shanghaiToday}T00:00:00+08:00`);
+    const beforeMidnight = new Date(midnight.getTime() - 60 * 1000).toISOString();
+    const afterMidnight = new Date(midnight.getTime() + 60 * 1000).toISOString();
+    const setTimestamps = (taskId: string, iso: string) => db!.run(
+      "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
+      [iso, iso, iso, iso, taskId],
+    );
+    setTimestamps(before.taskId, beforeMidnight);
+    setTimestamps(after.taskId, afterMidnight);
+
+    // days=1 in the viewer tz = "the viewer's today": a task one minute before
+    // local midnight is out even though it is within the past 24 hours. This
+    // keeps the by-agent leaderboard consistent with the tz-bucketed daily
+    // chart, which files that task under yesterday's (filtered-out) date.
+    const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=1&tz=Asia/Shanghai")).json();
+    expect(daily.map((row: any) => row.model)).toEqual(["opus"]);
+    const byAgent = await (await app.request("/api/dashboard/usage/by-agent?workspace_id=local&days=1&tz=Asia/Shanghai")).json();
+    expect(byAgent.map((row: any) => row.agent_id)).toEqual([after.agentId]);
+    const leaderboard = await (await app.request("/api/dashboard/agent-runtime?workspace_id=local&days=1&tz=Asia/Shanghai")).json();
+    expect(leaderboard.map((row: any) => row.agent_id)).toEqual([after.agentId]);
+
+    // A 2-day window readmits the pre-midnight task.
+    const twoDays = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=2&tz=Asia/Shanghai")).json();
+    expect(twoDays.map((row: any) => row.model).sort()).toEqual(["opus", "sonnet"]);
+  });
+
   it("requires auth on dashboard endpoints while keeping / public when a token is configured", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });

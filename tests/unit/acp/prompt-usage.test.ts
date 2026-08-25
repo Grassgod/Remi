@@ -50,6 +50,25 @@ describe("resolvePromptUsage", () => {
     expect(resolvePromptUsage(streamedOnly, null)).toEqual(streamedOnly);
   });
 
+  it("treats an explicit settle 0 as authoritative instead of falling back to streamed values", () => {
+    // A cancelled turn settles with all-zero sessionUsage; the streamed
+    // context occupancy must not be misreported as this turn's tokens.
+    const resolved = resolvePromptUsage(streamedOnly, {
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+      totalTokens: 0,
+    });
+    expect(resolved).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+    });
+  });
+
   it("ignores non-finite and negative settle values", () => {
     const resolved = resolvePromptUsage(streamedOnly, {
       inputTokens: Number.NaN,
