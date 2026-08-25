@@ -2,6 +2,7 @@ import type {
   CreateIssueRequest,
   GroupedIssuesResponse,
   Issue,
+  IssueRetitleResponse,
   IssueWorkspace,
   ListGroupedIssuesParams,
   ListIssuesParams,
@@ -14,10 +15,12 @@ import type { HttpClient } from "../http";
 import { parseStrictResponse, parseWithFallback } from "../schema";
 import {
   ChildIssuesResponseSchema,
+  EMPTY_ISSUE_RETITLE_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   GroupedIssuesResponseSchema,
   IssueSchema,
+  IssueRetitleResponseSchema,
   ListIssuesResponseSchema,
 } from "../schemas/issues";
 
@@ -147,6 +150,26 @@ export class IssuesEndpoints {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  async patchIssue(id: string, data: UpdateIssueRequest): Promise<Issue> {
+    return this.http.fetch(`/api/issues/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async retitleIssue(id: string, apply = true): Promise<IssueRetitleResponse> {
+    const raw = await this.http.fetch<unknown>(`/api/multiremi/issues/${id}/retitle`, {
+      method: "POST",
+      body: JSON.stringify({ apply }),
+    });
+    return parseWithFallback(
+      raw,
+      IssueRetitleResponseSchema,
+      EMPTY_ISSUE_RETITLE_RESPONSE,
+      { endpoint: "POST /api/multiremi/issues/:id/retitle" },
+    );
   }
 
   async restoreIssue(id: string): Promise<Issue> {

@@ -1869,6 +1869,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.retitle": {
+      "command": "remi issue retitle",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.retitle",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.cancel": {
       "command": "remi issue cancel-task",
       "aliases": [],
@@ -8868,6 +8885,9 @@
     },
     "POST /api/multiremi/issues/:id/restore": {
       "command": "issue.restore"
+    },
+    "POST /api/multiremi/issues/:id/retitle": {
+      "command": "issue.retitle"
     },
     "POST /api/multiremi/issues/:id/subscribers": {
       "command": "issue.subscriber.add"

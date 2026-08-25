@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   GroupedIssuesResponse,
+  IssueRetitleResponse,
   ListIssuesResponse,
 } from "../../types";
 
@@ -77,6 +78,26 @@ export const SubscribersListSchema = z.array(SubscriberSchema);
 export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
 }).loose();
+
+export const IssueRetitleResponseSchema = z.object({
+  title: z.string(),
+  previous_title: z.string(),
+  applied: z.boolean(),
+  reason: z.enum([
+    "generated",
+    "gateway_unconfigured",
+    "model_failed",
+    "kept",
+    "not_eligible",
+  ]),
+}).loose();
+
+export const EMPTY_ISSUE_RETITLE_RESPONSE: IssueRetitleResponse = {
+  title: "",
+  previous_title: "",
+  applied: false,
+  reason: "model_failed",
+};
 
 // ---------------------------------------------------------------------------
 // Structured error body — POST /api/workspaces/:wsId/issues 409 conflict.

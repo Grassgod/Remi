@@ -59,6 +59,7 @@ export function formatActivity(
       return t(($) => $.activity.due_date_set, { date: formatted });
     }
     case "title_changed":
+    case "title_renamed":
       return t(($) => $.activity.title_renamed, {
         from: details.from ?? "?",
         to: details.to ?? "?",
