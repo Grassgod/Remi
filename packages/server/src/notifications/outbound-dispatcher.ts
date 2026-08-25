@@ -22,14 +22,15 @@ export interface NotificationDispatcherStore {
   claimNotificationDeliveryAttempt(
     id: string,
     expectedAttempts: number,
+    expectedClaimSeq: number,
     maxAttempts: number,
     claimedAt: string,
     leasedUntil: string,
   ): MultiremiNotificationDelivery | null;
-  markNotificationDeliverySent(id: string, expectedAttempts: number): MultiremiNotificationDelivery | null;
-  markNotificationDeliveryFailed(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null;
-  recordNotificationDeliveryError(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null;
-  resetNotificationDeliveryForRetry(id: string): MultiremiNotificationDelivery | null;
+  markNotificationDeliverySent(id: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null;
+  markNotificationDeliveryFailed(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null;
+  recordNotificationDeliveryError(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null;
+  resetNotificationDeliveryForRetry(id: string, retryAt: string): MultiremiNotificationDelivery | null;
   getWorkspace(id: string): MultiremiWorkspace | null;
 }
 
@@ -103,7 +104,7 @@ export class OutboundNotificationDispatcher {
   }
 
   retry(id: string): MultiremiNotificationDelivery | null {
-    const delivery = this.store.resetNotificationDeliveryForRetry(id);
+    const delivery = this.store.resetNotificationDeliveryForRetry(id, new Date().toISOString());
     if (delivery) queueMicrotask(() => void this.dispatch(id));
     return delivery;
   }
@@ -117,20 +118,20 @@ export class OutboundNotificationDispatcher {
       this.store.markNotificationDeliveryFailed(
         id,
         "notification delivery retry attempts exhausted after lease expiry",
-        context.delivery.attempts,
+        context.delivery.claimSeq,
       );
       return;
     }
     if (!context.channel) {
-      this.store.markNotificationDeliveryFailed(id, "notification channel not found", context.delivery.attempts);
+      this.store.markNotificationDeliveryFailed(id, "notification channel not found", context.delivery.claimSeq);
       return;
     }
     if (!context.channel.enabled) {
-      this.store.markNotificationDeliveryFailed(id, "notification channel is disabled", context.delivery.attempts);
+      this.store.markNotificationDeliveryFailed(id, "notification channel is disabled", context.delivery.claimSeq);
       return;
     }
     if (!context.item) {
-      this.store.markNotificationDeliveryFailed(id, "inbox item not found", context.delivery.attempts);
+      this.store.markNotificationDeliveryFailed(id, "inbox item not found", context.delivery.claimSeq);
       return;
     }
     const sender = this.senders[context.delivery.channelKind];
@@ -138,7 +139,7 @@ export class OutboundNotificationDispatcher {
       this.store.markNotificationDeliveryFailed(
         id,
         `unsupported notification channel kind: ${context.delivery.channelKind}`,
-        context.delivery.attempts,
+        context.delivery.claimSeq,
       );
       return;
     }
@@ -146,6 +147,7 @@ export class OutboundNotificationDispatcher {
     const claimed = this.store.claimNotificationDeliveryAttempt(
       id,
       context.delivery.attempts,
+      context.delivery.claimSeq,
       this.maxAttempts,
       claimedAtIso,
       new Date(claimedAt.getTime() + this.leaseMs).toISOString(),
@@ -168,14 +170,14 @@ export class OutboundNotificationDispatcher {
         })),
         this.sendTimeoutMs,
       );
-      this.store.markNotificationDeliverySent(id, claimed.attempts);
+      this.store.markNotificationDeliverySent(id, claimed.claimSeq);
     } catch (error) {
       const message = redactNotificationError(error);
       if (error instanceof PermanentNotificationDeliveryError || claimed.attempts >= this.maxAttempts) {
-        this.store.markNotificationDeliveryFailed(id, message, claimed.attempts);
+        this.store.markNotificationDeliveryFailed(id, message, claimed.claimSeq);
         return;
       }
-      const recorded = this.store.recordNotificationDeliveryError(id, message, claimed.attempts);
+      const recorded = this.store.recordNotificationDeliveryError(id, message, claimed.claimSeq);
       if (recorded) this.scheduleRetry(id, this.retryBaseDelayMs * 2 ** (claimed.attempts - 1));
     }
   }

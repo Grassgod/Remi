@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import type { MultiremiNotificationDelivery } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api/server.js";
-import type { OutboundNotification, OutboundNotificationSender } from "@multiremi/notifications/types.js";
+import {
+  PermanentNotificationDeliveryError,
+  type OutboundNotification,
+  type OutboundNotificationSender,
+} from "@multiremi/notifications/types.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 let db: Database | null = null;
@@ -210,11 +214,13 @@ describe("Multiremi notification channels", () => {
   });
 
   it("redacts known credential values before recording or listing sender errors", async () => {
-    const canarySecret = "qa-canary-secret-value";
+    const canarySecret = "qa+canary/secret?=value";
+    const encodedSecret = encodeURIComponent(canarySecret);
+    const base64Secret = Buffer.from(canarySecret).toString("base64");
     process.env.MULTIREMI_FEISHU_APP_SECRET = canarySecret;
     const sender: OutboundNotificationSender = {
       async send(): Promise<void> {
-        throw new Error(`remote diagnostic echoed ${canarySecret}`);
+        throw new Error(`raw=${canarySecret} query=${encodedSecret} b64=${base64Secret}`);
       },
     };
     const current = createTestStore(sender, { maxAttempts: 1 });
@@ -224,7 +230,9 @@ describe("Multiremi notification channels", () => {
 
     const failed = await waitForDelivery(current, pending.id, "failed");
     expect(failed.lastError).toContain("***");
-    expect(failed.lastError).not.toContain(canarySecret);
+    for (const representation of [canarySecret, encodedSecret, base64Secret]) {
+      expect(failed.lastError).not.toContain(representation);
+    }
 
     current.createWorkspaceMember({
       workspaceId: "local",
@@ -245,19 +253,18 @@ describe("Multiremi notification channels", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(JSON.stringify(await response.json())).not.toContain(canarySecret);
+    const responseBody = JSON.stringify(await response.json());
+    for (const representation of [canarySecret, encodedSecret, base64Secret]) {
+      expect(responseBody).not.toContain(representation);
+    }
   });
 
-  it("redacts Feishu app credentials from SDK errors before they reach the dispatcher", async () => {
-    const sent: OutboundNotification[] = [];
-    const current = createTestStore(capturingSender(sent));
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Feishu SDK redaction");
-    const delivery = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
-    await waitForDelivery(current, delivery.id, "sent");
-
-    const appId = "qa-canary-app-id";
-    const appSecret = "qa-canary-app-secret";
+  it("maps arbitrary Feishu SDK diagnostics to a controlled error category", async () => {
+    const appId = "qa+canary/app?id";
+    const appSecret = "qa+canary/secret?=value";
+    const encodedSecret = encodeURIComponent(appSecret);
+    const base64Secret = Buffer.from(appSecret).toString("base64");
+    const arbitrarySdkText = `raw=${appSecret} query=${encodedSecret} b64=${base64Secret}`;
     const { createFeishuGroupSender } = await import("@multiremi/notifications/feishu-group-sender.js");
     const sender = createFeishuGroupSender(
       {
@@ -266,20 +273,46 @@ describe("Multiremi notification channels", () => {
       },
       {
         async sendCard(): Promise<never> {
-          throw new Error(`SDK rejected ${appId} with ${appSecret}`);
+          throw Object.assign(new Error(arbitrarySdkText), { code: 90001 });
         },
       },
     );
-    let errorMessage = "";
-    try {
-      await sender.send(sent[0]!);
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
+    const current = createTestStore(sender, { maxAttempts: 1 });
+    createChannel(current, { eventTypes: ["issue_assigned"] });
+    createAssignedIssue(current, "Controlled Feishu failure");
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+
+    const failed = await waitForDelivery(current, pending.id, "failed");
+
+    expect(failed.lastError).toBe("feishu_send_failed category=unknown provider_code=90001");
+    expect(failed.lastError).not.toContain(arbitrarySdkText);
+    for (const representation of [appId, appSecret, encodedSecret, base64Secret]) {
+      expect(failed.lastError).not.toContain(representation);
     }
 
-    expect(errorMessage).toContain("***");
-    expect(errorMessage).not.toContain(appId);
-    expect(errorMessage).not.toContain(appSecret);
+    current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "controlled-error-reader",
+      name: "Controlled error reader",
+      role: "member",
+    });
+    const memberToken = await current.createAccessToken({
+      name: "Controlled error reader token",
+      type: "pat",
+      workspaceId: "local",
+      userId: "controlled-error-reader",
+    });
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+    const response = await app.request(
+      "/api/multiremi/notification-deliveries?workspace_id=local",
+      { headers: jsonHeaders(memberToken.token) },
+    );
+    const responseBody = JSON.stringify(await response.json());
+    expect(response.status).toBe(200);
+    expect(responseBody).toContain("feishu_send_failed category=unknown provider_code=90001");
+    for (const representation of [appId, appSecret, encodedSecret, base64Secret, arbitrarySdkText]) {
+      expect(responseBody).not.toContain(representation);
+    }
   });
 
   it("forbids non-admin members from creating outbound channels", async () => {
@@ -427,6 +460,26 @@ describe("Multiremi notification channels", () => {
       const delivery = firstStore.listNotificationDeliveries({ workspaceId: "local" })[0]!;
       await firstStarted;
 
+      const owner = await firstStore.createAccessToken({
+        name: "Active delivery owner",
+        type: "pat",
+        workspaceId: "local",
+        userId: "local",
+      });
+      const app = createMultiremiApp({ store: firstStore, authToken: "root-secret" });
+      const beforeRetry = firstStore.getNotificationDelivery(delivery.id)!;
+      const retryResponse = await app.request(
+        `/api/multiremi/notification-deliveries/${delivery.id}/retry`,
+        { method: "POST", headers: jsonHeaders(owner.token) },
+      );
+      expect(retryResponse.status).toBe(409);
+      expect(await retryResponse.json()).toEqual({
+        error: "notification delivery is currently being sent",
+      });
+      expect(firstStore.getNotificationDelivery(delivery.id)).toEqual(beforeRetry);
+      expect(firstStore.retryNotificationDelivery(delivery.id)).toBeNull();
+      expect(firstStore.getNotificationDelivery(delivery.id)).toEqual(beforeRetry);
+
       await secondStore.dispatchNotificationDelivery(delivery.id);
       expect(firstCalls).toBe(1);
       expect(secondCalls).toBe(0);
@@ -437,6 +490,110 @@ describe("Multiremi notification channels", () => {
       expect(firstCalls + secondCalls).toBe(1);
     } finally {
       releaseFirst?.();
+      firstStore.stopNotificationDeliverySweeper();
+      secondStore.stopNotificationDeliverySweeper();
+      firstDb.close();
+      secondDb.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a monotonic claim sequence to fence an old worker across manual retry", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "multiremi-notification-fence-"));
+    const databasePath = join(directory, "shared.sqlite");
+    const firstDb = new Database(databasePath, { create: true });
+    const secondDb = new Database(databasePath, { create: true });
+    let releaseFirst!: () => void;
+    let reportFirstStarted!: () => void;
+    let releaseSecond!: () => void;
+    let reportSecondStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      reportFirstStarted = resolve;
+    });
+    const firstReleased = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      reportSecondStarted = resolve;
+    });
+    const secondReleased = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const firstStore = new MultiremiStore(firstDb, {
+      notificationMaxAttempts: 1,
+      notificationSenders: {
+        feishu_group: {
+          async send(): Promise<void> {
+            reportFirstStarted();
+            await firstReleased;
+          },
+        },
+      },
+    });
+    const secondStore = new MultiremiStore(secondDb, {
+      notificationMaxAttempts: 1,
+      notificationSenders: {
+        feishu_group: {
+          async send(): Promise<void> {
+            reportSecondStarted();
+            await secondReleased;
+            throw new PermanentNotificationDeliveryError("new generation failure");
+          },
+        },
+      },
+    });
+    try {
+      firstStore.ensureLocalWorkspace();
+      const { issue, member } = createAssignedIssue(firstStore, "Manual retry fencing");
+      const item = firstStore.listInboxItems(member.id).find((entry) => entry.issueId === issue.id)!;
+      const channel = firstStore.createNotificationChannel({
+        workspaceId: "local",
+        kind: "feishu_group",
+        name: "Fenced retry channel",
+        target: { chatId: "oc_team_123" },
+        eventTypes: ["issue_assigned"],
+        createdBy: "local",
+      });
+      const delivery = firstStore.recordPendingNotificationDelivery(item, channel);
+      const oldDispatch = firstStore.dispatchNotificationDelivery(delivery.id);
+      await firstStarted;
+      const oldClaim = firstStore.getNotificationDelivery(delivery.id)!;
+      expect(oldClaim).toMatchObject({ attempts: 1, claimSeq: 1, status: "pending" });
+
+      firstDb.run(
+        "UPDATE multiremi_notification_deliveries SET leased_until = ? WHERE id = ?",
+        ["2000-01-01T00:00:00.000Z", delivery.id],
+      );
+      const reset = firstStore.retryNotificationDelivery(delivery.id)!;
+      expect(reset).toMatchObject({ attempts: 0, claimSeq: 2, status: "pending" });
+
+      const newDispatch = secondStore.dispatchNotificationDelivery(delivery.id);
+      await secondStarted;
+      expect(secondStore.getNotificationDelivery(delivery.id)).toMatchObject({
+        attempts: 1,
+        claimSeq: 3,
+        status: "pending",
+      });
+
+      releaseFirst();
+      await oldDispatch;
+      expect(firstStore.getNotificationDelivery(delivery.id)).toMatchObject({
+        attempts: 1,
+        claimSeq: 3,
+        status: "pending",
+      });
+
+      releaseSecond();
+      await newDispatch;
+      expect(secondStore.getNotificationDelivery(delivery.id)).toMatchObject({
+        attempts: 1,
+        claimSeq: 3,
+        status: "failed",
+        lastError: "new generation failure",
+      });
+    } finally {
+      releaseFirst?.();
+      releaseSecond?.();
       firstStore.stopNotificationDeliverySweeper();
       secondStore.stopNotificationDeliverySweeper();
       firstDb.close();

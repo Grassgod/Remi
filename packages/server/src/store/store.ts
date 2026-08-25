@@ -1262,27 +1262,35 @@ runMigrations(this.db);
   claimNotificationDeliveryAttempt(
     id: string,
     expectedAttempts: number,
+    expectedClaimSeq: number,
     maxAttempts: number,
     claimedAt: string,
     leasedUntil: string,
   ): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.claimAttempt(id, expectedAttempts, maxAttempts, claimedAt, leasedUntil);
+    return this.notificationChannels.claimAttempt(
+      id,
+      expectedAttempts,
+      expectedClaimSeq,
+      maxAttempts,
+      claimedAt,
+      leasedUntil,
+    );
   }
 
-  markNotificationDeliverySent(id: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.markSent(id, expectedAttempts);
+  markNotificationDeliverySent(id: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markSent(id, expectedClaimSeq);
   }
 
-  markNotificationDeliveryFailed(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.markFailed(id, error, expectedAttempts);
+  markNotificationDeliveryFailed(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markFailed(id, error, expectedClaimSeq);
   }
 
-  recordNotificationDeliveryError(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.recordRetryableError(id, error, expectedAttempts);
+  recordNotificationDeliveryError(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.recordRetryableError(id, error, expectedClaimSeq);
   }
 
-  resetNotificationDeliveryForRetry(id: string): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.resetForRetry(id);
+  resetNotificationDeliveryForRetry(id: string, retryAt: string): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.resetForRetry(id, retryAt);
   }
 
   dispatchNotificationDelivery(id: string): Promise<void> {

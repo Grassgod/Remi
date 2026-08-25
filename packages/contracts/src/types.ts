@@ -2101,6 +2101,7 @@ export interface MultiremiNotificationDelivery {
   targetLabel: string;
   status: MultiremiNotificationDeliveryStatus;
   attempts: number;
+  claimSeq: number;
   leasedUntil: string | null;
   lastError: string | null;
   lastAttemptAt: string | null;

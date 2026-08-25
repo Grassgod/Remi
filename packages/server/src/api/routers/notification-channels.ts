@@ -119,10 +119,19 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
     if (current.status === "sent") {
       return c.json({ error: "sent notification deliveries cannot be retried" }, 409);
     }
+    if (current.status === "pending" && leaseIsActive(current.leasedUntil)) {
+      return c.json({ error: "notification delivery is currently being sent" }, 409);
+    }
     const delivery = store.retryNotificationDelivery(current.id);
     if (!delivery) return c.json({ error: "notification delivery cannot be retried" }, 409);
     return c.json({ delivery }, 202);
   });
+}
+
+function leaseIsActive(leasedUntil: string | null): boolean {
+  if (!leasedUntil) return false;
+  const expiresAt = Date.parse(leasedUntil);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
 function requestWorkspaceId(c: Context): string {

@@ -658,12 +658,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const claimed = store.claimNotificationDeliveryAttempt(
       delivery.id,
       0,
+      delivery.claimSeq,
       3,
       claimedAt,
       new Date(Date.now() + 30_000).toISOString(),
     );
     expect(claimed?.attempts).toBe(1);
-    expect(store.markNotificationDeliverySent(delivery.id, 1)?.status).toBe("sent");
+    expect(store.markNotificationDeliverySent(delivery.id, claimed!.claimSeq)?.status).toBe("sent");
   });
 
   it("projects and links provider-neutral change requests on Postgres", () => {

@@ -236,60 +236,65 @@ export class NotificationChannelsRepo {
   claimAttempt(
     id: string,
     expectedAttempts: number,
+    expectedClaimSeq: number,
     maxAttempts: number,
     claimedAt: string,
     leasedUntil: string,
   ): MultiremiNotificationDelivery | null {
     const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
-       SET attempts = attempts + 1, last_attempt_at = ?, leased_until = ?, last_error = NULL
-       WHERE id = ? AND status = 'pending' AND attempts = ? AND attempts < ?
+       SET attempts = attempts + 1, claim_seq = claim_seq + 1,
+           last_attempt_at = ?, leased_until = ?, last_error = NULL
+       WHERE id = ? AND status = 'pending' AND attempts = ? AND claim_seq = ? AND attempts < ?
          AND (leased_until IS NULL OR leased_until <= ?)`,
-      [claimedAt, leasedUntil, id, expectedAttempts, maxAttempts, claimedAt],
+      [claimedAt, leasedUntil, id, expectedAttempts, expectedClaimSeq, maxAttempts, claimedAt],
     );
     return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
-  markSent(id: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+  markSent(id: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
     const now = nowIso();
     const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
        SET status = 'sent', leased_until = NULL, last_error = NULL, delivered_at = ?
-       WHERE id = ? AND status = 'pending' AND attempts = ?`,
-      [now, id, expectedAttempts],
+       WHERE id = ? AND status = 'pending' AND claim_seq = ?`,
+      [now, id, expectedClaimSeq],
     );
     return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
-  markFailed(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+  markFailed(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
     const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
        SET status = 'failed', leased_until = NULL, last_error = ?
-       WHERE id = ? AND status = 'pending' AND attempts = ?`,
-      [truncateError(error), id, expectedAttempts],
+       WHERE id = ? AND status = 'pending' AND claim_seq = ?`,
+      [truncateError(error), id, expectedClaimSeq],
     );
     return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
-  recordRetryableError(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+  recordRetryableError(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
     const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
        SET leased_until = NULL, last_error = ?
-       WHERE id = ? AND status = 'pending' AND attempts = ?`,
-      [truncateError(error), id, expectedAttempts],
+       WHERE id = ? AND status = 'pending' AND claim_seq = ?`,
+      [truncateError(error), id, expectedClaimSeq],
     );
     return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
-  resetForRetry(id: string): MultiremiNotificationDelivery | null {
+  resetForRetry(id: string, retryAt: string): MultiremiNotificationDelivery | null {
     const current = this.getDelivery(id);
     if (!current || current.status === "sent") return null;
     const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
-       SET status = 'pending', attempts = 0, last_error = NULL,
+       SET status = 'pending', attempts = 0, claim_seq = claim_seq + 1, last_error = NULL,
            last_attempt_at = NULL, leased_until = NULL, delivered_at = NULL
-       WHERE id = ? AND status IN ('pending', 'failed')`,
-      [id],
+       WHERE id = ? AND (
+         status = 'failed'
+         OR (status = 'pending' AND (leased_until IS NULL OR leased_until <= ?))
+       )`,
+      [id, retryAt],
     );
     return result.changes === 1 ? this.getDelivery(id) : null;
   }
@@ -361,6 +366,7 @@ function toNotificationDelivery(row: Row): MultiremiNotificationDelivery {
     targetLabel: String(row.target_label ?? ""),
     status: String(row.status) as MultiremiNotificationDeliveryStatus,
     attempts: Number(row.attempts ?? 0),
+    claimSeq: Number(row.claim_seq ?? 0),
     leasedUntil: nullableString(row.leased_until),
     lastError: nullableString(row.last_error),
     lastAttemptAt: nullableString(row.last_attempt_at),

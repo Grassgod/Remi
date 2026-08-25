@@ -106,7 +106,9 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
       "source_revision", "sha256", "relative_path", "status", "uploaded_size_bytes",
     ]));
-    expect(columnNames(database, "multiremi_notification_deliveries")).toContain("leased_until");
+    expect(columnNames(database, "multiremi_notification_deliveries")).toEqual(expect.arrayContaining([
+      "claim_seq", "leased_until",
+    ]));
   });
 
   it("adds the notification delivery lease to a pre-lease table", () => {
@@ -130,7 +132,9 @@ describe("store migrations", () => {
 
     migrate(database);
 
-    expect(columnNames(database, "multiremi_notification_deliveries")).toContain("leased_until");
+    expect(columnNames(database, "multiremi_notification_deliveries")).toEqual(expect.arrayContaining([
+      "claim_seq", "leased_until",
+    ]));
     expect(database.query(
       `SELECT name FROM sqlite_master
        WHERE type = 'index' AND name = 'idx_multiremi_notification_deliveries_pending'`,
