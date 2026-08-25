@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import type { MultiremiNotificationDelivery } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api/server.js";
@@ -164,7 +167,7 @@ describe("Multiremi notification channels", () => {
     expect(current.listNotificationChannels("local")).toEqual([]);
   });
 
-  it("rejects user and malformed Feishu targets at channel creation", async () => {
+  it("rejects coerced, padded, user, and malformed Feishu targets on create and update", async () => {
     const current = createTestStore(capturingSender([]));
     const app = createMultiremiApp({ store: current, authToken: "root-secret" });
     const owner = await current.createAccessToken({
@@ -173,9 +176,17 @@ describe("Multiremi notification channels", () => {
       workspaceId: "local",
       userId: "local",
     });
+    const valid = current.createNotificationChannel({
+      workspaceId: "local",
+      kind: "feishu_group",
+      name: "Valid target",
+      target: { chatId: "oc_valid_target" },
+      eventTypes: ["*"],
+      createdBy: "local",
+    });
 
-    for (const chatId of ["ou_user_123", "not-a-chat-id"]) {
-      const response = await app.request("/api/multiremi/notification-channels", {
+    for (const chatId of [["oc_array"], "  oc_space  ", "ou_user_123", "not-a-chat-id"]) {
+      const createResponse = await app.request("/api/multiremi/notification-channels", {
         method: "POST",
         headers: jsonHeaders(owner.token),
         body: JSON.stringify({
@@ -186,9 +197,89 @@ describe("Multiremi notification channels", () => {
           eventTypes: ["*"],
         }),
       });
-      expect(response.status).toBe(400);
+      expect(createResponse.status).toBe(400);
+
+      const updateResponse = await app.request(`/api/multiremi/notification-channels/${valid.id}`, {
+        method: "PATCH",
+        headers: jsonHeaders(owner.token),
+        body: JSON.stringify({ target: { chatId } }),
+      });
+      expect(updateResponse.status).toBe(400);
     }
-    expect(current.listNotificationChannels("local")).toEqual([]);
+    expect(current.listNotificationChannels("local")).toEqual([valid]);
+  });
+
+  it("redacts known credential values before recording or listing sender errors", async () => {
+    const canarySecret = "qa-canary-secret-value";
+    process.env.MULTIREMI_FEISHU_APP_SECRET = canarySecret;
+    const sender: OutboundNotificationSender = {
+      async send(): Promise<void> {
+        throw new Error(`remote diagnostic echoed ${canarySecret}`);
+      },
+    };
+    const current = createTestStore(sender, { maxAttempts: 1 });
+    createChannel(current, { eventTypes: ["issue_assigned"] });
+    createAssignedIssue(current, "Redacted failure");
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+
+    const failed = await waitForDelivery(current, pending.id, "failed");
+    expect(failed.lastError).toContain("***");
+    expect(failed.lastError).not.toContain(canarySecret);
+
+    current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-reader",
+      name: "Notification reader",
+      role: "member",
+    });
+    const memberToken = await current.createAccessToken({
+      name: "Notification reader token",
+      type: "pat",
+      workspaceId: "local",
+      userId: "notification-reader",
+    });
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+    const response = await app.request(
+      "/api/multiremi/notification-deliveries?workspace_id=local",
+      { headers: jsonHeaders(memberToken.token) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).not.toContain(canarySecret);
+  });
+
+  it("redacts Feishu app credentials from SDK errors before they reach the dispatcher", async () => {
+    const sent: OutboundNotification[] = [];
+    const current = createTestStore(capturingSender(sent));
+    createChannel(current, { eventTypes: ["issue_assigned"] });
+    createAssignedIssue(current, "Feishu SDK redaction");
+    const delivery = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+    await waitForDelivery(current, delivery.id, "sent");
+
+    const appId = "qa-canary-app-id";
+    const appSecret = "qa-canary-app-secret";
+    const { createFeishuGroupSender } = await import("@multiremi/notifications/feishu-group-sender.js");
+    const sender = createFeishuGroupSender(
+      {
+        MULTIREMI_FEISHU_APP_ID: appId,
+        MULTIREMI_FEISHU_APP_SECRET: appSecret,
+      },
+      {
+        async sendCard(): Promise<never> {
+          throw new Error(`SDK rejected ${appId} with ${appSecret}`);
+        },
+      },
+    );
+    let errorMessage = "";
+    try {
+      await sender.send(sent[0]!);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(errorMessage).toContain("***");
+    expect(errorMessage).not.toContain(appId);
+    expect(errorMessage).not.toContain(appSecret);
   });
 
   it("forbids non-admin members from creating outbound channels", async () => {
@@ -289,17 +380,142 @@ describe("Multiremi notification channels", () => {
     expect(delivered.lastError).toBeNull();
     expect(sent).toHaveLength(2);
   });
+
+  it("uses a database lease to prevent two dispatchers from sending the same delivery", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "multiremi-notification-lease-"));
+    const databasePath = join(directory, "shared.sqlite");
+    const firstDb = new Database(databasePath, { create: true });
+    const secondDb = new Database(databasePath, { create: true });
+    let releaseFirst!: () => void;
+    let reportFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      reportFirstStarted = resolve;
+    });
+    const firstReleased = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstCalls = 0;
+    let secondCalls = 0;
+    const firstStore = new MultiremiStore(firstDb, {
+      notificationSenders: {
+        feishu_group: {
+          async send(): Promise<void> {
+            firstCalls += 1;
+            reportFirstStarted();
+            await firstReleased;
+          },
+        },
+      },
+      notificationLeaseMs: 1_000,
+      notificationSendTimeoutMs: 500,
+    });
+    const secondStore = new MultiremiStore(secondDb, {
+      notificationSenders: {
+        feishu_group: {
+          async send(): Promise<void> {
+            secondCalls += 1;
+          },
+        },
+      },
+      notificationLeaseMs: 1_000,
+      notificationSendTimeoutMs: 500,
+    });
+    try {
+      firstStore.ensureLocalWorkspace();
+      createChannel(firstStore, { eventTypes: ["issue_assigned"] });
+      createAssignedIssue(firstStore, "Shared delivery lease");
+      const delivery = firstStore.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+      await firstStarted;
+
+      await secondStore.dispatchNotificationDelivery(delivery.id);
+      expect(firstCalls).toBe(1);
+      expect(secondCalls).toBe(0);
+
+      releaseFirst();
+      const sent = await waitForDelivery(firstStore, delivery.id, "sent");
+      expect(sent.attempts).toBe(1);
+      expect(firstCalls + secondCalls).toBe(1);
+    } finally {
+      releaseFirst?.();
+      firstStore.stopNotificationDeliverySweeper();
+      secondStore.stopNotificationDeliverySweeper();
+      firstDb.close();
+      secondDb.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("times out a hung sender and re-drives the pending delivery", async () => {
+    let calls = 0;
+    const sender: OutboundNotificationSender = {
+      async send(): Promise<void> {
+        calls += 1;
+        if (calls === 1) await new Promise<void>(() => undefined);
+      },
+    };
+    const current = createTestStore(sender, {
+      maxAttempts: 3,
+      retryBaseDelayMs: 1,
+      leaseMs: 20,
+      sendTimeoutMs: 10,
+    });
+    createChannel(current, { eventTypes: ["issue_assigned"] });
+    createAssignedIssue(current, "Hung sender recovery");
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+
+    const sent = await waitForDelivery(current, pending.id, "sent");
+    expect(sent.attempts).toBe(2);
+    expect(sent.leasedUntil).toBeNull();
+    expect(calls).toBe(2);
+  });
+
+  it("moves an attempts-exhausted pending delivery to failed after its lease expires", async () => {
+    const sent: OutboundNotification[] = [];
+    const current = createTestStore(capturingSender(sent), { maxAttempts: 3 });
+    const { issue, member } = createAssignedIssue(current, "Exhausted delivery lease");
+    const item = current.listInboxItems(member.id).find((entry) => entry.issueId === issue.id)!;
+    const channel = current.createNotificationChannel({
+      workspaceId: "local",
+      kind: "feishu_group",
+      name: "Exhausted lease channel",
+      target: { chatId: "oc_team_123" },
+      eventTypes: ["issue_assigned"],
+      createdBy: "local",
+    });
+    const pending = current.recordPendingNotificationDelivery(item, channel);
+    db!.run(
+      `UPDATE multiremi_notification_deliveries
+       SET attempts = 3, leased_until = ? WHERE id = ?`,
+      ["2000-01-01T00:00:00.000Z", pending.id],
+    );
+
+    current.startNotificationDeliverySweeper();
+    const failed = await waitForDelivery(current, pending.id, "failed");
+
+    expect(failed.attempts).toBe(3);
+    expect(failed.leasedUntil).toBeNull();
+    expect(failed.lastError).toContain("attempts exhausted");
+    expect(sent).toEqual([]);
+  });
 });
 
 function createTestStore(
   sender?: OutboundNotificationSender,
-  options: { maxAttempts?: number; retryBaseDelayMs?: number; publicUrl?: string } = {},
+  options: {
+    maxAttempts?: number;
+    retryBaseDelayMs?: number;
+    leaseMs?: number;
+    sendTimeoutMs?: number;
+    publicUrl?: string;
+  } = {},
 ): MultiremiStore {
   db = new Database(":memory:");
   store = new MultiremiStore(db, {
     notificationSenders: sender ? { feishu_group: sender } : undefined,
     notificationMaxAttempts: options.maxAttempts,
     notificationRetryBaseDelayMs: options.retryBaseDelayMs,
+    notificationLeaseMs: options.leaseMs,
+    notificationSendTimeoutMs: options.sendTimeoutMs,
     publicUrl: options.publicUrl,
   });
   store.ensureLocalWorkspace();

@@ -800,6 +800,7 @@ export function runMigrations(db: SqlDatabase): void {
       target_label TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       attempts INTEGER NOT NULL DEFAULT 0,
+      leased_until TEXT,
       last_error TEXT,
       last_attempt_at TEXT,
       delivered_at TEXT,
@@ -1881,6 +1882,11 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");
   addColumnIfMissing(db, "multiremi_inbox_items", "details TEXT");
+  addColumnIfMissing(db, "multiremi_notification_deliveries", "leased_until TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_deliveries_pending
+      ON multiremi_notification_deliveries(status, leased_until, created_at);
+  `);
   ensureInboxGenericSchema(db);
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");

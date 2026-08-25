@@ -5,9 +5,16 @@ import {
   PermanentNotificationDeliveryError,
   type OutboundNotificationSender,
 } from "./types.js";
+import { redactNotificationError } from "./error-redaction.js";
+
+export interface FeishuGroupSenderDependencies {
+  createClient?: typeof createFeishuClient;
+  sendCard?: typeof sendCardFeishu;
+}
 
 export function createFeishuGroupSender(
   env: NodeJS.ProcessEnv = process.env,
+  dependencies: FeishuGroupSenderDependencies = {},
 ): OutboundNotificationSender {
   return {
     async send(notification): Promise<void> {
@@ -22,12 +29,16 @@ export function createFeishuGroupSender(
       } catch {
         throw new PermanentNotificationDeliveryError("invalid Feishu group chat target");
       }
-      const client = createFeishuClient({
-        appId,
-        appSecret,
-        domain: env.MULTIREMI_FEISHU_DOMAIN?.trim() || undefined,
-      });
-      await sendCardFeishu(client, chatId, notification.card);
+      try {
+        const client = (dependencies.createClient ?? createFeishuClient)({
+          appId,
+          appSecret,
+          domain: env.MULTIREMI_FEISHU_DOMAIN?.trim() || undefined,
+        });
+        await (dependencies.sendCard ?? sendCardFeishu)(client, chatId, notification.card);
+      } catch (error) {
+        throw new Error(redactNotificationError(error, env, [appSecret, appId]));
+      }
     },
   };
 }

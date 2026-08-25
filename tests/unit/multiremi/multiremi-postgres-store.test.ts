@@ -654,7 +654,16 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listNotificationDeliveries({ workspaceId: ws })).toEqual([
       expect.objectContaining({ id: delivery.id, status: "pending", attempts: 0 }),
     ]);
-    expect(store.markNotificationDeliverySent(delivery.id)?.status).toBe("sent");
+    const claimedAt = new Date().toISOString();
+    const claimed = store.claimNotificationDeliveryAttempt(
+      delivery.id,
+      0,
+      3,
+      claimedAt,
+      new Date(Date.now() + 30_000).toISOString(),
+    );
+    expect(claimed?.attempts).toBe(1);
+    expect(store.markNotificationDeliverySent(delivery.id, 1)?.status).toBe("sent");
   });
 
   it("projects and links provider-neutral change requests on Postgres", () => {

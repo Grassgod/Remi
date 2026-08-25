@@ -371,6 +371,8 @@ export class MultiremiStore {
     notificationMaxAttempts?: number;
     notificationRetryBaseDelayMs?: number;
     notificationSweepIntervalMs?: number;
+    notificationLeaseMs?: number;
+    notificationSendTimeoutMs?: number;
     publicUrl?: string | null;
   } = {}) {
     this.db = db ?? openMultiremiDatabase();
@@ -385,6 +387,8 @@ export class MultiremiStore {
       maxAttempts: options.notificationMaxAttempts,
       retryBaseDelayMs: options.notificationRetryBaseDelayMs,
       sweepIntervalMs: options.notificationSweepIntervalMs,
+      leaseMs: options.notificationLeaseMs,
+      sendTimeoutMs: options.notificationSendTimeoutMs,
       publicUrl: options.publicUrl,
     });
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
@@ -1251,28 +1255,30 @@ runMigrations(this.db);
     return this.notificationChannels.listDeliveries(input);
   }
 
-  listPendingNotificationDeliveries(maxAttempts: number, limit?: number): MultiremiNotificationDelivery[] {
-    return this.notificationChannels.listPendingDeliveries(maxAttempts, limit);
+  listPendingNotificationDeliveries(now: string, limit?: number): MultiremiNotificationDelivery[] {
+    return this.notificationChannels.listPendingDeliveries(now, limit);
   }
 
   claimNotificationDeliveryAttempt(
     id: string,
     expectedAttempts: number,
     maxAttempts: number,
+    claimedAt: string,
+    leasedUntil: string,
   ): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.claimAttempt(id, expectedAttempts, maxAttempts);
+    return this.notificationChannels.claimAttempt(id, expectedAttempts, maxAttempts, claimedAt, leasedUntil);
   }
 
-  markNotificationDeliverySent(id: string): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.markSent(id);
+  markNotificationDeliverySent(id: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markSent(id, expectedAttempts);
   }
 
-  markNotificationDeliveryFailed(id: string, error: string): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.markFailed(id, error);
+  markNotificationDeliveryFailed(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markFailed(id, error, expectedAttempts);
   }
 
-  recordNotificationDeliveryError(id: string, error: string): MultiremiNotificationDelivery | null {
-    return this.notificationChannels.recordRetryableError(id, error);
+  recordNotificationDeliveryError(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.recordRetryableError(id, error, expectedAttempts);
   }
 
   resetNotificationDeliveryForRetry(id: string): MultiremiNotificationDelivery | null {

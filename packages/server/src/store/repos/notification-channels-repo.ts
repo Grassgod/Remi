@@ -52,8 +52,8 @@ export function validateFeishuGroupTarget(value: unknown): { chatId: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new NotificationChannelValidationError("target must be an object containing chatId");
   }
-  const chatId = String((value as Record<string, unknown>).chatId ?? "").trim();
-  if (!FEISHU_GROUP_CHAT_ID.test(chatId)) {
+  const chatId = (value as Record<string, unknown>).chatId;
+  if (typeof chatId !== "string" || !FEISHU_GROUP_CHAT_ID.test(chatId)) {
     throw new NotificationChannelValidationError("target.chatId must be a Feishu group chat id beginning with oc_");
   }
   return { chatId };
@@ -223,54 +223,62 @@ export class NotificationChannelsRepo {
     return rows.map(toNotificationDelivery);
   }
 
-  listPendingDeliveries(maxAttempts: number, limit = 100): MultiremiNotificationDelivery[] {
+  listPendingDeliveries(now: string, limit = 100): MultiremiNotificationDelivery[] {
     const rows = this.ctx.db.query(
       `SELECT * FROM multiremi_notification_deliveries
-       WHERE status = 'pending' AND attempts < ?
+       WHERE status = 'pending'
+         AND (leased_until IS NULL OR leased_until <= ?)
        ORDER BY created_at ASC, id ASC LIMIT ?`,
-    ).all(maxAttempts, normalizeLimit(limit)) as Row[];
+    ).all(now, normalizeLimit(limit)) as Row[];
     return rows.map(toNotificationDelivery);
   }
 
-  claimAttempt(id: string, expectedAttempts: number, maxAttempts: number): MultiremiNotificationDelivery | null {
-    const now = nowIso();
+  claimAttempt(
+    id: string,
+    expectedAttempts: number,
+    maxAttempts: number,
+    claimedAt: string,
+    leasedUntil: string,
+  ): MultiremiNotificationDelivery | null {
     const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
-       SET attempts = attempts + 1, last_attempt_at = ?, last_error = NULL
-       WHERE id = ? AND status = 'pending' AND attempts = ? AND attempts < ?`,
-      [now, id, expectedAttempts, maxAttempts],
+       SET attempts = attempts + 1, last_attempt_at = ?, leased_until = ?, last_error = NULL
+       WHERE id = ? AND status = 'pending' AND attempts = ? AND attempts < ?
+         AND (leased_until IS NULL OR leased_until <= ?)`,
+      [claimedAt, leasedUntil, id, expectedAttempts, maxAttempts, claimedAt],
     );
     return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
-  markSent(id: string): MultiremiNotificationDelivery | null {
+  markSent(id: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
     const now = nowIso();
-    this.ctx.db.run(
+    const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
-       SET status = 'sent', last_error = NULL, delivered_at = ?
-       WHERE id = ? AND status = 'pending'`,
-      [now, id],
+       SET status = 'sent', leased_until = NULL, last_error = NULL, delivered_at = ?
+       WHERE id = ? AND status = 'pending' AND attempts = ?`,
+      [now, id, expectedAttempts],
     );
-    return this.getDelivery(id);
+    return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
-  markFailed(id: string, error: string): MultiremiNotificationDelivery | null {
-    this.ctx.db.run(
+  markFailed(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+    const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
-       SET status = 'failed', last_error = ?
-       WHERE id = ? AND status != 'sent'`,
-      [truncateError(error), id],
+       SET status = 'failed', leased_until = NULL, last_error = ?
+       WHERE id = ? AND status = 'pending' AND attempts = ?`,
+      [truncateError(error), id, expectedAttempts],
     );
-    return this.getDelivery(id);
+    return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
-  recordRetryableError(id: string, error: string): MultiremiNotificationDelivery | null {
-    this.ctx.db.run(
+  recordRetryableError(id: string, error: string, expectedAttempts: number): MultiremiNotificationDelivery | null {
+    const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
-       SET last_error = ? WHERE id = ? AND status = 'pending'`,
-      [truncateError(error), id],
+       SET leased_until = NULL, last_error = ?
+       WHERE id = ? AND status = 'pending' AND attempts = ?`,
+      [truncateError(error), id, expectedAttempts],
     );
-    return this.getDelivery(id);
+    return result.changes === 1 ? this.getDelivery(id) : null;
   }
 
   resetForRetry(id: string): MultiremiNotificationDelivery | null {
@@ -279,7 +287,7 @@ export class NotificationChannelsRepo {
     const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
        SET status = 'pending', attempts = 0, last_error = NULL,
-           last_attempt_at = NULL, delivered_at = NULL
+           last_attempt_at = NULL, leased_until = NULL, delivered_at = NULL
        WHERE id = ? AND status IN ('pending', 'failed')`,
       [id],
     );
@@ -353,6 +361,7 @@ function toNotificationDelivery(row: Row): MultiremiNotificationDelivery {
     targetLabel: String(row.target_label ?? ""),
     status: String(row.status) as MultiremiNotificationDeliveryStatus,
     attempts: Number(row.attempts ?? 0),
+    leasedUntil: nullableString(row.leased_until),
     lastError: nullableString(row.last_error),
     lastAttemptAt: nullableString(row.last_attempt_at),
     deliveredAt: nullableString(row.delivered_at),
