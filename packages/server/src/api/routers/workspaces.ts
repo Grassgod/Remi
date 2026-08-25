@@ -3,6 +3,7 @@ import {
   backfillWorkspaceRepositoryDefaultBranches,
   createScmAwareGitRemoteInspector,
   denyCurrentUserWorkspaceAccess,
+  denyTaskTokenRepositoryWikiAccess,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
   isJsonApiError,
@@ -351,6 +352,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
+    if (taskDenied) return taskDenied;
     const missing = requireWorkspaceRepository(store, workspaceId, repositoryId);
     if (missing) return c.json({ error: "repository not found" }, 404);
     try {
@@ -368,6 +371,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
+    if (taskDenied) return taskDenied;
     const missing = requireWorkspaceRepository(store, workspaceId, repositoryId);
     if (missing) return c.json({ error: "repository not found" }, 404);
     const body = await readJsonStrict<CreateRepositoryWikiDocInput>(c);
@@ -420,6 +425,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
+    if (taskDenied) return taskDenied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     try {
       const doc = await deps.repositoryWiki.get(workspaceId, repositoryId, c.req.param("ref"));
@@ -433,6 +440,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
+    if (taskDenied) return taskDenied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     const body = await readJsonStrict<UpdateRepositoryWikiDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -452,6 +461,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
+    if (taskDenied) return taskDenied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     try {
       const expectedVersion = c.req.query("expected_version");
@@ -471,6 +482,8 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
+    if (taskDenied) return taskDenied;
     try {
       const revisions = await deps.repositoryWiki.revisions(workspaceId, repositoryId, c.req.param("ref"));
       return c.json({ revisions: revisions.map(repositoryWikiRevisionResponse) });
