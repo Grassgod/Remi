@@ -728,6 +728,7 @@ export class StoreContext {
     actorId?: string | null;
     details?: unknown | null;
     emitEvent?: boolean;
+    bypassMute?: boolean;
   }): MultiremiInboxItem | null {
     const issueId = cleanOptionalString(input.issueId);
     const issue = issueId ? this.host.getIssue(issueId) : null;
@@ -738,7 +739,7 @@ export class StoreContext {
     if (recipientType !== "member" || !rawRecipientId) return null;
     const member = this.resolveWorkspaceMemberForNotification(workspaceId, rawRecipientId);
     if (!member || member.archivedAt) return null;
-    if (this.isNotificationMuted(workspaceId, member.id, input.type)) return null;
+    if (!input.bypassMute && this.isNotificationMuted(workspaceId, member.id, input.type)) return null;
     const id = createId("inb");
     const now = nowIso();
     this.db.run(

@@ -2,6 +2,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { normalizeFeishuSidecarEndpointName } from "@multiremi/feishu-ingest/endpoints.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   CreateIssueFromMultiremiFeishuMessageInput,
   CreateMultiremiFeishuSourceInput,
@@ -19,6 +20,8 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+const log = createLogger("multiremi-feishu-ingest");
 
 export interface ClaimFeishuSyncStreamInput {
   sourceId: string;
@@ -446,7 +449,10 @@ export class FeishuIngestRepo {
     if (!source) throw new Error(`Feishu source not found: ${sourceId}`);
     const connection = this.ctx.db.query(
       `SELECT last_successful_ingest_at, last_error_code, last_error_at,
-              consecutive_failures, connection_alerted_at
+              consecutive_failures, connection_alerted_at,
+              connection_alert_delivery_failure_count,
+              connection_alert_delivery_error_code,
+              connection_alert_delivery_failed_at
        FROM multiremi_feishu_sources WHERE id = ?`,
     ).get(sourceId) as Row;
     const backlog = this.ctx.db.query(
@@ -483,6 +489,9 @@ export class FeishuIngestRepo {
         : null,
       consecutiveFailures: Number(connection.consecutive_failures ?? 0),
       connectionAlertedAt: nullableString(connection.connection_alerted_at),
+      connectionAlertDeliveryFailureCount: Number(connection.connection_alert_delivery_failure_count ?? 0),
+      connectionAlertDeliveryErrorCode: nullableString(connection.connection_alert_delivery_error_code),
+      connectionAlertDeliveryFailedAt: nullableString(connection.connection_alert_delivery_failed_at),
     };
   }
 
@@ -490,7 +499,10 @@ export class FeishuIngestRepo {
     this.ctx.db.run(
       `UPDATE multiremi_feishu_sources
        SET last_successful_ingest_at = ?, consecutive_failures = 0,
-           connection_alerted_at = NULL, updated_at = ?
+           connection_alerted_at = NULL,
+           connection_alert_delivery_error_code = NULL,
+           connection_alert_delivery_failed_at = NULL,
+           updated_at = ?
        WHERE id = ?`,
       [completedAt, completedAt, sourceId],
     );
@@ -520,7 +532,10 @@ export class FeishuIngestRepo {
                   created_at ASC, id ASC
          LIMIT 1`,
       ).get(String(source.workspace_id)) as Row | null;
-      if (!recipient) return null;
+      if (!recipient) {
+        this.recordConnectionAlertDeliveryFailure(sourceId, failedAt, "alert_recipient_unavailable");
+        return null;
+      }
       const item = this.ctx.createInboxItem({
         workspaceId: String(source.workspace_id),
         memberId: String(recipient.id),
@@ -536,15 +551,37 @@ export class FeishuIngestRepo {
           consecutive_failures: Number(source.consecutive_failures),
         },
         emitEvent: true,
+        bypassMute: true,
       });
-      if (!item) return null;
+      if (!item) {
+        this.recordConnectionAlertDeliveryFailure(sourceId, failedAt, "alert_inbox_create_failed");
+        return null;
+      }
       this.ctx.db.run(
-        `UPDATE multiremi_feishu_sources SET connection_alerted_at = ?, updated_at = ?
+        `UPDATE multiremi_feishu_sources
+         SET connection_alerted_at = ?,
+             connection_alert_delivery_error_code = NULL,
+             connection_alert_delivery_failed_at = NULL,
+             updated_at = ?
          WHERE id = ? AND connection_alerted_at IS NULL`,
         [failedAt, failedAt, sourceId],
       );
       return item;
     })();
+  }
+
+  private recordConnectionAlertDeliveryFailure(sourceId: string, failedAt: string, errorCode: string): void {
+    const normalizedCode = normalizeConnectionErrorCode(errorCode);
+    this.ctx.db.run(
+      `UPDATE multiremi_feishu_sources
+       SET connection_alert_delivery_failure_count = connection_alert_delivery_failure_count + 1,
+           connection_alert_delivery_error_code = ?,
+           connection_alert_delivery_failed_at = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      [normalizedCode, failedAt, failedAt, sourceId],
+    );
+    log.warn(`Feishu connection alert delivery failed for source ${sourceId}: ${normalizedCode}`);
   }
 
   hasDueUnprocessedMessages(sourceId: string, now: Date): boolean {

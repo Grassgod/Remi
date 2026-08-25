@@ -6,6 +6,7 @@ const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
 const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
+const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_delivery_v3";
 const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
@@ -1163,6 +1164,9 @@ export function runMigrations(db: SqlDatabase): void {
       last_error_at TEXT,
       consecutive_failures INTEGER NOT NULL DEFAULT 0,
       connection_alerted_at TEXT,
+      connection_alert_delivery_failure_count INTEGER NOT NULL DEFAULT 0,
+      connection_alert_delivery_error_code TEXT,
+      connection_alert_delivery_failed_at TEXT,
       access_token_encrypted TEXT,
       access_token_hint TEXT,
       created_at TEXT NOT NULL,
@@ -1944,6 +1948,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_inbox_items", "details TEXT");
   ensureInboxGenericSchema(db);
   runMigrationOnce(db, FEISHU_INGEST_V2_MIGRATION, () => ensureFeishuIngestV2Schema(db));
+  runMigrationOnce(db, FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION, () => ensureFeishuIngestAlertDeliveryV3Schema(db));
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_autopilots", "session_policy TEXT NOT NULL DEFAULT 'new'");
@@ -2378,6 +2383,16 @@ function ensureFeishuIngestV2Schema(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_source_unprocessed
       ON multiremi_feishu_messages(source_id, processed_at, last_retry_at, ingested_at, message_id);
   `);
+}
+
+function ensureFeishuIngestAlertDeliveryV3Schema(db: SqlDatabase): void {
+  addColumnIfMissing(
+    db,
+    "multiremi_feishu_sources",
+    "connection_alert_delivery_failure_count INTEGER NOT NULL DEFAULT 0",
+  );
+  addColumnIfMissing(db, "multiremi_feishu_sources", "connection_alert_delivery_error_code TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "connection_alert_delivery_failed_at TEXT");
 }
 
 function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {

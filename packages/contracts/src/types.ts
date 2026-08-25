@@ -2688,6 +2688,9 @@ export interface MultiremiFeishuSourceStatus {
   lagSeconds: number | null;
   consecutiveFailures: number;
   connectionAlertedAt: string | null;
+  connectionAlertDeliveryFailureCount: number;
+  connectionAlertDeliveryErrorCode: string | null;
+  connectionAlertDeliveryFailedAt: string | null;
 }
 
 export type MultiremiFeishuMessageOutcomeKind =

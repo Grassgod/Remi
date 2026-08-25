@@ -6,6 +6,7 @@ import { PersonalAutomationFeishuAdapter } from "@multiremi/feishu-ingest/person
 import { feishuSidecarEndpointsFromEnv } from "@multiremi/feishu-ingest/endpoints.js";
 import type { FeishuPollContext, FeishuPollPage, FeishuSourceAdapter } from "@multiremi/feishu-ingest/types.js";
 import type { IngestedFeishuMessageInput } from "@multiremi/store/repos/feishu-ingest-repo.js";
+import type { StoreContext } from "@multiremi/store/context.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -260,7 +261,13 @@ describe("Feishu message ingestion", () => {
     expect((await list.json()).messages).toEqual([expect.objectContaining({ messageId: "om_api" })]);
     const status = await app.request(`/api/workspaces/local/feishu/sources/${source.id}/status`, { headers });
     expect(status.status).toBe(200);
-    expect((await status.json()).status).toMatchObject({ sourceId: source.id, unprocessedCount: 1 });
+    expect((await status.json()).status).toMatchObject({
+      sourceId: source.id,
+      unprocessedCount: 1,
+      connectionAlertDeliveryFailureCount: 0,
+      connectionAlertDeliveryErrorCode: null,
+      connectionAlertDeliveryFailedAt: null,
+    });
 
     const resolve = await app.request("/api/workspaces/local/feishu/messages/om_api/resolve", {
       method: "POST",
@@ -547,6 +554,148 @@ describe("Feishu message ingestion", () => {
       lagSeconds: 0,
       consecutiveFailures: 0,
       connectionAlertedAt: null,
+    });
+  });
+
+  it("delivers connection alerts through member-level system notification muting", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const owner = store.listWorkspaceMembers("local").find((member) => member.role === "owner")!;
+    store.updateNotificationPreferences({
+      workspaceId: "local",
+      memberId: owner.id,
+      preferences: { system_notifications: "muted" },
+    });
+    const source = store.createFeishuSource({
+      endpointName: "local",
+      allowlist: [{ chatId: "oc_alertmember", addedAt: "2026-08-25T10:00:00.000Z" }],
+    });
+    const context = (store as unknown as { ctx: StoreContext }).ctx;
+    expect(context.createInboxItem({
+      workspaceId: "local",
+      memberId: owner.id,
+      type: "system_test_notification",
+      title: "Ordinary system notification",
+    })).toBeNull();
+
+    for (let failure = 0; failure < 4; failure += 1) {
+      store.recordFeishuConnectionFailure(
+        source.id,
+        "ingest_failed",
+        new Date(Date.UTC(2026, 7, 25, 13, failure)).toISOString(),
+      );
+    }
+
+    expect(store.listInboxItems(owner.id).filter((item) => item.type === "feishu_ingest_connection_alert"))
+      .toHaveLength(1);
+    expect(store.getFeishuSourceStatus(source.id)).toMatchObject({
+      connectionAlertedAt: expect.any(String),
+      connectionAlertDeliveryFailureCount: 0,
+      connectionAlertDeliveryErrorCode: null,
+      connectionAlertDeliveryFailedAt: null,
+    });
+
+    store.recordFeishuConnectionSuccess(source.id, "2026-08-25T13:05:00.000Z");
+    for (let failure = 0; failure < 3; failure += 1) {
+      store.recordFeishuConnectionFailure(
+        source.id,
+        "ingest_failed",
+        new Date(Date.UTC(2026, 7, 25, 14, failure)).toISOString(),
+      );
+    }
+    expect(store.listInboxItems(owner.id).filter((item) => item.type === "feishu_ingest_connection_alert"))
+      .toHaveLength(2);
+  });
+
+  it("delivers connection alerts through workspace-level system notification muting", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const owner = store.listWorkspaceMembers("local").find((member) => member.role === "owner")!;
+    store.updateNotificationPreferences({
+      workspaceId: "local",
+      preferences: { system_notifications: "muted" },
+    });
+    const source = store.createFeishuSource({
+      endpointName: "local",
+      allowlist: [{ chatId: "oc_alertworkspace", addedAt: "2026-08-25T10:00:00.000Z" }],
+    });
+    const context = (store as unknown as { ctx: StoreContext }).ctx;
+    expect(context.createInboxItem({
+      workspaceId: "local",
+      memberId: owner.id,
+      type: "system_test_notification",
+      title: "Ordinary system notification",
+    })).toBeNull();
+
+    for (let failure = 0; failure < 3; failure += 1) {
+      store.recordFeishuConnectionFailure(
+        source.id,
+        "ingest_failed",
+        new Date(Date.UTC(2026, 7, 25, 15, failure)).toISOString(),
+      );
+    }
+
+    expect(store.listInboxItems().filter((item) => item.type === "feishu_ingest_connection_alert"))
+      .toHaveLength(1);
+    expect(store.getFeishuSourceStatus(source.id).connectionAlertedAt).toBeString();
+  });
+
+  it("records and sanitizes connection alert delivery failures when no recipient exists", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const source = store.createFeishuSource({
+      endpointName: "local",
+      name: "Sensitive source label",
+      allowlist: [{ chatId: "oc_alertmissing", addedAt: "2026-08-25T10:00:00.000Z" }],
+    });
+    db!.run(
+      "UPDATE multiremi_workspace_members SET archived_at = ? WHERE workspace_id = ?",
+      ["2026-08-25T16:00:00.000Z", "local"],
+    );
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      for (let failure = 0; failure < 4; failure += 1) {
+        store.recordFeishuConnectionFailure(
+          source.id,
+          "secret-shaped transport failure",
+          new Date(Date.UTC(2026, 7, 25, 16, failure)).toISOString(),
+        );
+      }
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(store.listInboxItems().filter((item) => item.type === "feishu_ingest_connection_alert"))
+      .toHaveLength(0);
+    expect(store.getFeishuSourceStatus(source.id)).toMatchObject({
+      consecutiveFailures: 4,
+      connectionAlertedAt: null,
+      connectionAlertDeliveryFailureCount: 2,
+      connectionAlertDeliveryErrorCode: "alert_recipient_unavailable",
+      connectionAlertDeliveryFailedAt: "2026-08-25T16:03:00.000Z",
+    });
+    expect(warnings).toHaveLength(2);
+    for (const warning of warnings) {
+      expect(warning).toContain(source.id);
+      expect(warning).toContain("alert_recipient_unavailable");
+      expect(warning).not.toContain("Sensitive source label");
+      expect(warning).not.toContain("secret-shaped");
+    }
+
+    db!.run(
+      "UPDATE multiremi_workspace_members SET archived_at = NULL WHERE workspace_id = ?",
+      ["local"],
+    );
+    store.recordFeishuConnectionFailure(source.id, "ingest_failed", "2026-08-25T16:04:00.000Z");
+    expect(store.listInboxItems().filter((item) => item.type === "feishu_ingest_connection_alert"))
+      .toHaveLength(1);
+    expect(store.getFeishuSourceStatus(source.id)).toMatchObject({
+      connectionAlertedAt: "2026-08-25T16:04:00.000Z",
+      connectionAlertDeliveryFailureCount: 2,
+      connectionAlertDeliveryErrorCode: null,
+      connectionAlertDeliveryFailedAt: null,
     });
   });
 

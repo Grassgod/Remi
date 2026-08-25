@@ -158,6 +158,8 @@ describe("store migrations", () => {
       "endpoint_name", "unprocessed_retry_seconds", "unprocessed_retry_limit",
       "last_successful_ingest_at", "last_error_code", "last_error_at",
       "consecutive_failures", "connection_alerted_at",
+      "connection_alert_delivery_failure_count", "connection_alert_delivery_error_code",
+      "connection_alert_delivery_failed_at",
     ]));
     expect(columnNames(database, "multiremi_feishu_messages")).toEqual(expect.arrayContaining([
       "retry_count", "last_retry_at",
@@ -171,10 +173,42 @@ describe("store migrations", () => {
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_v2'",
     ).get()).toEqual({ count: 1 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    ).get()).toEqual({ count: 1 });
 
     migrate(database);
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_v2'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("upgrades an already-migrated Feishu v2 source table to alert delivery v3", () => {
+    const database = freshDb();
+    migrate(database);
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    );
+    database.exec(`
+      ALTER TABLE multiremi_feishu_sources DROP COLUMN connection_alert_delivery_failure_count;
+      ALTER TABLE multiremi_feishu_sources DROP COLUMN connection_alert_delivery_error_code;
+      ALTER TABLE multiremi_feishu_sources DROP COLUMN connection_alert_delivery_failed_at;
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_feishu_sources")).toEqual(expect.arrayContaining([
+      "connection_alert_delivery_failure_count",
+      "connection_alert_delivery_error_code",
+      "connection_alert_delivery_failed_at",
+    ]));
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    ).get()).toEqual({ count: 1 });
+
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
     ).get()).toEqual({ count: 1 });
   });
 
