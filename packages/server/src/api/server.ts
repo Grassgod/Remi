@@ -578,6 +578,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     : null;
   scheduler?.start();
   scmPolling?.start();
+  if (backgroundJobs) store.startNotificationDeliverySweeper();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
@@ -793,6 +794,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     unsubscribeWorkspaceEvent();
     scheduler?.stop();
     scmPolling?.stop();
+    store.stopNotificationDeliverySweeper();
     return stopServer(closeActiveConnections);
   };
   return server;

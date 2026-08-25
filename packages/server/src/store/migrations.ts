@@ -774,6 +774,44 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_member ON multiremi_inbox_items(member_id, archived, read, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_notification_channels (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      target TEXT NOT NULL,
+      event_types TEXT NOT NULL,
+      min_severity TEXT NOT NULL DEFAULT 'info',
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_channels_workspace
+      ON multiremi_notification_channels(workspace_id, enabled, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_notification_deliveries (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      inbox_item_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      channel_kind TEXT NOT NULL,
+      target_label TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      last_attempt_at TEXT,
+      delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(inbox_item_id) REFERENCES multiremi_inbox_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_deliveries_workspace_status
+      ON multiremi_notification_deliveries(workspace_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_deliveries_inbox
+      ON multiremi_notification_deliveries(inbox_item_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_issue_labels (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
