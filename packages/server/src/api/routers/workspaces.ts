@@ -81,9 +81,12 @@ import {
   repositoryWikiBuildDedupeKey,
   type MultiremiAutopilotRunRecord,
 } from "@multiremi/store/repos/autopilots-repo.js";
+import {
+  ATLAS_AGENT_NAME,
+  ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
+  resolveAtlasRepositoryWikiAutopilot,
+} from "@multiremi/repository-wiki/atlas.js";
 
-const ATLAS_AGENT_NAME = "Atlas · LLM Wiki";
-const ATLAS_REPOSITORY_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
 const ATLAS_PROJECT_AUTOPILOT_TITLE = "Atlas · Project Knowledge";
 
 export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
@@ -335,7 +338,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryAutopilot = ensureAtlasAutopilot(store, {
       workspaceId,
       agentId: agent.id,
-      title: ATLAS_REPOSITORY_AUTOPILOT_TITLE,
+      title: ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
       description: "Use the canonical SCM event, checked-out target repository, and existing Repo Wiki to perform an incremental repository Wiki update with the remi CLI.",
       executionMode: "run_only",
       createdById,
@@ -886,7 +889,11 @@ function atlasSetupStatus(store: RouterDeps["store"], workspaceId: string): Reco
     ? store.listAutopilots(workspaceId).filter((autopilot) => autopilot.assigneeType === "agent" && autopilot.assigneeId === agent.id)
     : [];
   const projectAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_PROJECT_AUTOPILOT_TITLE) ?? null;
-  const repositoryAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_REPOSITORY_AUTOPILOT_TITLE) ?? null;
+  const repositoryAutopilot = resolveAtlasRepositoryWikiAutopilot(
+    workspaceId,
+    store.listAgents(),
+    store.listAutopilots(workspaceId),
+  );
   const projectTrigger = projectAutopilot
     ? store.listAutopilotTriggers(projectAutopilot.id).find((trigger) => trigger.kind === "system_event" && trigger.enabled) ?? null
     : null;
@@ -992,6 +999,7 @@ interface RepositoryWikiBuildState {
   started_at: string | null;
   updated_at: string | null;
   source_revision: string | null;
+  published: boolean | null;
 }
 
 /**
@@ -1013,6 +1021,7 @@ function repositoryWikiBuildState(
       started_at: null,
       updated_at: null,
       source_revision: null,
+      published: null,
     };
   }
   const task = run.taskId ? store.getTask(run.taskId) : null;
@@ -1029,6 +1038,7 @@ function repositoryWikiBuildState(
     started_at: run.triggeredAt,
     updated_at: run.completedAt ?? task?.updatedAt ?? run.triggeredAt,
     source_revision: autopilotRunSourceRevision(run),
+    published: run.status === "completed" ? store.isRepositoryWikiRunPublished(run.id) : null,
   };
 }
 

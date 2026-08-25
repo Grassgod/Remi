@@ -141,6 +141,7 @@ function buildingSummary(): RepositoryWikiSummary {
       started_at: "2026-08-24T00:00:00Z",
       updated_at: "2026-08-24T00:01:00Z",
       source_revision: null,
+      published: null,
     },
   });
 }
@@ -250,6 +251,7 @@ describe("RepositoryWikiPage build state", () => {
         started_at: "2026-08-24T00:00:00Z",
         updated_at: "2026-08-24T00:01:00Z",
         source_revision: null,
+        published: null,
       },
     })];
     renderPage();

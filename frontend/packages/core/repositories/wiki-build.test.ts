@@ -36,6 +36,7 @@ function build(overrides: Partial<NonNullable<RepositoryWikiSummary["build"]>> =
     started_at: null,
     updated_at: null,
     source_revision: null,
+    published: null,
     ...overrides,
   };
 }
@@ -65,12 +66,14 @@ describe("repository wiki summary build schema", () => {
           started_at: "2026-08-24T00:00:00Z",
           updated_at: "2026-08-24T00:01:00Z",
           source_revision: "abc1234def",
+          published: false,
         },
       }],
     });
     expect(parsed?.build?.status).toBe("building");
     expect(parsed?.build?.run_id).toBe("run-1");
     expect(parsed?.build?.task_id).toBe("task-1");
+    expect(parsed?.build?.published).toBe(false);
   });
 
   it("defaults build to null for older servers that omit it", () => {
@@ -83,6 +86,13 @@ describe("repository wiki summary build schema", () => {
       repositories: [{ ...base, build: { status: "canceled" } }],
     });
     expect(parsed?.build?.status).toBe("idle");
+  });
+
+  it("defaults missing or malformed publication state to null", () => {
+    expect(parse({ repositories: [{ ...base, build: { status: "idle" } }] })[0]?.build?.published).toBeNull();
+    expect(parse({
+      repositories: [{ ...base, build: { status: "idle", published: "yes" } }],
+    })[0]?.build?.published).toBeNull();
   });
 
   it("degrades a malformed build block to null without dropping the summary", () => {

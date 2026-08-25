@@ -53,6 +53,21 @@ function loadAutopilotForCurrentUser(
   return denied ?? { autopilot };
 }
 
+/** Keep server-only run fields out of every public run/trigger route. */
+function publicRunAutopilotInput(input: RunAutopilotInput): RunAutopilotInput {
+  return {
+    source: input.source,
+    prompt: input.prompt,
+    payload: input.payload,
+    triggerIssueId: input.triggerIssueId,
+    trigger_issue_id: input.trigger_issue_id,
+    triggerId: input.triggerId,
+    trigger_id: input.trigger_id,
+    eventId: input.eventId,
+    event_id: input.event_id,
+  };
+}
+
 export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   const { store, scheduler } = deps;
 
@@ -162,7 +177,7 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJson<RunAutopilotInput>(c);
     try {
-      return c.json({ run: store.runAutopilot(c.req.param("id"), body) }, 201);
+      return c.json({ run: store.runAutopilot(c.req.param("id"), publicRunAutopilotInput(body)) }, 201);
     } catch (error) {
       return autopilotCompatibilityErrorResponse(c, error);
     }
@@ -185,8 +200,9 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJson<RunAutopilotInput>(c);
     try {
+      const input = publicRunAutopilotInput(body);
       return c.json({
-        run: store.runAutopilot(c.req.param("id"), { ...body, source: body.source ?? "api" }),
+        run: store.runAutopilot(c.req.param("id"), { ...input, source: input.source ?? "api" }),
       }, 201);
     } catch (error) {
       return autopilotCompatibilityErrorResponse(c, error);
@@ -262,7 +278,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const { autopilot } = loaded;
     if (autopilot.status !== "active") return c.json({ error: "autopilot is not active" }, 400);
     try {
-      return c.json(autopilotRunCompatibilityResponse(store.runAutopilot(autopilot.id, { ...body, source: body.source ?? "manual" })));
+      const input = publicRunAutopilotInput(body);
+      return c.json(autopilotRunCompatibilityResponse(store.runAutopilot(autopilot.id, { ...input, source: input.source ?? "manual" })));
     } catch (error) {
       return autopilotCompatibilityErrorResponse(c, error);
     }

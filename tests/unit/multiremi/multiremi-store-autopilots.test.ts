@@ -788,7 +788,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
   it("dedupes repository Wiki build runs by active build and pinned-revision key", () => {
     const store = createStore();
-    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const runtime = store.registerRuntime({ name: "wiki-runtime", provider: "claude" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
@@ -834,7 +835,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     store.startTask(rebuild.taskId!);
     store.completeTask(rebuild.taskId!, { output: "ok" });
 
-    // A completed pinned-revision build is authoritative for that revision.
+    // A completed pinned-revision run without a Wiki write is not
+    // authoritative and must not block retry.
     const pinnedInput = {
       source: "scm_event" as const,
       repositoryId: "repo_x",
@@ -845,9 +847,45 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(pinned.taskId!);
     store.startTask(pinned.taskId!);
     store.completeTask(pinned.taskId!, { output: "ok" });
+    expect(store.isRepositoryWikiRunPublished(pinned.id)).toBe(false);
+    const unpublishedRetry = store.runAutopilot(autopilot.id, pinnedInput);
+    expect(unpublishedRetry.id).not.toBe(pinned.id);
+    expect(unpublishedRetry.deduplicated).toBeUndefined();
+
+    // A document attributed to the retry task is store-owned publication
+    // evidence, so later delivery for the same revision reuses that run.
+    expect(store.claimTask(runtime.id)?.id).toBe(unpublishedRetry.taskId!);
+    store.startTask(unpublishedRetry.taskId!);
+    store.createRepositoryWikiDoc("local", "repo_x", {
+      path: "task-attributed.md",
+      title: "Task attributed",
+      sourceTaskId: unpublishedRetry.taskId,
+    });
+    store.completeTask(unpublishedRetry.taskId!, { output: "published" });
+    expect(store.isRepositoryWikiRunPublished(unpublishedRetry.id)).toBe(true);
     const replay = store.runAutopilot(autopilot.id, pinnedInput);
-    expect(replay.id).toBe(pinned.id);
+    expect(replay.id).toBe(unpublishedRetry.id);
     expect(replay.deduplicated).toBe(true);
+
+    // A revision already present in Wiki history is a legitimate no-op.
+    store.createRepositoryWikiDoc("local", "repo_x", {
+      path: "revision-attributed.md",
+      title: "Revision attributed",
+      sourceRevision: "def456",
+    });
+    const noOpInput = {
+      ...pinnedInput,
+      dedupeKey: "repo_x:incremental_update:def456",
+    };
+    const noOp = store.runAutopilot(autopilot.id, noOpInput);
+    expect(store.claimTask(runtime.id)?.id).toBe(noOp.taskId!);
+    store.startTask(noOp.taskId!);
+    store.completeTask(noOp.taskId!, { output: "no changes required" });
+    expect(store.isRepositoryWikiRunPublished(noOp.id)).toBe(true);
+    expect(store.runAutopilot(autopilot.id, noOpInput)).toMatchObject({
+      id: noOp.id,
+      deduplicated: true,
+    });
 
     // Runs without repository scoping (every other autopilot) never dedupe.
     const other = store.createAutopilot({
@@ -862,6 +900,39 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(store.listAutopilotRuns(other.id)).toHaveLength(2);
   });
 
+  it("rejects forged or inconsistent repository Wiki build scope at the store boundary", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
+    const userOwned = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      assigneeId: userAgent.id,
+      executionMode: "run_only",
+    });
+    const serverOwned = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      assigneeId: atlas.id,
+      executionMode: "run_only",
+    });
+
+    expect(() => store.runAutopilot(userOwned.id, {
+      repository_id: "repo_private",
+      dedupe_key: "repo_private:incremental_update:abc123",
+    })).toThrow("server-owned Atlas Repository Wiki autopilot");
+    expect(() => store.runAutopilot(serverOwned.id, {
+      repositoryId: "repo_private",
+    })).toThrow("repository_id and dedupe_key together");
+    expect(() => store.runAutopilot(serverOwned.id, {
+      repositoryId: "repo_private",
+      dedupeKey: "repo_other:incremental_update:abc123",
+    })).toThrow("must start with its repository_id segment");
+
+    expect(store.listAutopilotRuns(serverOwned.id)).toEqual([]);
+    const ordinaryRun = store.runAutopilot(userOwned.id);
+    expect(ordinaryRun).toMatchObject({ repositoryId: null, dedupeKey: null });
+  });
+
   it("returns structured trigger summaries in slim run listings", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -874,7 +945,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         default_branch: "main",
       }],
     });
-    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
       assigneeId: agent.id,

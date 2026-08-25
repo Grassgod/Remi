@@ -1056,7 +1056,7 @@ describe("SCM connection and canonical event store", () => {
 
   it("collapses change.merged and default_branch.updated at one revision into a single wiki build run", () => {
     const { store, connection } = seedConnection();
-    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const wiki = store.createAutopilot({
       title: "Atlas · Repository Wiki",
       workspaceId: "local",
@@ -1065,6 +1065,22 @@ describe("SCM connection and canonical event store", () => {
       description: "Update the repository wiki",
     });
     const wikiTrigger = store.createAutopilotTrigger(wiki.id, {
+      kind: "scm_event",
+      eventConfig: {
+        resource: "scm",
+        events: ["change.merged", "default_branch.updated"],
+        repositoryIds: ["repo_widgets"],
+      },
+    });
+    const userAgent = store.createAgent({ name: "User wiki agent", provider: "claude" });
+    const sameTitleUserWiki = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      workspaceId: "local",
+      assigneeId: userAgent.id,
+      executionMode: "run_only",
+      description: "User-owned automation with the reserved-looking title",
+    });
+    store.createAutopilotTrigger(sameTitleUserWiki.id, {
       kind: "scm_event",
       eventConfig: {
         resource: "scm",
@@ -1143,6 +1159,11 @@ describe("SCM connection and canonical event store", () => {
     const announcerRuns = store.listAutopilotRuns(announcer.id);
     expect(announcerRuns).toHaveLength(2);
     expect(announcerRuns.every((run) => run.repositoryId === null && run.dedupeKey === null)).toBe(true);
+
+    // A user-owned same-title automation is not a Repository Wiki build.
+    const sameTitleRuns = store.listAutopilotRuns(sameTitleUserWiki.id);
+    expect(sameTitleRuns).toHaveLength(2);
+    expect(sameTitleRuns.every((run) => run.repositoryId === null && run.dedupeKey === null)).toBe(true);
   });
 
   it("retries the persisted delivery set after filters change and explicitly skips disabled triggers", () => {
