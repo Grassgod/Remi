@@ -128,16 +128,28 @@ export function isInFlightTaskStatus(status: MultiremiTaskStatus): boolean {
     || status === "awaiting_human";
 }
 
-export function usageQuery(c: { req: { query: (name: string) => string | undefined } }, extra: { runtimeId?: string | null } = {}): {
+export function usageQuery(
+  c: { req: { query: (name: string) => string | undefined; header: (name: string) => string | undefined } },
+  extra: { runtimeId?: string | null; store?: MultiremiStore } = {},
+): {
   workspaceId?: string | null;
   projectId?: string | null;
   runtimeId?: string | null;
   days?: number;
+  tz?: string | null;
 } {
+  // The web client scopes every request with the X-Workspace-Slug header and
+  // sends no workspace query param (MUL-92) — resolve the slug before falling
+  // back to "local" so dashboards aggregate the workspace the user is viewing.
+  const slug = extra.store ? c.req.header("X-Workspace-Slug")?.trim() : undefined;
+  const slugWorkspaceId = slug
+    ? extra.store!.listWorkspaces().find((workspace) => workspace.slug === slug)?.id ?? null
+    : null;
   return {
-    workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local",
+    workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? slugWorkspaceId ?? "local",
     projectId: c.req.query("projectId") ?? c.req.query("project_id") ?? null,
     runtimeId: extra.runtimeId,
     days: parseOptionalInt(c.req.query("days")),
+    tz: c.req.query("tz")?.trim() || null,
   };
 }

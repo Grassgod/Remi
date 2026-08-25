@@ -3592,6 +3592,10 @@ export interface MultiremiUsageDaily {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  // Pre-0.2.49 ACP bridges only reported the context-occupancy total, so
+  // historical rows carry totalTokens with zero splits; keep it in the
+  // aggregate so that history is not silently erased.
+  totalTokens: number;
   taskCount: number;
 }
 
@@ -3602,6 +3606,7 @@ export interface MultiremiUsageByAgent {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  totalTokens: number;
   taskCount: number;
 }
 
@@ -3617,6 +3622,14 @@ export interface MultiremiUsageByHour {
 
 export interface MultiremiRuntimeDaily {
   date: string;
+  totalSeconds: number;
+  taskCount: number;
+  failedCount: number;
+}
+
+/** Per-agent run-time rollup for the dashboard leaderboard (`/api/dashboard/agent-runtime`). */
+export interface MultiremiAgentRuntime {
+  agentId: string;
   totalSeconds: number;
   taskCount: number;
   failedCount: number;

@@ -1383,17 +1383,19 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       body: JSON.stringify({ usage: [{ provider: "claude", model: "sonnet", input_tokens: 21, output_tokens: 8 }] }),
     });
 
+    // Dashboard rollups are snake_case on the wire (MUL-92): the frontend zod
+    // schemas default unknown fields to 0, so camelCase here renders all-zeros.
     const dailyUsage = await app.request("/api/dashboard/usage/daily?workspace_id=local");
     expect((await dailyUsage.json())[0]).toMatchObject({
-      runtimeId: runtime.id,
+      runtime_id: runtime.id,
       provider: "claude",
       model: "sonnet",
-      inputTokens: 21,
-      taskCount: 1,
+      input_tokens: 21,
+      task_count: 1,
     });
     const usageByAgent = await app.request("/api/dashboard/usage/by-agent?workspace_id=local");
-    expect((await usageByAgent.json())[0]).toMatchObject({ agentId: agent.id, model: "sonnet", outputTokens: 8, taskCount: 1 });
+    expect((await usageByAgent.json())[0]).toMatchObject({ agent_id: agent.id, model: "sonnet", output_tokens: 8, task_count: 1 });
     const runtimeDaily = await app.request("/api/dashboard/runtime/daily?workspace_id=local");
-    expect((await runtimeDaily.json())[0]).toMatchObject({ taskCount: 1, failedCount: 0 });
+    expect((await runtimeDaily.json())[0]).toMatchObject({ task_count: 1, failed_count: 0 });
   });
 });
