@@ -1032,6 +1032,38 @@ describe("store migrations", () => {
     expect(tableNames(database)).not.toContain("multiremi_inbox_items_legacy");
   });
 
+  it("adds squad avatars to a legacy squads table without dropping rows", () => {
+    const database = freshDb();
+    database.run(`
+      CREATE TABLE multiremi_squads (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        instructions TEXT NOT NULL DEFAULT '',
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        leader_id TEXT,
+        creator_id TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    database.run(
+      "INSERT INTO multiremi_squads (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      ["sqd_legacy", "Legacy squad", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+    );
+
+    migrate(database);
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_squads")).toContain("avatar_url");
+    const row = database.query("SELECT name, avatar_url FROM multiremi_squads WHERE id = ?").get("sqd_legacy") as
+      | { name?: string; avatar_url?: string | null }
+      | null;
+    expect(row?.name).toBe("Legacy squad");
+    expect(row?.avatar_url).toBeNull();
+  });
+
   it("repairs duplicate squad leader roles from the squad leader id", () => {
     const database = freshDb();
     migrate(database);

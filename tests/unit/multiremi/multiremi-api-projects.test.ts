@@ -1077,4 +1077,58 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(missingProjectDelete.status).toBe(404);
     expect(await missingProjectDelete.json()).toEqual({ error: "project not found" });
   });
+
+  it("round-trips squad avatars through both the compat and native routes", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const agent = store.createAgent({ name: "Squad Lead", provider: "claude" });
+
+    const created = await app.request("/api/squads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Avatar Squad", leader_id: agent.id, avatar_url: "/api/attachments/att_1" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.avatar_url).toBe("/api/attachments/att_1");
+    expect((await (await app.request(`/api/squads/${createdBody.id}`)).json()).avatar_url).toBe("/api/attachments/att_1");
+
+    const renamed = await app.request(`/api/squads/${createdBody.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Renamed Squad" }),
+    });
+    // An update that omits avatar_url must leave the stored avatar alone.
+    expect((await renamed.json()).avatar_url).toBe("/api/attachments/att_1");
+
+    const reAvatared = await app.request(`/api/squads/${createdBody.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatar_url: "/api/attachments/att_2" }),
+    });
+    expect((await reAvatared.json()).avatar_url).toBe("/api/attachments/att_2");
+
+    const cleared = await app.request(`/api/squads/${createdBody.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatar_url: "" }),
+    });
+    expect((await cleared.json()).avatar_url).toBeNull();
+
+    const patched = await app.request(`/api/multiremi/squads/${createdBody.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatarUrl: "/api/attachments/att_3" }),
+    });
+    expect((await patched.json()).squad.avatarUrl).toBe("/api/attachments/att_3");
+    expect((await (await app.request(`/api/squads/${createdBody.id}`)).json()).avatar_url).toBe("/api/attachments/att_3");
+
+    const nativeCreated = await app.request("/api/multiremi/squads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Native Avatar Squad", avatarUrl: "/api/attachments/att_4" }),
+    });
+    expect(nativeCreated.status).toBe(201);
+    expect((await nativeCreated.json()).squad.avatarUrl).toBe("/api/attachments/att_4");
+  });
 });

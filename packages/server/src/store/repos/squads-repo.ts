@@ -34,14 +34,15 @@ export class SquadsRepo {
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_squads (
-        id, name, description, instructions, workspace_id, leader_id,
+        id, name, description, instructions, avatar_url, workspace_id, leader_id,
         creator_id, archived_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       [
         id,
         input.name.trim(),
         input.description ?? "",
         input.instructions ?? "",
+        input.avatarUrl ?? null,
         workspaceId,
         input.leaderId ?? null,
         input.creatorId ?? null,
@@ -123,6 +124,7 @@ export class SquadsRepo {
           name = ?,
           description = ?,
           instructions = ?,
+          avatar_url = ?,
           leader_id = ?,
           updated_at = ?
          WHERE id = ?`,
@@ -130,6 +132,7 @@ export class SquadsRepo {
           input.name ?? current.name,
           input.description === undefined ? current.description : input.description ?? "",
           input.instructions === undefined ? current.instructions : input.instructions ?? "",
+          input.avatarUrl === undefined ? current.avatarUrl : input.avatarUrl,
           input.leaderId === undefined ? current.leaderId : input.leaderId,
           now,
           id,
@@ -318,6 +321,7 @@ function toSquad(row: Row): MultiremiSquad {
     name: String(row.name),
     description: String(row.description ?? ""),
     instructions: String(row.instructions ?? ""),
+    avatarUrl: nullableString(row.avatar_url),
     leaderId: nullableString(row.leader_id),
     creatorId: nullableString(row.creator_id),
     archivedAt: nullableString(row.archived_at),

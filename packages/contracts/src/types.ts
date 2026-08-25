@@ -2527,6 +2527,7 @@ export interface MultiremiSquad {
   name: string;
   description: string;
   instructions: string;
+  avatarUrl: string | null;
   leaderId: string | null;
   creatorId: string | null;
   archivedAt: string | null;
@@ -2549,6 +2550,7 @@ export interface CreateSquadInput {
   name: string;
   description?: string | null;
   instructions?: string | null;
+  avatarUrl?: string | null;
   workspaceId?: string | null;
   leaderId?: string | null;
   creatorId?: string | null;
@@ -2559,6 +2561,7 @@ export interface UpdateSquadInput {
   name?: string;
   description?: string | null;
   instructions?: string | null;
+  avatarUrl?: string | null;
   leaderId?: string | null;
 }
 
