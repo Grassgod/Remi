@@ -4,9 +4,11 @@ import {
   canUserViewTaskMessages,
   denyCurrentUserWorkspaceAccess,
   loadChatSessionForCurrentUser,
+  organizerTaskInspection,
   parseOptionalTaskMessageSince,
   readJson,
   taskFromParam,
+  supervisorTaskIdentity,
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
@@ -17,6 +19,7 @@ import {
 } from "../wire/index.js";
 import type { CreateTaskInput } from "@multiremi/contracts/types.js";
 import { TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
+import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
@@ -80,20 +83,43 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (taskDenied) return taskDenied;
     return c.json({ task: taskPublicResponse(task) });
   });
-  app.post("/api/multiremi/tasks/:id/cancel", (c) => {
+  const cancelTaskRoute = async (c: any, compatibility: boolean) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
-    return c.json({ task: taskPublicResponse(store.cancelTask(task.id)) });
-  });
-  app.post("/api/tasks/:id/cancel", (c) => {
-    const task = taskFromParam(store, c, "id");
-    if (!task) return c.json({ error: "task not found" }, 404);
-    const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
-    if (taskDenied) return taskDenied;
-    return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
-  });
+    const taskToken = currentTaskAccessToken(c);
+    if (taskToken?.taskId) {
+      const supervisor = supervisorTaskIdentity(c, store);
+      if (supervisor && task.id === supervisor.task.id) {
+        return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
+      }
+      if (supervisor && task.id !== taskToken.taskId) {
+        const body = await readJson<{ reason?: string }>(c);
+        try {
+          const result = store.performOrganizerAction({
+            supervisorTaskId: supervisor.task.id,
+            supervisorAgentId: supervisor.agentId,
+            targetTaskId: task.id,
+            action: "cancel",
+            reason: cleanString(body.reason) ?? "",
+          });
+          return compatibility
+            ? c.json({ ...taskCompatibilityResponse(result.task), organizer_action: result.audit, comment_id: result.comment.id })
+            : c.json({ task: taskPublicResponse(result.task), organizer_action: result.audit, comment_id: result.comment.id });
+        } catch (error) {
+          if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
+          throw error;
+        }
+      }
+    }
+    const cancelled = store.cancelTask(task.id);
+    return compatibility
+      ? c.json(taskCompatibilityResponse(cancelled))
+      : c.json({ task: taskPublicResponse(cancelled) });
+  };
+  app.post("/api/multiremi/tasks/:id/cancel", (c) => cancelTaskRoute(c, false));
+  app.post("/api/tasks/:id/cancel", (c) => cancelTaskRoute(c, true));
   // Mid-run steering: record a directive the daemon injects into the live
   // provider session. Unlike cancel, the run keeps going (and still ends
   // `completed`); `force_answer` asks the agent to wrap up with its best
@@ -103,11 +129,35 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
-    const body = await readJson<{ content?: string; kind?: string; force_answer?: boolean; forceAnswer?: boolean }>(c);
+    const body = await readJson<{ content?: string; kind?: string; force_answer?: boolean; forceAnswer?: boolean; reason?: string }>(c);
     const forceAnswer = body?.kind === "force_answer" || body?.force_answer === true || body?.forceAnswer === true;
     const content = cleanString(body?.content)
       ?? (forceAnswer ? "Please stop exploring and deliver your best conclusion based on the work so far." : null);
     if (!content) return c.json({ error: "content is required" }, 400);
+    const taskToken = currentTaskAccessToken(c);
+    if (taskToken?.taskId) {
+      const supervisor = supervisorTaskIdentity(c, store);
+      if (supervisor && task.id === supervisor.task.id) {
+        return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
+      }
+      if (supervisor && task.id !== taskToken.taskId) {
+        try {
+          const result = store.performOrganizerAction({
+            supervisorTaskId: supervisor.task.id,
+            supervisorAgentId: supervisor.agentId,
+            targetTaskId: task.id,
+            action: forceAnswer ? "force_answer" : "steer",
+            reason: cleanString(body.reason) ?? "",
+            content,
+          });
+          return c.json({ message: result.message, organizer_action: result.audit, comment_id: result.comment.id }, 201);
+        } catch (error) {
+          if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
+          if (error instanceof TaskSteerConflictError) return c.json({ error: error.message }, 409);
+          throw error;
+        }
+      }
+    }
     // Re-read after body parsing: the task may have finished while the body
     // streamed in, and the pre-parse snapshot would let a doomed insert reach
     // the store. The store's own terminal check backstops the remaining race.
@@ -140,6 +190,49 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/tasks/:id/steer", steerTaskRoute);
   app.get("/api/multiremi/tasks/:id/steer", listTaskSteerRoute);
   app.get("/api/tasks/:id/steer", listTaskSteerRoute);
+  const inspectTaskRoute = (c: any) => {
+    const task = taskFromParam(store, c, "id");
+    if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
+    if (taskDenied) return taskDenied;
+    return c.json({ inspection: organizerTaskInspection(store, task) });
+  };
+  app.get("/api/multiremi/tasks/:id/inspection", inspectTaskRoute);
+  app.get("/api/tasks/:id/inspection", inspectTaskRoute);
+  const redispatchTaskRoute = async (c: any) => {
+    const task = taskFromParam(store, c, "id");
+    if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
+    if (taskDenied) return taskDenied;
+    const supervisor = supervisorTaskIdentity(c, store);
+    if (!supervisor) {
+      return c.json({ error: "supervisor task credential required", code: "organizer_supervisor_required" }, 403);
+    }
+    const body = await readJson<{ reason?: string }>(c);
+    try {
+      const result = store.performOrganizerAction({
+        supervisorTaskId: supervisor.task.id,
+        supervisorAgentId: supervisor.agentId,
+        targetTaskId: task.id,
+        action: "redispatch",
+        reason: cleanString(body.reason) ?? "",
+      });
+      return c.json({
+        cancelled_task: taskPublicResponse(result.task),
+        replacement_task: result.replacementTask ? taskPublicResponse(result.replacementTask) : null,
+        organizer_action: result.audit,
+        comment_id: result.comment.id,
+      }, 202);
+    } catch (error) {
+      if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
+      if (error instanceof Error && error.message.startsWith("Task not found or terminal:")) {
+        return c.json({ error: error.message }, 409);
+      }
+      throw error;
+    }
+  };
+  app.post("/api/multiremi/tasks/:id/redispatch", redispatchTaskRoute);
+  app.post("/api/tasks/:id/redispatch", redispatchTaskRoute);
   app.get("/api/multiremi/tasks/:id/messages", (c) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);

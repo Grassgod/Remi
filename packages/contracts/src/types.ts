@@ -1264,6 +1264,35 @@ export interface MultiremiTaskMessage {
   createdAt: string;
 }
 
+export type MultiremiOrganizerActionKind = "steer" | "force_answer" | "cancel" | "redispatch";
+
+export interface MultiremiOrganizerAction {
+  id: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
+  createdAt: string;
+}
+
+export interface CreateOrganizerActionInput {
+  id?: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId?: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
+}
+
 export interface TaskUsageEntry {
   provider: string;
   model: string;

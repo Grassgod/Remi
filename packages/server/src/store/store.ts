@@ -67,6 +67,7 @@ import {
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
+import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
 import {
   AutopilotsRepo,
   type MultiremiAutopilotFailureThresholdCandidate,
@@ -201,6 +202,8 @@ import type {
   MultiremiNotificationChannel,
   MultiremiNotificationDelivery,
   MultiremiNotificationDeliveryStatus,
+  MultiremiOrganizerAction,
+  MultiremiOrganizerActionKind,
   MultiremiPinnedItem,
   MultiremiIssueReaction,
   MultiremiIssueSubscriber,
@@ -660,7 +663,15 @@ runMigrations(this.db);
   }
 
   setAgentSupervisor(id: string, supervisor: boolean): MultiremiAgent {
-    return this.agents.setAgentSupervisor(id, supervisor);
+    return this.db.transaction(() => {
+      const current = this.agents.getAgent(id);
+      if (!current) throw new Error(`Agent not found: ${id}`);
+      const agent = this.agents.setAgentSupervisor(id, supervisor);
+      if (current.supervisor !== agent.supervisor) {
+        for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
+      }
+      return agent;
+    })();
   }
 
   archiveAgent(id: string): MultiremiAgent {
@@ -3197,6 +3208,116 @@ runMigrations(this.db);
 
   consumeTaskSteerMessages(taskId: string, steerIds: string[]): MultiremiTaskSteerMessage[] {
     return this.tasks.consumeTaskSteerMessages(taskId, steerIds);
+  }
+
+  listOrganizerActionsForTask(taskId: string): MultiremiOrganizerAction[] {
+    return this.tasks.listOrganizerActionsForTask(taskId);
+  }
+
+  performOrganizerAction(input: {
+    supervisorTaskId: string;
+    supervisorAgentId: string;
+    targetTaskId: string;
+    action: MultiremiOrganizerActionKind;
+    reason: string;
+    content?: string | null;
+  }): {
+    task: MultiremiTask;
+    replacementTask: MultiremiTask | null;
+    message: MultiremiTaskSteerMessage | null;
+    audit: MultiremiOrganizerAction;
+    comment: MultiremiIssueComment;
+  } {
+    let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    const result = this.db.transaction(() => {
+      const supervisorTask = this.getTask(input.supervisorTaskId);
+      const supervisorAgent = this.getAgent(input.supervisorAgentId);
+      if (
+        !supervisorTask
+        || !supervisorAgent?.supervisor
+        || supervisorTask.agentId !== supervisorAgent.id
+        || supervisorTask.workspaceId !== supervisorAgent.workspaceId
+      ) {
+        throw new OrganizerActionError("organizer_supervisor_required", "a current supervisor task is required");
+      }
+      const target = this.getTask(input.targetTaskId);
+      if (!target || target.workspaceId !== supervisorTask.workspaceId) {
+        throw new OrganizerActionError("organizer_target_forbidden", "target task is outside the supervisor workspace");
+      }
+      if (target.id === supervisorTask.id) {
+        throw new OrganizerActionError("organizer_self_action_forbidden", "a supervisor cannot act on its own task");
+      }
+      const targetAgent = this.getAgent(target.agentId);
+      if (targetAgent?.supervisor) {
+        throw new OrganizerActionError("organizer_supervisor_target_forbidden", "a supervisor cannot act on another supervisor task");
+      }
+      const workspace = this.getWorkspace(supervisorTask.workspaceId);
+      if (readOrganizerMode(workspace) !== "act") {
+        throw new OrganizerActionError(
+          "organizer_report_only",
+          "cross-task actions are disabled while organizer.mode is report_only",
+        );
+      }
+      const reportIssue = supervisorTask.issueId ? this.getIssue(supervisorTask.issueId) : null;
+      if (!reportIssue || reportIssue.workspaceId !== supervisorTask.workspaceId) {
+        throw new OrganizerActionError(
+          "organizer_report_issue_required",
+          "the supervisor task must belong to a patrol issue so the action can be disclosed",
+          409,
+        );
+      }
+      const reason = input.reason.trim();
+      if (!reason) throw new OrganizerActionError("organizer_reason_required", "reason is required", 400);
+      if (reason.length > 2_000) throw new OrganizerActionError("organizer_reason_too_long", "reason must be at most 2000 characters", 400);
+
+      let task = target;
+      let replacementTask: MultiremiTask | null = null;
+      let message: MultiremiTaskSteerMessage | null = null;
+      if (input.action === "cancel") {
+        task = this.tasks.cancelTask(target.id);
+      } else if (input.action === "redispatch") {
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id);
+        task = redispatchResult.cancelled;
+        replacementTask = redispatchResult.replacement;
+      } else {
+        const content = String(input.content ?? "").trim();
+        if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
+        message = this.tasks.createTaskSteerMessage({
+          taskId: target.id,
+          kind: input.action,
+          content,
+          authorType: "agent",
+          authorId: supervisorAgent.id,
+        });
+      }
+      const audit = this.tasks.recordOrganizerAction({
+        workspaceId: target.workspaceId,
+        supervisorTaskId: supervisorTask.id,
+        supervisorAgentId: supervisorAgent.id,
+        targetTaskId: target.id,
+        targetIssueId: target.issueId,
+        replacementTaskId: replacementTask?.id ?? null,
+        reportIssueId: reportIssue.id,
+        action: input.action,
+        reason,
+      });
+      const comment = this.issues.createIssueComment(reportIssue.id, {
+        authorType: "agent",
+        authorId: supervisorAgent.id,
+        taskId: supervisorTask.id,
+        body: [
+          `Organizer action: ${input.action}`,
+          `Target task: ${target.id}`,
+          ...(target.issueId ? [`Target issue: ${target.issueId}`] : []),
+          ...(replacementTask ? [`Replacement task: ${replacementTask.id}`] : []),
+          `Criterion: ${reason}`,
+          `Audit record: ${audit.id}`,
+        ].join("\n"),
+      });
+      return { task, replacementTask, message, audit, comment };
+    })();
+    if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+    return result;
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {

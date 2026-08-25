@@ -24,6 +24,8 @@ describe("Multiremi API — authentication and token scoping", () => {
       ["DELETE", "/api/workspaces/local/lark/installations/lin_1", "workspace_identity"],
       ["POST", "/api/workspaces", "workspace_lifecycle"],
       ["DELETE", "/api/workspaces/local", "workspace_lifecycle"],
+      ["PUT", "/api/agents/agt_1/supervisor", "privilege_configuration"],
+      ["PUT", "/api/workspaces/local/organizer", "privilege_configuration"],
       ["GET", "/api/cloud-billing/balance", "billing"],
       // Platform status is task-readable, but only via GET, and only that exact
       // path — everything else under /api/multiremi/platform stays maintenance.

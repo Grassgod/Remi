@@ -55,6 +55,7 @@ export type TaskTokenHardDenyCategory =
   | "access_credentials"
   | "workspace_identity"
   | "workspace_lifecycle"
+  | "privilege_configuration"
   | "billing"
   | "platform_maintenance"
   | "daemon_identity";
@@ -99,6 +100,10 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     || (/^\/api\/workspaces\/[^/]+$/.test(path) && method === "DELETE")
     || (/^\/api\/workspaces\/[^/]+\/leave$/.test(path) && method === "POST")) {
     return "workspace_lifecycle";
+  }
+  if ((/^\/api\/agents\/[^/]+\/supervisor$/.test(path) && method === "PUT")
+    || (/^\/api\/workspaces\/[^/]+\/organizer$/.test(path) && method === "PUT")) {
+    return "privilege_configuration";
   }
   if (path === "/api/cloud-billing" || path.startsWith("/api/cloud-billing/")) return "billing";
   const taskAllowedPlatformRequest = (method === "GET" && path === "/api/multiremi/platform/status")

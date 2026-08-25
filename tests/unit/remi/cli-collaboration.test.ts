@@ -130,6 +130,36 @@ describe("native collaboration CLI contracts", () => {
     expect(JSON.parse(jsonl.stdout)).toMatchObject({ id: "lbl_1", name: "Urgent" });
   });
 
+  it("executes task inspection and supervisor-only redispatch commands", async () => {
+    useCliEnv();
+    const inspect = specById("task.inspect");
+    globalThis.fetch = capabilityFetch(inspect.id, (request) => {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname).toBe("/api/tasks/tsk_target/inspection");
+      return Response.json({ inspection: { id: "tsk_target", status: "running" } });
+    });
+    const inspected = await capture(() => registryFor([inspect]).execute([
+      "task", "inspect", "tsk_target", "--output", "json",
+    ]));
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      inspection: { id: "tsk_target", status: "running" },
+    });
+
+    const redispatch = specById("task.redispatch");
+    let body: unknown;
+    globalThis.fetch = capabilityFetch(redispatch.id, async (request) => {
+      expect(request.method).toBe("POST");
+      expect(new URL(request.url).pathname).toBe("/api/tasks/tsk_target/redispatch");
+      body = await request.json();
+      return Response.json({ replacement_task: { id: "tsk_replacement", status: "queued" } }, { status: 202 });
+    });
+    await capture(() => registryFor([redispatch]).execute([
+      "task", "redispatch", "tsk_target", "--reason", "Queued too long", "--yes", "--output", "json",
+    ]));
+    expect(body).toEqual({ reason: "Queued too long" });
+    expect(registryFor([redispatch]).inventory()[0]?.auth).toEqual(["task"]);
+  });
+
   it("uploads attachments against the requested issue and honors structured output", async () => {
     useCliEnv();
     let uploadedIssue = "";

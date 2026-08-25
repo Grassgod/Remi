@@ -504,6 +504,25 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_workspace ON multiremi_access_tokens(workspace_id, type);
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_hash ON multiremi_access_tokens(token_hash);
 
+    CREATE TABLE IF NOT EXISTS multiremi_organizer_actions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      supervisor_task_id TEXT NOT NULL,
+      supervisor_agent_id TEXT NOT NULL,
+      target_task_id TEXT NOT NULL,
+      target_issue_id TEXT,
+      replacement_task_id TEXT,
+      report_issue_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_target
+      ON multiremi_organizer_actions(target_task_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_supervisor
+      ON multiremi_organizer_actions(supervisor_task_id, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_issue_shares (
       id TEXT PRIMARY KEY,
       issue_id TEXT NOT NULL,

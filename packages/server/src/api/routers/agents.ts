@@ -20,6 +20,7 @@ import {
   requestedAgentWorkspaceId,
   resolveAgentRequestProvider,
   runtimeForAgentInput,
+  supervisorTaskIdentity,
   withAgentRequestContext,
   withAgentTemplateRequestContext,
   withAgentUpdateRequestContext,
@@ -27,6 +28,7 @@ import {
 import {
   agentCompatibilityResponse,
   agentEnvResponse,
+  currentTaskAccessToken,
   currentRequestUserId,
   skillCompatibilityErrorResponse,
   skillSummaryCompatibilityResponse,
@@ -278,6 +280,17 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/agents/:id/cancel-tasks", (c) => {
     const loaded = loadAgentForCurrentManager(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const taskToken = currentTaskAccessToken(c);
+    const supervisor = supervisorTaskIdentity(c, store);
+    if (taskToken?.taskId && supervisor) {
+      const selfTarget = loaded.agent.id === supervisor.agentId;
+      return c.json({
+        error: selfTarget
+          ? "a supervisor cannot act on its own tasks"
+          : "supervisor bulk cancellation is forbidden; act on each task with an audit reason",
+        code: selfTarget ? "organizer_self_action_forbidden" : "organizer_bulk_action_forbidden",
+      }, 403);
+    }
     return c.json({ cancelled: store.cancelAgentTasks(loaded.agent.id) });
   });
   app.post("/api/multiremi/agents/from-template", async (c) => {
