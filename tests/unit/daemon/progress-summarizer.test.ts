@@ -1,17 +1,24 @@
 import { describe, expect, it } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildSummaryPrompt,
   digestTaskMessage,
   parseSummaryText,
   PROGRESS_SUMMARY_DEFAULTS,
+  readCodexAuthApiKey,
   resolveProgressSummaryConfig,
   resolveSummarizerCredentials,
+  resolveTaskProgressSummaryConfig,
   TaskProgressSummarizer,
   TaskProgressTracker,
   type ProgressSummaryConfig,
   type ProgressSummaryResult,
+  type SummaryCliSpawn,
 } from "@multiremi/worker/progress-summarizer.js";
 import type { TaskMessageInput } from "@multiremi/contracts/types.js";
+import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 
 function textMessage(content = "working on it"): TaskMessageInput {
   return { type: "text", content };
@@ -27,7 +34,28 @@ function config(overrides: Partial<ProgressSummaryConfig> = {}): ProgressSummary
     model: "test-model",
     maxDigestChars: 12_000,
     requestTimeoutMs: 5000,
+    transport: "api",
+    openAi: null,
     ...overrides,
+  };
+}
+
+function byteStream(text = ""): ReadableStream<Uint8Array> {
+  return new Blob([text]).stream();
+}
+
+function successfulCliSpawn(
+  summary: string,
+  onSpawn?: (command: string[], options: Parameters<SummaryCliSpawn>[1]) => void,
+): SummaryCliSpawn {
+  return (command, options) => {
+    onSpawn?.(command, options);
+    return {
+      stdout: byteStream(JSON.stringify({ summary })),
+      stderr: byteStream(),
+      exited: Promise.resolve(0),
+      kill: () => {},
+    };
   };
 }
 
@@ -46,6 +74,8 @@ describe("resolveProgressSummaryConfig", () => {
     expect(resolved.minNewMessages).toBe(PROGRESS_SUMMARY_DEFAULTS.minNewMessages);
     expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
     expect(resolved.model).toBe(PROGRESS_SUMMARY_DEFAULTS.model);
+    expect(resolved.transport).toBe("auto");
+    expect(resolved.openAi).toBeNull();
   });
 
   it("honors N/T/model/disable overrides", () => {
@@ -54,20 +84,191 @@ describe("resolveProgressSummaryConfig", () => {
       MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "5",
       MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "9000",
       MULTIREMI_PROGRESS_SUMMARY_MODEL: "claude-x",
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "openai",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: "https://openai.example/v1/",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-luna",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "openai-key",
     });
     expect(resolved.enabled).toBe(false);
     expect(resolved.minNewMessages).toBe(5);
     expect(resolved.minIntervalMs).toBe(9000);
     expect(resolved.model).toBe("claude-x");
+    expect(resolved.transport).toBe("openai");
+    expect(resolved.openAi).toEqual({
+      baseUrl: "https://openai.example/v1",
+      model: "gpt-luna",
+      apiKey: "openai-key",
+    });
   });
 
   it("falls back to defaults on invalid numbers", () => {
     const resolved = resolveProgressSummaryConfig({
       MULTIREMI_PROGRESS_SUMMARY_MESSAGES: "not-a-number",
       MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS: "-5",
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "other",
     });
     expect(resolved.minNewMessages).toBe(PROGRESS_SUMMARY_DEFAULTS.minNewMessages);
     expect(resolved.minIntervalMs).toBe(PROGRESS_SUMMARY_DEFAULTS.minIntervalMs);
+    expect(resolved.transport).toBe("auto");
+  });
+
+  it("treats an empty OpenAI key as unavailable", () => {
+    const resolved = resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "openai",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: "https://openai.example",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-luna",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "  ",
+    });
+    expect(resolved.transport).toBe("openai");
+    expect(resolved.openAi).toBeNull();
+  });
+
+  it("builds the zero-config OpenAI defaults from provider and process env", () => {
+    const resolved = resolveProgressSummaryConfig(
+      { OPENAI_API_KEY: "environment-key" },
+      { providerEnv: { ANTHROPIC_BASE_URL: "https://relay.example/" } },
+    );
+    expect(resolved.transport).toBe("auto");
+    expect(resolved.openAi).toEqual({
+      baseUrl: "https://relay.example",
+      model: "gpt-5.6-luna",
+      apiKey: "environment-key",
+    });
+  });
+
+  it("falls back to $HOME/.codex/auth.json when no OpenAI env key exists", async () => {
+    const home = await mkdtemp(join(tmpdir(), "multiremi-progress-home-"));
+    try {
+      await mkdir(join(home, ".codex"));
+      await writeFile(join(home, ".codex", "auth.json"), JSON.stringify({ OPENAI_API_KEY: "auth-file-key" }));
+      expect(await readCodexAuthApiKey({ HOME: home })).toBe("auth-file-key");
+      const resolved = await resolveTaskProgressSummaryConfig(
+        { ANTHROPIC_BASE_URL: "https://relay.example/v1" },
+        { HOME: home },
+      );
+      expect(resolved.openAi).toEqual({
+        baseUrl: "https://relay.example/v1",
+        model: "gpt-5.6-luna",
+        apiKey: "auth-file-key",
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a missing or invalid Codex auth file", async () => {
+    const home = await mkdtemp(join(tmpdir(), "multiremi-progress-empty-home-"));
+    try {
+      expect(await readCodexAuthApiKey({ HOME: home })).toBeNull();
+      await mkdir(join(home, ".codex"));
+      await writeFile(join(home, ".codex", "auth.json"), "not-json");
+      const resolved = await resolveTaskProgressSummaryConfig(
+        { ANTHROPIC_BASE_URL: "https://relay.example" },
+        { HOME: home },
+      );
+      expect(resolved.openAi).toBeNull();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read Codex auth for an explicit non-OpenAI transport", async () => {
+    let authReads = 0;
+    const resolved = await resolveTaskProgressSummaryConfig(
+      { ANTHROPIC_BASE_URL: "https://relay.example" },
+      { MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "api", HOME: "/unused" },
+      async () => {
+        authReads++;
+        return "unexpected-key";
+      },
+    );
+    expect(resolved.transport).toBe("api");
+    expect(resolved.openAi).toBeNull();
+    expect(authReads).toBe(0);
+  });
+
+  it("does not read Codex auth when workspace settings select the API transport", async () => {
+    let authReads = 0;
+    const resolved = await resolveTaskProgressSummaryConfig(
+      { ANTHROPIC_BASE_URL: "https://relay.example" },
+      { HOME: "/unused" },
+      async () => {
+        authReads++;
+        return "unexpected-key";
+      },
+      resolveWorkspaceProgressSummaryPolicy({
+        progress_summary: { transport: "api" },
+      }),
+    );
+    expect(resolved.transport).toBe("api");
+    expect(resolved.openAi).toBeNull();
+    expect(authReads).toBe(0);
+  });
+
+  it("uses workspace models and transport when machine overrides are absent", () => {
+    const workspacePolicy = resolveWorkspaceProgressSummaryPolicy({
+      progress_summary: {
+        transport: "openai",
+        model: "claude-workspace",
+        openai_model: "gpt-workspace",
+        openai_api_key: "must-not-be-consumed",
+      },
+    });
+    const resolved = resolveProgressSummaryConfig(
+      { OPENAI_API_KEY: "environment-key", ANTHROPIC_BASE_URL: "https://relay.example" },
+      { workspacePolicy },
+    );
+
+    expect(workspacePolicy).toEqual({
+      transport: "openai",
+      model: "claude-workspace",
+      openAiModel: "gpt-workspace",
+    });
+    expect(resolved.transport).toBe("openai");
+    expect(resolved.model).toBe("claude-workspace");
+    expect(resolved.openAi?.model).toBe("gpt-workspace");
+  });
+
+  it("lets machine env override workspace settings field by field", () => {
+    const workspacePolicy = resolveWorkspaceProgressSummaryPolicy({
+      progress_summary: {
+        transport: "cli",
+        model: "claude-workspace",
+        openai_model: "gpt-workspace",
+      },
+    });
+    const resolved = resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "api",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-machine",
+    }, { workspacePolicy });
+
+    expect(resolved.transport).toBe("api");
+    expect(resolved.model).toBe("claude-workspace");
+    expect(resolved.openAi).toBeNull();
+    expect(resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: "https://relay.example",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "key",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-machine",
+    }, { workspacePolicy }).openAi?.model).toBe("gpt-machine");
+  });
+
+  it("ignores invalid workspace progress summary values", () => {
+    expect(resolveWorkspaceProgressSummaryPolicy({
+      progress_summary: {
+        transport: "other",
+        model: " ",
+        openai_model: 42,
+        api_key: "must-not-be-consumed",
+      },
+    })).toEqual({});
+
+    const resolved = resolveProgressSummaryConfig({}, {
+      workspacePolicy: resolveWorkspaceProgressSummaryPolicy({
+        progress_summary: { transport: "other", model: " ", openai_model: 42 },
+      }),
+    });
+    expect(resolved.transport).toBe(PROGRESS_SUMMARY_DEFAULTS.transport);
+    expect(resolved.model).toBe(PROGRESS_SUMMARY_DEFAULTS.model);
   });
 });
 
@@ -317,5 +518,269 @@ describe("TaskProgressSummarizer", () => {
     expect(requests[0]!.model).toBe("claude-haiku-test");
     expect(requests[0]!.headers.authorization).toBe("Bearer tok");
     expect(requests[0]!.headers["x-api-key"]).toBe("key");
+  });
+
+  it("calls an OpenAI-compatible chat completions endpoint", async () => {
+    const requests: Array<{
+      url: string;
+      headers: Record<string, string>;
+      body: { model: string; messages: Array<{ role: string; content: string }> };
+    }> = [];
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({
+        transport: "openai",
+        openAi: {
+          baseUrl: "https://openai.example/v1",
+          model: "gpt-5.6-luna",
+          apiKey: "openai-key",
+        },
+      }),
+      taskTitle: "Luna 摘要",
+      taskPrompt: "走 OpenAI 兼容接口",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async (url, init) => {
+        requests.push({
+          url: String(url),
+          headers: (init as RequestInit).headers as Record<string, string>,
+          body: JSON.parse(String((init as RequestInit).body)),
+        });
+        return modelResponse({
+          choices: [{ message: { content: '{"summary":"Luna 摘要成功","step":2,"total":3}' } }],
+        });
+      },
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "Luna 摘要成功", step: 2, total: 3 }]);
+    expect(requests.length).toBe(1);
+    expect(requests[0]!.url).toBe("https://openai.example/v1/chat/completions");
+    expect(requests[0]!.headers.authorization).toBe("Bearer openai-key");
+    expect(requests[0]!.body.model).toBe("gpt-5.6-luna");
+    expect(requests[0]!.body.messages[0]).toEqual({ role: "system", content: expect.any(String) });
+    expect(requests[0]!.body.messages[0]!.content).toContain("任务进度播报员");
+    expect(requests[0]!.body.messages[1]!.role).toBe("user");
+    expect(requests[0]!.body.messages[1]!.content).toContain("Luna 摘要");
+  });
+
+  it("falls back to auto when OpenAI transport has no usable key", async () => {
+    let apiCalls = 0;
+    let cliCalls = 0;
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "openai", openAi: null }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => {
+        apiCalls++;
+        return modelResponse({ error: "Claude Code clients only" }, 503);
+      },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("CLI fallback 摘要", () => { cliCalls++; }),
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "CLI fallback 摘要" }]);
+    expect(apiCalls).toBe(1);
+    expect(cliCalls).toBe(1);
+  });
+
+  it("auto prefers OpenAI then remembers an HTTP fallback through API to CLI", async () => {
+    const reports: string[] = [];
+    let openAiCalls = 0;
+    let anthropicCalls = 0;
+    let cliCalls = 0;
+    let reportReady: (() => void) | undefined;
+    let waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    let now = 1000;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({
+        minNewMessages: 1,
+        minIntervalMs: 0,
+        transport: "auto",
+        openAi: { baseUrl: "https://relay.example", model: "gpt-5.6-luna", apiKey: "openai-key" },
+      }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => {
+        reports.push(result.summary);
+        reportReady?.();
+      },
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/chat/completions")) openAiCalls++;
+        else anthropicCalls++;
+        return modelResponse({ error: "unavailable" }, 503);
+      },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("CLI final fallback", () => { cliCalls++; }),
+      now: () => now,
+    });
+
+    summarizer.onMessages([textMessage("first")]);
+    await waitForReport;
+    await Bun.sleep(0);
+    waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    now++;
+    summarizer.onMessages([textMessage("second")]);
+    await waitForReport;
+
+    expect(reports).toEqual(["CLI final fallback", "CLI final fallback"]);
+    expect(openAiCalls).toBe(1);
+    expect(anthropicCalls).toBe(1);
+    expect(cliCalls).toBe(2);
+  });
+
+  it("auto falls back to the Anthropic API after an OpenAI timeout", async () => {
+    const reported: ProgressSummaryResult[] = [];
+    let calls = 0;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({
+        transport: "auto",
+        openAi: { baseUrl: "https://relay.example", model: "gpt-5.6-luna", apiKey: "openai-key" },
+      }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => {
+        calls++;
+        if (calls === 1) throw new DOMException("request timed out", "TimeoutError");
+        return summaryResponse("Anthropic fallback");
+      },
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "Anthropic fallback" }]);
+    expect(calls).toBe(2);
+  });
+
+  it("auto-switches to Claude CLI after an API HTTP error and remembers the choice", async () => {
+    const reports: string[] = [];
+    let apiCalls = 0;
+    let cliCalls = 0;
+    let reportReady: (() => void) | undefined;
+    let waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    let now = 1000;
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ minNewMessages: 1, minIntervalMs: 0, transport: "auto" }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => {
+        reports.push(result.summary);
+        reportReady?.();
+      },
+      fetchImpl: async () => {
+        apiCalls++;
+        return modelResponse({ error: "Claude Code clients only" }, 503);
+      },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("CLI 摘要", () => { cliCalls++; }),
+      now: () => now,
+    });
+
+    summarizer.onMessages([textMessage("first")]);
+    await waitForReport;
+    await Bun.sleep(0);
+    waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
+    now++;
+    summarizer.onMessages([textMessage("second")]);
+    await waitForReport;
+
+    expect(reports).toEqual(["CLI 摘要", "CLI 摘要"]);
+    expect(apiCalls).toBe(1);
+    expect(cliCalls).toBe(2);
+  });
+
+  it("runs the CLI in an isolated cwd with the provider env and combined prompt", async () => {
+    const calls: Array<{ command: string[]; options: Parameters<SummaryCliSpawn>[1] }> = [];
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "cli", model: "claude-haiku-test" }),
+      credentials: CREDENTIALS,
+      providerEnv: { MULTIREMI_TEST_PROVIDER_ENV: "task-value" },
+      taskTitle: "修复 Relay",
+      taskPrompt: "增加 CLI 通道",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => { throw new Error("API should not be called"); },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl: successfulCliSpawn("已通过 CLI 生成摘要", (command, options) => {
+        calls.push({ command, options });
+      }),
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "已通过 CLI 生成摘要" }]);
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.command[0]).toBe("/opt/claude/bin/claude");
+    expect(calls[0]!.command.slice(-4)).toEqual(["--model", "claude-haiku-test", "--tools", ""]);
+    expect(calls[0]!.command[2]).toContain("你是任务进度播报员");
+    expect(calls[0]!.command[2]).toContain("修复 Relay");
+    expect(calls[0]!.options.env.MULTIREMI_TEST_PROVIDER_ENV).toBe("task-value");
+    expect(calls[0]!.options.cwd).toContain("multiremi-progress-");
+    expect(calls[0]!.options.cwd).not.toContain(process.cwd());
+  });
+
+  it("kills a CLI subprocess when the request timeout expires", async () => {
+    let kills = 0;
+    const reported: ProgressSummaryResult[] = [];
+    const spawnImpl: SummaryCliSpawn = () => ({
+      stdout: byteStream(),
+      stderr: byteStream(),
+      exited: new Promise<number>(() => {}),
+      kill: () => { kills++; },
+    });
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "cli", requestTimeoutMs: 5 }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      whichImpl: () => "/opt/claude/bin/claude",
+      spawnImpl,
+      now: () => 0,
+    });
+
+    await summarizer.finalize("failed");
+
+    expect(kills).toBe(1);
+    expect(reported).toEqual([]);
+  });
+
+  it("falls back to the API when CLI transport cannot find the binary", async () => {
+    let apiCalls = 0;
+    let cliCalls = 0;
+    const reported: ProgressSummaryResult[] = [];
+    const summarizer = new TaskProgressSummarizer({
+      config: config({ transport: "cli" }),
+      credentials: CREDENTIALS,
+      taskTitle: "t",
+      taskPrompt: "p",
+      report: async (result) => { reported.push(result); },
+      fetchImpl: async () => {
+        apiCalls++;
+        return summaryResponse("API 摘要");
+      },
+      whichImpl: () => null,
+      spawnImpl: successfulCliSpawn("unexpected", () => { cliCalls++; }),
+      now: () => 0,
+    });
+
+    await summarizer.finalize("completed");
+
+    expect(reported).toEqual([{ summary: "API 摘要" }]);
+    expect(apiCalls).toBe(1);
+    expect(cliCalls).toBe(0);
   });
 });

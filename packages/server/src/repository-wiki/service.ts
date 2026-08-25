@@ -4,7 +4,6 @@ import type {
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
   MultiremiTaskWithAgent,
-  MultiremiTaskRepositoryWikiContext,
   UpdateRepositoryWikiDocInput,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
@@ -19,7 +18,10 @@ import {
   repositoryWikiRootUri,
   sha256Text,
 } from "./codec.js";
-import { resolveAtlasRepositoryWikiAutopilot } from "./atlas.js";
+import {
+  canonicalRepositoryRemote,
+  resolveTaskRepositoryWikiRepositories,
+} from "./task-scope.js";
 
 export interface RepositoryWikiServiceContract {
   readonly mode: ProjectKnowledgeMode;
@@ -186,56 +188,16 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   }
 
   async hydrateTaskWiki(task: MultiremiTaskWithAgent): Promise<MultiremiTaskWithAgent> {
-    const workspace = this.store.getWorkspace(task.workspaceId);
-    if (!workspace) return task;
-    const repositories = workspace.repos.flatMap((value) => normalizeWorkspaceRepository(value));
-    const selectedIds = new Set<string>();
-    const resourceKeys = new Set(task.projectResources.flatMap((resource) => {
-      if (resource.resourceType !== "github_repo") return [];
-      const url = resource.resourceRef.url;
-      return typeof url === "string" && url.trim() ? [canonicalRemote(url)] : [];
-    }));
-    for (const repository of repositories) {
-      if (resourceKeys.has(canonicalRemote(repository.url))) selectedIds.add(repository.id);
-    }
-
-    // SCM automations run without an Issue or Project. Resolve their target
-    // from the server-owned canonical event instead of trusting prompt data.
-    // This gives Atlas exactly one checked-out repository and its Wiki while
-    // preserving the workspace boundary enforced by the recorded event.
-    if (task.assignmentSourceEventId) {
-      const event = this.store.getScmCanonicalEvent(task.assignmentSourceEventId);
-      if (event?.workspaceId === task.workspaceId) selectedIds.add(event.repositoryId);
-    }
-
-    // Manual bootstrap runs are server-authored. The repository is still
-    // resolved against this workspace's registry below before it is exposed.
-    if (task.autopilotRunId) {
-      const run = this.store.getAutopilotRun(task.autopilotRunId);
-      const payload = record(run?.payload);
-      const repositoryId = clean(payload?.atlas_repository_id);
-      if (run && repositoryId) {
-        const autopilot = resolveAtlasRepositoryWikiAutopilot(
-          task.workspaceId,
-          this.store.listAgents(),
-          this.store.listAutopilots(task.workspaceId),
-        );
-        if (autopilot?.id === run.autopilotId) {
-          selectedIds.add(repositoryId);
-        }
-      }
-    }
-
-    const selected = repositories.filter((repository) => selectedIds.has(repository.id));
+    const selected = resolveTaskRepositoryWikiRepositories(this.store, task);
     if (!selected.length) return task;
     const contexts = await Promise.all(selected.map(async (repository) => ({
       repository,
       docs: await this.list(task.workspaceId, repository.id),
     })));
     const repos = [...task.repos];
-    const knownRemotes = new Set(repos.map((repo) => canonicalRemote(repo.url)));
+    const knownRemotes = new Set(repos.map((repo) => canonicalRepositoryRemote(repo.url)));
     for (const repository of selected) {
-      if (!knownRemotes.has(canonicalRemote(repository.url))) repos.push({ url: repository.url });
+      if (!knownRemotes.has(canonicalRepositoryRemote(repository.url))) repos.push({ url: repository.url });
     }
     return { ...task, repos, repositoryWikiContexts: contexts };
   }
@@ -323,33 +285,8 @@ function prepareUpdate(current: MultiremiRepositoryWikiDoc, input: UpdateReposit
 }
 
 function clean(value: unknown): string | null { const text = String(value ?? "").trim(); return text || null; }
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
 function normalizeStrings(value: unknown): string[] { return Array.isArray(value) ? [...new Set(value.map(String).map((v) => v.trim()).filter(Boolean))] : []; }
 function clampLimit(value: number): number { return Math.max(1, Math.min(100, Math.floor(Number(value) || 20))); }
 function positiveInt(value: string | undefined, fallback: number): number { const parsed = Number.parseInt(String(value ?? ""), 10); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 function parseMode(value: string | undefined): ProjectKnowledgeMode { const mode = String(value ?? "sql").toLowerCase(); if (mode === "sql" || mode === "shadow" || mode === "openviking") return mode; throw new Error("invalid knowledge mode"); }
 function requireSnapshot(value: string | null): string { if (!value) throw new RepositoryWikiUnavailableError("OpenViking snapshot commit returned no OID"); return value; }
-
-function normalizeWorkspaceRepository(value: unknown): MultiremiTaskRepositoryWikiContext["repository"][] {
-  if (!value || typeof value !== "object") return [];
-  const row = value as Record<string, unknown>;
-  const id = clean(row.id);
-  const name = clean(row.name);
-  const url = clean(row.url);
-  if (!id || !name || !url) return [];
-  return [{ id, name, url, defaultBranch: clean(row.default_branch ?? row.defaultBranch) }];
-}
-
-function canonicalRemote(value: string): string {
-  const trimmed = value.trim();
-  const scp = trimmed.match(/^[^@\s]+@([^:\s]+):(.+)$/);
-  if (scp) return `${scp[1]}/${scp[2]}`.toLowerCase().replace(/\.git$/i, "").replace(/\/+$/, "");
-  try {
-    const url = new URL(trimmed);
-    return `${url.hostname}${url.pathname}`.toLowerCase().replace(/\.git$/i, "").replace(/\/+$/, "");
-  } catch {
-    return trimmed.toLowerCase().replace(/\.git$/i, "").replace(/\/+$/, "");
-  }
-}

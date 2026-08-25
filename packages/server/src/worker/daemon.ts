@@ -114,6 +114,7 @@ import {
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
 import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
 import { resolveWorkspaceGcPolicy, type WorkspaceGcPolicy } from "@daemon/agent-runtime/workspace/gc-policy.js";
+import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 import {
   IsomorphicGitWorktreeInspector,
   type GitWorktreeInspector,
@@ -149,7 +150,7 @@ import {
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
 import {
-  resolveProgressSummaryConfig,
+  resolveTaskProgressSummaryConfig,
   resolveSummarizerCredentials,
   TaskProgressSummarizer,
   type ProgressRunOutcome,
@@ -1961,7 +1962,7 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "start", {});
       this.enqueueTaskReport(task.id, "progress", { summary: "Agent execution started", step: 1, total: 3 });
-      progressSummarizer = this.createTaskProgressSummarizer(task, providerEnv);
+      progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
         // The run loop only leaves a task unfinalized when the output was
@@ -2413,25 +2414,36 @@ export class MultiremiDaemon {
   }
 
   /**
-   * Per-task LLM progress summarizer (MUL-67). Reuses the task's own provider
-   * credentials; returns null when the feature is disabled or no usable
-   * credential exists, in which case the run proceeds without summaries.
+   * Per-task LLM progress summarizer (MUL-67). Reuses the task's provider
+   * credentials for Anthropic transports or a dedicated OpenAI-compatible
+   * config; returns null when disabled or no selected transport can authenticate.
    */
-  private createTaskProgressSummarizer(
+  private async createTaskProgressSummarizer(
     task: MultiremiTaskWithAgent,
     providerEnv?: Record<string, string>,
-  ): TaskProgressSummarizer | null {
+  ): Promise<TaskProgressSummarizer | null> {
     try {
-      const config = resolveProgressSummaryConfig();
+      const workspacePolicy = resolveWorkspaceProgressSummaryPolicy(
+        this.workspaceSettings.get(task.workspaceId),
+      );
+      const config = await resolveTaskProgressSummaryConfig(
+        providerEnv,
+        process.env,
+        undefined,
+        workspacePolicy,
+      );
       if (!config.enabled) return null;
       const credentials = resolveSummarizerCredentials(providerEnv);
-      if (!credentials) {
-        log.info(`Progress summaries unavailable for task ${task.id}: no Anthropic-style credential`);
+      const hasOpenAiTransport = (config.transport === "auto" || config.transport === "openai")
+        && config.openAi !== null;
+      if (!credentials && !hasOpenAiTransport) {
+        log.info(`Progress summaries unavailable for task ${task.id}: no usable model credential`);
         return null;
       }
       return new TaskProgressSummarizer({
         config,
-        credentials,
+        credentials: credentials ?? undefined,
+        providerEnv,
         taskTitle: task.issue?.title ?? task.triggerSummary ?? "",
         taskPrompt: task.prompt ?? "",
         report: async (result, { final }) => {
