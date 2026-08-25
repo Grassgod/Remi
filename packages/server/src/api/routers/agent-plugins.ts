@@ -12,7 +12,6 @@ import {
 import {
   currentRequestUserId,
   currentAccessToken,
-  currentTaskAccessToken,
   currentWorkspaceRoleStrict,
   daemonAgentPluginDesiredResponse,
   daemonAgentPluginStateResponse,
@@ -38,13 +37,8 @@ import type { RouterDeps } from "./deps.js";
 
 export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
-  const humanOnly = (c: Context): Response | null => currentTaskAccessToken(c)
-    ? c.json({ error: "this endpoint is only available to human actors" }, 403)
-    : null;
 
   app.get("/api/multiremi/agent-plugins", (c) => {
-    const actorDenied = humanOnly(c);
-    if (actorDenied) return actorDenied;
     const workspaceId = requestedWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
@@ -118,8 +112,6 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/multiremi/agent-plugins/:id", (c) => {
-    const actorDenied = humanOnly(c);
-    if (actorDenied) return actorDenied;
     const plugin = store.getAgentPlugin(c.req.param("id"));
     if (!plugin) return c.json({ error: "plugin not found", code: "plugin_not_found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, plugin.workspaceId);
@@ -168,8 +160,6 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/multiremi/agent-plugins/:id/versions", (c) => {
-    const actorDenied = humanOnly(c);
-    if (actorDenied) return actorDenied;
     const plugin = store.getAgentPlugin(c.req.param("id"));
     if (!plugin) return c.json({ error: "plugin not found", code: "plugin_not_found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, plugin.workspaceId);
@@ -231,8 +221,6 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/multiremi/agent-plugins/:id/runtimes", (c) => {
-    const actorDenied = humanOnly(c);
-    if (actorDenied) return actorDenied;
     const plugin = store.getAgentPlugin(c.req.param("id"));
     if (!plugin) return c.json({ error: "plugin not found", code: "plugin_not_found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, plugin.workspaceId);
@@ -271,8 +259,6 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/multiremi/runtimes/:runtimeId/agent-plugins", (c) => {
-    const actorDenied = humanOnly(c);
-    if (actorDenied) return actorDenied;
     const runtime = store.getRuntime(c.req.param("runtimeId"));
     if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
     const workspaceId = runtime.workspaceId ?? "local";
@@ -286,8 +272,6 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/multiremi/agents/:id/plugins", (c) => {
-    const actorDenied = humanOnly(c);
-    if (actorDenied) return actorDenied;
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     try {
@@ -566,9 +550,6 @@ function requestedWorkspaceId(
 }
 
 function requireWorkspaceManager(c: Context, deps: RouterDeps, workspaceId: string): Response | null {
-  if (currentTaskAccessToken(c)) {
-    return c.json({ error: "this endpoint is only available to human actors" }, 403);
-  }
   const denied = denyCurrentUserWorkspaceAccess(c, deps.store, workspaceId);
   if (denied) return denied;
   const role = currentWorkspaceRoleStrict(c, deps.store, workspaceId);

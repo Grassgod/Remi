@@ -88,6 +88,47 @@ interface RegisteredPath {
   alias: CommandAlias | null;
 }
 
+const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
+  "autopilot.trigger.rotate-token",
+  "autopilot.trigger.set-secret",
+  "daemon.retire",
+  "lark.binding.redeem",
+  "lark.daemon.install",
+  "lark.daemon.status",
+  "platform.local.update",
+  "runtime.archive-agents-and-delete",
+  "runtime.create",
+  "runtime.delete",
+  "runtime.release.start",
+  "workspace.create",
+  "workspace.delete",
+  "workspace.leave",
+  "workspace.relay.reveal",
+  "workspace.ssh-mesh.rotate",
+  "workspace.ssh-mesh.update",
+]);
+
+const TASK_PARITY_DENIED_COMMAND_PREFIXES = [
+  "billing.",
+  "context.auth.",
+  "invite.",
+  "member.",
+  "platform.operation.",
+  "platform.settings.",
+  "runtime.cloud.",
+  "token.",
+];
+
+function taskParityCommandSpec(spec: CommandSpec): CommandSpec {
+  const humanAllowed = spec.auth?.includes("human") === true;
+  const denied = TASK_PARITY_DENIED_COMMAND_IDS.has(spec.id)
+    || TASK_PARITY_DENIED_COMMAND_PREFIXES.some((prefix) => spec.id.startsWith(prefix))
+    || spec.id === "platform.status";
+  return humanAllowed && !spec.auth?.includes("task") && !denied
+    ? { ...spec, auth: [...(spec.auth ?? []), "task"] }
+    : spec;
+}
+
 export interface CommandExecutionOptions {
   onDeprecatedAlias?: (alias: CommandAlias, spec: CommandSpec) => void;
 }
@@ -97,6 +138,7 @@ export class CommandRegistry {
   private readonly paths = new Map<string, RegisteredPath>();
 
   register(spec: CommandSpec): void {
+    spec = taskParityCommandSpec(spec);
     validateCommandSpec(spec);
     if (this.specs.has(spec.id)) throw new Error(`CLI command id already registered: ${spec.id}`);
     const entries: RegisteredPath[] = [

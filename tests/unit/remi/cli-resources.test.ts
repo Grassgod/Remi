@@ -46,6 +46,27 @@ afterEach(() => {
 });
 
 describe("native CLI resource contracts", () => {
+  it("advertises task parity except for identity and workspace lifecycle commands", () => {
+    const registry = registryFor(SPECS);
+    const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
+    for (const id of ["workspace.get", "workspace.update", "project.update", "repo.list", "memory.list"]) {
+      expect(inventory.get(id)?.auth, id).toEqual(["human", "task"]);
+    }
+    for (const id of [
+      "workspace.create",
+      "workspace.delete",
+      "workspace.leave",
+      "workspace.ssh-mesh.update",
+      "workspace.ssh-mesh.rotate",
+      "workspace.relay.reveal",
+      "member.list",
+      "invite.list",
+      "token.list",
+    ]) {
+      expect(inventory.get(id)?.auth, id).toEqual(["human"]);
+    }
+  });
+
   it("gives every read command paging/output options and every destructive command --yes", () => {
     const native = SPECS.filter((spec) => spec.capability);
     for (const spec of native) {
@@ -296,9 +317,9 @@ describe("native CLI resource contracts", () => {
     });
   });
 
-  it("resolves a project the credential cannot GET by id through the workspace list", async () => {
-    // A task token may only GET its own issue's project by id; discovery of
-    // every other project falls back to search, then to the workspace list.
+  it("resolves a project through the workspace list when direct lookup is unavailable", async () => {
+    // Compatibility fallback for older servers whose direct project lookup
+    // may be narrower than their workspace project listing.
     useCliEnv();
     const spec = specById("project.defaults");
     const requests: Request[] = [];

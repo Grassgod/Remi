@@ -222,7 +222,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       body.workspaceId ?? body.workspace_id ?? c.req.query("workspaceId") ?? c.req.query("workspace_id"),
     ) ?? "local";
     const actorToken = currentAccessToken(c);
-    if (actorToken?.type === "task" || actorToken?.type === "daemon") {
+    if (actorToken?.type === "task") {
+      return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+    }
+    if (actorToken?.type === "daemon") {
       return c.json({ error: "this endpoint is only available to human actors" }, 403);
     }
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);

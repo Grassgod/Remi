@@ -20,7 +20,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.list": {
       "command": "remi workspace list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.list",
       "output": [
@@ -32,7 +33,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.get": {
       "command": "remi workspace get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.get",
       "output": [
@@ -56,7 +58,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.update": {
       "command": "remi workspace update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.update",
       "output": [
@@ -92,7 +95,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.env.get": {
       "command": "remi workspace env get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.env.get",
       "output": [
@@ -104,7 +108,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.env.update": {
       "command": "remi workspace env update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.env.update",
       "output": [
@@ -116,7 +121,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.ssh-mesh.get": {
       "command": "remi workspace ssh-mesh get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.ssh-mesh.get",
       "output": [
@@ -152,7 +158,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.ssh-mesh.test": {
       "command": "remi workspace ssh-mesh test",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.ssh-mesh.test",
       "output": [
@@ -164,7 +171,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.relay.get": {
       "command": "remi workspace relay get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.relay.get",
       "output": [
@@ -176,7 +184,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.relay.discovery": {
       "command": "remi workspace relay discovery",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.relay.discovery",
       "output": [
@@ -188,7 +197,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.relay.update": {
       "command": "remi workspace relay update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.relay.update",
       "output": [
@@ -212,7 +222,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.prompt.get": {
       "command": "remi workspace prompt get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.prompt.get",
       "output": [
@@ -224,7 +235,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.prompt.template": {
       "command": "remi workspace prompt template",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.prompt.template",
       "output": [
@@ -236,7 +248,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.prompt.update": {
       "command": "remi workspace prompt update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.prompt.update",
       "output": [
@@ -248,7 +261,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.issue-archive.get": {
       "command": "remi workspace issue-archive get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.issue-archive.get",
       "output": [
@@ -260,7 +274,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "workspace.issue-archive.update": {
       "command": "remi workspace issue-archive update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.issue-archive.update",
       "output": [
@@ -564,7 +579,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "project.create": {
       "command": "remi project create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.create",
       "output": [
@@ -576,7 +592,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "project.update": {
       "command": "remi project update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.update",
       "output": [
@@ -588,7 +605,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "project.archive": {
       "command": "remi project archive",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.archive",
       "output": [
@@ -600,7 +618,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "project.restore": {
       "command": "remi project restore",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.restore",
       "output": [
@@ -625,7 +644,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "project.resource.create": {
       "command": "remi project resource create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.resource.create",
       "output": [
@@ -637,7 +657,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "project.resource.update": {
       "command": "remi project resource update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.resource.update",
       "output": [
@@ -649,7 +670,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "project.resource.delete": {
       "command": "remi project resource delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.resource.delete",
       "output": [
@@ -687,7 +709,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "repo.inspect": {
       "command": "remi repo inspect",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.inspect",
       "output": [
@@ -699,7 +722,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "repo.create": {
       "command": "remi repo create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.create",
       "output": [
@@ -711,7 +735,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "repo.update": {
       "command": "remi repo update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.update",
       "output": [
@@ -723,7 +748,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "repo.delete": {
       "command": "remi repo delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.delete",
       "output": [
@@ -943,7 +969,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "memory.migration.status": {
       "command": "remi memory migration status",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.status",
       "output": [
@@ -955,7 +982,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "memory.migration.backfill": {
       "command": "remi memory migration backfill",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.backfill",
       "output": [
@@ -967,7 +995,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "memory.migration.verify": {
       "command": "remi memory migration verify",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.verify",
       "output": [
@@ -979,7 +1008,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "memory.migration.retry": {
       "command": "remi memory migration retry",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.retry",
       "output": [
@@ -1069,7 +1099,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "wiki.repository.build": {
       "command": "remi wiki repository build",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "wiki.repository.build",
       "output": [
@@ -1081,7 +1112,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "wiki.repository.atlas.status": {
       "command": "remi wiki repository atlas status",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "wiki.repository.atlas.status",
       "output": [
@@ -1093,7 +1125,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "wiki.repository.atlas.configure": {
       "command": "remi wiki repository atlas configure",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "wiki.repository.atlas.configure",
       "output": [
@@ -1261,7 +1294,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.restore": {
       "command": "remi issue restore",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.restore",
       "output": [
@@ -1273,7 +1307,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.rerun": {
       "command": "remi issue rerun",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.rerun",
       "output": [
@@ -1480,7 +1515,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.create": {
       "command": "remi session create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.create",
       "output": [
@@ -1492,7 +1528,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.update": {
       "command": "remi session update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.update",
       "output": [
@@ -1517,7 +1554,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.participant.add": {
       "command": "remi session participant add",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.participant.add",
       "output": [
@@ -1529,7 +1567,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.participant.remove": {
       "command": "remi session participant remove",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.participant.remove",
       "output": [
@@ -1619,7 +1658,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.archive.list": {
       "command": "remi session archive list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.list",
       "output": [
@@ -1631,7 +1671,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.archive.status": {
       "command": "remi session archive status",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.status",
       "output": [
@@ -1643,7 +1684,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.archive.verify": {
       "command": "remi session archive verify",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.verify",
       "output": [
@@ -1655,7 +1697,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.archive.retry": {
       "command": "remi session archive retry",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.retry",
       "output": [
@@ -1667,7 +1710,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.config.get": {
       "command": "remi session config get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.config.get",
       "output": [
@@ -1679,7 +1723,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "session.config.update": {
       "command": "remi session config update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.config.update",
       "output": [
@@ -2055,7 +2100,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.batch-update": {
       "command": "remi issue batch-update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.batch-update",
       "output": [
@@ -2067,7 +2113,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.batch-delete": {
       "command": "remi issue batch-delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.batch-delete",
       "output": [
@@ -2079,7 +2126,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.quick-create": {
       "command": "remi issue quick-create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.quick-create",
       "output": [
@@ -2104,7 +2152,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.get": {
       "command": "remi share get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "share.get",
       "output": [
@@ -2116,7 +2165,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.create": {
       "command": "remi share create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "share.create",
       "output": [
@@ -2128,7 +2178,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.extend": {
       "command": "remi share extend",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "share.extend",
       "output": [
@@ -2140,7 +2191,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.delete": {
       "command": "remi share delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "share.delete",
       "output": [
@@ -2153,7 +2205,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi share view",
       "auth": [
         "human",
-        "share"
+        "share",
+        "task"
       ],
       "capability": "share.view",
       "output": [
@@ -2191,7 +2244,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "label.create": {
       "command": "remi label create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "label.create",
       "output": [
@@ -2203,7 +2257,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "label.update": {
       "command": "remi label update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "label.update",
       "output": [
@@ -2215,7 +2270,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "label.delete": {
       "command": "remi label delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "label.delete",
       "output": [
@@ -2227,7 +2283,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.list": {
       "command": "remi chat list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.list",
       "output": [
@@ -2239,7 +2296,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.get": {
       "command": "remi chat get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.get",
       "output": [
@@ -2251,7 +2309,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.create": {
       "command": "remi chat create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.create",
       "output": [
@@ -2263,7 +2322,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.update": {
       "command": "remi chat update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.update",
       "output": [
@@ -2275,7 +2335,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.delete": {
       "command": "remi chat delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.delete",
       "output": [
@@ -2287,7 +2348,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.message.list": {
       "command": "remi chat message list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.message.list",
       "output": [
@@ -2299,7 +2361,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.message.create": {
       "command": "remi chat message create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.message.create",
       "output": [
@@ -2311,7 +2374,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.pending": {
       "command": "remi chat pending",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.pending",
       "output": [
@@ -2323,7 +2387,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "chat.read": {
       "command": "remi chat read",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.read",
       "output": [
@@ -2361,7 +2426,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "task.create": {
       "command": "remi task create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "task.create",
       "output": [
@@ -2490,7 +2556,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.create": {
       "command": "remi agent create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.create",
       "output": [
@@ -2502,7 +2569,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.update": {
       "command": "remi agent update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.update",
       "output": [
@@ -2514,7 +2582,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.archive": {
       "command": "remi agent archive",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.archive",
       "output": [
@@ -2526,7 +2595,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.restore": {
       "command": "remi agent restore",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.restore",
       "output": [
@@ -2538,7 +2608,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.default": {
       "command": "remi agent default",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.default",
       "output": [
@@ -2550,7 +2621,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.cancel-tasks": {
       "command": "remi agent cancel-tasks",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.cancel-tasks",
       "output": [
@@ -2562,7 +2634,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.template.list": {
       "command": "remi agent template list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.template.list",
       "output": [
@@ -2574,7 +2647,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.template.get": {
       "command": "remi agent template get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.template.get",
       "output": [
@@ -2586,7 +2660,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.template.create": {
       "command": "remi agent template create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.template.create",
       "output": [
@@ -2598,7 +2673,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.skill.list": {
       "command": "remi agent skill list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.skill.list",
       "output": [
@@ -2610,7 +2686,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.skill.set": {
       "command": "remi agent skill set",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.skill.set",
       "output": [
@@ -2622,7 +2699,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.skill.add": {
       "command": "remi agent skill add",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.skill.add",
       "output": [
@@ -2634,7 +2712,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.task.list": {
       "command": "remi agent task list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.task.list",
       "output": [
@@ -2646,7 +2725,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.env.get": {
       "command": "remi agent env get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.env.get",
       "output": [
@@ -2658,7 +2738,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.env.update": {
       "command": "remi agent env update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.env.update",
       "output": [
@@ -2670,7 +2751,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.plugin.list": {
       "command": "remi agent plugin list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.list",
       "output": [
@@ -2682,7 +2764,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.plugin.bind": {
       "command": "remi agent plugin bind",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.bind",
       "output": [
@@ -2694,7 +2777,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.plugin.update": {
       "command": "remi agent plugin update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.update",
       "output": [
@@ -2706,7 +2790,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "agent.plugin.unbind": {
       "command": "remi agent plugin unbind",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.unbind",
       "output": [
@@ -2744,7 +2829,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "squad.create": {
       "command": "remi squad create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.create",
       "output": [
@@ -2756,7 +2842,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "squad.update": {
       "command": "remi squad update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.update",
       "output": [
@@ -2768,7 +2855,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "squad.archive": {
       "command": "remi squad archive",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.archive",
       "output": [
@@ -2806,7 +2894,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "squad.member.add": {
       "command": "remi squad member add",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.member.add",
       "output": [
@@ -2818,7 +2907,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "squad.member.update": {
       "command": "remi squad member update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.member.update",
       "output": [
@@ -2830,7 +2920,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "squad.member.remove": {
       "command": "remi squad member remove",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.member.remove",
       "output": [
@@ -2881,7 +2972,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "skill.create": {
       "command": "remi skill create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.create",
       "output": [
@@ -2893,7 +2985,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "skill.update": {
       "command": "remi skill update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.update",
       "output": [
@@ -2905,7 +2998,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "skill.archive": {
       "command": "remi skill archive",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.archive",
       "output": [
@@ -2917,7 +3011,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "skill.import": {
       "command": "remi skill import",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.import",
       "output": [
@@ -2942,7 +3037,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "skill.file.update": {
       "command": "remi skill file update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.file.update",
       "output": [
@@ -2954,7 +3050,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "skill.file.delete": {
       "command": "remi skill file delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.file.delete",
       "output": [
@@ -2966,7 +3063,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.list": {
       "command": "remi plugin list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.list",
       "output": [
@@ -2978,7 +3076,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.get": {
       "command": "remi plugin get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.get",
       "output": [
@@ -2990,7 +3089,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.update": {
       "command": "remi plugin update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.update",
       "output": [
@@ -3002,7 +3102,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.archive": {
       "command": "remi plugin archive",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.archive",
       "output": [
@@ -3014,7 +3115,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.restore": {
       "command": "remi plugin restore",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.restore",
       "output": [
@@ -3026,7 +3128,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.inspect": {
       "command": "remi plugin inspect",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.inspect",
       "output": [
@@ -3038,7 +3141,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.import": {
       "command": "remi plugin import",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.import",
       "output": [
@@ -3050,7 +3154,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.version.list": {
       "command": "remi plugin version list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.version.list",
       "output": [
@@ -3062,7 +3167,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.version.create": {
       "command": "remi plugin version create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.version.create",
       "output": [
@@ -3074,7 +3180,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.activate": {
       "command": "remi plugin activate",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.activate",
       "output": [
@@ -3086,7 +3193,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.rollback": {
       "command": "remi plugin rollback",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.rollback",
       "output": [
@@ -3098,7 +3206,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.runtime.list": {
       "command": "remi plugin runtime list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.runtime.list",
       "output": [
@@ -3110,7 +3219,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.runtime.retry": {
       "command": "remi plugin runtime retry",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.runtime.retry",
       "output": [
@@ -3122,7 +3232,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "plugin.runtime.get": {
       "command": "remi plugin runtime get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.runtime.get",
       "output": [
@@ -3135,7 +3246,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime list",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.list",
       "output": [
@@ -3148,7 +3260,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime get",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.get",
       "output": [
@@ -3173,7 +3286,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "runtime.update": {
       "command": "remi runtime update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.update",
       "output": [
@@ -3210,7 +3324,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime model list",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.model.list",
       "output": [
@@ -3222,7 +3337,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "runtime.model.set": {
       "command": "remi runtime model set",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.model.set",
       "output": [
@@ -3234,7 +3350,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "runtime.model.refresh": {
       "command": "remi runtime model refresh",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.model.refresh",
       "output": [
@@ -3247,7 +3364,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime model status",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.model.status",
       "output": [
@@ -3272,7 +3390,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime release status",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.release.status",
       "output": [
@@ -3284,7 +3403,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "runtime.skill.scan": {
       "command": "remi runtime skill scan",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.skill.scan",
       "output": [
@@ -3297,7 +3417,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime skill status",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.skill.status",
       "output": [
@@ -3309,7 +3430,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "runtime.skill.import": {
       "command": "remi runtime skill import",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.skill.import",
       "output": [
@@ -3322,7 +3444,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime skill import-status",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.skill.import-status",
       "output": [
@@ -3334,7 +3457,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "runtime.directory.scan": {
       "command": "remi runtime directory scan",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.directory.scan",
       "output": [
@@ -3347,7 +3471,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime directory status",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.directory.status",
       "output": [
@@ -3360,7 +3485,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime usage",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.usage",
       "output": [
@@ -3373,7 +3499,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime usage by-agent",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.usage.by-agent",
       "output": [
@@ -3386,7 +3513,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime usage by-hour",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.usage.by-hour",
       "output": [
@@ -3399,7 +3527,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime task-activity",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.task-activity",
       "output": [
@@ -3412,7 +3541,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
       "command": "remi runtime activity",
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.activity",
       "output": [
@@ -3424,7 +3554,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "runtime.model.catalog": {
       "command": "remi runtime model catalog",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.model.catalog",
       "output": [
@@ -3568,7 +3699,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "daemon.list": {
       "command": "remi daemon list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "daemon.list",
       "output": [
@@ -3580,7 +3712,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "daemon.retirement-plan": {
       "command": "remi daemon retirement-plan",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "daemon.retirement-plan",
       "output": [
@@ -3604,7 +3737,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.list": {
       "command": "remi autopilot list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.list",
       "output": [
@@ -3616,7 +3750,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.get": {
       "command": "remi autopilot get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.get",
       "output": [
@@ -3628,7 +3763,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.create": {
       "command": "remi autopilot create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.create",
       "output": [
@@ -3640,7 +3776,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.update": {
       "command": "remi autopilot update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.update",
       "output": [
@@ -3652,7 +3789,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.delete": {
       "command": "remi autopilot delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delete",
       "output": [
@@ -3664,7 +3802,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.run.list": {
       "command": "remi autopilot run list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.run.list",
       "output": [
@@ -3676,7 +3815,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.run.get": {
       "command": "remi autopilot run get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.run.get",
       "output": [
@@ -3688,7 +3828,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.run": {
       "command": "remi autopilot run",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.run",
       "output": [
@@ -3700,7 +3841,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.delivery.list": {
       "command": "remi autopilot delivery list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delivery.list",
       "output": [
@@ -3712,7 +3854,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.delivery.get": {
       "command": "remi autopilot delivery get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delivery.get",
       "output": [
@@ -3724,7 +3867,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.delivery.replay": {
       "command": "remi autopilot delivery replay",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delivery.replay",
       "output": [
@@ -3736,7 +3880,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.trigger.list": {
       "command": "remi autopilot trigger list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.list",
       "output": [
@@ -3748,7 +3893,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.trigger.create": {
       "command": "remi autopilot trigger create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.create",
       "output": [
@@ -3760,7 +3906,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.trigger.update": {
       "command": "remi autopilot trigger update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.update",
       "output": [
@@ -3772,7 +3919,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.trigger.delete": {
       "command": "remi autopilot trigger delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.delete",
       "output": [
@@ -3808,7 +3956,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.scheduler": {
       "command": "remi autopilot scheduler",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.scheduler",
       "output": [
@@ -3820,7 +3969,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.capabilities": {
       "command": "remi scm capabilities",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.capabilities",
       "output": [
@@ -3832,7 +3982,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.connection.list": {
       "command": "remi scm connection list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.list",
       "output": [
@@ -3844,7 +3995,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.connection.get": {
       "command": "remi scm connection get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.get",
       "output": [
@@ -3856,7 +4008,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.connection.create": {
       "command": "remi scm connection create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.create",
       "output": [
@@ -3868,7 +4021,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.connection.update": {
       "command": "remi scm connection update",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.update",
       "output": [
@@ -3880,7 +4034,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.connection.delete": {
       "command": "remi scm connection delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.delete",
       "output": [
@@ -3892,7 +4047,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.connection.verify": {
       "command": "remi scm connection verify",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.verify",
       "output": [
@@ -3904,7 +4060,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.repository.bind": {
       "command": "remi scm repository bind",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.repository.bind",
       "output": [
@@ -3916,7 +4073,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.repository.unbind": {
       "command": "remi scm repository unbind",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.repository.unbind",
       "output": [
@@ -3928,7 +4086,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.event.list": {
       "command": "remi scm event list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.event.list",
       "output": [
@@ -3940,7 +4099,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "scm.event.get": {
       "command": "remi scm event get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.event.get",
       "output": [
@@ -4277,7 +4437,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.health": {
       "command": "remi platform health",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.health",
       "output": [
@@ -4289,7 +4450,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.ready": {
       "command": "remi platform ready",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.ready",
       "output": [
@@ -4301,7 +4463,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.realtime": {
       "command": "remi platform realtime",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.realtime",
       "output": [
@@ -4337,7 +4500,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.feedback.list": {
       "command": "remi platform feedback list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.feedback.list",
       "output": [
@@ -4349,7 +4513,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.release.version": {
       "command": "remi platform release version",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.release.version",
       "output": [
@@ -4361,7 +4526,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.feedback.create": {
       "command": "remi platform feedback create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.feedback.create",
       "output": [
@@ -4409,7 +4575,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.release.latest": {
       "command": "remi platform release latest",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.release.latest",
       "output": [
@@ -4421,7 +4588,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.release.get": {
       "command": "remi platform release get",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.release.get",
       "output": [
@@ -4529,7 +4697,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "lark.installation.list": {
       "command": "remi lark installation list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "lark.installation.list",
       "output": [
@@ -4541,7 +4710,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "lark.install.begin": {
       "command": "remi lark install begin",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "lark.install.begin",
       "output": [
@@ -4553,7 +4723,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "lark.install.status": {
       "command": "remi lark install status",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "lark.install.status",
       "output": [
@@ -4565,7 +4736,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "lark.installation.delete": {
       "command": "remi lark installation delete",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "lark.installation.delete",
       "output": [

@@ -24,6 +24,7 @@ import {
   autopilotTriggerUpdateCompatibilityInput,
   autopilotUpdateCompatibilityInput,
   cleanString,
+  currentTaskAccessToken,
   validateAutopilotTriggerCompatibilityInput,
   validateAutopilotTriggerUpdateCompatibilityInput,
   webhookDeliveryResponse,
@@ -68,6 +69,13 @@ function publicRunAutopilotInput(input: RunAutopilotInput): RunAutopilotInput {
   };
 }
 
+function taskTokenSecretCreationDenied(c: Context, triggerKind: string | null | undefined): Response | null {
+  if (currentTaskAccessToken(c) && cleanString(triggerKind)?.toLowerCase() === "webhook") {
+    return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+  }
+  return null;
+}
+
 export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   const { store, scheduler } = deps;
 
@@ -91,6 +99,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/autopilots", async (c) => {
     const body = await readJsonStrict<CreateAutopilotInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const secretDenied = taskTokenSecretCreationDenied(c, body.triggerKind ?? body.trigger_kind);
+    if (secretDenied) return secretDenied;
     const input = autopilotCreateCompatibilityInput(c, body);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
@@ -107,6 +117,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/autopilots", async (c) => {
     const body = await readJson<CreateAutopilotInput>(c);
+    const secretDenied = taskTokenSecretCreationDenied(c, body.triggerKind ?? body.trigger_kind);
+    if (secretDenied) return secretDenied;
     const input = autopilotCreateInput(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
     if (denied) return denied;
@@ -124,7 +136,9 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const { autopilot } = loaded;
     return c.json({
       autopilot,
-      triggers: store.listAutopilotTriggers(autopilot.id).map(autopilotTriggerResponse),
+      triggers: store.listAutopilotTriggers(autopilot.id).map((trigger) =>
+        autopilotTriggerResponse(trigger, { redactSecrets: Boolean(currentTaskAccessToken(c)) })
+      ),
       runs: store.listAutopilotRuns(autopilot.id),
       deliveries: store.listWebhookDeliveries(autopilot.id),
     });
@@ -238,7 +252,9 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const { autopilot } = loaded;
     return c.json({
       autopilot: autopilotCompatibilityResponse(autopilot),
-      triggers: store.listAutopilotTriggers(autopilot.id).map(autopilotTriggerCompatibilityResponse),
+      triggers: store.listAutopilotTriggers(autopilot.id).map((trigger) =>
+        autopilotTriggerCompatibilityResponse(trigger, { redactSecrets: Boolean(currentTaskAccessToken(c)) })
+      ),
     });
   });
   app.patch("/api/autopilots/:id", async (c) => {
@@ -331,12 +347,14 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<CreateAutopilotTriggerInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const secretDenied = taskTokenSecretCreationDenied(c, body.kind);
+    if (secretDenied) return secretDenied;
     const invalid = validateAutopilotTriggerCompatibilityInput(body);
     if (invalid) return c.json({ error: invalid }, 400);
     try {
       const trigger = store.createAutopilotTrigger(c.req.param("id"), autopilotTriggerCreateCompatibilityInput(body));
       scheduler?.sync();
-      const response = autopilotTriggerCompatibilityResponse(trigger);
+      const response = autopilotTriggerCompatibilityResponse(trigger, { redactSecrets: Boolean(currentTaskAccessToken(c)) });
       const autopilot = store.getAutopilot(trigger.autopilotId);
       if (autopilot) publishWorkspaceEvent(c, store, "autopilot:updated", autopilot.workspaceId, { autopilot_id: autopilot.id, trigger: response });
       return c.json(response, 201);
@@ -357,7 +375,7 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     try {
       const trigger = store.updateAutopilotTrigger(c.req.param("id"), c.req.param("triggerId"), input);
       scheduler?.sync();
-      const response = autopilotTriggerCompatibilityResponse(trigger);
+      const response = autopilotTriggerCompatibilityResponse(trigger, { redactSecrets: Boolean(currentTaskAccessToken(c)) });
       const autopilot = store.getAutopilot(trigger.autopilotId);
       if (autopilot) publishWorkspaceEvent(c, store, "autopilot:updated", autopilot.workspaceId, { autopilot_id: autopilot.id, trigger: response });
       return c.json(response);
@@ -401,7 +419,7 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
         c.req.param("triggerId"),
         signingSecret,
       );
-      const response = autopilotTriggerCompatibilityResponse(trigger);
+      const response = autopilotTriggerCompatibilityResponse(trigger, { redactSecrets: Boolean(currentTaskAccessToken(c)) });
       const autopilot = store.getAutopilot(trigger.autopilotId);
       if (autopilot) publishWorkspaceEvent(c, store, "autopilot:updated", autopilot.workspaceId, { autopilot_id: autopilot.id, trigger: response });
       return c.json(response);

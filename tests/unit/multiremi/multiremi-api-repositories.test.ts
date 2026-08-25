@@ -380,7 +380,7 @@ describe("Multiremi API - workspace repositories", () => {
       .toEqual([2, 1]);
   });
 
-  it("allows task tokens only on same-workspace repository Wiki publishing routes", async () => {
+  it("gives owner task tokens full same-workspace Repository Wiki and build access", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.updateWorkspaceRepositories(workspace.id, [{
@@ -390,6 +390,18 @@ describe("Multiremi API - workspace repositories", () => {
       source: "github",
       default_branch: "main",
     }]);
+    store.importAgentPlugin({
+      provider: "claude",
+      name: "code-to-wiki",
+      manifest: { name: "code-to-wiki", version: "1.0.0" },
+      files: [{ path: "skills/code-to-wiki/SKILL.md", content: "# Code to Wiki\n" }],
+    });
+    store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
     const foreignWorkspace = store.createWorkspace({ name: "Foreign Wiki", slug: "foreign-wiki" });
     store.updateWorkspaceRepositories(foreignWorkspace.id, [{
       id: "repo_foreign_wiki",
@@ -427,12 +439,16 @@ describe("Multiremi API - workspace repositories", () => {
       `${root}/${created.id}/revisions`,
     ]) {
       const response = await app.request(path, { headers: auth });
-      expect(response.status, path).toBe(403);
-      expect(await response.json()).toEqual({ error: "forbidden for task token" });
+      expect(response.status, path).toBe(200);
     }
+    const atlas = await app.request(`/api/workspaces/${workspace.id}/repository-wikis/atlas`, {
+      method: "POST",
+      headers: jsonAuth,
+      body: "{}",
+    });
+    expect(atlas.status).toBe(200);
     const build = await app.request(`${root}/build`, { method: "POST", headers: jsonAuth, body: "{}" });
-    expect(build.status).toBe(403);
-    expect(await build.json()).toEqual({ error: "forbidden for task token" });
+    expect(build.status).toBe(202);
 
     const foreignRoot = `/api/workspaces/${foreignWorkspace.id}/repos/repo_foreign_wiki/wiki`;
     expect((await app.request(foreignRoot, { headers: auth })).status).toBe(404);

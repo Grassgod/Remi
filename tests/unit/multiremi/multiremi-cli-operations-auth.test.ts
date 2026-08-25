@@ -24,29 +24,87 @@ describe("operations CLI authorization boundaries", () => {
     expect((await app.request("/api/cloud-billing/balance", { headers })).status).toBe(403);
   });
 
-  it("keeps task credentials on collaboration analytics and out of operations management", async () => {
+  it("gives task credentials workspace operations parity but keeps platform and daemon identities hard-denied", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Task actor", provider: "codex", workspaceId: "local" });
     const issue = store.createIssue({ title: "Operations auth", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Auth" });
     const token = await store.createTaskAccessToken(task, "local");
+    const runtime = store.registerRuntime({ id: "rt_task_ops", name: "Task runtime", provider: "codex", workspaceId: "local" });
+    const autopilot = store.createAutopilot({
+      title: "Task-managed autopilot",
+      workspaceId: "local",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+    const webhookTrigger = store.createAutopilotTrigger(autopilot.id, { kind: "webhook" });
     const app = createMultiremiApp({ store, authToken: "root-operations-secret" });
     const headers = { Authorization: `Bearer ${token.token}` };
 
     expect((await app.request("/api/inbox", { headers })).status).toBe(200);
     expect((await app.request("/api/dashboard/usage/daily?workspace_id=local", { headers })).status).toBe(200);
-    for (const path of [
-      "/api/runtimes",
-      "/api/autopilots",
-      "/api/cloud-runtime",
-      "/api/cloud-billing/balance",
-      "/api/multiremi/platform/status",
-      "/api/lark/binding/redeem",
-    ]) {
-      const response = await app.request(path, { headers });
-      expect(response.status, path).toBe(403);
+    expect((await app.request("/api/runtimes", { headers })).status).toBe(200);
+    expect((await app.request(`/api/runtimes/${runtime.id}`, {
+      method: "PATCH",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Updated by task" }),
+    })).status).toBe(200);
+    expect((await app.request("/api/autopilots", { headers })).status).toBe(200);
+    const autopilotRead = await app.request(`/api/autopilots/${autopilot.id}`, { headers });
+    expect(autopilotRead.status).toBe(200);
+    expect((await autopilotRead.json()).triggers).toEqual([
+      expect.objectContaining({
+        id: webhookTrigger.id,
+        webhook_token: null,
+        webhook_path: null,
+        webhook_url: null,
+        signing_secret_hint: null,
+      }),
+    ]);
+    expect((await app.request(`/api/autopilots/${autopilot.id}`, {
+      method: "PATCH",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "Updated by task" }),
+    })).status).toBe(200);
+    expect((await app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "schedule", cron_expression: "0 9 * * *" }),
+    })).status).toBe(201);
+    expect((await app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "webhook" }),
+    })).status).toBe(403);
+    expect((await app.request(`/api/autopilots/${autopilot.id}/triggers/${webhookTrigger.id}/rotate-webhook-token`, {
+      method: "POST",
+      headers,
+    })).status).toBe(403);
+
+    for (const [method, path, body] of [
+      ["GET", "/api/cloud-runtime", undefined],
+      ["GET", "/api/cloud-billing/balance", undefined],
+      ["GET", "/api/multiremi/platform/status", undefined],
+      ["GET", "/api/lark/binding/redeem", undefined],
+      ["POST", "/api/multiremi/runtimes", { name: "Forged runtime", provider: "codex" }],
+      ["POST", `/api/runtimes/${runtime.id}/update`, {}],
+    ] as const) {
+      const response = await app.request(path, {
+        method,
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      expect(response.status, `${method} ${path}`).toBe(403);
+      expect((await response.json()).code, `${method} ${path}`).toBe("task_token_hard_denied");
     }
+
+    expect((await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ runtime_id: runtime.id }),
+    })).status).toBe(403);
   });
 
   it("keeps SCM, billing, and Lark responses free of configured secret values", async () => {

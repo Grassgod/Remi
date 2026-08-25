@@ -65,32 +65,6 @@ export function issueCommentCreateInput(
   return { ...input, authorType: "member", authorId: currentRequestUserId(c) };
 }
 
-export function taskScopedIssueCommentListInput(
-  c: Context,
-  store: MultiremiStore,
-  issueId: string,
-  input: ListIssueCommentsInput,
-): { input: ListIssueCommentsInput } | { response: Response } {
-  const token = currentTaskAccessToken(c);
-  if (!token?.taskId) return { input };
-  const task = store.getTask(token.taskId);
-  if (!task || task.issueId !== issueId) {
-    return { response: c.json({ error: "forbidden" }, 403) };
-  }
-  if (!task.issueSessionId) return { input };
-  const requested = cleanString(input.issueSessionId ?? input.issue_session_id);
-  if (requested && requested !== task.issueSessionId) {
-    return { response: c.json({ error: "forbidden" }, 403) };
-  }
-  return {
-    input: {
-      ...input,
-      issueSessionId: task.issueSessionId,
-      issue_session_id: task.issueSessionId,
-    },
-  };
-}
-
 export function issueSubscriberTarget(
   c: Context,
   body: { member_id?: string; user_id?: string; user_type?: string },

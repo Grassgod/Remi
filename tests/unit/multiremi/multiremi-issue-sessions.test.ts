@@ -484,7 +484,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(created.task_id).toBe(task.id);
   });
 
-  it("allows a task token to read its Session but not sibling raw transcripts", async () => {
+  it("gives an owner task token parity across sibling Sessions and tasks", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scoped agent", provider: "claude" });
@@ -514,15 +514,15 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect((await app.request(
       `/api/issues/${issue.id}/sessions/${sibling.id}/events`,
       { headers },
-    )).status).toBe(403);
+    )).status).toBe(200);
     expect((await app.request(
       `/api/issues/${issue.id}/timeline`,
       { headers },
-    )).status).toBe(403);
+    )).status).toBe(200);
     expect((await app.request(
       `/api/issues/${issue.id}/timeline?issue_session_id=${sibling.id}`,
       { headers },
-    )).status).toBe(403);
+    )).status).toBe(200);
     expect((await app.request(
       `/api/issues/${issue.id}/timeline?issue_session_id=${main.id}`,
       { headers },
@@ -532,41 +532,40 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(scopedCommentsResponse.status).toBe(200);
     const scopedComments = await scopedCommentsResponse.json();
     expect(scopedComments.map((comment: { content: string }) => comment.content)).toContain("Visible current context");
-    expect(scopedComments.map((comment: { content: string }) => comment.content)).not.toContain("Hidden sibling context");
+    expect(scopedComments.map((comment: { content: string }) => comment.content)).toContain("Hidden sibling context");
 
     const detailResponse = await app.request(`/api/multiremi/issues/${issue.id}`, { headers });
     expect(detailResponse.status).toBe(200);
     const detail = await detailResponse.json();
     expect(detail.comments.map((comment: { body: string }) => comment.body)).toContain("Visible current context");
-    expect(detail.comments.map((comment: { body: string }) => comment.body)).not.toContain("Hidden sibling context");
-    expect(detail.issue.tasks.map((item: { id: string }) => item.id)).toEqual([task.id]);
-    expect(detail.activity).toEqual([]);
+    expect(detail.comments.map((comment: { body: string }) => comment.body)).toContain("Hidden sibling context");
+    expect(detail.issue.tasks.map((item: { id: string }) => item.id).sort()).toEqual([task.id, siblingTask.id].sort());
 
     const searchResponse = await app.request(
       `/api/issues/search?q=${encodeURIComponent("Hidden sibling context")}`,
       { headers },
     );
     expect(searchResponse.status).toBe(200);
-    expect((await searchResponse.json()).issues).toEqual([]);
+    expect((await searchResponse.json()).issues).toEqual([expect.objectContaining({ id: issue.id })]);
 
     const taskRunsResponse = await app.request(`/api/issues/${issue.id}/task-runs`, { headers });
     expect(taskRunsResponse.status).toBe(200);
-    expect((await taskRunsResponse.json()).map((item: { id: string }) => item.id)).toEqual([task.id]);
+    expect((await taskRunsResponse.json()).map((item: { id: string }) => item.id).sort()).toEqual([task.id, siblingTask.id].sort());
     const rawTasksResponse = await app.request("/api/multiremi/tasks", { headers });
     expect(rawTasksResponse.status).toBe(200);
-    expect((await rawTasksResponse.json()).tasks.map((item: { id: string }) => item.id)).toEqual([task.id]);
-    expect((await app.request(`/api/multiremi/tasks/${siblingTask.id}`, { headers })).status).toBe(403);
+    expect((await rawTasksResponse.json()).tasks.map((item: { id: string }) => item.id).sort()).toEqual([task.id, siblingTask.id].sort());
+    expect((await app.request(`/api/multiremi/tasks/${siblingTask.id}`, { headers })).status).toBe(200);
     expect((await app.request(`/api/tasks/${siblingTask.id}/cancel`, {
       method: "POST",
       headers,
-    })).status).toBe(403);
+    })).status).toBe(200);
     expect((await app.request("/api/multiremi/tasks", {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ agentId: agent.id, issueId: issue.id, prompt: "Bypass Session route" }),
-    })).status).toBe(403);
+    })).status).toBe(201);
     expect((await app.request(`/api/tasks/${task.id}/messages`, { headers })).status).toBe(200);
-    expect((await app.request(`/api/tasks/${siblingTask.id}/messages`, { headers })).status).toBe(403);
+    expect((await app.request(`/api/tasks/${siblingTask.id}/messages`, { headers })).status).toBe(200);
 
     const agentCommentResponse = await app.request(`/api/issues/${issue.id}/comments`, {
       method: "POST",
@@ -584,20 +583,24 @@ describe("Issue sessions and per-agent projection lanes", () => {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ content: "Forbidden sibling write" }),
-    })).status).toBe(403);
+    })).status).toBe(201);
     expect((await app.request(`/api/issues/${issue.id}/sessions/${sibling.id}/results`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({ title: "Bad", body: "Forbidden sibling publish" }),
-    })).status).toBe(403);
+    })).status).toBe(201);
 
     const resultsResponse = await app.request(`/api/issues/${issue.id}/session-results`, { headers });
     expect(resultsResponse.status).toBe(200);
-    expect(await resultsResponse.json()).toEqual([
+    expect(await resultsResponse.json()).toEqual(expect.arrayContaining([
       expect.objectContaining({
         source_session_id: sibling.id,
         body: "Safe shared result",
       }),
-    ]);
+      expect.objectContaining({
+        source_session_id: sibling.id,
+        body: "Forbidden sibling publish",
+      }),
+    ]));
   });
 });

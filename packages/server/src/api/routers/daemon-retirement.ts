@@ -204,9 +204,6 @@ function loadHumanWorkspaceAccess(
   workspaceId: string,
 ): { isManager: boolean } | Response {
   const accessToken = currentAccessToken(c);
-  if (accessToken?.type === "task") {
-    return c.json({ error: "forbidden for task token", code: "human_admin_required" }, 403);
-  }
   if (accessToken?.type === "daemon") {
     return c.json({ error: "forbidden for daemon token", code: "human_admin_required" }, 403);
   }

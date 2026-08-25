@@ -1,12 +1,48 @@
 // Bearer auth, daemon-token route scoping, and the cookie fallback for safe methods.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { taskTokenHardDenyCategory } from "@multiremi/api/helpers/auth-guards.js";
 import { createStore, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — authentication and token scoping", () => {
-  it("scopes task-token Repository Wiki CRUD to the task project repository", async () => {
+  it("keeps the task-token hard deny list method- and path-exact", () => {
+    const denied = [
+      ["POST", "/api/tokens", "access_credentials"],
+      ["POST", "/api/autopilots/aut_1/triggers/trg_1/rotate-webhook-token", "access_credentials"],
+      ["POST", "/api/workspaces/local/relay-config/codex/reveal", "access_credentials"],
+      ["GET", "/api/workspaces/local/members", "workspace_identity"],
+      ["POST", "/api/invitations/inv_1/accept", "workspace_identity"],
+      ["POST", "/api/workspaces", "workspace_lifecycle"],
+      ["DELETE", "/api/workspaces/local", "workspace_lifecycle"],
+      ["GET", "/api/cloud-billing/balance", "billing"],
+      ["GET", "/api/multiremi/platform/status", "platform_maintenance"],
+      ["POST", "/api/cloud-runtime/nodes/start", "platform_maintenance"],
+      ["POST", "/api/runtimes/rt_1/update", "platform_maintenance"],
+      ["PUT", "/api/workspaces/local/ssh-mesh", "platform_maintenance"],
+      ["POST", "/api/multiremi/runtimes", "daemon_identity"],
+    ] as const;
+    for (const [method, path, category] of denied) {
+      expect(taskTokenHardDenyCategory(new Request(`http://localhost${path}?q=ignored`, { method })), `${method} ${path}`)
+        .toBe(category);
+    }
+
+    for (const [method, path] of [
+      ["GET", "/api/workspaces"],
+      ["PATCH", "/api/workspaces/local"],
+      ["GET", "/api/workspaces/local/ssh-mesh"],
+      ["PATCH", "/api/runtimes/rt_1"],
+      ["GET", "/api/multiremi/runtimes"],
+      ["POST", "/api/autopilots/aut_1/triggers"],
+      ["POST", "/api/workspaces/local/repos/repo_1/wiki/build"],
+    ] as const) {
+      expect(taskTokenHardDenyCategory(new Request(`http://localhost${path}`, { method })), `${method} ${path}`)
+        .toBeNull();
+    }
+  });
+
+  it("scopes task-token Repository Wiki CRUD to its workspace rather than its current project", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.updateWorkspace(workspace.id, {
@@ -57,22 +93,26 @@ describe("Multiremi API — authentication and token scoping", () => {
     expect((await app.request(`${root}/${created.id}/revisions`, { headers: auth })).status).toBe(200);
 
     const foreignRoot = `/api/workspaces/${workspace.id}/repos/repo_beta/wiki`;
-    for (const [method, path] of [
-      ["GET", foreignRoot],
-      ["POST", foreignRoot],
-      ["GET", `${foreignRoot}/secret`],
-      ["PUT", `${foreignRoot}/secret`],
-      ["DELETE", `${foreignRoot}/secret`],
-      ["GET", `${foreignRoot}/secret/revisions`],
-    ] as const) {
-      const foreign = await app.request(path, { method, headers: jsonAuth });
-      expect(foreign.status).toBe(404);
-      expect(await foreign.json()).toEqual({ error: "repository not found" });
-    }
+    expect((await app.request(foreignRoot, { headers: auth })).status).toBe(200);
+    const betaCreated = await app.request(foreignRoot, {
+      method: "POST",
+      headers: jsonAuth,
+      body: JSON.stringify({ path: "secret.md", title: "Secret", body: "v1" }),
+    });
+    expect(betaCreated.status).toBe(201);
+    const betaDoc = (await betaCreated.json() as any).doc;
+    expect((await app.request(`${foreignRoot}/${betaDoc.id}`, { headers: auth })).status).toBe(200);
+    expect((await app.request(`${foreignRoot}/${betaDoc.id}`, {
+      method: "PUT",
+      headers: jsonAuth,
+      body: JSON.stringify({ body: "v2", expected_version: 1 }),
+    })).status).toBe(200);
+    expect((await app.request(`${foreignRoot}/${betaDoc.id}/revisions`, { headers: auth })).status).toBe(200);
+    expect((await app.request(`${foreignRoot}/${betaDoc.id}`, { method: "DELETE", headers: auth })).status).toBe(200);
 
     const build = await app.request(`${root}/build`, { method: "POST", headers: auth });
-    expect(build.status).toBe(403);
-    expect(await build.json()).toEqual({ error: "forbidden for task token" });
+    expect(build.status).toBe(409);
+    expect((await build.json()).code).toBe("atlas_not_configured");
 
     const daemon = await app.request(root, {
       headers: { Authorization: `Bearer ${daemonToken.token}` },
@@ -186,7 +226,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       body: JSON.stringify({ runtime_id: runtime.id }),
     });
     expect(daemonControlPlane.status).toBe(403);
-    expect(await daemonControlPlane.json()).toEqual({ error: "forbidden for task token" });
+    expect(await daemonControlPlane.json()).toEqual({ error: "daemon token required", code: "daemon_token_required" });
   });
 
   it("protects APIs with bearer auth and scopes daemon tokens to daemon routes", async () => {
@@ -333,7 +373,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       headers: { Authorization: `Bearer ${taskTokenClaimBody.task.auth_token}` },
     });
     expect(taskTokenOnDaemonRoute.status).toBe(403);
-    expect(await taskTokenOnDaemonRoute.json()).toEqual({ error: "forbidden for task token" });
+    expect(await taskTokenOnDaemonRoute.json()).toEqual({ error: "daemon token required", code: "daemon_token_required" });
 
     const taskTokenComment = await app.request(`/api/issues/${taskTokenIssue.id}/comments`, {
       method: "POST",

@@ -104,17 +104,29 @@ describe("Multiremi API - CLI context and capabilities", () => {
     expect(shareContext.catalog).toEqual({ projects: [], repositories: [], next_cursor: null });
   });
 
-  it("keeps task tokens on the safe directory and current-project knowledge surface", async () => {
+  it("gives task tokens owner parity inside their workspace while hard-denying identity and lifecycle operations", async () => {
     const fixture = await cliFixture();
     const taskHeaders = bearer(fixture.task);
 
-    for (const request of [
-      fixture.app.request("/api/workspaces/local", { headers: taskHeaders }),
-      fixture.app.request("/api/workspaces/local", { method: "PATCH", headers: taskHeaders, body: JSON.stringify({ name: "No" }) }),
-      fixture.app.request("/api/tokens", { method: "POST", headers: taskHeaders, body: JSON.stringify({ name: "No" }) }),
-      fixture.app.request("/api/multiremi/members", { headers: taskHeaders }),
-    ]) {
-      expect((await request).status).toBe(403);
+    expect((await fixture.app.request("/api/workspaces/local", { headers: taskHeaders })).status).toBe(200);
+    expect((await fixture.app.request("/api/workspaces/local", {
+      method: "PATCH",
+      headers: { ...taskHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "Updated by owner task" }),
+    })).status).toBe(200);
+
+    for (const [method, path, body] of [
+      ["POST", "/api/tokens", { name: "No" }],
+      ["GET", "/api/multiremi/members", undefined],
+      ["POST", "/api/workspaces", { name: "No" }],
+    ] as const) {
+      const response = await fixture.app.request(path, {
+        method,
+        headers: { ...taskHeaders, "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      expect(response.status, `${method} ${path}`).toBe(403);
+      expect((await response.json()).code).toBe("task_token_hard_denied");
     }
 
     const repositories = await fixture.app.request("/api/workspaces/local/repos", { headers: taskHeaders });
@@ -122,7 +134,7 @@ describe("Multiremi API - CLI context and capabilities", () => {
     expect((await repositories.json()).repositories).toEqual([
       expect.objectContaining({
         id: fixture.repositoryId,
-        url: "https://example.com/org/remi.git",
+        url: "https://repo-user-secret@example.com/org/remi.git?access=repo-url-secret",
       }),
     ]);
 
@@ -137,7 +149,62 @@ describe("Multiremi API - CLI context and capabilities", () => {
     const siblingRead = await fixture.app.request(`/api/projects/${sibling.id}`, { headers: taskHeaders });
     const siblingDocs = await fixture.app.request(`/api/projects/${sibling.id}/docs`, { headers: taskHeaders });
     const siblingResources = await fixture.app.request(`/api/projects/${sibling.id}/resources`, { headers: taskHeaders });
-    expect([siblingRead.status, siblingDocs.status, siblingResources.status]).toEqual([404, 404, 404]);
+    expect([siblingRead.status, siblingDocs.status, siblingResources.status]).toEqual([200, 200, 200]);
+
+    const foreign = fixture.store.createWorkspace({ id: "ws_task_foreign", name: "Foreign", slug: "foreign" }, "local");
+    const foreignRead = await fixture.app.request(`/api/workspaces/${foreign.id}`, { headers: taskHeaders });
+    expect(foreignRead.status).toBe(404);
+
+    const humanContext = await fixture.app.request("/api/cli/context", { headers: bearer(fixture.human) });
+    const taskContext = await fixture.app.request("/api/cli/context", { headers: taskHeaders });
+    expect((await taskContext.json()).allowed_operations).toEqual((await humanContext.json()).allowed_operations);
+  });
+
+  it("records structured audit fields for allowed and hard-denied task writes", async () => {
+    const fixture = await cliFixture();
+    const taskHeaders = { ...bearer(fixture.task), "Content-Type": "application/json" };
+    const auditRows: Record<string, unknown>[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      const row = args.find((value) => typeof value === "object" && value !== null
+        && (value as Record<string, unknown>).event === "task_token_write");
+      if (row) auditRows.push(row as Record<string, unknown>);
+    };
+    try {
+      expect((await fixture.app.request("/api/workspaces/local", {
+        method: "PATCH",
+        headers: taskHeaders,
+        body: JSON.stringify({ description: "Audited" }),
+      })).status).toBe(200);
+      expect((await fixture.app.request("/api/tokens", {
+        method: "POST",
+        headers: taskHeaders,
+        body: JSON.stringify({ name: "Denied" }),
+      })).status).toBe(403);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(auditRows).toEqual([
+      {
+        event: "task_token_write",
+        task_id: fixture.taskId,
+        workspace_id: "local",
+        method: "PATCH",
+        path: "/api/workspaces/local",
+        status_code: 200,
+      },
+      {
+        event: "task_token_write",
+        task_id: fixture.taskId,
+        workspace_id: "local",
+        method: "POST",
+        path: "/api/tokens",
+        status_code: 403,
+        deny_category: "access_credentials",
+      },
+    ]);
+    expect(JSON.stringify(auditRows)).not.toContain(fixture.task);
   });
 });
 

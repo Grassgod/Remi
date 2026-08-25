@@ -22,6 +22,29 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
+  it("advertises task parity for workspace operations but not platform, billing, or destructive runtime commands", () => {
+    const registry = registryFor(specs);
+    const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
+    for (const id of ["runtime.list", "runtime.update", "autopilot.list", "autopilot.update", "platform.feedback.create"]) {
+      expect(inventory.get(id)?.auth, id).toContain("task");
+    }
+    for (const id of [
+      "runtime.delete",
+      "runtime.archive-agents-and-delete",
+      "runtime.release.start",
+      "runtime.cloud.status",
+      "billing.balance",
+      "platform.status",
+      "platform.operation.list",
+      "platform.settings.update",
+      "daemon.retire",
+      "lark.binding.redeem",
+      "context.auth.logout",
+    ]) {
+      expect(inventory.get(id)?.auth, id).not.toContain("task");
+    }
+  });
+
   it("declares shared output/paging contracts and confirms every destructive command", () => {
     for (const spec of specs.filter((candidate) => candidate.capability)) {
       const options = new Set(spec.options?.map((option) => option.name));

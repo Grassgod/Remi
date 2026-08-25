@@ -120,10 +120,11 @@ describe("agent extension CLI contracts", () => {
     expect(restoredPath).toBe("/api/agents/agt_archived_123/restore");
   });
 
-  it("keeps private Agent Plugin surfaces human-only", () => {
-    for (const spec of specs.filter((candidate) => candidate.path[0] === "plugin" || candidate.path.slice(0, 2).join(" ") === "agent plugin")) {
+  it("advertises Task parity for Agent Plugin surfaces", () => {
+    const inventory = registryFor(specs).inventory();
+    for (const spec of inventory.filter((candidate) => candidate.path[0] === "plugin" || candidate.path.slice(0, 2).join(" ") === "agent plugin")) {
       if (!spec.capability) continue;
-      expect(spec.auth, spec.id).toEqual(["human"]);
+      expect(spec.auth, spec.id).toContain("task");
     }
   });
 });

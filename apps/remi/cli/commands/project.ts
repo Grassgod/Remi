@@ -137,10 +137,9 @@ export async function resolveProject(
       const response = await client.request<unknown>({ method: "GET", path: "/api/projects/search", query: { workspace_id: workspaceId, q: query, include_closed: true } });
       const records = extractRecords(response.data, ["projects"]);
       if (records.length) return records;
-      // Task tokens may only GET their own issue's project by id, and text
-      // search does not match project ids. The workspace list is readable by
-      // every identity and carries each project's summary (including the
-      // default assignee), so fall back to it for id/name resolution.
+      // Text search does not match project ids. Fall back to the workspace list,
+      // which carries each project's summary (including the default assignee),
+      // so id/name resolution also works against older servers.
       const listed = await client.request<unknown>({ method: "GET", path: "/api/projects", query: { workspace_id: workspaceId } });
       return extractRecords(listed.data, ["projects"]);
     },
