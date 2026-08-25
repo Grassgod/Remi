@@ -42,6 +42,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
 import { listWorkspaceRepositories } from "../helpers/repositories.js";
+import { ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE } from "../../repository-wiki/atlas.js";
 
 function loadAutopilotForCurrentUser(
   c: Context,
@@ -76,6 +77,14 @@ function taskTokenSecretCreationDenied(c: Context, triggerKind: string | null | 
   return null;
 }
 
+function reservedAtlasAutopilotTitle(c: Context, title: unknown): Response | null {
+  if (cleanString(typeof title === "string" ? title : null) !== ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE) return null;
+  return c.json({
+    error: `${ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE} is reserved for the platform Repository Wiki automation`,
+    code: "atlas_identity_reserved",
+  }, 409);
+}
+
 export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   const { store, scheduler } = deps;
 
@@ -103,6 +112,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (secretDenied) return secretDenied;
     const input = autopilotCreateCompatibilityInput(c, body);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
+    const reserved = reservedAtlasAutopilotTitle(c, input.title);
+    if (reserved) return reserved;
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
     if (denied) return denied;
     try {
@@ -120,6 +131,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const secretDenied = taskTokenSecretCreationDenied(c, body.triggerKind ?? body.trigger_kind);
     if (secretDenied) return secretDenied;
     const input = autopilotCreateInput(c, body);
+    const reserved = reservedAtlasAutopilotTitle(c, input.title);
+    if (reserved) return reserved;
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
     if (denied) return denied;
     try {
@@ -147,6 +160,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const body = await readJson<UpdateAutopilotInput>(c);
+    const reserved = reservedAtlasAutopilotTitle(c, body.title);
+    if (reserved) return reserved;
     try {
       const autopilot = store.updateAutopilot(c.req.param("id"), body);
       scheduler?.sync();
@@ -264,6 +279,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = autopilotUpdateCompatibilityInput(body);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
+    const reserved = reservedAtlasAutopilotTitle(c, input.title);
+    if (reserved) return reserved;
     try {
       const autopilot = store.updateAutopilot(c.req.param("id"), input);
       scheduler?.sync();
