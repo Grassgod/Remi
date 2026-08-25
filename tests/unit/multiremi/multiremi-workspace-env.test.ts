@@ -37,7 +37,7 @@ describe("workspace env API", () => {
     expect(store.getWorkspaceEnv("local")).toEqual({ GH_TOKEN: "ghp_secret" });
   });
 
-  it("rejects non-admin members and task tokens", async () => {
+  it("rejects non-admin members but gives an owner task token admin parity", async () => {
     const store = createLocalStore();
     store.createWorkspaceMember({ id: "mem_local_bob", workspaceId: "local", userId: "bob", name: "Bob", email: "bob@example.com", role: "member" });
     const member = await store.createAccessToken({ workspaceId: "local", type: "pat", name: "bob", userId: "bob" });
@@ -54,7 +54,7 @@ describe("workspace env API", () => {
     const asTask = await app.request("/api/workspaces/local/env", {
       headers: { Authorization: `Bearer ${taskToken.token}` },
     });
-    expect(asTask.status).toBe(403);
+    expect(asTask.status).toBe(200);
   });
 
   it("does not leak env through the workspace object or repos endpoints", async () => {

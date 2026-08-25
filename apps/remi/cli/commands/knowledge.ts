@@ -276,14 +276,18 @@ function wikiWorkingCopySpecs(): CommandSpec[] {
     [],
     [PROJECT_OPTION],
     async (invocation) => {
-      const projectRef = requireProjectOption(invocation);
-      const client = await clientFor(invocation);
-      const project = await resolveProject(client, requiredWorkspace(invocation), projectRef);
+      const projectRef = action === "pull" || action === "diff"
+        ? requireProjectOption(invocation)
+        : projectOption(invocation);
+      const project = projectRef
+        ? await resolveProject(await clientFor(invocation), requiredWorkspace(invocation), projectRef)
+        : null;
+      const projectId = project ? String(project.id) : null;
       const options = legacyOptions(invocation);
-      if (action === "pull") await wikiPull(options, String(project.id));
-      else if (action === "status") await wikiStatus(options, String(project.id));
-      else if (action === "diff") await wikiDiff(options, String(project.id));
-      else await wikiPush(options, String(project.id));
+      if (action === "pull") await wikiPull(options, projectId!);
+      else if (action === "status") await wikiStatus(options, projectId);
+      else if (action === "diff") await wikiDiff(options, projectId!);
+      else await wikiPush(options, projectId);
     },
   ));
 }

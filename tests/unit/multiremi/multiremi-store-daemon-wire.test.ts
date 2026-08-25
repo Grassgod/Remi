@@ -394,7 +394,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     const agent = store.createAgent({
       id: "agt_claim_context",
-      name: "Claim Context Claude",
+      name: "Atlas · LLM Wiki",
       provider: "claude",
       runtimeId: runtime.id,
     });
@@ -411,14 +411,16 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     store.sendChatMessage(chat.id, { body: "and Qingdao too" });
     const autopilot = store.createAutopilot({
       id: "ap_claim_context",
-      title: "Webhook triage",
-      description: "Investigate incoming webhook",
+      title: "Atlas · Repository Wiki",
+      description: "Update the repository Wiki",
       assigneeId: agent.id,
       executionMode: "run_only",
     });
     const run = store.runAutopilot(autopilot.id, {
-      source: "webhook",
-      payload: { repository: "remi", action: "push" },
+      source: "scm_event",
+      payload: { atlas_repository_id: "repo_claim_context", atlas_mode: "incremental_update" },
+      repositoryId: "repo_claim_context",
+      dedupeKey: "repo_claim_context:incremental_update:abc123",
     });
     const quick = store.quickCreateIssue({
       agentId: agent.id,
@@ -451,10 +453,11 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       kind: "autopilot",
       autopilot_run_id: run.id,
       autopilot_id: autopilot.id,
-      autopilot_source: "webhook",
-      autopilot_title: "Webhook triage",
-      autopilot_description: "Investigate incoming webhook",
-      autopilot_trigger_payload: { repository: "remi", action: "push" },
+      autopilot_source: "scm_event",
+      autopilot_title: "Atlas · Repository Wiki",
+      autopilot_description: "Update the repository Wiki",
+      autopilot_trigger_payload: { atlas_repository_id: "repo_claim_context", atlas_mode: "incremental_update" },
+      scm_revision: "abc123",
     });
     expect(byId.get(run.taskId!).autopilotTitle).toBeUndefined();
 
@@ -491,6 +494,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
         autopilot_title: "Normalized autopilot",
         autopilot_description: "Normalized description",
         autopilot_trigger_payload: { ok: true },
+        scm_revision: "deadbeef",
         quick_create_prompt: "Normalized quick-create",
         workspace_context: "Normalized workspace context",
         requesting_user_name: "Normalized Alice",
@@ -512,6 +516,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       autopilotTitle: "Normalized autopilot",
       autopilotDescription: "Normalized description",
       autopilotTriggerPayload: { ok: true },
+      scmRevision: "deadbeef",
       quickCreatePrompt: "Normalized quick-create",
       workspaceContext: "Normalized workspace context",
       requestingUserName: "Normalized Alice",

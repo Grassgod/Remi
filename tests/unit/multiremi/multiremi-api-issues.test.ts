@@ -57,7 +57,7 @@ describe("Multiremi API — issue endpoints", () => {
     });
   });
 
-  it("requires a human workspace owner or admin for single and batch hard deletion", async () => {
+  it("gives an owner task token delete parity while rejecting daemon and member credentials", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const target = store.createIssue({ title: "Human-admin delete only", workspaceId: "local" });
@@ -92,7 +92,25 @@ describe("Multiremi API — issue endpoints", () => {
     });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
-    for (const token of [taskToken.token, daemonToken.token, memberToken.token]) {
+    const taskSingleTarget = store.createIssue({ title: "Task single delete", workspaceId: "local" });
+    expect((await app.request(`/api/issues/${taskSingleTarget.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${taskToken.token}` },
+    })).status).toBe(204);
+    expect(store.getIssue(taskSingleTarget.id)).toBeNull();
+
+    const taskBatchTarget = store.createIssue({ title: "Task batch delete", workspaceId: "local" });
+    expect((await app.request("/api/issues/batch-delete", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${taskToken.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ issue_ids: [taskBatchTarget.id] }),
+    })).status).toBe(200);
+    expect(store.getIssue(taskBatchTarget.id)).toBeNull();
+
+    for (const token of [daemonToken.token, memberToken.token]) {
       const single = await app.request(`/api/issues/${target.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },

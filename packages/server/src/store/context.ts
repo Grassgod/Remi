@@ -242,6 +242,7 @@ export interface ProjectsSurface {
 
 export interface AutopilotsSurface {
   getAutopilot(id: string): MultiremiAutopilot | null;
+  listAutopilots(workspaceId?: string | null): MultiremiAutopilot[];
   getAutopilotRun(id: string): MultiremiAutopilotRun | null;
   runAutopilot(autopilotId: string, input?: import("@multiremi/contracts/types.js").RunAutopilotInput): MultiremiAutopilotRun;
   enqueueIssueStatusChangedEvent(input: {

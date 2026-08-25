@@ -314,6 +314,8 @@ export interface AgentTask {
   autopilot_source?: string | null;
   autopilotTriggerPayload?: unknown | null;
   autopilot_trigger_payload?: unknown | null;
+  scmRevision?: string | null;
+  scm_revision?: string | null;
   quickCreatePrompt?: string | null;
   quick_create_prompt?: string | null;
 

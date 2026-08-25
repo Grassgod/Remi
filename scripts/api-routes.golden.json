@@ -19479,7 +19479,8 @@
               "failure_reason": null,
               "started_at": null,
               "updated_at": null,
-              "source_revision": null
+              "source_revision": null,
+              "published": null
             }
           },
           {
@@ -19497,7 +19498,8 @@
               "failure_reason": null,
               "started_at": null,
               "updated_at": null,
-              "source_revision": null
+              "source_revision": null,
+              "published": null
             }
           },
           {
@@ -19515,7 +19517,8 @@
               "failure_reason": null,
               "started_at": null,
               "updated_at": null,
-              "source_revision": null
+              "source_revision": null,
+              "published": null
             }
           }
         ]

@@ -152,6 +152,89 @@ describe("task-level agent delegation return", () => {
     expect(delegated.delegationId).toBeTruthy();
   });
 
+  it("coalesces a leader's repeated rich mention into the teammate's queued task", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Leader", provider: "claude" });
+    const qa = store.createAgent({ name: "QA", provider: "claude" });
+    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
+    const issue = store.createIssue({ title: "Duplicate delegation", assigneeType: "squad", assigneeId: squad.id });
+    const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
+
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: `Please verify [@QA](mention://agent/${qa.id})`,
+    });
+    // The leader's own summary re-mentions the teammate it just dispatched.
+    const summary = store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: `Next up: already sent [@QA](mention://agent/${qa.id}) to run the acceptance pass.`,
+    });
+
+    const qaTasks = store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id);
+    expect(qaTasks).toHaveLength(1);
+    expect(qaTasks[0]!.status).toBe("queued");
+
+    const coalesced = store.listIssueActivity(issue.id)
+      .filter((activity) => activity.type === "comment_mention_coalesced");
+    expect(coalesced).toHaveLength(1);
+    expect(coalesced[0]!.data).toMatchObject({ commentId: summary.id, agentId: qa.id, taskId: qaTasks[0]!.id });
+  });
+
+  it("still queues a follow-up mention once the teammate's task left the queue", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Leader", provider: "claude" });
+    const qa = store.createAgent({ name: "QA", provider: "claude" });
+    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
+    const issue = store.createIssue({ title: "Follow-up delegation", assigneeType: "squad", assigneeId: squad.id });
+    const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
+
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: `Please verify [@QA](mention://agent/${qa.id})`,
+    });
+    const firstQaTask = store.listTasksForIssue(issue.id).find((task) => task.agentId === qa.id)!;
+    // A dispatched task has its context frozen, so a later instruction cannot
+    // ride along on it and must get its own turn.
+    db!.run(
+      "UPDATE multiremi_tasks SET status = 'dispatched', dispatched_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [firstQaTask.id],
+    );
+
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: leader.id,
+      taskId: leaderTask.id,
+      body: `One more thing [@QA](mention://agent/${qa.id}) — also check the migration.`,
+    });
+
+    expect(store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id)).toHaveLength(2);
+  });
+
+  it("dispatches every human rich mention individually without coalescing", () => {
+    const store = createStore();
+    const qa = store.createAgent({ name: "QA", provider: "claude" });
+    const issue = store.createIssue({ title: "Human mentions" });
+
+    store.createIssueComment(issue.id, {
+      authorType: "member",
+      body: `Please look [@QA](mention://agent/${qa.id})`,
+    });
+    store.createIssueComment(issue.id, {
+      authorType: "member",
+      body: `And this too [@QA](mention://agent/${qa.id})`,
+    });
+
+    expect(store.listTasksForIssue(issue.id).filter((task) => task.agentId === qa.id)).toHaveLength(2);
+    expect(store.listIssueActivity(issue.id)
+      .filter((activity) => activity.type === "comment_mention_coalesced")).toHaveLength(0);
+  });
+
   it("returns a completed child exactly once and does not bounce after the leader finishes", () => {
     const fixture = createDelegationFixture();
 

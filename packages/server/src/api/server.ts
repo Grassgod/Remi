@@ -66,6 +66,7 @@ import {
 } from "./helpers/repositories.js";
 import type {
   CreateFeedbackInput,
+  MultiremiAccessToken,
 } from "@multiremi/contracts/types.js";
 import {
   resolveAgentPluginGitSource,
@@ -94,7 +95,7 @@ import {
   denyDaemonTokenTaskRuntimeIdentity,
   isDaemonGcCheckRequest,
   isDaemonTokenAllowedRequest,
-  isTaskTokenForbiddenRequest,
+  taskTokenHardDenyCategory,
   log,
   readJson,
   resolveWebhookClientIpAddress,
@@ -150,6 +151,25 @@ import type {
 } from "./helpers.js";
 
 let authDisabledWarningEmitted = false;
+
+function recordTaskTokenWrite(
+  request: Request,
+  token: MultiremiAccessToken,
+  statusCode: number,
+  denyCategory?: string,
+): void {
+  const method = request.method.toUpperCase();
+  if (method !== "POST" && method !== "PUT" && method !== "PATCH" && method !== "DELETE") return;
+  log.info("task token write request", {
+    event: "task_token_write",
+    task_id: token.taskId ?? null,
+    workspace_id: token.workspaceId ?? null,
+    method,
+    path: new URL(request.url).pathname,
+    status_code: statusCode,
+    ...(denyCategory ? { deny_category: denyCategory } : {}),
+  });
+}
 
 function envEnabled(value: string | undefined, fallback = true): boolean {
   if (value === undefined) return fallback;
@@ -289,8 +309,21 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       if (accessToken.type === "daemon" && !isDaemonTokenAllowedRequest(c.req.raw)) {
         return c.json({ error: "forbidden for daemon token" }, 403);
       }
-      if (accessToken.type === "task" && isTaskTokenForbiddenRequest(c.req.raw)) {
-        return c.json({ error: "forbidden for task token" }, 403);
+      if (accessToken.type === "task") {
+        const denyCategory = taskTokenHardDenyCategory(c.req.raw);
+        if (denyCategory) {
+          recordTaskTokenWrite(c.req.raw, accessToken, 403, denyCategory);
+          return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+        }
+        c.set("multiremiAuth", buildRequestAuth(accessToken, null));
+        try {
+          await next();
+          recordTaskTokenWrite(c.req.raw, accessToken, c.res.status);
+        } catch (error) {
+          recordTaskTokenWrite(c.req.raw, accessToken, 500);
+          throw error;
+        }
+        return;
       }
       c.set("multiremiAuth", buildRequestAuth(accessToken, null));
       await next();
@@ -315,8 +348,21 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         if (accessToken.type === "daemon" && !isDaemonTokenAllowedRequest(c.req.raw)) {
           return c.json({ error: "forbidden for daemon token" }, 403);
         }
-        if (accessToken.type === "task" && isTaskTokenForbiddenRequest(c.req.raw)) {
-          return c.json({ error: "forbidden for task token" }, 403);
+        if (accessToken.type === "task") {
+          const denyCategory = taskTokenHardDenyCategory(c.req.raw);
+          if (denyCategory) {
+            recordTaskTokenWrite(c.req.raw, accessToken, 403, denyCategory);
+            return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+          }
+          c.set("multiremiAuth", buildRequestAuth(accessToken, null));
+          try {
+            await next();
+            recordTaskTokenWrite(c.req.raw, accessToken, c.res.status);
+          } catch (error) {
+            recordTaskTokenWrite(c.req.raw, accessToken, 500);
+            throw error;
+          }
+          return;
         }
         c.set("multiremiAuth", buildRequestAuth(accessToken, null));
       }

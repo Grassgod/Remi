@@ -1142,6 +1142,9 @@ export interface MultiremiTask {
   autopilot_description?: string | null;
   autopilotTriggerPayload?: unknown | null;
   autopilot_trigger_payload?: unknown | null;
+  /** Normalized source revision for an SCM-backed automation claim. */
+  scmRevision?: string | null;
+  scm_revision?: string | null;
   quickCreatePrompt?: string | null;
   quick_create_prompt?: string | null;
   workspaceContext?: string | null;

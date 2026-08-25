@@ -3,7 +3,6 @@ import {
   backfillWorkspaceRepositoryDefaultBranches,
   createScmAwareGitRemoteInspector,
   denyCurrentUserWorkspaceAccess,
-  denyTaskTokenRepositoryWikiAccess,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
   isJsonApiError,
@@ -18,7 +17,6 @@ import {
   safeCreateWorkspace,
   safeLeaveWorkspace,
   updateWorkspaceRepository,
-  safeWorkspaceRepositoryData,
   WorkspaceRepositoryError,
 } from "../helpers.js";
 import type {
@@ -81,9 +79,12 @@ import {
   repositoryWikiBuildDedupeKey,
   type MultiremiAutopilotRunRecord,
 } from "@multiremi/store/repos/autopilots-repo.js";
+import {
+  ATLAS_AGENT_NAME,
+  ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
+  resolveAtlasRepositoryWikiAutopilot,
+} from "@multiremi/repository-wiki/atlas.js";
 
-const ATLAS_AGENT_NAME = "Atlas · LLM Wiki";
-const ATLAS_REPOSITORY_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
 const ATLAS_PROJECT_AUTOPILOT_TITLE = "Atlas · Project Knowledge";
 
 export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
@@ -91,7 +92,10 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
 
   app.get("/api/workspaces", (c) => {
     const userId = authenticatedRequestUserId(c);
-    const all = store.listWorkspaces();
+    const token = currentAccessToken(c);
+    const all = store.listWorkspaces().filter((workspace) =>
+      token?.type !== "task" || workspace.id === token.workspaceId
+    );
     // Master token / open mode (no identity) is admin and sees everything;
     // a logged-in user sees only the workspaces they are a member of.
     if (!userId) return c.json(all);
@@ -202,10 +206,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         workspaceId,
         createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       );
-      const visible = currentAccessToken(c)?.type === "task"
-        ? repositories.map(safeWorkspaceRepositoryData)
-        : repositories;
-      return c.json({ repositories: visible, total: visible.length });
+      return c.json({ repositories, total: repositories.length });
     } catch (error) {
       if (error instanceof WorkspaceRepositoryError) {
         return c.json({ error: error.message }, error.status);
@@ -335,7 +336,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryAutopilot = ensureAtlasAutopilot(store, {
       workspaceId,
       agentId: agent.id,
-      title: ATLAS_REPOSITORY_AUTOPILOT_TITLE,
+      title: ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
       description: "Use the canonical SCM event, checked-out target repository, and existing Repo Wiki to perform an incremental repository Wiki update with the remi CLI.",
       executionMode: "run_only",
       createdById,
@@ -357,8 +358,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
-    if (taskDenied) return taskDenied;
     const missing = requireWorkspaceRepository(store, workspaceId, repositoryId);
     if (missing) return c.json({ error: "repository not found" }, 404);
     try {
@@ -376,8 +375,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
-    if (taskDenied) return taskDenied;
     const missing = requireWorkspaceRepository(store, workspaceId, repositoryId);
     if (missing) return c.json({ error: "repository not found" }, 404);
     const body = await readJsonStrict<CreateRepositoryWikiDocInput>(c);
@@ -430,8 +427,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
-    if (taskDenied) return taskDenied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     try {
       const doc = await deps.repositoryWiki.get(workspaceId, repositoryId, c.req.param("ref"));
@@ -445,8 +440,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
-    if (taskDenied) return taskDenied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     const body = await readJsonStrict<UpdateRepositoryWikiDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -466,8 +459,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
-    if (taskDenied) return taskDenied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     try {
       const expectedVersion = c.req.query("expected_version");
@@ -487,8 +478,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const repositoryId = c.req.param("repositoryId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const taskDenied = denyTaskTokenRepositoryWikiAccess(c, store, workspaceId, repositoryId);
-    if (taskDenied) return taskDenied;
     try {
       const revisions = await deps.repositoryWiki.revisions(workspaceId, repositoryId, c.req.param("ref"));
       return c.json({ revisions: revisions.map(repositoryWikiRevisionResponse) });
@@ -594,9 +583,15 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/workspaces/:id", (c) => {
     const workspaceId = c.req.param("id");
     const actorToken = currentAccessToken(c);
-    if (actorToken?.type === "task" || actorToken?.type === "daemon") {
+    if (actorToken?.type === "task") {
       return c.json({
-        error: `forbidden for ${actorToken.type} token`,
+        error: "forbidden for task token",
+        code: "task_token_hard_denied",
+      }, 403);
+    }
+    if (actorToken?.type === "daemon") {
+      return c.json({
+        error: "forbidden for daemon token",
         code: "human_admin_required",
       }, 403);
     }
@@ -886,7 +881,11 @@ function atlasSetupStatus(store: RouterDeps["store"], workspaceId: string): Reco
     ? store.listAutopilots(workspaceId).filter((autopilot) => autopilot.assigneeType === "agent" && autopilot.assigneeId === agent.id)
     : [];
   const projectAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_PROJECT_AUTOPILOT_TITLE) ?? null;
-  const repositoryAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_REPOSITORY_AUTOPILOT_TITLE) ?? null;
+  const repositoryAutopilot = resolveAtlasRepositoryWikiAutopilot(
+    workspaceId,
+    store.listAgents(),
+    store.listAutopilots(workspaceId),
+  );
   const projectTrigger = projectAutopilot
     ? store.listAutopilotTriggers(projectAutopilot.id).find((trigger) => trigger.kind === "system_event" && trigger.enabled) ?? null
     : null;
@@ -992,6 +991,7 @@ interface RepositoryWikiBuildState {
   started_at: string | null;
   updated_at: string | null;
   source_revision: string | null;
+  published: boolean | null;
 }
 
 /**
@@ -1013,6 +1013,7 @@ function repositoryWikiBuildState(
       started_at: null,
       updated_at: null,
       source_revision: null,
+      published: null,
     };
   }
   const task = run.taskId ? store.getTask(run.taskId) : null;
@@ -1029,6 +1030,7 @@ function repositoryWikiBuildState(
     started_at: run.triggeredAt,
     updated_at: run.completedAt ?? task?.updatedAt ?? run.triggeredAt,
     source_revision: autopilotRunSourceRevision(run),
+    published: run.status === "completed" ? store.isRepositoryWikiRunPublished(run.id) : null,
   };
 }
 

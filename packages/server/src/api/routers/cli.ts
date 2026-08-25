@@ -302,9 +302,6 @@ function repositoryIdsForProject(
 }
 
 function allowedOperations(identity: CliIdentity): string[] {
-  if (identity === "task") {
-    return ["context.read", "project.catalog.read", "repo.catalog.read", "issue.current.write", "session.current.write", "task.current.write", "project.knowledge.write"];
-  }
   if (identity === "daemon") return ["context.read", "runtime.own.manage", "daemon.control"];
   if (identity === "share") return ["context.read", "share.read"];
   return ["context.read", "workspace.manage", "project.manage", "repo.manage", "collaboration.manage", "runtime.manage"];

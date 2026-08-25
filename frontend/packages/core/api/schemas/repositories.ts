@@ -54,6 +54,7 @@ export const repositoryWikiBuildInfoSchema = z.object({
   started_at: z.string().nullable().optional().default(null),
   updated_at: z.string().nullable().optional().default(null),
   source_revision: z.string().nullable().optional().default(null),
+  published: z.boolean().nullable().catch(null).default(null),
 }).loose();
 
 export const repositoryWikiSummarySchema = z.object({

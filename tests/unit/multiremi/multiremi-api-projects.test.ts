@@ -412,7 +412,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(await tooLongCreate.json()).toEqual({ error: "instructions must be 4000 characters or fewer" });
   });
 
-  it("scopes instruction reads to the Project and allows only human members to update them", async () => {
+  it("scopes instruction access to the workspace and gives Task tokens owner parity", async () => {
     const store = createStore();
     const workspace = store.createWorkspace({
       id: "ws_project_instructions_guard",
@@ -459,7 +459,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       workspaceId: workspace.id,
       prompt: "work",
     });
-    const taskToken = await store.createTaskAccessToken(task, workspace.id);
+    const taskToken = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const outsiderHeaders = {
       Authorization: `Bearer ${outsiderToken.token}`,
@@ -489,17 +489,17 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
 
     expect((await app.request(`/api/multiremi/projects/${project.id}`, { headers: taskHeaders })).status).toBe(200);
     expect((await app.request(`/api/projects/${project.id}`, { headers: taskHeaders })).status).toBe(200);
-    expect((await app.request(`/api/projects/${siblingProject.id}`, { headers: taskHeaders })).status).toBe(404);
+    expect((await app.request(`/api/projects/${siblingProject.id}`, { headers: taskHeaders })).status).toBe(200);
     expect((await app.request(`/api/multiremi/projects/${project.id}`, {
       method: "PATCH",
       headers: taskHeaders,
       body: JSON.stringify({ instructions: "Task injection", expectedInstructionsRevision: 1 }),
-    })).status).toBe(403);
-    expect((await app.request(`/api/projects/${project.id}`, {
+    })).status).toBe(200);
+    expect((await app.request(`/api/projects/${siblingProject.id}`, {
       method: "PUT",
       headers: taskHeaders,
       body: JSON.stringify({ instructions: "Task injection", expected_instructions_revision: 1 }),
-    })).status).toBe(403);
+    })).status).toBe(200);
 
     const compatList = await (await app.request(
       `/api/projects?workspace_id=${workspace.id}`,
@@ -541,7 +541,8 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(compatSearch.projects[0]).not.toHaveProperty("instructions_revision");
     expect(compatSearch.projects[0]).not.toHaveProperty("instructions_updated_at");
     expect(compatSearch.projects[0]).not.toHaveProperty("instructions_updated_by");
-    expect(store.getProject(project.id)?.instructions).toBe("Private project guidance");
+    expect(store.getProject(project.id)?.instructions).toBe("Task injection");
+    expect(store.getProject(siblingProject.id)?.instructions).toBe("Task injection");
   });
 
   it("serves original project, squad, and autopilot compatibility endpoints", async () => {

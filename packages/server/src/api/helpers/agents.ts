@@ -9,7 +9,6 @@ import {
   cleanString,
   currentAccessToken,
   currentRequestUserId,
-  currentTaskAccessToken,
   currentWorkspaceRoleStrict,
   hasRequestField,
   requestedSkillWorkspaceId,
@@ -32,8 +31,17 @@ import {
   type FleetModelResponse,
   type FleetProviderModelsResponse,
 } from "../wire/runtimes.js";
+import { ATLAS_AGENT_NAME } from "../../repository-wiki/atlas.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
+
+function reservedAtlasAgentName(c: Context, name: string): Response | null {
+  if (name !== ATLAS_AGENT_NAME) return null;
+  return c.json({
+    error: `${ATLAS_AGENT_NAME} is reserved for the platform Repository Wiki agent`,
+    code: "atlas_identity_reserved",
+  }, 409);
+}
 
 export function requestedAgentWorkspaceId(c: Context, input?: Pick<CreateAgentInput, "workspaceId" | "workspace_id">): string {
   return cleanString(input?.workspaceId) ??
@@ -159,7 +167,6 @@ export function withSkillCreateRequestContext(
   store: MultiremiStore,
   input: CreateSkillInput,
 ): CreateSkillInput | Response {
-  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const workspaceId = requestedSkillWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -221,7 +228,6 @@ export function loadSkillForCurrentManager(
   store: MultiremiStore,
   skillId: string,
 ): { skill: MultiremiSkill } | Response {
-  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const loaded = loadSkillForCurrentUser(c, store, skillId);
   if (loaded instanceof Response) return loaded;
   const role = currentWorkspaceRoleStrict(c, store, skillWorkspaceId(loaded.skill));
@@ -237,7 +243,6 @@ export function loadAgentForCurrentManager(
   store: MultiremiStore,
   agentId: string,
 ): { agent: MultiremiAgent } | Response {
-  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const loaded = loadAgentForCurrentUser(c, store, agentId);
   if (loaded instanceof Response) return loaded;
   const role = currentWorkspaceRoleStrict(c, store, loaded.agent.workspaceId);
@@ -253,7 +258,6 @@ export function loadAgentEnvForCurrentAdmin(
   store: MultiremiStore,
   agentId: string,
 ): { agent: MultiremiAgent } | Response {
-  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const loaded = loadAgentForCurrentUser(c, store, agentId);
   if (loaded instanceof Response) return loaded;
   const role = currentWorkspaceRoleStrict(c, store, loaded.agent.workspaceId);
@@ -293,12 +297,13 @@ export function parseExpectedActiveAgentIds(c: Context, value: unknown): string[
 }
 
 export function withAgentRequestContext(c: Context, store: MultiremiStore, input: CreateAgentInput): CreateAgentInput | Response {
-  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const name = cleanString(typeof input.name === "string" ? input.name : null);
   if (!name) return c.json({ error: "name is required" }, 400);
+  const reserved = reservedAtlasAgentName(c, name);
+  if (reserved) return reserved;
   const provider = resolveAgentRequestProvider(c, store, workspaceId, input);
   if (provider instanceof Response) return provider;
   const conflict = store.getAgentByWorkspaceAndName(workspaceId, name);
@@ -366,6 +371,8 @@ export function withAgentUpdateRequestContext(
   if (hasRequestField(input, "name")) {
     const name = cleanString(typeof input.name === "string" ? input.name : null);
     if (!name) return c.json({ error: "name is required" }, 400);
+    const reserved = reservedAtlasAgentName(c, name);
+    if (reserved) return reserved;
     const conflict = store.getAgentByWorkspaceAndName(targetWorkspaceId, name);
     if (conflict && conflict.id !== current.id) return agentNameConflict(c, name);
     next.name = name;
@@ -472,12 +479,13 @@ export function withAgentTemplateRequestContext(
   store: MultiremiStore,
   input: CreateAgentFromTemplateInput,
 ): CreateAgentFromTemplateInput | Response {
-  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const name = cleanString(typeof input.name === "string" ? input.name : null);
   if (!name) return c.json({ error: "name is required" }, 400);
+  const reserved = reservedAtlasAgentName(c, name);
+  if (reserved) return reserved;
   const templateSlug = cleanString(input.templateSlug ?? input.template_slug);
   if (!templateSlug) return c.json({ error: "template_slug is required" }, 400);
   const template = getAgentTemplate(templateSlug);

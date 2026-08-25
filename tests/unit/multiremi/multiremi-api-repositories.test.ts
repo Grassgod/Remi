@@ -166,6 +166,7 @@ describe("Multiremi API - workspace repositories", () => {
         run_id: firstBody.run_id,
         task_id: firstBody.task_id,
         failure_reason: null,
+        published: null,
       },
     });
 
@@ -183,6 +184,7 @@ describe("Multiremi API - workspace repositories", () => {
       status: "failed",
       run_id: firstBody.run_id,
       failure_reason: "clone failed",
+      published: null,
     });
 
     // A failed build never blocks a retry. (Sleep so the retry gets a strictly
@@ -200,12 +202,117 @@ describe("Multiremi API - workspace repositories", () => {
     const healthy = await summary();
     expect(healthy.status).toBe("healthy");
     expect(healthy.page_count).toBe(1);
-    expect(healthy.build).toMatchObject({ status: "idle", run_id: retryBody.run_id });
+    expect(healthy.build).toMatchObject({ status: "idle", run_id: retryBody.run_id, published: false });
 
     // Manual rebuilds target the moving HEAD, so a completed build never blocks one.
     const rebuild = await app.request(buildPath, { method: "POST" });
     expect(rebuild.status).toBe(202);
     expect((await rebuild.json() as any).run_id).not.toBe(retryBody.run_id);
+  });
+
+  it("keeps repository Wiki builds unavailable to daemon tokens", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories(workspace.id, [{
+      id: "repo_guarded",
+      name: "guarded",
+      url: "git@github.com:acme/guarded.git",
+      source: "github",
+      default_branch: "main",
+    }]);
+    const daemonToken = await store.createAccessToken({
+      workspaceId: workspace.id,
+      name: "Build auth daemon",
+      type: "daemon",
+      purpose: "daemon",
+      daemonId: "dmn_build_auth",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const path = `/api/workspaces/${workspace.id}/repos/repo_guarded/wiki/build`;
+
+    const response = await app.request(path, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${daemonToken.token}` },
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it("strips server-only repository build scope from public autopilot run routes", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories(workspace.id, [{
+      id: "repo_private",
+      name: "private",
+      url: "git@github.com:acme/private.git",
+      source: "github",
+      default_branch: "main",
+    }]);
+    store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
+    const sameTitle = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      workspaceId: workspace.id,
+      assigneeId: userAgent.id,
+      executionMode: "run_only",
+    });
+    const runtime = store.registerRuntime({ name: "wiki-injection-runtime", provider: "claude" });
+    const app = createMultiremiApp({ store });
+    const injectedSnakeCase = {
+      source: "api",
+      repository_id: "repo_private",
+      dedupe_key: "repo_private:incremental_update:abc123",
+      payload: { atlas_repository_id: "repo_private" },
+    };
+
+    const firstResponse = await app.request(`/api/autopilots/${sameTitle.id}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(injectedSnakeCase),
+    });
+    expect(firstResponse.status).toBe(200);
+    const firstBody = await firstResponse.json() as any;
+    const firstRun = store.getAutopilotRun(firstBody.id)!;
+    expect(firstRun).toMatchObject({ repositoryId: null, dedupeKey: null });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(firstRun.taskId!);
+    store.startTask(firstRun.taskId!);
+    store.createRepositoryWikiDoc(workspace.id, "repo_private", {
+      path: "user-write.md",
+      title: "User write",
+      sourceTaskId: firstRun.taskId,
+    });
+    store.completeTask(firstRun.taskId!, { output: "published" });
+
+    const replayResponse = await app.request(`/api/autopilots/${sameTitle.id}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(injectedSnakeCase),
+    });
+    expect(replayResponse.status).toBe(200);
+    expect((await replayResponse.json() as any).id).not.toBe(firstRun.id);
+
+    const injectedCamelCase = {
+      repositoryId: "repo_private",
+      dedupeKey: "repo_private:incremental_update:abc123",
+    };
+    for (const path of [
+      `/api/multiremi/autopilots/${sameTitle.id}/run`,
+      `/api/multiremi/autopilots/${sameTitle.id}/trigger`,
+    ]) {
+      const response = await app.request(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(injectedCamelCase),
+      });
+      expect(response.status).toBe(201);
+    }
+
+    const runs = store.listAutopilotRuns(sameTitle.id);
+    expect(runs).toHaveLength(4);
+    expect(runs.every((run) => run.repositoryId === null && run.dedupeKey === null)).toBe(true);
+    const summaries = await app.request(`/api/workspaces/${workspace.id}/repository-wikis`);
+    expect(summaries.status).toBe(200);
+    expect((await summaries.json() as any).repositories[0].build.run_id).toBeNull();
   });
 
   it("does not create an unusable Atlas agent before code-to-wiki is imported", async () => {
@@ -262,6 +369,90 @@ describe("Multiremi API - workspace repositories", () => {
     ]);
     expect((await (await app.request(`${root}/${created.id}/revisions`)).json() as any).revisions.map((revision: any) => revision.version))
       .toEqual([2, 1]);
+  });
+
+  it("gives owner task tokens full same-workspace Repository Wiki and build access", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories(workspace.id, [{
+      id: "repo_task_wiki",
+      name: "task-wiki",
+      url: "git@github.com:acme/task-wiki.git",
+      source: "github",
+      default_branch: "main",
+    }]);
+    store.importAgentPlugin({
+      provider: "claude",
+      name: "code-to-wiki",
+      manifest: { name: "code-to-wiki", version: "1.0.0" },
+      files: [{ path: "skills/code-to-wiki/SKILL.md", content: "# Code to Wiki\n" }],
+    });
+    store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+    const foreignWorkspace = store.createWorkspace({ name: "Foreign Wiki", slug: "foreign-wiki" });
+    store.updateWorkspaceRepositories(foreignWorkspace.id, [{
+      id: "repo_foreign_wiki",
+      name: "foreign-wiki",
+      url: "git@github.com:acme/foreign-wiki.git",
+      source: "github",
+      default_branch: "main",
+    }]);
+    const agent = store.createAgent({ name: "Wiki task", provider: "claude", workspaceId: workspace.id });
+    const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "Publish repository Wiki" });
+    const credential = await store.createTaskAccessToken(task, "local");
+    const auth = { Authorization: `Bearer ${credential.token}` };
+    const jsonAuth = { ...auth, "Content-Type": "application/json" };
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const root = `/api/workspaces/${workspace.id}/repos/repo_task_wiki/wiki`;
+
+    const createdResponse = await app.request(root, {
+      method: "POST",
+      headers: jsonAuth,
+      body: JSON.stringify({ path: "overview.md", title: "Overview", body: "v1" }),
+    });
+    expect(createdResponse.status).toBe(201);
+    const created = (await createdResponse.json() as any).doc;
+
+    expect((await app.request(root, { headers: auth })).status).toBe(200);
+    expect((await app.request(`${root}/${created.id}`, { headers: auth })).status).toBe(200);
+    expect((await app.request(`${root}/${created.id}`, {
+      method: "PUT",
+      headers: jsonAuth,
+      body: JSON.stringify({ body: "v2", expected_version: 1 }),
+    })).status).toBe(200);
+
+    for (const path of [
+      `/api/workspaces/${workspace.id}/repository-wikis`,
+      `${root}/${created.id}/revisions`,
+    ]) {
+      const response = await app.request(path, { headers: auth });
+      expect(response.status, path).toBe(200);
+    }
+    const atlas = await app.request(`/api/workspaces/${workspace.id}/repository-wikis/atlas`, {
+      method: "POST",
+      headers: jsonAuth,
+      body: "{}",
+    });
+    expect(atlas.status).toBe(200);
+    const build = await app.request(`${root}/build`, { method: "POST", headers: jsonAuth, body: "{}" });
+    expect(build.status).toBe(202);
+
+    const foreignRoot = `/api/workspaces/${foreignWorkspace.id}/repos/repo_foreign_wiki/wiki`;
+    expect((await app.request(foreignRoot, { headers: auth })).status).toBe(404);
+    expect((await app.request(foreignRoot, {
+      method: "POST",
+      headers: jsonAuth,
+      body: JSON.stringify({ path: "planted.md", title: "Planted", body: "no" }),
+    })).status).toBe(404);
+
+    expect((await app.request(`${root}/${created.id}?expected_version=2`, {
+      method: "DELETE",
+      headers: auth,
+    })).status).toBe(200);
   });
 
   it("rejects repository writes through generic workspace update routes", async () => {

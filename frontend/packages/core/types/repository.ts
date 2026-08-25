@@ -58,6 +58,8 @@ export interface RepositoryWikiBuildInfo {
   started_at: string | null;
   updated_at: string | null;
   source_revision: string | null;
+  // Null while the run is active or when talking to an older server.
+  published: boolean | null;
 }
 
 export interface RepositoryWikiSummary {

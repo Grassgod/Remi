@@ -362,11 +362,11 @@ describe("Multiremi API — daemon retirement", () => {
       taskId: task.id,
       agentId: agent.id,
     });
-    const taskPlanDenied = await app.request(path, {
+    const taskPlan = await app.request(path, {
       headers: { Authorization: `Bearer ${taskToken.token}` },
     });
-    expect(taskPlanDenied.status).toBe(403);
-    expect(await taskPlanDenied.json()).toMatchObject({ code: "human_admin_required" });
+    expect(taskPlan.status).toBe(200);
+    expect((await taskPlan.json()).plan.can_retire).toBeFalse();
 
     const taskRetireDenied = await app.request("/api/multiremi/daemons/daemon-blocked/retire", {
       method: "POST",
@@ -377,7 +377,7 @@ describe("Multiremi API — daemon retirement", () => {
       body: JSON.stringify({ workspace_id: "local", expected_snapshot: "untrusted" }),
     });
     expect(taskRetireDenied.status).toBe(403);
-    expect(await taskRetireDenied.json()).toMatchObject({ code: "human_admin_required" });
+    expect(await taskRetireDenied.json()).toMatchObject({ code: "task_token_hard_denied" });
 
     const memberDenied = await app.request(path, {
       headers: { Authorization: `Bearer ${memberToken.token}` },

@@ -6,7 +6,6 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import {
   cleanString,
   currentRequestUserId,
-  currentTaskAccessToken,
   currentWorkspaceRoleStrict,
   workspaceAlwaysRedactSecrets,
 } from "./context.js";
@@ -45,38 +44,6 @@ export function agentCompatibilityResponse(store: MultiremiStore, agent: Multire
   };
 }
 
-export function agentTaskDirectoryResponse(agent: MultiremiAgent): Record<string, unknown> {
-  return {
-    id: agent.id,
-    workspaceId: agent.workspaceId,
-    provider: agent.provider,
-    name: agent.name,
-    description: agent.description,
-    avatarUrl: agent.avatarUrl,
-    visibility: agent.visibility,
-    status: agent.archivedAt ? "archived" : "active",
-    model: agent.model ?? "",
-    thinkingLevel: agent.thinkingLevel ?? "",
-    archivedAt: agent.archivedAt,
-  };
-}
-
-export function agentTaskDirectoryCompatibilityResponse(agent: MultiremiAgent): Record<string, unknown> {
-  return {
-    id: agent.id,
-    workspace_id: agent.workspaceId,
-    provider: agent.provider,
-    name: agent.name,
-    description: agent.description,
-    avatar_url: agent.avatarUrl,
-    visibility: agent.visibility,
-    status: agent.archivedAt ? "archived" : "active",
-    model: agent.model ?? "",
-    thinking_level: agent.thinkingLevel ?? "",
-    archived_at: agent.archivedAt,
-  };
-}
-
 export function agentBroadcastCompatibilityResponse(store: MultiremiStore, agent: MultiremiAgent): Record<string, unknown> {
   const response = agentCompatibilityResponse(store, agent);
   if (response.mcp_config != null) {
@@ -93,7 +60,7 @@ function agentMcpConfigForRequest(
 ): { value: unknown | null; redacted: boolean } {
   if (agent.mcpConfig == null) return { value: null, redacted: false };
   if (!c) return { value: agent.mcpConfig, redacted: false };
-  if (currentTaskAccessToken(c) || cleanString(c.req?.header?.("X-Agent-ID"))) return { value: null, redacted: true };
+  if (cleanString(c.req?.header?.("X-Agent-ID"))) return { value: null, redacted: true };
   if (workspaceAlwaysRedactSecrets(store.getWorkspace(agent.workspaceId)?.settings)) return { value: null, redacted: true };
   const role = currentWorkspaceRoleStrict(c, store, agent.workspaceId);
   if (role === "owner" || role === "admin" || agent.ownerId === currentRequestUserId(c)) {

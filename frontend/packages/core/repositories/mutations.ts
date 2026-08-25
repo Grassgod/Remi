@@ -88,6 +88,7 @@ function markWikiBuildQueued(
               started_at: null,
               updated_at: null,
               source_revision: null,
+              published: null,
             },
           }
         : summary,

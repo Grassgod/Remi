@@ -33,7 +33,7 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/workspaces/:workspaceId/feishu/sources", async (c) => {
     const workspaceId = c.req.param("workspaceId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
-      ?? requireWorkspaceAdmin(c, store, workspaceId);
+      ?? requireHumanFeishuSourceAdmin(c, deps, workspaceId);
     if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiFeishuSourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -195,11 +195,18 @@ function loadSource(
 ): { source: NonNullable<ReturnType<RouterDeps["store"]["getFeishuSource"]>> } | Response {
   const workspaceId = c.req.param("workspaceId") ?? "";
   const denied = denyCurrentUserWorkspaceAccess(c, deps.store, workspaceId)
-    ?? (requireAdmin ? requireWorkspaceAdmin(c, deps.store, workspaceId) : null);
+    ?? (requireAdmin ? requireHumanFeishuSourceAdmin(c, deps, workspaceId) : null);
   if (denied) return denied;
   const source = deps.store.getFeishuSource(c.req.param("sourceId") ?? "");
   if (!source || source.workspaceId !== workspaceId) return c.json({ error: "Feishu source not found" }, 404);
   return { source };
+}
+
+function requireHumanFeishuSourceAdmin(c: Context, deps: RouterDeps, workspaceId: string): Response | null {
+  if (currentAccessToken(c)?.type === "task") {
+    return c.json({ error: "forbidden for task token", code: "human_admin_required" }, 403);
+  }
+  return requireWorkspaceAdmin(c, deps.store, workspaceId);
 }
 
 function parseBooleanQuery(value: string | undefined, name: string): boolean | undefined {

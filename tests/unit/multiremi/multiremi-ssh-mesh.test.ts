@@ -1256,7 +1256,7 @@ describe("Multiremi SSH Mesh", () => {
     expect(store.getWorkspace(workspace.id)).toBeNull();
   });
 
-  it("allows only human workspace owners and admins to delete workspaces", async () => {
+  it("allows workspace owners and admins to delete workspaces but hard-denies Task tokens", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const ownerWorkspace = store.createWorkspace({
@@ -1303,7 +1303,7 @@ describe("Multiremi SSH Mesh", () => {
     expect((await removeAs(memberToken.token)).status).toBe(403);
     const taskDenied = await removeAs(taskToken.token);
     expect(taskDenied.status).toBe(403);
-    expect(await taskDenied.json()).toMatchObject({ code: "human_admin_required" });
+    expect(await taskDenied.json()).toMatchObject({ code: "task_token_hard_denied" });
     expect((await removeAs(daemonToken.token)).status).toBe(403);
     expect(store.getWorkspace(ownerWorkspace.id)).not.toBeNull();
     expect((await removeAs(ownerToken.token)).status).toBe(204);

@@ -43,8 +43,12 @@ describe("buildTaskEnv", () => {
   });
 
   it("accepts the snake_case wire field", () => {
-    const env = buildTaskEnv(taskWith({ workspace_env: { GH_TOKEN: "ghp_snake" } }), OPTS);
+    const env = buildTaskEnv(taskWith({
+      workspace_env: { GH_TOKEN: "ghp_snake" },
+      scm_revision: "deadbeef",
+    }), OPTS);
     expect(env.GH_TOKEN).toBe("ghp_snake");
+    expect(env.MULTIREMI_SCM_REVISION).toBe("deadbeef");
   });
 
   it("never falls back to the daemon credential when a claim has no task token", () => {
@@ -68,6 +72,7 @@ describe("buildTaskEnv", () => {
       MULTIREMI_PROJECT_ID: "spoofed",
       MULTIREMI_ISSUE_ID: "spoofed",
       MULTIREMI_ISSUE_SESSION_ID: "spoofed",
+      MULTIREMI_SCM_REVISION: "spoofed",
       MULTIREMI_WORKSPACE_ROOT: "/spoofed",
       CODEX_HOME: "/spoofed/codex",
     };
@@ -78,6 +83,7 @@ describe("buildTaskEnv", () => {
       project: { id: "prj_real", title: "Project", description: null },
       issueId: "iss_real",
       issueSessionId: "ises_real",
+      scmRevision: "abc123",
     }), {
       ...OPTS,
       workDir: "/workspaces/MUL-1",
@@ -101,6 +107,7 @@ describe("buildTaskEnv", () => {
     expect(env.MULTIREMI_PROJECT_ID).toBe("prj_real");
     expect(env.MULTIREMI_ISSUE_ID).toBe("iss_real");
     expect(env.MULTIREMI_ISSUE_SESSION_ID).toBe("ises_real");
+    expect(env.MULTIREMI_SCM_REVISION).toBe("abc123");
     expect(env.MULTIREMI_WORKSPACE_ROOT).toBe("/workspaces/MUL-1");
     expect(env.CODEX_HOME).toBe("/workspaces/MUL-1/.multiremi/sessions/ises_real/agt_real/1/home");
     expect(env.OPENAI_API_KEY).toBe("provider-secret");

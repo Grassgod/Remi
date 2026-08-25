@@ -3,6 +3,7 @@ import type {
   MultiremiTaskWithAgent,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { resolveAtlasRepositoryWikiAutopilot } from "./atlas.js";
 
 type RepositoryWikiRepository = MultiremiTaskRepositoryWikiContext["repository"];
 
@@ -38,8 +39,12 @@ export function resolveTaskRepositoryWikiRepositories(
     const payload = asRecord(run?.payload);
     const repositoryId = clean(payload?.atlas_repository_id);
     if (run && repositoryId) {
-      const autopilot = store.getAutopilot(run.autopilotId);
-      if (autopilot?.workspaceId === task.workspaceId && autopilot.title === "Atlas · Repository Wiki") {
+      const autopilot = resolveAtlasRepositoryWikiAutopilot(
+        task.workspaceId,
+        store.listAgents(),
+        store.listAutopilots(task.workspaceId),
+      );
+      if (autopilot?.id === run.autopilotId) {
         selectedIds.add(repositoryId);
       }
     }

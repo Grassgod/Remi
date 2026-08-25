@@ -390,20 +390,20 @@ describe("RepositoryWikiService OpenViking mode", () => {
     store.updateWorkspace("local", {
       repos: [{ id: "repo_bootstrap", name: "bootstrap", url: "git@github.com:example/bootstrap.git" }],
     });
-    store.getAutopilotRun = ((id: string) => id === "run_atlas" ? ({
-      id,
-      autopilotId: "auto_atlas",
-      payload: { atlas_repository_id: "repo_bootstrap" },
-    }) : null) as typeof store.getAutopilotRun;
-    store.getAutopilot = ((id: string) => id === "auto_atlas" ? ({
-      id,
-      workspaceId: "local",
+    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
-    }) : null) as typeof store.getAutopilot;
+      workspaceId: "local",
+      assigneeId: atlas.id,
+      executionMode: "run_only",
+    });
+    const run = store.runAutopilot(autopilot.id, {
+      payload: { atlas_repository_id: "repo_bootstrap" },
+    });
 
     const hydrated = await service.hydrateTaskWiki({
       workspaceId: "local",
-      autopilotRunId: "run_atlas",
+      autopilotRunId: run.id,
       assignmentSourceEventId: null,
       projectResources: [],
       repos: [],
@@ -414,6 +414,36 @@ describe("RepositoryWikiService OpenViking mode", () => {
       repository: { id: "repo_bootstrap", name: "bootstrap" },
       docs: [],
     }]);
+  });
+
+  it("does not hydrate bootstrap context for a user-owned same-title autopilot", async () => {
+    const store = createLocalStore();
+    const service = new RepositoryWikiService(store, new FakeOpenViking(), "openviking");
+    store.updateWorkspace("local", {
+      repos: [{ id: "repo_private", name: "private", url: "git@github.com:example/private.git" }],
+    });
+    store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
+    const sameTitle = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      workspaceId: "local",
+      assigneeId: userAgent.id,
+      executionMode: "run_only",
+    });
+    const run = store.runAutopilot(sameTitle.id, {
+      payload: { atlas_repository_id: "repo_private" },
+    });
+
+    const hydrated = await service.hydrateTaskWiki({
+      workspaceId: "local",
+      autopilotRunId: run.id,
+      assignmentSourceEventId: null,
+      projectResources: [],
+      repos: [],
+    } as any);
+
+    expect(hydrated.repos).toEqual([]);
+    expect(hydrated.repositoryWikiContexts).toBeUndefined();
   });
 });
 

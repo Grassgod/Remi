@@ -174,8 +174,12 @@ export function autopilotUpdateCompatibilityInput(
   return output;
 }
 
-export function autopilotTriggerCompatibilityResponse(trigger: MultiremiAutopilotTrigger): Record<string, unknown> {
+export function autopilotTriggerCompatibilityResponse(
+  trigger: MultiremiAutopilotTrigger,
+  options: { redactSecrets?: boolean } = {},
+): Record<string, unknown> {
   const isWebhook = trigger.kind === "webhook";
+  const redactSecrets = options.redactSecrets === true;
   const response: Record<string, unknown> = {
     id: trigger.id,
     autopilot_id: trigger.autopilotId,
@@ -184,12 +188,12 @@ export function autopilotTriggerCompatibilityResponse(trigger: MultiremiAutopilo
     cron_expression: trigger.cronExpression,
     timezone: trigger.timezone,
     next_run_at: trigger.nextRunAt,
-    webhook_token: trigger.webhookToken,
-    webhook_path: trigger.webhookPath,
-    webhook_url: trigger.webhookUrl,
+    webhook_token: redactSecrets ? null : trigger.webhookToken,
+    webhook_path: redactSecrets ? null : trigger.webhookPath,
+    webhook_url: redactSecrets ? null : trigger.webhookUrl,
     provider: isWebhook ? trigger.provider ?? "generic" : null,
     has_signing_secret: isWebhook ? trigger.signingSecretSet : false,
-    signing_secret_hint: isWebhook ? trigger.signingSecretHint : null,
+    signing_secret_hint: isWebhook && !redactSecrets ? trigger.signingSecretHint : null,
     label: trigger.label,
     last_fired_at: trigger.lastFiredAt,
     created_at: trigger.createdAt,
@@ -566,7 +570,10 @@ function validateIssueTitleTemplateCompatibility(template: string | null | undef
   return null;
 }
 
-export function autopilotTriggerResponse(trigger: MultiremiAutopilotTrigger): MultiremiAutopilotTrigger & {
+export function autopilotTriggerResponse(
+  trigger: MultiremiAutopilotTrigger,
+  options: { redactSecrets?: boolean } = {},
+): MultiremiAutopilotTrigger & {
   autopilot_id: string;
   cron_expression: string | null;
   next_run_at: string | null;
@@ -580,14 +587,19 @@ export function autopilotTriggerResponse(trigger: MultiremiAutopilotTrigger): Mu
   created_at: string;
   updated_at: string;
 } {
+  const redactSecrets = options.redactSecrets === true;
   return {
     ...trigger,
+    webhookToken: redactSecrets ? null : trigger.webhookToken,
+    webhookPath: redactSecrets ? null : trigger.webhookPath,
+    webhookUrl: redactSecrets ? null : trigger.webhookUrl,
+    signingSecretHint: redactSecrets ? null : trigger.signingSecretHint,
     autopilot_id: trigger.autopilotId,
     cron_expression: trigger.cronExpression,
     next_run_at: trigger.nextRunAt,
-    webhook_token: trigger.webhookToken,
-    webhook_path: trigger.webhookPath,
-    webhook_url: trigger.webhookUrl,
+    webhook_token: redactSecrets ? null : trigger.webhookToken,
+    webhook_path: redactSecrets ? null : trigger.webhookPath,
+    webhook_url: redactSecrets ? null : trigger.webhookUrl,
     event_filters: trigger.eventFilters,
     event_config: trigger.eventConfig,
     signing_secret_set: trigger.signingSecretSet,

@@ -364,17 +364,15 @@ describe("Feishu message ingestion", () => {
     expect((await replayedIssue.json()).issue.id).toBe(linkedIssueBody.issue.id);
     expect(store.listIssues({ workspaceId: "local" }).filter((entry) => entry.title.includes("Feishu"))).toHaveLength(1);
 
-    const missingRecipientCredential = await store.createTaskAccessToken(task, "missing-user");
     const inboxCountBefore = store.listInboxItems().length;
-    const missingRecipient = await app.request("/api/workspaces/local/feishu/messages/om_no_recipient/notify", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${missingRecipientCredential.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ summary: "must roll back" }),
-    });
-    expect(missingRecipient.status).toBe(409);
+    expect(() => store.createFeishuInboxOutcome("om_no_recipient", "notified", {
+      workspaceId: "local",
+      recipientId: "missing-user",
+      taskId: task.id,
+      actorType: "agent",
+      actorId: agent.id,
+      text: "must roll back",
+    })).toThrow("Inbox recipient is unavailable");
     expect(store.listFeishuMessageOutcomes("om_no_recipient")).toEqual([]);
     expect(store.listInboxItems()).toHaveLength(inboxCountBefore);
   });
