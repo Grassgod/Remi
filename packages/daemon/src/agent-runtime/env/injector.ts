@@ -40,6 +40,7 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
   // The daemon credential remains in the supervisor process so it can keep
   // heartbeating/registering, but it is never a fallback child credential.
   const taskAuthToken = task.authToken ?? task.auth_token;
+  const scmRevision = (task.scmRevision ?? task.scm_revision)?.trim();
   const env = {
     ...(task.workspaceEnv ?? task.workspace_env),
     ...agent?.customEnv,
@@ -53,6 +54,7 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
     ...((task.issueSessionId ?? task.issue_session_id)
       ? { MULTIREMI_ISSUE_SESSION_ID: String(task.issueSessionId ?? task.issue_session_id) }
       : {}),
+    ...(scmRevision ? { MULTIREMI_SCM_REVISION: scmRevision } : {}),
     ...(opts.workDir ? { MULTIREMI_WORKSPACE_ROOT: opts.workDir } : {}),
     MULTIREMI_SERVER_URL: opts.serverUrl,
     ...(opts.providerHome?.provider === "claude"

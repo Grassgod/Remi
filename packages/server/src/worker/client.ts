@@ -697,6 +697,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     autopilotTitle: stringOrNull(raw.autopilot_title ?? raw.autopilotTitle),
     autopilotDescription: stringOrNull(raw.autopilot_description ?? raw.autopilotDescription),
     autopilotTriggerPayload: raw.autopilot_trigger_payload ?? raw.autopilotTriggerPayload ?? null,
+    scmRevision: stringOrNull(raw.scm_revision ?? raw.scmRevision),
     quickCreatePrompt: stringOrNull(raw.quick_create_prompt ?? raw.quickCreatePrompt),
     workspaceContext: stringOrNull(raw.workspace_context ?? raw.workspaceContext),
     workspaceBootstrapPrompt: stringOrNull(raw.workspace_bootstrap_prompt ?? raw.workspaceBootstrapPrompt),

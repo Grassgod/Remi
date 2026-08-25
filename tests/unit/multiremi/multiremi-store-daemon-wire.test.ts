@@ -419,6 +419,8 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const run = store.runAutopilot(autopilot.id, {
       source: "webhook",
       payload: { repository: "remi", action: "push" },
+      repositoryId: "repo_claim_context",
+      dedupeKey: "repo_claim_context:incremental_update:abc123",
     });
     const quick = store.quickCreateIssue({
       agentId: agent.id,
@@ -455,6 +457,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       autopilot_title: "Webhook triage",
       autopilot_description: "Investigate incoming webhook",
       autopilot_trigger_payload: { repository: "remi", action: "push" },
+      scm_revision: "abc123",
     });
     expect(byId.get(run.taskId!).autopilotTitle).toBeUndefined();
 
@@ -491,6 +494,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
         autopilot_title: "Normalized autopilot",
         autopilot_description: "Normalized description",
         autopilot_trigger_payload: { ok: true },
+        scm_revision: "deadbeef",
         quick_create_prompt: "Normalized quick-create",
         workspace_context: "Normalized workspace context",
         requesting_user_name: "Normalized Alice",
@@ -512,6 +516,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       autopilotTitle: "Normalized autopilot",
       autopilotDescription: "Normalized description",
       autopilotTriggerPayload: { ok: true },
+      scmRevision: "deadbeef",
       quickCreatePrompt: "Normalized quick-create",
       workspaceContext: "Normalized workspace context",
       requestingUserName: "Normalized Alice",
