@@ -39,9 +39,6 @@ import type {
 
 type Row = Record<string, unknown>;
 
-/** Title marking the Atlas repository Wiki autopilot (see workspaces router + repository-wiki service). */
-export const ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
-
 /**
  * Store-level run input: RunAutopilotInput plus the optional repository scoping
  * used by repository Wiki builds. `dedupeKey` is `${repositoryId}:${mode}:${revision|"head"}`.
@@ -717,6 +714,19 @@ export class AutopilotsRepo {
     return [...latest.values()];
   }
 
+  /**
+   * A completed Wiki run is published only when the control-plane store has a
+   * repository-scoped write attributable to it. A matching source revision in
+   * either the current doc or revision history also represents a legitimate
+   * no-op: that pinned revision was already published. Agent result text is
+   * intentionally not trusted.
+   */
+  isRepositoryWikiRunPublished(runId: string): boolean {
+    const run = this.getAutopilotRun(runId);
+    if (!run?.repositoryId) return false;
+    return this.repositoryWikiRunHasPublication(run);
+  }
+
   selectAutopilotsExceedingFailureThreshold(
     options: MultiremiAutopilotFailureThresholdOptions = {},
   ): MultiremiAutopilotFailureThresholdCandidate[] {
@@ -949,11 +959,13 @@ export class AutopilotsRepo {
       // unaffected). Two rules, both inside this transaction:
       //  1. one non-terminal build per (autopilot, repository) — a second
       //     request while a build is queued/running returns the existing run;
-      //  2. a completed run for the same pinned-revision dedupe key is
-      //     authoritative, so a late event for the same revision (for example
-      //     default_branch.updated after change.merged) reuses it. Keys ending
-      //     in ":head" target a moving revision and never dedupe on success,
-      //     so a manual rebuild after a completed build is always allowed.
+      //  2. a completed, store-verified published run for the same pinned-
+      //     revision dedupe key is authoritative, so a late event for the same
+      //     revision (for example default_branch.updated after change.merged)
+      //     reuses it. A completed run without publication evidence never
+      //     blocks retry. Keys ending in ":head" target a moving revision and
+      //     never dedupe on success, so a manual rebuild after a completed
+      //     build is always allowed.
       // failed / skipped runs are terminal and never block a retry.
       if (repositoryId) {
         const active = this.ctx.db.query(
@@ -965,12 +977,14 @@ export class AutopilotsRepo {
         if (active) return { ...toAutopilotRun(active), deduplicated: true };
       }
       if (dedupeKey && !dedupeKey.endsWith(":head")) {
-        const completed = this.ctx.db.query(
+        const completed = (this.ctx.db.query(
           `SELECT * FROM multiremi_autopilot_runs
            WHERE autopilot_id = ? AND dedupe_key = ? AND status = 'completed'
-           ORDER BY created_at DESC, id DESC LIMIT 1`,
-        ).get(autopilotId, dedupeKey) as Row | null;
-        if (completed) return { ...toAutopilotRun(completed), deduplicated: true };
+           ORDER BY created_at DESC, id DESC`,
+        ).all(autopilotId, dedupeKey) as Row[])
+          .map(toAutopilotRun)
+          .find((candidate) => this.repositoryWikiRunHasPublication(candidate));
+        if (completed) return { ...completed, deduplicated: true };
       }
 
       const now = nowIso();
@@ -1090,6 +1104,33 @@ export class AutopilotsRepo {
       this.ctx.analytics().recordAutopilotRunStartedAnalytics(startedAutopilot, run);
     }
     return run;
+  }
+
+  private repositoryWikiRunHasPublication(run: MultiremiAutopilotRunRecord): boolean {
+    if (!run.repositoryId) return false;
+    const autopilot = this.getAutopilot(run.autopilotId);
+    if (!autopilot) return false;
+    const sourceRevision = autopilotRunSourceRevision(run);
+    const row = this.ctx.db.query(
+      `SELECT 1 AS published
+       FROM multiremi_repository_wiki_docs doc
+       LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id
+       WHERE doc.workspace_id = ? AND doc.repository_id = ?
+         AND (
+           (? IS NOT NULL AND doc.source_task_id = ?)
+           OR (? IS NOT NULL AND (doc.source_revision = ? OR revision.source_revision = ?))
+         )
+       LIMIT 1`,
+    ).get(
+      autopilot.workspaceId,
+      run.repositoryId,
+      run.taskId,
+      run.taskId,
+      sourceRevision,
+      sourceRevision,
+      sourceRevision,
+    ) as { published: number } | null;
+    return row != null;
   }
 
   getAutopilotRun(id: string): MultiremiAutopilotRunRecord | null {

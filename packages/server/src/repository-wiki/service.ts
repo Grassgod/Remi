@@ -19,6 +19,7 @@ import {
   repositoryWikiRootUri,
   sha256Text,
 } from "./codec.js";
+import { resolveAtlasRepositoryWikiAutopilot } from "./atlas.js";
 
 export interface RepositoryWikiServiceContract {
   readonly mode: ProjectKnowledgeMode;
@@ -214,8 +215,12 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
       const payload = record(run?.payload);
       const repositoryId = clean(payload?.atlas_repository_id);
       if (run && repositoryId) {
-        const autopilot = this.store.getAutopilot(run.autopilotId);
-        if (autopilot?.workspaceId === task.workspaceId && autopilot.title === "Atlas · Repository Wiki") {
+        const autopilot = resolveAtlasRepositoryWikiAutopilot(
+          task.workspaceId,
+          this.store.listAgents(),
+          this.store.listAutopilots(task.workspaceId),
+        );
+        if (autopilot?.id === run.autopilotId) {
           selectedIds.add(repositoryId);
         }
       }

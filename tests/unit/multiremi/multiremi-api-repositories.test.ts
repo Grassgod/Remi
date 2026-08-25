@@ -166,6 +166,7 @@ describe("Multiremi API - workspace repositories", () => {
         run_id: firstBody.run_id,
         task_id: firstBody.task_id,
         failure_reason: null,
+        published: null,
       },
     });
 
@@ -183,6 +184,7 @@ describe("Multiremi API - workspace repositories", () => {
       status: "failed",
       run_id: firstBody.run_id,
       failure_reason: "clone failed",
+      published: null,
     });
 
     // A failed build never blocks a retry. (Sleep so the retry gets a strictly
@@ -200,12 +202,48 @@ describe("Multiremi API - workspace repositories", () => {
     const healthy = await summary();
     expect(healthy.status).toBe("healthy");
     expect(healthy.page_count).toBe(1);
-    expect(healthy.build).toMatchObject({ status: "idle", run_id: retryBody.run_id });
+    expect(healthy.build).toMatchObject({ status: "idle", run_id: retryBody.run_id, published: false });
 
     // Manual rebuilds target the moving HEAD, so a completed build never blocks one.
     const rebuild = await app.request(buildPath, { method: "POST" });
     expect(rebuild.status).toBe(202);
     expect((await rebuild.json() as any).run_id).not.toBe(retryBody.run_id);
+  });
+
+  it("keeps repository Wiki builds human-admin only for task and daemon tokens", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories(workspace.id, [{
+      id: "repo_guarded",
+      name: "guarded",
+      url: "git@github.com:acme/guarded.git",
+      source: "github",
+      default_branch: "main",
+    }]);
+    const agent = store.createAgent({ name: "Build auth agent", provider: "codex" });
+    const task = store.createTask({
+      workspaceId: workspace.id,
+      agentId: agent.id,
+      prompt: "authenticate only",
+    });
+    const taskToken = await store.createTaskAccessToken(task, workspace.id);
+    const daemonToken = await store.createAccessToken({
+      workspaceId: workspace.id,
+      name: "Build auth daemon",
+      type: "daemon",
+      purpose: "daemon",
+      daemonId: "dmn_build_auth",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const path = `/api/workspaces/${workspace.id}/repos/repo_guarded/wiki/build`;
+
+    for (const token of [taskToken.token, daemonToken.token]) {
+      const response = await app.request(path, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(403);
+    }
   });
 
   it("does not create an unusable Atlas agent before code-to-wiki is imported", async () => {

@@ -2783,6 +2783,10 @@ runMigrations(this.db);
     return this.autopilots.listLatestRepositoryAutopilotRuns(workspaceId);
   }
 
+  isRepositoryWikiRunPublished(runId: string): boolean {
+    return this.autopilots.isRepositoryWikiRunPublished(runId);
+  }
+
   selectAutopilotsExceedingFailureThreshold(
     options: MultiremiAutopilotFailureThresholdOptions = {},
   ): MultiremiAutopilotFailureThresholdCandidate[] {
