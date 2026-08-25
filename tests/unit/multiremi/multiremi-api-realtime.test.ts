@@ -567,6 +567,15 @@ describe("Multiremi API — realtime websockets", () => {
       name: "Local human",
       type: "pat",
     });
+    const taskAgent = store.createAgent({ name: "WS task agent", provider: "codex", workspaceId: "local" });
+    const taskIssue = store.createIssue({ title: "WS task", workspaceId: "local" });
+    const task = store.createTask({
+      agentId: taskAgent.id,
+      issueId: taskIssue.id,
+      workspaceId: "local",
+      prompt: "Do not assume daemon identity",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
     const removedMember = store.createWorkspaceMember({
       id: "member-removed-daemon-ws",
       workspaceId: "local",
@@ -639,6 +648,11 @@ describe("Multiremi API — realtime websockets", () => {
         headers: { Authorization: `Bearer ${humanToken.token}` },
       } as any);
       await expectWebSocketRejected(human);
+
+      const taskSocket = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
+        headers: { Authorization: `Bearer ${taskToken.token}` },
+      } as any);
+      await expectWebSocketRejected(taskSocket);
       expect(store.getRuntime("rt_ws_local")?.metadata.agent_plugin_protocol).toBe(1);
 
       const master = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {

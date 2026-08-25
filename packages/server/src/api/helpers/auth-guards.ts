@@ -60,11 +60,13 @@ export type TaskTokenHardDenyCategory =
   | "daemon_identity";
 
 /**
- * Task credentials inherit their owner's normal workspace authority. Only
- * operations that can expand identity, expose credentials, destroy the
- * workspace/machine boundary, or operate the platform control plane stay
- * unavailable. Daemon protocol routes are intentionally absent here: their
- * existing daemon-identity middleware remains the authority.
+ * Task credentials inherit their owner's normal authority inside the bound
+ * workspace, including access to business configuration such as environment
+ * values and SCM settings. Credential-minting/reveal surfaces, identity and
+ * workspace lifecycle, billing, and machine/platform control planes remain
+ * unavailable. This is an intentional usability/security tradeoff: untrusted
+ * task input can exercise the owner's workspace authority, but cannot mint a
+ * new access capability or assume a daemon identity.
  */
 export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCategory | null {
   const url = new URL(request.url);
@@ -73,6 +75,7 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
   if (path === "/api/tokens" || path.startsWith("/api/tokens/")
     || path === "/api/multiremi/tokens" || path.startsWith("/api/multiremi/tokens/")
     || path === "/api/cli-token"
+    || /^\/api\/issues\/[^/]+\/share(?:\/extend)?$/.test(path)
     || /^\/api\/autopilots\/[^/]+\/triggers\/[^/]+\/(?:rotate-webhook-token|signing-secret)$/.test(path)
     || /^\/api\/workspaces\/[^/]+\/relay-config\/[^/]+\/reveal$/.test(path)) {
     return "access_credentials";
@@ -81,6 +84,8 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     || path === "/api/invitations" || path.startsWith("/api/invitations/")
     || path === "/api/multiremi/members" || path.startsWith("/api/multiremi/members/")
     || /^\/api\/workspaces\/[^/]+\/(?:members|invitations)(?:\/.*)?$/.test(path)
+    || (/^\/api\/workspaces\/[^/]+\/lark\/install\/begin$/.test(path) && method === "POST")
+    || (/^\/api\/workspaces\/[^/]+\/lark\/installations\/[^/]+$/.test(path) && method === "DELETE")
     || path === "/api/lark/binding/redeem"
     || path === "/auth/logout" || path.startsWith("/auth/google")
     || path.startsWith("/auth/send-code") || path.startsWith("/auth/verify-code")
@@ -105,7 +110,12 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     || (/^\/api\/workspaces\/[^/]+\/ssh-mesh\/rotate$/.test(path) && method === "POST")) {
     return "platform_maintenance";
   }
-  if (path === "/api/multiremi/runtimes" && method === "POST") return "daemon_identity";
+  const taskGitCredentialRequest = path === "/api/daemon/scm/git-credentials" && method === "POST";
+  if ((!taskGitCredentialRequest && (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")))
+    || (path === "/api/multiremi/runtimes" && method === "POST")
+    || (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST")) {
+    return "daemon_identity";
+  }
   return null;
 }
 
@@ -394,12 +404,12 @@ export function currentWorkspaceRole(c: Context, store: MultiremiStore, workspac
 }
 
 /**
- * A caller may receive the PLAINTEXT relay token on the daemon register/repos
- * response only if their token maps to a workspace owner/admin. This covers both
- * daemon tokens and the owner/admin PAT that real agents authenticate with, while
- * still withholding the secret from a non-admin member's token.
+ * A caller may receive the PLAINTEXT relay token on daemon bootstrap responses
+ * only if a non-task identity maps to a workspace owner/admin. Relay credentials
+ * authorize a machine and are not part of task-to-owner workspace parity.
  */
 export function callerCanReceiveRelay(c: Context, store: MultiremiStore, workspaceId: string): boolean {
+  if (currentAccessToken(c)?.type === "task") return false;
   const role = currentWorkspaceRoleStrict(c, store, workspaceId);
   return role === "owner" || role === "admin";
 }

@@ -3019,8 +3019,7 @@
       "command": "remi share get",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.get",
       "mutation": "read",
@@ -3036,8 +3035,7 @@
       "command": "remi share create",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.create",
       "mutation": "write",
@@ -3053,8 +3051,7 @@
       "command": "remi share extend",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.extend",
       "mutation": "write",
@@ -3070,8 +3067,7 @@
       "command": "remi share delete",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.delete",
       "mutation": "destructive",
@@ -6706,8 +6702,7 @@
       "command": "remi lark install begin",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "lark.install.begin",
       "mutation": "write",
@@ -6740,8 +6735,7 @@
       "command": "remi lark installation delete",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "lark.installation.delete",
       "mutation": "destructive",

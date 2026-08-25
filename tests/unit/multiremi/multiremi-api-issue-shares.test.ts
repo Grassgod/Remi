@@ -7,6 +7,40 @@ afterEach(resetMultiremiTestEnv);
 const bearer = (token: string) => ({ headers: { Authorization: `Bearer ${token}` } });
 
 describe("Multiremi API - issue sharing", () => {
+  it("hard-denies task credentials from minting, reading, extending, or revoking share capabilities", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Share task agent", provider: "codex", workspaceId: "local" });
+    const taskIssue = store.createIssue({ title: "Task source", workspaceId: "local", createdBy: "local" });
+    const siblingIssue = store.createIssue({ title: "Sibling target", workspaceId: "local", createdBy: "local" });
+    const task = store.createTask({
+      agentId: agent.id,
+      issueId: taskIssue.id,
+      workspaceId: "local",
+      prompt: "Do not mint shares",
+    });
+    const taskCredential = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store, authToken: "root-secret", shareSecret: "test-share-secret" });
+
+    for (const [method, suffix] of [
+      ["GET", ""],
+      ["POST", ""],
+      ["POST", "/extend"],
+      ["DELETE", ""],
+    ] as const) {
+      const response = await app.request(`/api/issues/${siblingIssue.id}/share${suffix}`, {
+        method,
+        ...bearer(taskCredential.token),
+      });
+      expect(response.status, `${method} ${suffix || "/"}`).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "forbidden for task token",
+        code: "task_token_hard_denied",
+      });
+    }
+    expect(store.getActiveIssueShare(siblingIssue.id)).toBeNull();
+  });
+
   it("grants a signed, revocable, issue-only read view to a logged-in non-member", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

@@ -38,6 +38,8 @@ describe("operations CLI contracts", () => {
       "platform.operation.list",
       "platform.settings.update",
       "daemon.retire",
+      "lark.install.begin",
+      "lark.installation.delete",
       "lark.binding.redeem",
       "context.auth.logout",
     ]) {

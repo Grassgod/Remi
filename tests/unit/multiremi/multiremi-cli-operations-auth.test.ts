@@ -88,7 +88,11 @@ describe("operations CLI authorization boundaries", () => {
       ["GET", "/api/cloud-billing/balance", undefined],
       ["GET", "/api/multiremi/platform/status", undefined],
       ["GET", "/api/lark/binding/redeem", undefined],
+      ["POST", "/api/workspaces/local/lark/install/begin", {}],
+      ["DELETE", "/api/workspaces/local/lark/installations/lin_1", undefined],
       ["POST", "/api/multiremi/runtimes", { name: "Forged runtime", provider: "codex" }],
+      ["POST", `/api/multiremi/runtimes/${runtime.id}/heartbeat`, {}],
+      ["POST", "/api/daemon/register", { workspace_id: "local", daemon_id: "forged", runtimes: [{ type: "codex" }] }],
       ["POST", `/api/runtimes/${runtime.id}/update`, {}],
     ] as const) {
       const response = await app.request(path, {

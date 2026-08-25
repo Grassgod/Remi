@@ -2152,8 +2152,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.get": {
       "command": "remi share get",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.get",
       "output": [
@@ -2165,8 +2164,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.create": {
       "command": "remi share create",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.create",
       "output": [
@@ -2178,8 +2176,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.extend": {
       "command": "remi share extend",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.extend",
       "output": [
@@ -2191,8 +2188,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "share.delete": {
       "command": "remi share delete",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "share.delete",
       "output": [
@@ -4710,8 +4706,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "lark.install.begin": {
       "command": "remi lark install begin",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "lark.install.begin",
       "output": [
@@ -4736,8 +4731,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "lark.installation.delete": {
       "command": "remi lark installation delete",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "lark.installation.delete",
       "output": [
