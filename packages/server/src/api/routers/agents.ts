@@ -25,10 +25,7 @@ import {
 } from "../helpers.js";
 import {
   agentCompatibilityResponse,
-  agentTaskDirectoryCompatibilityResponse,
-  agentTaskDirectoryResponse,
   agentEnvResponse,
-  currentTaskAccessToken,
   currentRequestUserId,
   skillCompatibilityErrorResponse,
   skillSummaryCompatibilityResponse,
@@ -54,7 +51,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     }).filter((agent) =>
       agent.workspaceId === workspaceId && canCurrentUserAccessAgent(c, store, agent)
     );
-    return c.json({ agents: currentTaskAccessToken(c) ? agents.map(agentTaskDirectoryResponse) : agents });
+    return c.json({ agents });
   });
   app.post("/api/multiremi/agents", async (c) => {
     const body = await readJsonStrict<CreateAgentInput>(c);
@@ -71,7 +68,6 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ agent }, 201);
   });
   app.post("/api/multiremi/agents/default", async (c) => {
-    if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
     const body = await readJsonStrict<{ provider?: string; runtimeId?: string | null; runtime_id?: string | null; workspaceId?: string | null; workspace_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = requestedAgentWorkspaceId(c, body);
@@ -98,7 +94,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/agents/:id", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    return c.json({ agent: currentTaskAccessToken(c) ? agentTaskDirectoryResponse(loaded.agent) : loaded.agent });
+    return c.json({ agent: loaded.agent });
   });
   app.patch("/api/multiremi/agents/:id", async (c) => {
     const loaded = loadAgentForCurrentManager(c, store, c.req.param("id"));
@@ -121,14 +117,12 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/agents/:id/skills", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
     const skills = store.listAgentSkills(loaded.agent.id);
     return c.json({ skills, total: skills.length });
   });
   app.get("/api/multiremi/agents/:id/tasks", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
     const tasks = store.listAgentTasks(loaded.agent.id).map(taskPublicResponse);
     return c.json({ tasks, total: tasks.length });
   });
@@ -142,13 +136,11 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/agents/:id/tasks", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
     return c.json(store.listAgentTasks(loaded.agent.id).map(taskPublicResponse));
   });
   app.get("/api/agents/:id/skills", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
     return c.json(store.listAgentSkills(loaded.agent.id, { includeFiles: false }).map(skillSummaryCompatibilityResponse));
   });
   app.put("/api/agents/:id/skills", async (c) => {
@@ -206,9 +198,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     }).filter((agent) =>
       agent.workspaceId === workspaceId && canCurrentUserAccessAgent(c, store, agent)
     );
-    return c.json(currentTaskAccessToken(c)
-      ? agents.map(agentTaskDirectoryCompatibilityResponse)
-      : agents.map((agent) => agentCompatibilityResponse(store, agent, c)));
+    return c.json(agents.map((agent) => agentCompatibilityResponse(store, agent, c)));
   });
   app.post("/api/agents", async (c) => {
     const body = await readJsonStrict<CreateAgentInput>(c);
@@ -245,9 +235,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/agents/:id", (c) => {
     const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
-    return c.json(currentTaskAccessToken(c)
-      ? agentTaskDirectoryCompatibilityResponse(loaded.agent)
-      : agentCompatibilityResponse(store, loaded.agent, c));
+    return c.json(agentCompatibilityResponse(store, loaded.agent, c));
   });
   app.put("/api/agents/:id", async (c) => {
     const loaded = loadAgentForCurrentManager(c, store, c.req.param("id"));

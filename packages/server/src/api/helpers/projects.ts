@@ -10,7 +10,7 @@ import type {
   UpdateProjectDocInput,
   UpdateProjectInput,
 } from "@multiremi/contracts/types.js";
-import { denyCurrentUserWorkspaceAccess, denyTaskTokenProjectAccess } from "./auth-guards.js";
+import { denyCurrentUserWorkspaceAccess } from "./auth-guards.js";
 import { issueSubscriberCaller } from "./issues.js";
 
 export const MAX_PROJECT_INSTRUCTIONS_LENGTH = 4_000;
@@ -54,7 +54,7 @@ export function loadProjectResourceForMutation(
   projectId: string,
   resourceId: string,
 ): MultiremiProjectResource | Response {
-  const project = loadProjectForHumanMutation(c, store, projectId);
+  const project = loadProjectForMutation(c, store, projectId);
   if (project instanceof Response) return project;
   const resource = store.getProjectResource(resourceId);
   if (!resource || resource.projectId !== projectId) return c.json({ error: "project resource not found" }, 404);
@@ -66,21 +66,16 @@ export function loadProjectForDocs(c: Context, store: MultiremiStore, projectId:
   if (!project) return c.json({ error: "project not found" }, 404);
   const denied = denyCurrentUserWorkspaceAccess(c, store, project.workspaceId);
   if (denied) return denied;
-  const taskDenied = denyTaskTokenProjectAccess(c, store, project.id);
-  if (taskDenied) return taskDenied;
   return project;
 }
 
-export function loadProjectForHumanMutation(
+export function loadProjectForMutation(
   c: Context,
   store: MultiremiStore,
   projectId: string,
 ): MultiremiProject | Response {
   const project = loadProjectForDocs(c, store, projectId);
   if (project instanceof Response) return project;
-  if (currentTaskAccessToken(c)) {
-    return c.json({ error: "this endpoint is only available to human actors" }, 403);
-  }
   return project;
 }
 

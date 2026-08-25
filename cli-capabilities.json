@@ -70,7 +70,8 @@
       "command": "remi workspace list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.list",
       "mutation": "read",
@@ -86,7 +87,8 @@
       "command": "remi workspace get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.get",
       "mutation": "read",
@@ -118,7 +120,8 @@
       "command": "remi workspace update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.update",
       "mutation": "write",
@@ -166,7 +169,8 @@
       "command": "remi workspace env get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.env.get",
       "mutation": "read",
@@ -182,7 +186,8 @@
       "command": "remi workspace env update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.env.update",
       "mutation": "write",
@@ -198,7 +203,8 @@
       "command": "remi workspace ssh-mesh get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.ssh-mesh.get",
       "mutation": "read",
@@ -246,7 +252,8 @@
       "command": "remi workspace ssh-mesh test",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.ssh-mesh.test",
       "mutation": "write",
@@ -262,7 +269,8 @@
       "command": "remi workspace relay get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.relay.get",
       "mutation": "read",
@@ -278,7 +286,8 @@
       "command": "remi workspace relay discovery",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.relay.discovery",
       "mutation": "write",
@@ -294,7 +303,8 @@
       "command": "remi workspace relay update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.relay.update",
       "mutation": "write",
@@ -326,7 +336,8 @@
       "command": "remi workspace prompt get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.prompt.get",
       "mutation": "read",
@@ -342,7 +353,8 @@
       "command": "remi workspace prompt template",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.prompt.template",
       "mutation": "read",
@@ -358,7 +370,8 @@
       "command": "remi workspace prompt update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.prompt.update",
       "mutation": "write",
@@ -374,7 +387,8 @@
       "command": "remi workspace issue-archive get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.issue-archive.get",
       "mutation": "read",
@@ -390,7 +404,8 @@
       "command": "remi workspace issue-archive update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "workspace.issue-archive.update",
       "mutation": "write",
@@ -834,7 +849,8 @@
       "command": "remi project create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.create",
       "mutation": "write",
@@ -850,7 +866,8 @@
       "command": "remi project update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.update",
       "mutation": "write",
@@ -868,7 +885,8 @@
         "remi project delete"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.archive",
       "mutation": "destructive",
@@ -884,7 +902,8 @@
       "command": "remi project restore",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.restore",
       "mutation": "write",
@@ -917,7 +936,8 @@
       "command": "remi project resource create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.resource.create",
       "mutation": "write",
@@ -933,7 +953,8 @@
       "command": "remi project resource update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.resource.update",
       "mutation": "write",
@@ -949,7 +970,8 @@
       "command": "remi project resource delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "project.resource.delete",
       "mutation": "destructive",
@@ -1009,7 +1031,8 @@
       "command": "remi repo inspect",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.inspect",
       "mutation": "read",
@@ -1027,7 +1050,8 @@
         "remi repo import"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.create",
       "mutation": "write",
@@ -1043,7 +1067,8 @@
       "command": "remi repo update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.update",
       "mutation": "write",
@@ -1059,7 +1084,8 @@
       "command": "remi repo delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "repo.delete",
       "mutation": "destructive",
@@ -1382,7 +1408,8 @@
         "remi project knowledge status"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.status",
       "mutation": "read",
@@ -1400,7 +1427,8 @@
         "remi project knowledge backfill"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.backfill",
       "mutation": "write",
@@ -1418,7 +1446,8 @@
         "remi project knowledge verify"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.verify",
       "mutation": "write",
@@ -1436,7 +1465,8 @@
         "remi project knowledge retry-failed"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "memory.migration.retry",
       "mutation": "write",
@@ -1554,7 +1584,8 @@
       "command": "remi wiki repository build",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "wiki.repository.build",
       "mutation": "destructive",
@@ -1570,7 +1601,8 @@
       "command": "remi wiki repository atlas status",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "wiki.repository.atlas.status",
       "mutation": "read",
@@ -1586,7 +1618,8 @@
       "command": "remi wiki repository atlas configure",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "wiki.repository.atlas.configure",
       "mutation": "destructive",
@@ -1806,7 +1839,8 @@
       "command": "remi issue restore",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.restore",
       "mutation": "write",
@@ -1822,7 +1856,8 @@
       "command": "remi issue rerun",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.rerun",
       "mutation": "write",
@@ -2127,7 +2162,8 @@
       "command": "remi session create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.create",
       "mutation": "write",
@@ -2143,7 +2179,8 @@
       "command": "remi session update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.update",
       "mutation": "write",
@@ -2176,7 +2213,8 @@
       "command": "remi session participant add",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.participant.add",
       "mutation": "write",
@@ -2192,7 +2230,8 @@
       "command": "remi session participant remove",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.participant.remove",
       "mutation": "destructive",
@@ -2316,7 +2355,8 @@
         "remi issue archive list"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.list",
       "mutation": "read",
@@ -2334,7 +2374,8 @@
         "remi issue archive status"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.status",
       "mutation": "read",
@@ -2352,7 +2393,8 @@
         "remi issue archive verify"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.verify",
       "mutation": "write",
@@ -2370,7 +2412,8 @@
         "remi issue archive retry"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.archive.retry",
       "mutation": "write",
@@ -2386,7 +2429,8 @@
       "command": "remi session config get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.config.get",
       "mutation": "read",
@@ -2402,7 +2446,8 @@
       "command": "remi session config update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "session.config.update",
       "mutation": "write",
@@ -2896,7 +2941,8 @@
       "command": "remi issue batch-update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.batch-update",
       "mutation": "write",
@@ -2912,7 +2958,8 @@
       "command": "remi issue batch-delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.batch-delete",
       "mutation": "destructive",
@@ -2928,7 +2975,8 @@
       "command": "remi issue quick-create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "issue.quick-create",
       "mutation": "write",
@@ -3036,7 +3084,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "share"
+        "share",
+        "task"
       ],
       "capability": "share.view",
       "mutation": "read",
@@ -3096,7 +3145,8 @@
       "command": "remi label create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "label.create",
       "mutation": "write",
@@ -3112,7 +3162,8 @@
       "command": "remi label update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "label.update",
       "mutation": "write",
@@ -3128,7 +3179,8 @@
       "command": "remi label delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "label.delete",
       "mutation": "destructive",
@@ -3154,7 +3206,8 @@
       "command": "remi chat list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.list",
       "mutation": "read",
@@ -3170,7 +3223,8 @@
       "command": "remi chat get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.get",
       "mutation": "read",
@@ -3186,7 +3240,8 @@
       "command": "remi chat create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.create",
       "mutation": "write",
@@ -3202,7 +3257,8 @@
       "command": "remi chat update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.update",
       "mutation": "write",
@@ -3218,7 +3274,8 @@
       "command": "remi chat delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.delete",
       "mutation": "destructive",
@@ -3234,7 +3291,8 @@
       "command": "remi chat message list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.message.list",
       "mutation": "read",
@@ -3250,7 +3308,8 @@
       "command": "remi chat message create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.message.create",
       "mutation": "write",
@@ -3266,7 +3325,8 @@
       "command": "remi chat pending",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.pending",
       "mutation": "read",
@@ -3282,7 +3342,8 @@
       "command": "remi chat read",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "chat.read",
       "mutation": "write",
@@ -3342,7 +3403,8 @@
       "command": "remi task create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "task.create",
       "mutation": "write",
@@ -3527,7 +3589,8 @@
       "command": "remi agent create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.create",
       "mutation": "write",
@@ -3547,7 +3610,8 @@
         "remi multiremi agent update"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.update",
       "mutation": "write",
@@ -3563,7 +3627,8 @@
       "command": "remi agent archive",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.archive",
       "mutation": "destructive",
@@ -3579,7 +3644,8 @@
       "command": "remi agent restore",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.restore",
       "mutation": "write",
@@ -3598,7 +3664,8 @@
         "remi multiremi seed"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.default",
       "mutation": "write",
@@ -3614,7 +3681,8 @@
       "command": "remi agent cancel-tasks",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.cancel-tasks",
       "mutation": "destructive",
@@ -3630,7 +3698,8 @@
       "command": "remi agent template list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.template.list",
       "mutation": "read",
@@ -3646,7 +3715,8 @@
       "command": "remi agent template get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.template.get",
       "mutation": "read",
@@ -3662,7 +3732,8 @@
       "command": "remi agent template create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.template.create",
       "mutation": "write",
@@ -3678,7 +3749,8 @@
       "command": "remi agent skill list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.skill.list",
       "mutation": "read",
@@ -3694,7 +3766,8 @@
       "command": "remi agent skill set",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.skill.set",
       "mutation": "write",
@@ -3710,7 +3783,8 @@
       "command": "remi agent skill add",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.skill.add",
       "mutation": "write",
@@ -3726,7 +3800,8 @@
       "command": "remi agent task list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.task.list",
       "mutation": "read",
@@ -3742,7 +3817,8 @@
       "command": "remi agent env get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.env.get",
       "mutation": "read",
@@ -3758,7 +3834,8 @@
       "command": "remi agent env update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.env.update",
       "mutation": "write",
@@ -3774,7 +3851,8 @@
       "command": "remi agent plugin list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.list",
       "mutation": "read",
@@ -3790,7 +3868,8 @@
       "command": "remi agent plugin bind",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.bind",
       "mutation": "write",
@@ -3806,7 +3885,8 @@
       "command": "remi agent plugin update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.update",
       "mutation": "write",
@@ -3822,7 +3902,8 @@
       "command": "remi agent plugin unbind",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "agent.plugin.unbind",
       "mutation": "destructive",
@@ -3882,7 +3963,8 @@
       "command": "remi squad create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.create",
       "mutation": "write",
@@ -3898,7 +3980,8 @@
       "command": "remi squad update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.update",
       "mutation": "write",
@@ -3916,7 +3999,8 @@
         "remi squad delete"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.archive",
       "mutation": "destructive",
@@ -3966,7 +4050,8 @@
       "command": "remi squad member add",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.member.add",
       "mutation": "write",
@@ -3982,7 +4067,8 @@
       "command": "remi squad member update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.member.update",
       "mutation": "write",
@@ -3998,7 +4084,8 @@
       "command": "remi squad member remove",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "squad.member.remove",
       "mutation": "destructive",
@@ -4075,7 +4162,8 @@
       "command": "remi skill create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.create",
       "mutation": "write",
@@ -4091,7 +4179,8 @@
       "command": "remi skill update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.update",
       "mutation": "write",
@@ -4109,7 +4198,8 @@
         "remi skill delete"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.archive",
       "mutation": "destructive",
@@ -4125,7 +4215,8 @@
       "command": "remi skill import",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.import",
       "mutation": "write",
@@ -4158,7 +4249,8 @@
       "command": "remi skill file update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.file.update",
       "mutation": "write",
@@ -4174,7 +4266,8 @@
       "command": "remi skill file delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "skill.file.delete",
       "mutation": "destructive",
@@ -4200,7 +4293,8 @@
       "command": "remi plugin list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.list",
       "mutation": "read",
@@ -4216,7 +4310,8 @@
       "command": "remi plugin get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.get",
       "mutation": "read",
@@ -4232,7 +4327,8 @@
       "command": "remi plugin update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.update",
       "mutation": "write",
@@ -4250,7 +4346,8 @@
         "remi plugin delete"
       ],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.archive",
       "mutation": "destructive",
@@ -4266,7 +4363,8 @@
       "command": "remi plugin restore",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.restore",
       "mutation": "write",
@@ -4282,7 +4380,8 @@
       "command": "remi plugin inspect",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.inspect",
       "mutation": "write",
@@ -4298,7 +4397,8 @@
       "command": "remi plugin import",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.import",
       "mutation": "write",
@@ -4314,7 +4414,8 @@
       "command": "remi plugin version list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.version.list",
       "mutation": "read",
@@ -4330,7 +4431,8 @@
       "command": "remi plugin version create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.version.create",
       "mutation": "write",
@@ -4346,7 +4448,8 @@
       "command": "remi plugin activate",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.activate",
       "mutation": "write",
@@ -4362,7 +4465,8 @@
       "command": "remi plugin rollback",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.rollback",
       "mutation": "write",
@@ -4378,7 +4482,8 @@
       "command": "remi plugin runtime list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.runtime.list",
       "mutation": "read",
@@ -4394,7 +4499,8 @@
       "command": "remi plugin runtime retry",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.runtime.retry",
       "mutation": "write",
@@ -4410,7 +4516,8 @@
       "command": "remi plugin runtime get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "plugin.runtime.get",
       "mutation": "read",
@@ -4437,7 +4544,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.list",
       "mutation": "read",
@@ -4454,7 +4562,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.get",
       "mutation": "read",
@@ -4487,7 +4596,8 @@
       "command": "remi runtime update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.update",
       "mutation": "write",
@@ -4536,7 +4646,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.model.list",
       "mutation": "read",
@@ -4552,7 +4663,8 @@
       "command": "remi runtime model set",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.model.set",
       "mutation": "write",
@@ -4568,7 +4680,8 @@
       "command": "remi runtime model refresh",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.model.refresh",
       "mutation": "write",
@@ -4585,7 +4698,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.model.status",
       "mutation": "read",
@@ -4618,7 +4732,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.release.status",
       "mutation": "read",
@@ -4634,7 +4749,8 @@
       "command": "remi runtime skill scan",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.skill.scan",
       "mutation": "write",
@@ -4651,7 +4767,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.skill.status",
       "mutation": "read",
@@ -4667,7 +4784,8 @@
       "command": "remi runtime skill import",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.skill.import",
       "mutation": "write",
@@ -4684,7 +4802,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.skill.import-status",
       "mutation": "read",
@@ -4700,7 +4819,8 @@
       "command": "remi runtime directory scan",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.directory.scan",
       "mutation": "write",
@@ -4717,7 +4837,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.directory.status",
       "mutation": "read",
@@ -4734,7 +4855,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.usage",
       "mutation": "read",
@@ -4751,7 +4873,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.usage.by-agent",
       "mutation": "read",
@@ -4768,7 +4891,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.usage.by-hour",
       "mutation": "read",
@@ -4785,7 +4909,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.task-activity",
       "mutation": "read",
@@ -4802,7 +4927,8 @@
       "aliases": [],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": "runtime.activity",
       "mutation": "read",
@@ -4818,7 +4944,8 @@
       "command": "remi runtime model catalog",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "runtime.model.catalog",
       "mutation": "read",
@@ -5020,7 +5147,8 @@
       "command": "remi daemon list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "daemon.list",
       "mutation": "read",
@@ -5036,7 +5164,8 @@
       "command": "remi daemon retirement-plan",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "daemon.retirement-plan",
       "mutation": "read",
@@ -5071,7 +5200,8 @@
       ],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": null,
       "mutation": "write",
@@ -5090,7 +5220,8 @@
       ],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": null,
       "mutation": "write",
@@ -5109,7 +5240,8 @@
       ],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": null,
       "mutation": "write",
@@ -5128,7 +5260,8 @@
       ],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": null,
       "mutation": "read",
@@ -5147,7 +5280,8 @@
       ],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": null,
       "mutation": "read",
@@ -5166,7 +5300,8 @@
       ],
       "auth": [
         "human",
-        "daemon"
+        "daemon",
+        "task"
       ],
       "capability": null,
       "mutation": "write",
@@ -5192,7 +5327,8 @@
       "command": "remi autopilot list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.list",
       "mutation": "read",
@@ -5208,7 +5344,8 @@
       "command": "remi autopilot get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.get",
       "mutation": "read",
@@ -5224,7 +5361,8 @@
       "command": "remi autopilot create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.create",
       "mutation": "write",
@@ -5240,7 +5378,8 @@
       "command": "remi autopilot update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.update",
       "mutation": "write",
@@ -5256,7 +5395,8 @@
       "command": "remi autopilot delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delete",
       "mutation": "destructive",
@@ -5272,7 +5412,8 @@
       "command": "remi autopilot run list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.run.list",
       "mutation": "read",
@@ -5288,7 +5429,8 @@
       "command": "remi autopilot run get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.run.get",
       "mutation": "read",
@@ -5304,7 +5446,8 @@
       "command": "remi autopilot run",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.run",
       "mutation": "write",
@@ -5320,7 +5463,8 @@
       "command": "remi autopilot delivery list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delivery.list",
       "mutation": "read",
@@ -5336,7 +5480,8 @@
       "command": "remi autopilot delivery get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delivery.get",
       "mutation": "read",
@@ -5352,7 +5497,8 @@
       "command": "remi autopilot delivery replay",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.delivery.replay",
       "mutation": "write",
@@ -5368,7 +5514,8 @@
       "command": "remi autopilot trigger list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.list",
       "mutation": "read",
@@ -5384,7 +5531,8 @@
       "command": "remi autopilot trigger create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.create",
       "mutation": "write",
@@ -5400,7 +5548,8 @@
       "command": "remi autopilot trigger update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.update",
       "mutation": "write",
@@ -5416,7 +5565,8 @@
       "command": "remi autopilot trigger delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.trigger.delete",
       "mutation": "destructive",
@@ -5464,7 +5614,8 @@
       "command": "remi autopilot scheduler",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "autopilot.scheduler",
       "mutation": "read",
@@ -5490,7 +5641,8 @@
       "command": "remi scm capabilities",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.capabilities",
       "mutation": "read",
@@ -5506,7 +5658,8 @@
       "command": "remi scm connection list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.list",
       "mutation": "read",
@@ -5522,7 +5675,8 @@
       "command": "remi scm connection get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.get",
       "mutation": "read",
@@ -5538,7 +5692,8 @@
       "command": "remi scm connection create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.create",
       "mutation": "write",
@@ -5554,7 +5709,8 @@
       "command": "remi scm connection update",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.update",
       "mutation": "write",
@@ -5570,7 +5726,8 @@
       "command": "remi scm connection delete",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.delete",
       "mutation": "destructive",
@@ -5586,7 +5743,8 @@
       "command": "remi scm connection verify",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.connection.verify",
       "mutation": "write",
@@ -5602,7 +5760,8 @@
       "command": "remi scm repository bind",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.repository.bind",
       "mutation": "write",
@@ -5618,7 +5777,8 @@
       "command": "remi scm repository unbind",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.repository.unbind",
       "mutation": "destructive",
@@ -5634,7 +5794,8 @@
       "command": "remi scm event list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.event.list",
       "mutation": "read",
@@ -5650,7 +5811,8 @@
       "command": "remi scm event get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "scm.event.get",
       "mutation": "read",
@@ -6141,7 +6303,8 @@
       "command": "remi platform health",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.health",
       "mutation": "read",
@@ -6157,7 +6320,8 @@
       "command": "remi platform ready",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.ready",
       "mutation": "read",
@@ -6173,7 +6337,8 @@
       "command": "remi platform realtime",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.realtime",
       "mutation": "read",
@@ -6221,7 +6386,8 @@
       "command": "remi platform feedback list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.feedback.list",
       "mutation": "read",
@@ -6237,7 +6403,8 @@
       "command": "remi platform release version",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.release.version",
       "mutation": "read",
@@ -6253,7 +6420,8 @@
       "command": "remi platform feedback create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.feedback.create",
       "mutation": "write",
@@ -6317,7 +6485,8 @@
       "command": "remi platform release latest",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.release.latest",
       "mutation": "read",
@@ -6333,7 +6502,8 @@
       "command": "remi platform release get",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.release.get",
       "mutation": "read",
@@ -6515,7 +6685,8 @@
       "command": "remi lark installation list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "lark.installation.list",
       "mutation": "read",
@@ -6547,7 +6718,8 @@
       "command": "remi lark install status",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "lark.install.status",
       "mutation": "read",

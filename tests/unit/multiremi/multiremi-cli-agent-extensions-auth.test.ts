@@ -5,7 +5,7 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("agent extension CLI authorization boundaries", () => {
-  it("returns only safe Agent directory fields to Task tokens", async () => {
+  it("gives Task tokens owner-equivalent access to Agent directory fields", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const taskAgent = store.createAgent({ name: "Task actor", provider: "codex", workspaceId: "local" });
@@ -41,8 +41,9 @@ describe("agent extension CLI authorization boundaries", () => {
       expect(response.status, path).toBe(200);
       const serialized = await response.text();
       expect(serialized).toContain("Visible directory agent");
-      expect(serialized.toLowerCase()).not.toMatch(/token|password|secret|key|authorization/);
-      for (const value of Object.values(privateValues)) expect(serialized).not.toContain(value);
+      expect(serialized).toContain(privateValues.instructions);
+      expect(serialized).toContain(privateValues.arg);
+      expect(serialized).toContain(privateValues.mcp);
     }
 
     const human = await app.request(`/api/agents/${directoryAgent.id}`, {
@@ -52,7 +53,7 @@ describe("agent extension CLI authorization boundaries", () => {
     expect(await human.text()).toContain(privateValues.instructions);
   });
 
-  it("keeps Task collaboration reads but rejects management and private child surfaces", async () => {
+  it("gives Task tokens owner-equivalent Agent extension management", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Task actor", provider: "codex", workspaceId: "local" });
@@ -65,25 +66,25 @@ describe("agent extension CLI authorization boundaries", () => {
 
     expect((await app.request("/api/squads?workspace_id=local", { headers })).status).toBe(200);
     expect((await app.request(`/api/squads/${squad.id}`, { headers })).status).toBe(200);
-    for (const [method, path, body] of [
-      ["POST", "/api/agents", { name: "Denied", provider: "codex", workspace_id: "local" }],
-      ["GET", `/api/agents/${agent.id}/env`, undefined],
-      ["GET", `/api/agents/${agent.id}/skills`, undefined],
-      ["GET", `/api/agents/${agent.id}/tasks`, undefined],
-      ["GET", `/api/multiremi/agents/${agent.id}/plugins`, undefined],
-      ["GET", "/api/agent-templates", undefined],
-      ["POST", "/api/squads", { name: "Denied squad", leader_id: agent.id, workspace_id: "local" }],
-      ["PUT", `/api/squads/${squad.id}`, { name: "Denied update" }],
-      ["POST", `/api/squads/${squad.id}/members`, { member_type: "agent", member_id: agent.id }],
-      ["POST", "/api/skills", { name: "Denied skill", workspace_id: "local", content: "# Skill" }],
-      ["GET", "/api/multiremi/agent-plugins?workspace_id=local", undefined],
+    for (const [method, path, body, status] of [
+      ["POST", "/api/agents", { name: "Allowed", provider: "codex", workspace_id: "local" }, 201],
+      ["GET", `/api/agents/${agent.id}/env`, undefined, 200],
+      ["GET", `/api/agents/${agent.id}/skills`, undefined, 200],
+      ["GET", `/api/agents/${agent.id}/tasks`, undefined, 200],
+      ["GET", `/api/multiremi/agents/${agent.id}/plugins`, undefined, 200],
+      ["GET", "/api/agent-templates", undefined, 200],
+      ["POST", "/api/squads", { name: "Allowed squad", leader_id: agent.id, workspace_id: "local" }, 201],
+      ["PUT", `/api/squads/${squad.id}`, { name: "Allowed update" }, 200],
+      ["POST", `/api/squads/${squad.id}/members`, { member_type: "agent", member_id: agent.id }, 201],
+      ["POST", "/api/skills", { name: "Allowed skill", workspace_id: "local", content: "# Skill" }, 201],
+      ["GET", "/api/multiremi/agent-plugins?workspace_id=local", undefined, 200],
     ] as const) {
       const response = await app.request(path, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      expect(response.status, `${method} ${path}`).toBe(403);
+      expect(response.status, `${method} ${path}`).toBe(status);
     }
   });
 

@@ -80,7 +80,7 @@ describe("Bun Multiremi project docs API", () => {
     expect(store.getProjectDoc(doc.id)).toBeNull();
   });
 
-  it("exposes migration status and dry-run only to workspace administrators", async () => {
+  it("exposes migration status and dry-run to owner task credentials", async () => {
     const store = createStore();
     const project = store.createProject({ title: "Migration API" });
     store.createProjectDoc(project.id, { kind: "memory", title: "Fact", body: "legacy SQL" });
@@ -108,10 +108,10 @@ describe("Bun Multiremi project docs API", () => {
     });
     expect(verify.status).toBe(503);
 
-    const forbidden = await app.request("/api/project-knowledge/migration?workspace_id=local", {
+    const asTask = await app.request("/api/project-knowledge/migration?workspace_id=local", {
       headers: { Authorization: `Bearer ${taskToken.token}` },
     });
-    expect(forbidden.status).toBe(403);
+    expect(asTask.status).toBe(200);
   });
 
   it("creates docs with member provenance and round-trips refs", async () => {
@@ -251,7 +251,7 @@ describe("Bun Multiremi project docs API", () => {
     });
   });
 
-  it("confines a task token to the project of its own issue", async () => {
+  it("gives an owner task token parity across projects in its workspace", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
@@ -259,49 +259,38 @@ describe("Bun Multiremi project docs API", () => {
     const ownIssue = store.createIssue({ title: "Own issue", projectId: ownProject.id });
     const task = store.createTask({ agentId: agent.id, issueId: ownIssue.id, workspaceId: "local", prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
-    // Same workspace, different project: workspace membership alone is not the
-    // boundary for project knowledge.
     const otherProject = store.createProject({ title: "Other project" });
     store.createProjectDoc(otherProject.id, { kind: "wiki", title: "Other secret" });
 
     const auth = { Authorization: `Bearer ${taskToken.token}` };
 
-    // Read is confined.
     expect((await app.request(`/api/projects/${ownProject.id}/docs`, { headers: auth })).status).toBe(200);
     const foreignList = await app.request(`/api/projects/${otherProject.id}/docs`, { headers: auth });
-    expect(foreignList.status).toBe(404);
-    expect(await foreignList.json()).toEqual({ error: "project not found" });
-    expect((await app.request(`/api/projects/${otherProject.id}/docs/other-secret`, { headers: auth })).status).toBe(404);
-    expect((await app.request(`/api/projects/${otherProject.id}/docs/other-secret/revisions`, { headers: auth })).status).toBe(404);
+    expect(foreignList.status).toBe(200);
+    expect((await app.request(`/api/projects/${otherProject.id}/docs/other-secret`, { headers: auth })).status).toBe(200);
+    expect((await app.request(`/api/projects/${otherProject.id}/docs/other-secret/revisions`, { headers: auth })).status).toBe(200);
 
-    // Write is confined.
     const foreignCreate = await app.request(`/api/projects/${otherProject.id}/docs`, {
       method: "POST",
       headers: { ...JSON_HEADERS, ...auth },
-      body: JSON.stringify({ kind: "memory", title: "Planted" }),
+      body: JSON.stringify({ kind: "memory", title: "Planted", body: "same workspace" }),
     });
-    expect(foreignCreate.status).toBe(404);
+    expect(foreignCreate.status).toBe(201);
     const foreignUpdate = await app.request(`/api/projects/${otherProject.id}/docs/other-secret`, {
       method: "PUT",
       headers: { ...JSON_HEADERS, ...auth },
       body: JSON.stringify({ body: "overwritten" }),
     });
-    expect(foreignUpdate.status).toBe(404);
+    expect(foreignUpdate.status).toBe(200);
     const foreignDelete = await app.request(`/api/projects/${otherProject.id}/docs/other-secret`, {
       method: "DELETE",
       headers: auth,
     });
-    expect(foreignDelete.status).toBe(404);
-    expect(store.getProjectDocByRef(otherProject.id, "other-secret")).not.toBeNull();
-    expect(store.getProjectDocByRef(otherProject.id, "other-secret")!.body).toBe("");
-
-    // A non-task caller reaching both projects is untouched by the rule.
-    expect((await app.request(`/api/projects/${otherProject.id}/docs`, {
-      headers: { Authorization: "Bearer root-secret" },
-    })).status).toBe(200);
+    expect(foreignDelete.status).toBe(200);
+    expect(store.getProjectDocByRef(otherProject.id, "other-secret")).toBeNull();
   });
 
-  it("denies a task token whose task has no project behind it", async () => {
+  it("lets owner task tokens without a current project read workspace projects", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
@@ -316,8 +305,7 @@ describe("Bun Multiremi project docs API", () => {
       const listed = await app.request(`/api/projects/${project.id}/docs`, {
         headers: { Authorization: `Bearer ${token.token}` },
       });
-      expect(listed.status).toBe(404);
-      expect(await listed.json()).toEqual({ error: "project not found" });
+      expect(listed.status).toBe(200);
     }
   });
 
@@ -557,7 +545,7 @@ describe("Bun Multiremi project docs API", () => {
     expect(await listed.json()).toEqual({ error: "workspace not found" });
   });
 
-  it("rejects a task token on the workspace doc listing outright", async () => {
+  it("lets an owner task token list workspace project docs", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
@@ -565,16 +553,16 @@ describe("Bun Multiremi project docs API", () => {
     const issue = store.createIssue({ title: "Own issue", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
-    // Same workspace, different project — exactly what the per-project route
-    // denies and this flat route must not quietly allow.
     const other = store.createProject({ title: "Other project" });
     store.createProjectDoc(other.id, { kind: "wiki", title: "Other secret" });
 
     const listed = await app.request("/api/project-docs", {
       headers: { Authorization: `Bearer ${taskToken.token}` },
     });
-    expect(listed.status).toBe(403);
-    expect(await listed.json()).toEqual({ error: "forbidden" });
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).docs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ project_id: other.id, title: "Other secret" }),
+    ]));
   });
 
   it("keeps project knowledge out of the daemon claim so agents retrieve it on demand", async () => {

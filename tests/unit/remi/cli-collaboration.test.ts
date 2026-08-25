@@ -29,6 +29,14 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("keeps issue share capability management human-only", () => {
+    const inventory = new Map(registryFor(specs).inventory().map((entry) => [entry.id, entry]));
+    for (const id of ["share.get", "share.create", "share.extend", "share.delete"]) {
+      expect(inventory.get(id)?.auth, id).toEqual(["human"]);
+    }
+    expect(inventory.get("share.view")?.auth).toEqual(["human", "share", "task"]);
+  });
+
   it("declares output/paging contracts and confirmations for native destructive commands", () => {
     for (const spec of specs.filter((candidate) => candidate.capability)) {
       expect(spec.outputs, spec.id).toEqual(["table", "json", "jsonl"]);

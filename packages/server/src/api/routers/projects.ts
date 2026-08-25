@@ -2,10 +2,9 @@ import type { Hono } from "hono";
 import {
   compatibilityWorkspaceId,
   denyCurrentUserWorkspaceAccess,
-  denyTaskTokenProjectAccess,
   isJsonApiError,
   loadProjectForDocs,
-  loadProjectForHumanMutation,
+  loadProjectForMutation,
   loadProjectResourceForMutation,
   projectDocCreateInput,
   projectDocUpdateInput,
@@ -25,7 +24,6 @@ import {
 import {
   cleanString,
   currentRequestUserId,
-  currentTaskAccessToken,
   parseOptionalInt,
   projectCompatibilityResponse,
   projectCompatibilitySummaryResponse,
@@ -177,7 +175,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.patch("/api/multiremi/projects/:id", async (c) => {
     const body = await readJsonStrict<UpdateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     const invalidInstructions = validateProjectInstructionsUpdate(c, body);
     if (invalidInstructions) return invalidInstructions;
@@ -194,12 +192,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.delete("/api/multiremi/projects/:id", (c) => {
-    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     return c.json({ project: store.archiveProject(project.id) });
   });
   app.post("/api/multiremi/projects/:id/restore", (c) => {
-    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     return c.json({ project: store.restoreProject(project.id) });
   });
@@ -210,7 +208,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ resources, total: resources.length });
   });
   app.post("/api/multiremi/projects/:id/resources", async (c) => {
-    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     const body = await readJsonStrict<CreateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -255,7 +253,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.put("/api/projects/:id", async (c) => {
     const body = await readJsonStrict<UpdateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const loadedProject = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const loadedProject = loadProjectForMutation(c, store, c.req.param("id"));
     if (loadedProject instanceof Response) return loadedProject;
     const invalidInstructions = validateProjectInstructionsUpdate(c, body);
     if (invalidInstructions) return invalidInstructions;
@@ -273,14 +271,14 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.delete("/api/projects/:id", (c) => {
-    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     const archived = store.archiveProject(project.id);
     publishProjectUpdated(c, store, archived, projectCompatibilityResponse(archived));
     return c.body(null, 204);
   });
   app.post("/api/projects/:id/restore", (c) => {
-    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     const restored = store.restoreProject(project.id);
     const response = projectCompatibilityResponse(restored);
@@ -294,7 +292,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ resources, total: resources.length });
   });
   app.post("/api/projects/:id/resources", async (c) => {
-    const project = loadProjectForHumanMutation(c, store, c.req.param("id"));
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     const body = await readJsonStrict<CreateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -456,9 +454,6 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = compatibilityWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    // A task token is project-scoped (denyTaskTokenProjectAccess); this flat
-    // workspace-wide listing would silently widen it, so reject it outright.
-    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
     try {
       const docs = await projectKnowledge.listWorkspaceDocs(workspaceId, {
         kind: cleanString(c.req.query("kind")),
@@ -479,7 +474,6 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = compatibilityWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
     return c.json(await projectKnowledge.migrationStatus(workspaceId));
   });
   app.post("/api/project-knowledge/migration/backfill", async (c) => {
@@ -488,7 +482,6 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
     try {
       return c.json(await projectKnowledge.backfill(workspaceId, {
         projectId: cleanString(body.project_id),
@@ -507,7 +500,6 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
     try {
       return c.json(await projectKnowledge.verify(workspaceId, cleanString(body.project_id)));
     } catch (err) {
@@ -522,7 +514,6 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
     try {
       return c.json(await projectKnowledge.backfill(workspaceId, {
         projectId: cleanString(body.project_id),

@@ -19,6 +19,8 @@ const savedEnv = {
   server: process.env.MULTIREMI_SERVER_URL,
   workspace: process.env.MULTIREMI_WORKSPACE_ID,
   token: process.env.MULTIREMI_TOKEN,
+  project: process.env.MULTIREMI_PROJECT_ID,
+  workspaceRoot: process.env.MULTIREMI_WORKSPACE_ROOT,
 };
 
 const SPECS = [
@@ -39,9 +41,32 @@ afterEach(() => {
   restoreEnv("MULTIREMI_SERVER_URL", savedEnv.server);
   restoreEnv("MULTIREMI_WORKSPACE_ID", savedEnv.workspace);
   restoreEnv("MULTIREMI_TOKEN", savedEnv.token);
+  restoreEnv("MULTIREMI_PROJECT_ID", savedEnv.project);
+  restoreEnv("MULTIREMI_WORKSPACE_ROOT", savedEnv.workspaceRoot);
 });
 
 describe("native CLI resource contracts", () => {
+  it("advertises task parity except for identity and workspace lifecycle commands", () => {
+    const registry = registryFor(SPECS);
+    const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
+    for (const id of ["workspace.get", "workspace.update", "project.update", "repo.list", "memory.list"]) {
+      expect(inventory.get(id)?.auth, id).toEqual(["human", "task"]);
+    }
+    for (const id of [
+      "workspace.create",
+      "workspace.delete",
+      "workspace.leave",
+      "workspace.ssh-mesh.update",
+      "workspace.ssh-mesh.rotate",
+      "workspace.relay.reveal",
+      "member.list",
+      "invite.list",
+      "token.list",
+    ]) {
+      expect(inventory.get(id)?.auth, id).toEqual(["human"]);
+    }
+  });
+
   it("gives every read command paging/output options and every destructive command --yes", () => {
     const native = SPECS.filter((spec) => spec.capability);
     for (const spec of native) {
@@ -292,9 +317,9 @@ describe("native CLI resource contracts", () => {
     });
   });
 
-  it("resolves a project the credential cannot GET by id through the workspace list", async () => {
-    // A task token may only GET its own issue's project by id; discovery of
-    // every other project falls back to search, then to the workspace list.
+  it("resolves a project through the workspace list when direct lookup is unavailable", async () => {
+    // Compatibility fallback for older servers whose direct project lookup
+    // may be narrower than their workspace project listing.
     useCliEnv();
     const spec = specById("project.defaults");
     const requests: Request[] = [];
@@ -370,6 +395,21 @@ describe("native CLI resource contracts", () => {
       body: "Repository facts",
       source_revision: "abc123",
     });
+  });
+
+  it("keeps native Repository Wiki status and push usable without a project", async () => {
+    useCliEnv();
+    delete process.env.MULTIREMI_PROJECT_ID;
+    const directory = mkdtempSync(join(tmpdir(), "remi-cli-repository-wiki-"));
+    tempDirectories.push(directory);
+    process.env.MULTIREMI_WORKSPACE_ROOT = directory;
+
+    for (const id of ["wiki.status", "wiki.push"]) {
+      await expect(execute(specById(id), [])).rejects.toThrow("Wiki working copy is not initialized");
+    }
+    for (const id of ["wiki.pull", "wiki.diff"]) {
+      await expect(execute(specById(id), [])).rejects.toThrow("--project is required");
+    }
   });
 
   it("preserves legacy memory body flags while rejecting empty content", async () => {

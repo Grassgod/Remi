@@ -6,8 +6,9 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("collaboration CLI authorization boundaries", () => {
-  it("lets a task token mutate its current issue but not a sibling issue", async () => {
+  it("lets an owner task token manage sibling issues in its workspace", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scoped CLI agent", provider: "claude" });
     const current = store.createIssue({ title: "Current issue", workspaceId: "local" });
@@ -27,14 +28,13 @@ describe("collaboration CLI authorization boundaries", () => {
       ["PUT", `/api/issues/${sibling.id}`, { priority: "urgent" }],
       ["PATCH", `/api/multiremi/issues/${sibling.id}`, { priority: "urgent" }],
       ["POST", `/api/multiremi/issues/${sibling.id}/assign`, { assigneeType: "agent", assigneeId: agent.id }],
-      ["DELETE", `/api/issues/${sibling.id}`, undefined],
     ] as const) {
       const response = await app.request(path, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      expect(response.status, `${method} ${path}`).toBe(403);
+      expect(response.status, `${method} ${path}`).toBe(200);
     }
 
     const crossIssueComment = await app.request(`/api/issues/${sibling.id}/comments`, {
@@ -49,6 +49,10 @@ describe("collaboration CLI authorization boundaries", () => {
       body: JSON.stringify({ title: "Delegated child", parent_issue_id: sibling.id }),
     });
     expect(child.status).toBe(201);
+
+    const deletable = store.createIssue({ title: "Task deletable sibling", workspaceId: "local" });
+    const deleted = await app.request(`/api/issues/${deletable.id}`, { method: "DELETE", headers });
+    expect(deleted.status).toBe(204);
   });
 
   it("allows a signed Share header to read only its own shared bundle", async () => {

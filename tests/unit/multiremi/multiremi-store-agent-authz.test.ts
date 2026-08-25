@@ -434,9 +434,10 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
       id: agent.id,
       name: "MCP Redact",
       workspace_id: "local",
+      mcp_config: secretConfig,
+      mcp_config_redacted: false,
     });
-    expect(taskDirectoryAgent).not.toHaveProperty("mcp_config");
-    expect(JSON.stringify(taskDirectoryAgent)).not.toContain("secret-command");
+    expect(JSON.stringify(taskDirectoryAgent)).toContain("secret-command");
 
     store.updateWorkspace("local", { settings: { always_redact_env: true } });
     const alwaysRedactedAdminRead = await app.request(`/api/agents/${agent.id}`, { headers: authHeaders(adminToken.token) });
@@ -512,10 +513,10 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     const taskUpdate = await app.request(`/api/agents/${createdBody.id}`, {
       method: "PUT",
       headers: jsonHeaders(taskToken.token),
-      body: JSON.stringify({ name: "Task Should Not Update" }),
+      body: JSON.stringify({ name: "Task Owner Update" }),
     });
-    expect(taskUpdate.status).toBe(403);
-    expect(await taskUpdate.json()).toEqual({ error: "this endpoint is only available to human actors" });
+    expect(taskUpdate.status).toBe(200);
+    expect(await taskUpdate.json()).toMatchObject({ name: "Task Owner Update" });
 
     const ownerUpdate = await app.request(`/api/agents/${createdBody.id}`, {
       method: "PUT",
@@ -637,17 +638,23 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     const envTask = store.createTask({ agentId: agent.id, prompt: "env access" });
     const envTaskToken = await store.createTaskAccessToken(envTask, "owner");
     const taskTokenRead = await app.request(`/api/agents/${agent.id}/env`, { headers: headers(envTaskToken.token) });
-    expect(taskTokenRead.status).toBe(403);
-    expect(await taskTokenRead.json()).toEqual({ error: "this endpoint is only available to human actors" });
+    expect(taskTokenRead.status).toBe(200);
+    expect(await taskTokenRead.json()).toEqual({
+      agent_id: agent.id,
+      custom_env: { SECRET_TOKEN: "real-value", KEEP_ME: "yes" },
+    });
 
     const taskTokenWrite = await app.request(`/api/agents/${agent.id}/env`, {
       method: "PUT",
       headers: headers(envTaskToken.token),
       body: JSON.stringify({ custom_env: { SECRET_TOKEN: "changed" } }),
     });
-    expect(taskTokenWrite.status).toBe(403);
-    expect(await taskTokenWrite.json()).toEqual({ error: "this endpoint is only available to human actors" });
-    expect(store.getAgent(agent.id)?.customEnv).toEqual({ SECRET_TOKEN: "real-value", KEEP_ME: "yes" });
+    expect(taskTokenWrite.status).toBe(200);
+    expect(await taskTokenWrite.json()).toEqual({
+      agent_id: agent.id,
+      custom_env: { SECRET_TOKEN: "changed" },
+    });
+    expect(store.getAgent(agent.id)?.customEnv).toEqual({ SECRET_TOKEN: "changed" });
 
     const invalidWrite = await app.request(`/api/agents/${agent.id}/env`, {
       method: "PUT",
@@ -656,7 +663,7 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     });
     expect(invalidWrite.status).toBe(400);
     expect(await invalidWrite.json()).toEqual({ error: "invalid request body" });
-    expect(store.getAgent(agent.id)?.customEnv).toEqual({ SECRET_TOKEN: "real-value", KEEP_ME: "yes" });
+    expect(store.getAgent(agent.id)?.customEnv).toEqual({ SECRET_TOKEN: "changed" });
 
     const ownerWrite = await app.request(`/api/agents/${agent.id}/env`, {
       method: "PUT",
@@ -666,9 +673,9 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     expect(ownerWrite.status).toBe(200);
     expect(await ownerWrite.json()).toEqual({
       agent_id: agent.id,
-      custom_env: { SECRET_TOKEN: "real-value", ADDED: "new" },
+      custom_env: { SECRET_TOKEN: "changed", ADDED: "new" },
     });
-    expect(store.getAgent(agent.id)?.customEnv).toEqual({ SECRET_TOKEN: "real-value", ADDED: "new" });
+    expect(store.getAgent(agent.id)?.customEnv).toEqual({ SECRET_TOKEN: "changed", ADDED: "new" });
 
     const adminClear = await app.request(`/api/agents/${agent.id}/env`, {
       method: "PUT",

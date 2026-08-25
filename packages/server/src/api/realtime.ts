@@ -656,7 +656,9 @@ export async function authorizeBrowserWebSocketToken(
   const accessToken = await store.verifyAccessToken(token);
   if (accessToken) {
     if (accessToken.type === "daemon") return { error: "forbidden for daemon token", status: 403 };
-    if (accessToken.type === "task") return { error: "forbidden for task token", status: 403 };
+    if (accessToken.type === "task" && accessToken.workspaceId !== workspaceId) {
+      return { error: "not a member of this workspace", status: 403 };
+    }
     const userId = accessToken.userId || "local";
     // Membership is the sole authority — a token being bound to this workspace
     // does not by itself make its user a member.

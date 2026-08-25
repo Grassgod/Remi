@@ -5,7 +5,7 @@ import {
   currentWorkspaceRole,
   denyAttachmentAccess,
   denyCurrentUserWorkspaceAccess,
-  denyTaskTokenCommentAccess,
+  denyCurrentUserCommentAccess,
   detectContentTypeFromFilename,
   loadChatSessionForCurrentUser,
   localAttachmentFileResponse,
@@ -36,8 +36,8 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<CreateAttachmentInput>(c);
     const commentId = cleanString(body.commentId ?? body.comment_id);
     if (commentId) {
-      const taskDenied = denyTaskTokenCommentAccess(c, store, commentId);
-      if (taskDenied) return taskDenied;
+      const denied = denyCurrentUserCommentAccess(c, store, commentId);
+      if (denied) return denied;
     }
     const workspaceId = cleanString(body.workspaceId) ?? cleanString(body.workspace_id) ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
@@ -57,8 +57,8 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
     const comment = commentId ? store.getIssueComment(commentId) : null;
     if (commentId && !comment) return c.json({ error: "invalid comment_id" }, 403);
     if (commentId) {
-      const taskDenied = denyTaskTokenCommentAccess(c, store, commentId);
-      if (taskDenied) return taskDenied;
+      const denied = denyCurrentUserCommentAccess(c, store, commentId);
+      if (denied) return denied;
     }
     if (issue && comment && comment.issueId !== issue.id) return c.json({ error: "invalid comment_id" }, 403);
     const chatSessionId = stringFormValue(form.get("chatSessionId") ?? form.get("chat_session_id"));
