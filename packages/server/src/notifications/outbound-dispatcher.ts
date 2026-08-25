@@ -5,7 +5,6 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { NotificationDeliveryContext } from "@multiremi/store/repos/notification-channels-repo.js";
 import { createLogger } from "@shared/logger.js";
-import { createFeishuGroupSender } from "./feishu-group-sender.js";
 import { buildInboxNotificationCard } from "./inbox-card.js";
 import {
   PermanentNotificationDeliveryError,
@@ -50,7 +49,7 @@ export class OutboundNotificationDispatcher {
   constructor(options: OutboundNotificationDispatcherOptions) {
     this.store = options.store;
     this.senders = {
-      feishu_group: createFeishuGroupSender(),
+      feishu_group: lazyFeishuGroupSender(),
       ...options.senders,
     };
     this.maxAttempts = positiveInteger(options.maxAttempts, 3);
@@ -101,6 +100,10 @@ export class OutboundNotificationDispatcher {
     if (!context || context.delivery.status !== "pending") return;
     if (!context.channel) {
       this.store.markNotificationDeliveryFailed(id, "notification channel not found");
+      return;
+    }
+    if (!context.channel.enabled) {
+      this.store.markNotificationDeliveryFailed(id, "notification channel is disabled");
       return;
     }
     if (!context.item) {
@@ -154,6 +157,19 @@ export class OutboundNotificationDispatcher {
     timer.unref?.();
     this.retryTimers.set(id, timer);
   }
+}
+
+function lazyFeishuGroupSender(): OutboundNotificationSender {
+  let sender: OutboundNotificationSender | null = null;
+  return {
+    async send(notification): Promise<void> {
+      if (!sender) {
+        const { createFeishuGroupSender } = await import("./feishu-group-sender.js");
+        sender = createFeishuGroupSender();
+      }
+      await sender.send(notification);
+    },
+  };
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {

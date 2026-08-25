@@ -4274,6 +4274,80 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "notification.channel.list": {
+      "command": "remi notification channel list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.channel.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.channel.create": {
+      "command": "remi notification channel create",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.channel.update": {
+      "command": "remi notification channel update",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.channel.delete": {
+      "command": "remi notification channel delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.delivery.list": {
+      "command": "remi notification delivery list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.delivery.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.delivery.retry": {
+      "command": "remi notification delivery retry",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.delivery.retry",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "pin.list": {
       "command": "remi pin list",
       "auth": [

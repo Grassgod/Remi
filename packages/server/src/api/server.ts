@@ -32,6 +32,7 @@ import { registerAgentTemplateRoutes } from "./routers/agent-templates.js";
 import { registerSkillRoutes } from "./routers/skills.js";
 import { registerTokenRoutes } from "./routers/tokens.js";
 import { registerNotificationPreferenceRoutes } from "./routers/notification-preferences.js";
+import { registerNotificationChannelRoutes } from "./routers/notification-channels.js";
 import { registerRuntimeRoutes } from "./routers/runtimes.js";
 import { registerDaemonRetirementRoutes } from "./routers/daemon-retirement.js";
 import { registerDashboardRoutes } from "./routers/dashboard.js";
@@ -506,6 +507,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   registerTokenRoutes(app, deps);
   registerNotificationPreferenceRoutes(app, deps);
+  registerNotificationChannelRoutes(app, deps);
   app.post("/api/multiremi/feedback", async (c) => {
     const body = await readJson<CreateFeedbackInput>(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");

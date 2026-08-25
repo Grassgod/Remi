@@ -248,10 +248,33 @@ function inboxSpecs(): CommandSpec[] {
 }
 
 function notificationSpecs(): CommandSpec[] {
+  const channelPath = async (invocation: CommandInvocation, client: CliApiClient) => {
+    const channelId = await resolveListedId(
+      client,
+      invocation,
+      positional(invocation, 0, "channel"),
+      "notification channel",
+      "/api/multiremi/notification-channels",
+      ["channels"],
+    );
+    return `/api/multiremi/notification-channels/${encodePath(channelId)}`;
+  };
+  const deliveryStatusOption: CliOptionSpec = {
+    name: "status",
+    type: "string",
+    valueName: "pending|sent|failed",
+    description: "Delivery status filter",
+  };
   return [
     group("notification", "Manage notification preferences"),
     op({ id: "notification.get", path: ["notification", "get"], description: "Get notification preferences", method: "GET", apiPath: "/api/notification-preferences", auth: HUMAN_TASK, query: (i) => ({ workspace_id: requiredWorkspace(i) }) }),
     op({ id: "notification.update", path: ["notification", "update"], description: "Update notification preferences", method: "PUT", apiPath: "/api/notification-preferences", mutation: "write", auth: HUMAN_TASK, options: INPUT_OPTIONS, body: withWorkspace }),
+    op({ id: "notification.channel.list", path: ["notification", "channel", "list"], description: "List outbound notification channels", method: "GET", apiPath: "/api/multiremi/notification-channels", auth: HUMAN_TASK, query: (i) => ({ workspace_id: requiredWorkspace(i) }), collections: ["channels"] }),
+    op({ id: "notification.channel.create", path: ["notification", "channel", "create"], description: "Create an outbound notification channel", method: "POST", apiPath: "/api/multiremi/notification-channels", mutation: "write", auth: HUMAN, options: INPUT_OPTIONS, body: withWorkspace }),
+    op({ id: "notification.channel.update", path: ["notification", "channel", "update"], description: "Update an outbound notification channel", method: "PATCH", apiPath: channelPath, mutation: "write", auth: HUMAN, positionals: [ref("channel")], options: INPUT_OPTIONS }),
+    op({ id: "notification.channel.delete", path: ["notification", "channel", "delete"], description: "Delete an outbound notification channel", method: "DELETE", apiPath: channelPath, mutation: "destructive", auth: HUMAN, positionals: [ref("channel")] }),
+    op({ id: "notification.delivery.list", path: ["notification", "delivery", "list"], description: "List outbound notification deliveries", method: "GET", apiPath: "/api/multiremi/notification-deliveries", auth: HUMAN_TASK, options: [deliveryStatusOption], query: (i) => queryOptions(i, { workspace_id: requiredWorkspace(i), status: stringOption(i, "status") }), collections: ["deliveries"] }),
+    op({ id: "notification.delivery.retry", path: ["notification", "delivery", "retry"], description: "Retry an outbound notification delivery", method: "POST", apiPath: (i) => `/api/multiremi/notification-deliveries/${encodePath(positional(i, 0, "delivery"))}/retry`, mutation: "write", auth: HUMAN, positionals: [ref("delivery")] }),
   ];
 }
 

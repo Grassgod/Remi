@@ -86,6 +86,9 @@ export class NotificationChannelsRepo {
     const target = validateFeishuGroupTarget(input.target);
     const eventTypes = normalizeEventTypes(input.eventTypes);
     const minSeverity = normalizeSeverity(input.minSeverity ?? "info");
+    if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
+      throw new NotificationChannelValidationError("enabled must be a boolean");
+    }
     const id = createId("nch");
     const now = nowIso();
     this.ctx.db.run(
@@ -271,14 +274,16 @@ export class NotificationChannelsRepo {
   }
 
   resetForRetry(id: string): MultiremiNotificationDelivery | null {
-    this.ctx.db.run(
+    const current = this.getDelivery(id);
+    if (!current || current.status === "sent") return null;
+    const result = this.ctx.db.run(
       `UPDATE multiremi_notification_deliveries
        SET status = 'pending', attempts = 0, last_error = NULL,
            last_attempt_at = NULL, delivered_at = NULL
        WHERE id = ? AND status IN ('pending', 'failed')`,
       [id],
     );
-    return this.getDelivery(id);
+    return result.changes === 1 ? this.getDelivery(id) : null;
   }
 }
 
@@ -289,10 +294,10 @@ function requiredString(value: unknown, name: string): string {
 }
 
 function normalizeEventTypes(value: unknown): string[] {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
     throw new NotificationChannelValidationError("eventTypes must be a non-empty string array");
   }
-  const normalized = [...new Set(value.map((entry) => String(entry).trim()).filter(Boolean))];
+  const normalized = [...new Set(value.map((entry) => entry.trim()).filter(Boolean))];
   if (!normalized.length) {
     throw new NotificationChannelValidationError("eventTypes must be a non-empty string array");
   }
