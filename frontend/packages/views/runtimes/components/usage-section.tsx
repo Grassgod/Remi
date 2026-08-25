@@ -188,6 +188,13 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
   const unmappedInWindow = collectUnmappedModels(filtered);
   const costUnavailable =
     tokensTotal > 0 && totals.cost === 0 && unmappedInWindow.length > 0;
+  // Cache savings is the same derivation applied to cache-read tokens: if
+  // cache reads happened but none priced, $0.00 savings is equally
+  // fabricated. No cache reads at all → $0.00 is a real measurement.
+  const cacheSavingsUnavailable =
+    totals.cacheRead > 0 &&
+    totals.cacheSavings === 0 &&
+    unmappedInWindow.length > 0;
 
   return (
     <div className="space-y-5">
@@ -261,15 +268,19 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
         />
         <KpiCard
           label={t(($) => $.usage.kpi_cache_label, { days })}
-          value={fmtMoney(totals.cacheSavings)}
+          value={cacheSavingsUnavailable ? "—" : fmtMoney(totals.cacheSavings)}
           accent={totals.cacheSavings > 0 ? "success" : "default"}
           hint={
-            <span>
-              {t(($) => $.usage.kpi_cache_hint, {
-                pct: cacheHitRate,
-                reads: formatTokens(totals.cacheRead),
-              })}
-            </span>
+            cacheSavingsUnavailable ? (
+              <span>{t(($) => $.usage.kpi_cache_unpriced)}</span>
+            ) : (
+              <span>
+                {t(($) => $.usage.kpi_cache_hint, {
+                  pct: cacheHitRate,
+                  reads: formatTokens(totals.cacheRead),
+                })}
+              </span>
+            )
           }
         />
         <KpiCard
@@ -640,7 +651,11 @@ function CostByBlock({
 
   // by-agent is server-side aggregation (fetched lazily on tab activation).
   // by-model derives from the daily cache the parent already has — free.
-  const { data: byAgentRows = [] } = useQuery({
+  const {
+    data: byAgentRows = [],
+    isError: byAgentFailed,
+    refetch: refetchByAgent,
+  } = useQuery({
     ...runtimeUsageByAgentOptions(runtimeId, days, tz),
     enabled: tab === "agent",
   });
@@ -685,7 +700,29 @@ function CostByBlock({
         <span className="text-xs text-muted-foreground">{caption}</span>
       </div>
       <div className="pt-4">
-        {tab === "agent" && (
+        {/* A failed by-agent fetch must not read as "no agent spent
+            anything" (MUL-93) — CostByList's empty copy would be a
+            fabricated conclusion. */}
+        {tab === "agent" && byAgentFailed && (
+          <div
+            role="alert"
+            className="flex flex-col items-center gap-2 py-4 text-center"
+          >
+            <AlertCircle className="h-4 w-4 text-warning" />
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.usage.error_body)}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => refetchByAgent()}
+            >
+              {t(($) => $.usage.retry)}
+            </Button>
+          </div>
+        )}
+        {tab === "agent" && !byAgentFailed && (
           <CostByList
             rows={byAgent}
             renderKey={(key) => {
@@ -756,8 +793,12 @@ function CostByList({
             <div className="text-right text-xs tabular-nums text-muted-foreground">
               {formatTokens(row.tokens)}
             </div>
+            {/* $0.00 for a row whose tokens are all unpriced would be a
+                fabricated figure — render "—" instead (MUL-93). */}
             <div className="text-right text-sm font-medium tabular-nums">
-              ${row.cost.toFixed(2)}
+              {row.tokens > 0 && row.cost === 0 && row.unpricedTokens > 0
+                ? "—"
+                : `$${row.cost.toFixed(2)}`}
             </div>
           </div>
         );

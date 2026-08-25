@@ -385,10 +385,15 @@ export function DashboardPage() {
             <DashboardSkeleton />
           ) : allError ? (
             <DashboardError onRetry={retryFailed} />
-          ) : hasNoData ? (
-            <DashboardEmpty />
           ) : (
             <>
+              {/* Real-zero explainer — every series succeeded and came back
+                  empty. The KPI tiles below still render their genuine
+                  zeros ("$0.00 / 0 / 0m"), per the MUL-93 acceptance
+                  criteria: a real zero is DISPLAYED as zero, and this card
+                  says why it can be trusted. */}
+              {hasNoData && <DashboardEmpty />}
+
               {/* Partial-failure banner — some series loaded, some didn't.
                   The affected tiles below render "—"; this banner names the
                   situation and owns the retry entry point. */}
@@ -838,9 +843,12 @@ function Leaderboard({
           </span>
         </div>
       </div>
-      {tokensFailed && runTimeFailed ? (
-        // Both sources failed — an empty list here would read as "no agent
-        // activity", which is a fabrication (MUL-93).
+      {(tokensFailed || runTimeFailed) && sortedRows.length === 0 ? (
+        // No rows AND at least one failed source — "no agent activity"
+        // would be a fabricated conclusion (the failed series may hold the
+        // missing rows), so show the failure instead (MUL-93). When rows
+        // exist despite a failed source, they render below with the failed
+        // columns as "—".
         <div
           role="alert"
           className="flex flex-col items-center gap-2 px-4 py-8 text-center"
@@ -901,7 +909,9 @@ function Leaderboard({
                   <div
                     className={`text-right text-xs tabular-nums ${sortBy === "tokens" ? "font-medium text-foreground" : "text-muted-foreground"}`}
                   >
-                    {tokensFailed ? "—" : formatTokens(row.tokens)}
+                    {tokensFailed || row.tokensUnavailable
+                      ? "—"
+                      : formatTokens(row.tokens)}
                   </div>
                   <div
                     className={`text-right tabular-nums ${sortBy === "cost" ? "text-sm font-medium" : "text-xs text-muted-foreground"}`}

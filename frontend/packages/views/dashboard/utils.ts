@@ -110,6 +110,10 @@ export interface AgentDashboardRow {
    *  an in-flight task) — rendering it as "<1m" would fabricate a duration,
    *  so the UI shows "—" instead. */
   hasRunTime: boolean;
+  /** True when this agent ran tasks but no token usage rows were recorded
+   *  (MUL-93): `tokens: 0` here is "not collected", not a measured zero,
+   *  so the UI renders "—" for the token column instead of 0. */
+  tokensUnavailable: boolean;
 }
 
 // Merge per-agent token totals with per-agent run-time totals into one
@@ -140,13 +144,14 @@ export function mergeAgentDashboardRows(
       // Tokens recorded but every model unpriced → $0.00 would be fabricated.
       costUnavailable: r.tokens > 0 && r.cost === 0 && r.unpricedTokens > 0,
       hasRunTime: rt !== undefined,
+      tokensUnavailable: false,
     });
   }
-  // Agents with run-time rows but zero tokens still belong on the list
-  // (a task that errored before producing usage). Their token columns
-  // stay at 0 — that's a factual "no usage recorded" — but cost is marked
-  // unavailable because a dollar figure can't be derived from unrecorded
-  // usage.
+  // Agents with run-time rows but zero token rows still belong on the list
+  // (a task that errored before producing usage). With tasks on record and
+  // no usage rows, neither their token count nor their cost is derivable —
+  // both are marked unavailable so the UI renders "—", not a fabricated
+  // 0 / $0.00 (MUL-93).
   for (const r of runTimeRows) {
     if (merged.has(r.agent_id)) continue;
     merged.set(r.agent_id, {
@@ -157,6 +162,7 @@ export function mergeAgentDashboardRows(
       taskCount: r.task_count,
       costUnavailable: r.task_count > 0,
       hasRunTime: true,
+      tokensUnavailable: r.task_count > 0,
     });
   }
   return Array.from(merged.values()).toSorted((a, b) => {

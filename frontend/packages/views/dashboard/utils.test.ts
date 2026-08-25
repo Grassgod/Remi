@@ -377,6 +377,7 @@ describe("usage availability flags (MUL-93)", () => {
       [],
     );
     expect(merged[0]!.costUnavailable).toBe(false);
+    expect(merged[0]!.tokensUnavailable).toBe(false);
   });
 
   it("marks cost unavailable for run-time-only agents that ran tasks", () => {
@@ -388,6 +389,9 @@ describe("usage availability flags (MUL-93)", () => {
     );
     expect(merged[0]!.costUnavailable).toBe(true);
     expect(merged[0]!.hasRunTime).toBe(true);
+    // tokens: 0 here means "not collected", not a measured zero — the UI
+    // renders "—" for the token column off this flag.
+    expect(merged[0]!.tokensUnavailable).toBe(true);
   });
 
   it("flags rows without a run-time rollup so 0s isn't rendered as <1m", () => {

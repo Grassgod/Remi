@@ -381,10 +381,33 @@ describe("dashboard + runtime usage schema drift", () => {
     expect(DashboardAgentRunTimeListSchema.parse([])).toEqual([]);
   });
 
-  it("coerces missing fields on every runtime usage schema (still lenient)", () => {
-    expect(RuntimeUsageListSchema.parse([{ date: "2026-05-19" }])[0]?.input_tokens).toBe(0);
+  it("rejects runtime usage / by-agent rows missing fields (strict, MUL-93)", () => {
+    // The token-bearing runtime rollups follow the same strict policy as
+    // the dashboard: a missing token field must fail the row, not become 0.
+    expect(RuntimeUsageListSchema.safeParse([{ date: "2026-05-19" }]).success).toBe(false);
+    expect(RuntimeUsageByAgentListSchema.safeParse([{ model: "x" }]).success).toBe(false);
+  });
+
+  it("accepts a complete runtime usage row and keeps its values", () => {
+    const parsed = RuntimeUsageListSchema.parse([
+      {
+        runtime_id: "r-1",
+        date: "2026-05-19",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        input_tokens: 12,
+        output_tokens: 3,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+      },
+    ]);
+    expect(parsed[0]?.input_tokens).toBe(12);
+  });
+
+  it("coerces missing fields on the hour-of-day schemas (still lenient)", () => {
+    // Density visualizations prefer a degraded bucket over a dropped chart,
+    // and no dollar/token KPI derives from these rows.
     expect(RuntimeHourlyActivityListSchema.parse([{ hour: 9 }])[0]?.count).toBe(0);
-    expect(RuntimeUsageByAgentListSchema.parse([{ model: "x" }])[0]?.agent_id).toBe("");
     expect(RuntimeUsageByHourListSchema.parse([{ hour: 9 }])[0]?.model).toBe("");
   });
 
@@ -395,7 +418,17 @@ describe("dashboard + runtime usage schema drift", () => {
 
   it("keeps unknown server-side fields via .loose()", () => {
     const parsed = RuntimeUsageListSchema.parse([
-      { date: "2026-05-19", region: "us-east" },
+      {
+        runtime_id: "r-1",
+        date: "2026-05-19",
+        provider: "anthropic",
+        model: "m",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        region: "us-east",
+      },
     ]);
     expect((parsed[0] as Record<string, unknown>).region).toBe("us-east");
 

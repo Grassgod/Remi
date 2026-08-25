@@ -14,7 +14,7 @@
     "run_time_hint": "{{tasks}} 件のタスク全体",
     "tasks_label": "タスク · {{days}}日",
     "tasks_hint": "{{failed}} 件失敗",
-    "unavailable_hint": "読み込み失敗 · 値は利用不可（0 ではありません）",
+    "unavailable_hint": "読み込みに失敗したため、値を表示できません（0 ではありません）",
     "not_collected": "{{tasks}} 件のタスクが実行されましたが、トークン使用量は記録されていません",
     "no_tasks": "期間内にタスクはありません",
     "cost_unpriced": "使用モデルの価格情報がないため、費用を算出できません"

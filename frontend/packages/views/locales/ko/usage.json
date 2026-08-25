@@ -14,7 +14,7 @@
     "run_time_hint": "작업 {{tasks}}개 기준",
     "tasks_label": "작업 · {{days}}일",
     "tasks_hint": "실패 {{failed}}개",
-    "unavailable_hint": "불러오기 실패 · 값 없음(0 아님)",
+    "unavailable_hint": "불러오지 못해 값을 표시할 수 없습니다(0이 아닙니다)",
     "not_collected": "{{tasks}}개 작업이 실행되었지만 토큰 사용량이 기록되지 않았습니다",
     "no_tasks": "기간 내 작업 없음",
     "cost_unpriced": "사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다"

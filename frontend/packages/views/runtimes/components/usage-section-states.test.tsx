@@ -22,6 +22,7 @@ type QueryState = {
 };
 
 const usageState = vi.hoisted(() => ({ current: {} as QueryState }));
+const byAgentState = vi.hoisted(() => ({ current: {} as QueryState }));
 const refetchCalls = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("../../common/use-viewing-timezone", () => ({
@@ -58,12 +59,17 @@ vi.mock("@tanstack/react-query", async () => {
   return {
     ...actual,
     useQuery: (opts: { kind?: string }) => {
-      if (opts?.kind === "usage") {
-        const s = usageState.current;
+      const routed =
+        opts?.kind === "usage"
+          ? usageState.current
+          : opts?.kind === "by-agent"
+            ? byAgentState.current
+            : undefined;
+      if (routed) {
         return {
-          data: s.data,
-          isLoading: s.isLoading ?? false,
-          isError: s.isError ?? false,
+          data: routed.data,
+          isLoading: routed.isLoading ?? false,
+          isError: routed.isError ?? false,
           refetch: () => {
             refetchCalls.count += 1;
           },
@@ -84,6 +90,11 @@ vi.mock("./charts", () => ({
 
 vi.mock("./custom-pricing-dialog", () => ({
   CustomPricingDialog: () => null,
+}));
+
+// ActorAvatar drags in workspace member/squad queries irrelevant here.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: () => <span data-testid="avatar" />,
 }));
 
 import { UsageSection } from "./usage-section";
@@ -119,6 +130,7 @@ const TODAY = new Date().toISOString().slice(0, 10);
 beforeEach(() => {
   refetchCalls.count = 0;
   usageState.current = {};
+  byAgentState.current = { data: [] };
   cleanup();
 });
 
@@ -161,11 +173,39 @@ describe("UsageSection — cost without pricing (MUL-93)", () => {
     };
     render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
 
-    // The cost KPI shows "—" (the $0.00 still on screen belongs to the
-    // cache-savings card, which is a separate metric).
+    // The cost KPI shows "—". The cache-savings card may still show $0.00
+    // here because no cache reads were recorded — that zero is a real
+    // measurement (see the dedicated cache-read case below).
     expect(screen.getByText("—")).toBeTruthy();
     expect(
-      screen.getByText(/No pricing for the models used/),
+      screen.getByText(/No pricing for the models used — cost unavailable/),
+    ).toBeTruthy();
+  });
+
+  it("renders — for cache savings when unpriced cache reads exist", () => {
+    usageState.current = {
+      data: [
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: "totally-unknown-model-xyz",
+          input_tokens: 5_000,
+          output_tokens: 100,
+          cache_read_tokens: 2_000,
+          cache_write_tokens: 0,
+        },
+      ],
+    };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // Cost KPI and Cache-savings KPI both show "—": with every model
+    // unpriced, neither dollar figure is derivable, and $0.00 anywhere
+    // would be fabricated.
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("$0.00")).toBeNull();
+    expect(
+      screen.getByText(/savings can't be calculated/),
     ).toBeTruthy();
   });
 
@@ -188,5 +228,57 @@ describe("UsageSection — cost without pricing (MUL-93)", () => {
 
     expect(screen.getByText("$3.00")).toBeTruthy();
     expect(screen.queryByText("—")).toBeNull();
+  });
+});
+
+describe("UsageSection — Cost-by block honesty (MUL-93)", () => {
+  const PRICED_USAGE_ROW = {
+    runtime_id: "r-1",
+    date: TODAY,
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    input_tokens: 1_000_000,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+  };
+
+  it("shows an error with retry when the by-agent fetch fails", () => {
+    usageState.current = { data: [PRICED_USAGE_ROW] };
+    byAgentState.current = { data: undefined, isError: true };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // The by-agent tab must not read as "no usage in this period".
+    expect(
+      screen.getByText(/Usage data failed to load/),
+    ).toBeTruthy();
+    const before = refetchCalls.count;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetchCalls.count).toBe(before + 1);
+  });
+
+  it("renders — instead of $0.00 for an agent whose tokens are all unpriced", () => {
+    usageState.current = { data: [PRICED_USAGE_ROW] };
+    byAgentState.current = {
+      data: [
+        {
+          agent_id: "agent-unpriced",
+          model: "totally-unknown-model-xyz",
+          input_tokens: 9_000,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          task_count: 1,
+        },
+      ],
+    };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // The agent's row shows its real token count, and the page's only "—"
+    // is that row's cost cell (the KPI row is fully priced here; the
+    // cache-savings KPI legitimately shows $0.00 because no cache reads
+    // were recorded — a real measurement).
+    expect(screen.getByText("9K")).toBeTruthy();
+    expect(screen.getByText("—")).toBeTruthy();
   });
 });

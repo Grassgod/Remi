@@ -184,6 +184,14 @@ describe("DashboardPage — real zero", () => {
     expect(
       screen.getByText(/so these zeros are real measurements/),
     ).toBeTruthy();
+    // The KPI tiles still render their genuine zeros alongside the
+    // explainer — a real zero is DISPLAYED, not just described.
+    expect(screen.getByText("$0.00")).toBeTruthy();
+    expect(screen.getByText("0m")).toBeTruthy();
+    // Tokens KPI and Tasks KPI both render a genuine "0".
+    expect(screen.getAllByText("0").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("No tasks in this window").length).toBe(2);
+    expect(screen.queryByText("—")).toBeNull();
   });
 
   it("renders 0 tasks as a measurement when only usage exists elsewhere", () => {
@@ -215,14 +223,18 @@ describe("DashboardPage — usage missing / not collected", () => {
     });
     renderWithI18n(<DashboardPage />);
 
-    // Cost + Tokens KPIs and the leaderboard cost cell all show "—".
-    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
+    // Cost KPI, Tokens KPI, and the leaderboard token + cost cells all
+    // show "—" (4 placeholders).
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(4);
     expect(
       screen.getAllByText(/3 tasks ran, but no token usage was recorded/)
         .length,
     ).toBeGreaterThanOrEqual(1);
-    // No fabricated $0.00 anywhere.
+    // No fabricated $0.00 anywhere, and no fabricated 0-token cell — the
+    // leaderboard row for the agent that ran 3 tasks must not claim a
+    // measured "0" tokens.
     expect(screen.queryByText("$0.00")).toBeNull();
+    expect(screen.queryByText("0")).toBeNull();
     // Tasks KPI still shows the real count.
     expect(screen.getByText("1 failed")).toBeTruthy();
   });
@@ -272,6 +284,23 @@ describe("DashboardPage — fetch failure", () => {
     // chart placeholder) — either must refetch only the failed series.
     fireEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]!);
     expect(refetchCalls).toEqual(["daily"]);
+  });
+});
+
+describe("DashboardPage — leaderboard partial failure", () => {
+  it("shows the failure instead of 'no agent activity' when one source failed and the other is empty", () => {
+    setStates({
+      "by-agent": { data: undefined, isError: true, isSuccess: false },
+      // agent-runtime succeeds but has no rows — the failed by-agent
+      // series may hold the missing agents, so "no agent activity" would
+      // be a fabricated conclusion.
+    });
+    renderWithI18n(<DashboardPage />);
+
+    expect(
+      screen.getByText(/Leaderboard data failed to load/),
+    ).toBeTruthy();
+    expect(screen.queryByText("No agent activity in this window.")).toBeNull();
   });
 });
 

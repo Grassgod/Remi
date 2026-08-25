@@ -381,7 +381,9 @@ export class RuntimesEndpoints {
     const raw = await this.http.fetch<unknown>(
       `/api/runtimes/${runtimeId}/usage?${search}`,
     );
-    return parseWithFallback<RuntimeUsage[]>(raw, RuntimeUsageListSchema, [], {
+    // Strict (MUL-93): a drifted body throws ApiContractError instead of
+    // degrading to [] — an empty array from here always means a real zero.
+    return parseStrictResponse<RuntimeUsage[]>(raw, RuntimeUsageListSchema, {
       endpoint: "GET /api/runtimes/:id/usage",
     });
   }
@@ -426,10 +428,10 @@ export class RuntimesEndpoints {
     const raw = await this.http.fetch<unknown>(
       `/api/runtimes/${runtimeId}/usage/by-agent?${search}`,
     );
-    return parseWithFallback<RuntimeUsageByAgent[]>(
+    // Strict (MUL-93) — see getRuntimeUsage.
+    return parseStrictResponse<RuntimeUsageByAgent[]>(
       raw,
       RuntimeUsageByAgentListSchema,
-      [],
       { endpoint: "GET /api/runtimes/:id/usage/by-agent" },
     );
   }

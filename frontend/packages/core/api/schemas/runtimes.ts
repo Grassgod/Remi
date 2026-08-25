@@ -95,20 +95,30 @@ export const EMPTY_RELAY_CONFIG: RelayConfigResponse = { claude: null, codex: nu
 
 // ---------------------------------------------------------------------------
 // Runtime usage schemas — the runtime-detail page's four usage endpoints
-// (`/api/runtimes/:id/usage*`). Same leniency rules as the dashboard
-// schemas above: numbers default to 0, strings to "", `.loose()` passes
-// unknown fields.
+// (`/api/runtimes/:id/usage*`).
+//
+// The token-bearing rollups (usage, usage/by-agent) are STRICT, matching
+// the dashboard schemas (MUL-93): a row missing a numeric field means the
+// wire contract drifted, and defaulting it to 0 used to render fabricated
+// zeros as confirmed measurements. Their endpoints parse with
+// `parseStrictResponse` so drift raises ApiContractError → `isError` →
+// an explicit unavailable state with retry.
+//
+// The hour-of-day rollups (activity, usage/by-hour) stay lenient for now —
+// they feed density visualizations where a degraded bucket is preferable
+// to dropping the whole chart, and no KPI derives a dollar/token figure
+// from them.
 // ---------------------------------------------------------------------------
 
 const RuntimeUsageSchema = z.object({
-  runtime_id: z.string().default(""),
-  date: z.string().default(""),
-  provider: z.string().default(""),
-  model: z.string().default(""),
-  input_tokens: z.number().default(0),
-  output_tokens: z.number().default(0),
-  cache_read_tokens: z.number().default(0),
-  cache_write_tokens: z.number().default(0),
+  runtime_id: z.string(),
+  date: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  cache_read_tokens: z.number(),
+  cache_write_tokens: z.number(),
 }).loose();
 
 export const RuntimeUsageListSchema = z.array(RuntimeUsageSchema);
@@ -121,13 +131,13 @@ const RuntimeHourlyActivitySchema = z.object({
 export const RuntimeHourlyActivityListSchema = z.array(RuntimeHourlyActivitySchema);
 
 const RuntimeUsageByAgentSchema = z.object({
-  agent_id: z.string().default(""),
-  model: z.string().default(""),
-  input_tokens: z.number().default(0),
-  output_tokens: z.number().default(0),
-  cache_read_tokens: z.number().default(0),
-  cache_write_tokens: z.number().default(0),
-  task_count: z.number().default(0),
+  agent_id: z.string(),
+  model: z.string(),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  cache_read_tokens: z.number(),
+  cache_write_tokens: z.number(),
+  task_count: z.number(),
 }).loose();
 
 export const RuntimeUsageByAgentListSchema = z.array(RuntimeUsageByAgentSchema);

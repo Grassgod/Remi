@@ -768,6 +768,10 @@ export interface CostByKey {
   tokens: number;
   cost: number;
   taskCount: number;
+  /** Tokens whose model didn't resolve to a price — they contribute $0 to
+   *  `cost`. tokens > 0 && cost === 0 && unpricedTokens > 0 means the row's
+   *  cost is underivable and must render "—", not $0.00 (MUL-93). */
+  unpricedTokens: number;
 }
 
 // Per-(agent, model) rows → per-agent totals. Cost is summed across all
@@ -781,10 +785,13 @@ export function aggregateCostByAgent(rows: RuntimeUsageByAgent[]): CostByKey[] {
       tokens: 0,
       cost: 0,
       taskCount: 0,
+      unpricedTokens: 0,
     };
-    entry.tokens +=
+    const rowTokens =
       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    entry.tokens += rowTokens;
     entry.cost += estimateCost(r);
+    if (!isModelPriced(r.model)) entry.unpricedTokens += rowTokens;
     entry.taskCount += r.task_count;
     map.set(r.agent_id, entry);
   }
@@ -797,10 +804,13 @@ export function aggregateCostByModel(rows: RuntimeUsage[]): CostByKey[] {
   const map = new Map<string, CostByKey>();
   for (const r of rows) {
     const key = r.model || r.provider || "unknown";
-    const entry = map.get(key) ?? { key, tokens: 0, cost: 0, taskCount: 0 };
-    entry.tokens +=
+    const entry =
+      map.get(key) ?? { key, tokens: 0, cost: 0, taskCount: 0, unpricedTokens: 0 };
+    const rowTokens =
       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    entry.tokens += rowTokens;
     entry.cost += estimateCost(r);
+    if (!isModelPriced(r.model)) entry.unpricedTokens += rowTokens;
     map.set(key, entry);
   }
   return Array.from(map.values()).toSorted((a, b) => b.cost - a.cost);
