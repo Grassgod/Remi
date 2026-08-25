@@ -18,6 +18,7 @@ import {
   type SummaryCliSpawn,
 } from "@multiremi/worker/progress-summarizer.js";
 import type { TaskMessageInput } from "@multiremi/contracts/types.js";
+import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 
 function textMessage(content = "working on it"): TaskMessageInput {
   return { type: "text", content };
@@ -184,6 +185,90 @@ describe("resolveProgressSummaryConfig", () => {
     expect(resolved.transport).toBe("api");
     expect(resolved.openAi).toBeNull();
     expect(authReads).toBe(0);
+  });
+
+  it("does not read Codex auth when workspace settings select the API transport", async () => {
+    let authReads = 0;
+    const resolved = await resolveTaskProgressSummaryConfig(
+      { ANTHROPIC_BASE_URL: "https://relay.example" },
+      { HOME: "/unused" },
+      async () => {
+        authReads++;
+        return "unexpected-key";
+      },
+      resolveWorkspaceProgressSummaryPolicy({
+        progress_summary: { transport: "api" },
+      }),
+    );
+    expect(resolved.transport).toBe("api");
+    expect(resolved.openAi).toBeNull();
+    expect(authReads).toBe(0);
+  });
+
+  it("uses workspace models and transport when machine overrides are absent", () => {
+    const workspacePolicy = resolveWorkspaceProgressSummaryPolicy({
+      progress_summary: {
+        transport: "openai",
+        model: "claude-workspace",
+        openai_model: "gpt-workspace",
+        openai_api_key: "must-not-be-consumed",
+      },
+    });
+    const resolved = resolveProgressSummaryConfig(
+      { OPENAI_API_KEY: "environment-key", ANTHROPIC_BASE_URL: "https://relay.example" },
+      { workspacePolicy },
+    );
+
+    expect(workspacePolicy).toEqual({
+      transport: "openai",
+      model: "claude-workspace",
+      openAiModel: "gpt-workspace",
+    });
+    expect(resolved.transport).toBe("openai");
+    expect(resolved.model).toBe("claude-workspace");
+    expect(resolved.openAi?.model).toBe("gpt-workspace");
+  });
+
+  it("lets machine env override workspace settings field by field", () => {
+    const workspacePolicy = resolveWorkspaceProgressSummaryPolicy({
+      progress_summary: {
+        transport: "cli",
+        model: "claude-workspace",
+        openai_model: "gpt-workspace",
+      },
+    });
+    const resolved = resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_TRANSPORT: "api",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-machine",
+    }, { workspacePolicy });
+
+    expect(resolved.transport).toBe("api");
+    expect(resolved.model).toBe("claude-workspace");
+    expect(resolved.openAi).toBeNull();
+    expect(resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: "https://relay.example",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY: "key",
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL: "gpt-machine",
+    }, { workspacePolicy }).openAi?.model).toBe("gpt-machine");
+  });
+
+  it("ignores invalid workspace progress summary values", () => {
+    expect(resolveWorkspaceProgressSummaryPolicy({
+      progress_summary: {
+        transport: "other",
+        model: " ",
+        openai_model: 42,
+        api_key: "must-not-be-consumed",
+      },
+    })).toEqual({});
+
+    const resolved = resolveProgressSummaryConfig({}, {
+      workspacePolicy: resolveWorkspaceProgressSummaryPolicy({
+        progress_summary: { transport: "other", model: " ", openai_model: 42 },
+      }),
+    });
+    expect(resolved.transport).toBe(PROGRESS_SUMMARY_DEFAULTS.transport);
+    expect(resolved.model).toBe(PROGRESS_SUMMARY_DEFAULTS.model);
   });
 });
 

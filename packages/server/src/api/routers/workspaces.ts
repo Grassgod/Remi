@@ -72,6 +72,7 @@ import {
 } from "@multiremi/relay/fragment.js";
 import type { RouterDeps } from "./deps.js";
 import { createAgentFromTemplate, getAgentTemplate } from "../agent-templates.js";
+import { sanitizeWorkspaceProgressSummarySettings } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 
 const ATLAS_AGENT_NAME = "Atlas · LLM Wiki";
 const ATLAS_REPOSITORY_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
@@ -89,7 +90,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(all.filter((ws) => store.getUserRoleInWorkspace(userId, ws.id) !== null));
   });
   app.post("/api/workspaces", async (c) => {
-    const body = await readJson<any>(c);
+    const body = sanitizeWorkspaceSettingsInput(await readJson<any>(c));
     const result = safeCreateWorkspace(store, body, authenticatedRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result, 201);
@@ -147,7 +148,9 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"))
       ?? requireWorkspaceAdmin(c, store, c.req.param("id"));
     if (denied) return denied;
-    const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    const body = sanitizeWorkspaceSettingsInput(
+      await readJson<Partial<CreateWorkspaceInput>>(c),
+    );
     if (hasOwn(body, "settings")) {
       const adminDenied = requireWorkspaceAdmin(c, store, c.req.param("id"));
       if (adminDenied) return adminDenied;
@@ -161,7 +164,9 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"))
       ?? requireWorkspaceAdmin(c, store, c.req.param("id"));
     if (denied) return denied;
-    const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    const body = sanitizeWorkspaceSettingsInput(
+      await readJson<Partial<CreateWorkspaceInput>>(c),
+    );
     if (hasOwn(body, "settings")) {
       const adminDenied = requireWorkspaceAdmin(c, store, c.req.param("id"));
       if (adminDenied) return adminDenied;
@@ -912,6 +917,15 @@ function ensureAtlasTrigger(
 
 function hasOwn(value: unknown, key: string): boolean {
   return typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function sanitizeWorkspaceSettingsInput<T extends Partial<CreateWorkspaceInput>>(body: T): T {
+  const settings = body.settings;
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return body;
+  return {
+    ...body,
+    settings: sanitizeWorkspaceProgressSummarySettings(settings),
+  };
 }
 
 function requireWorkspaceRepository(store: RouterDeps["store"], workspaceId: string, repositoryId: string): boolean {

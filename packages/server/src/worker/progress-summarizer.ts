@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { WorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 
 const log = createLogger("multiremi-progress");
 
@@ -59,7 +60,7 @@ function positiveInt(raw: string | undefined, fallback: number): number {
 }
 
 /**
- * N/T and the model are env-tunable:
+ * N/T and machine-level model overrides are env-tunable:
  *   MULTIREMI_PROGRESS_SUMMARY_DISABLED=1     turn the feature off
  *   MULTIREMI_PROGRESS_SUMMARY_MESSAGES=20    N — new messages per summary
  *   MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS=45000  T — debounce between summaries
@@ -68,27 +69,35 @@ function positiveInt(raw: string | undefined, fallback: number): number {
  *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL=... OpenAI-compatible endpoint
  *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL=...    OpenAI-compatible model id
  *   MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY=...  dedicated endpoint key
+ * Workspace-level transport/model defaults are resolved separately from the
+ * heartbeat-delivered `settings.progress_summary` object.
  */
 export function resolveProgressSummaryConfig(
   env: Record<string, string | undefined> = process.env,
   defaults: {
     providerEnv?: Record<string, string>;
     codexAuthApiKey?: string | null;
+    workspacePolicy?: WorkspaceProgressSummaryPolicy;
   } = {},
 ): ProgressSummaryConfig {
   const disabled = env.MULTIREMI_PROGRESS_SUMMARY_DISABLED;
   const configuredTransport = env.MULTIREMI_PROGRESS_SUMMARY_TRANSPORT?.trim().toLowerCase();
-  const transport: ProgressSummaryTransport = configuredTransport === "api"
+  const envTransport: ProgressSummaryTransport | undefined = configuredTransport === "api"
     || configuredTransport === "cli"
     || configuredTransport === "openai"
+    || configuredTransport === "auto"
     ? configuredTransport
-    : "auto";
+    : undefined;
+  const transport = envTransport
+    ?? defaults.workspacePolicy?.transport
+    ?? PROGRESS_SUMMARY_DEFAULTS.transport;
   const openAiBaseUrl = (
     env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL?.trim()
     || defaults.providerEnv?.ANTHROPIC_BASE_URL?.trim()
     || env.ANTHROPIC_BASE_URL?.trim()
   )?.replace(/\/+$/, "");
   const openAiModel = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL?.trim()
+    || defaults.workspacePolicy?.openAiModel
     || PROGRESS_SUMMARY_DEFAULTS.openAiModel;
   const openAiApiKey = env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY?.trim()
     || defaults.providerEnv?.OPENAI_API_KEY?.trim()
@@ -101,7 +110,9 @@ export function resolveProgressSummaryConfig(
     enabled: !(disabled === "1" || disabled === "true"),
     minNewMessages: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_MESSAGES, PROGRESS_SUMMARY_DEFAULTS.minNewMessages),
     minIntervalMs: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS, PROGRESS_SUMMARY_DEFAULTS.minIntervalMs),
-    model: env.MULTIREMI_PROGRESS_SUMMARY_MODEL?.trim() || PROGRESS_SUMMARY_DEFAULTS.model,
+    model: env.MULTIREMI_PROGRESS_SUMMARY_MODEL?.trim()
+      || defaults.workspacePolicy?.model
+      || PROGRESS_SUMMARY_DEFAULTS.model,
     maxDigestChars: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_MAX_DIGEST_CHARS, PROGRESS_SUMMARY_DEFAULTS.maxDigestChars),
     requestTimeoutMs: positiveInt(env.MULTIREMI_PROGRESS_SUMMARY_TIMEOUT_MS, PROGRESS_SUMMARY_DEFAULTS.requestTimeoutMs),
     transport,
@@ -130,8 +141,9 @@ export async function resolveTaskProgressSummaryConfig(
   providerEnv: Record<string, string> | undefined,
   processEnv: Record<string, string | undefined> = process.env,
   authKeyReader: (env: Record<string, string | undefined>) => Promise<string | null> = readCodexAuthApiKey,
+  workspacePolicy?: WorkspaceProgressSummaryPolicy,
 ): Promise<ProgressSummaryConfig> {
-  const envConfig = resolveProgressSummaryConfig(processEnv, { providerEnv });
+  const envConfig = resolveProgressSummaryConfig(processEnv, { providerEnv, workspacePolicy });
   if (!envConfig.enabled || envConfig.transport === "api" || envConfig.transport === "cli" || envConfig.openAi) {
     return envConfig;
   }
@@ -139,7 +151,11 @@ export async function resolveTaskProgressSummaryConfig(
     || providerEnv?.OPENAI_API_KEY?.trim()
     || processEnv.OPENAI_API_KEY?.trim();
   const codexAuthApiKey = configuredKey ? null : await authKeyReader(processEnv);
-  return resolveProgressSummaryConfig(processEnv, { providerEnv, codexAuthApiKey });
+  return resolveProgressSummaryConfig(processEnv, {
+    providerEnv,
+    codexAuthApiKey,
+    workspacePolicy,
+  });
 }
 
 export interface SummarizerCredentials {

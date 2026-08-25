@@ -22,7 +22,21 @@
 - **隔离性**：摘要调用 fire-and-forget，与主循环并行；失败只打日志，不影响任务执行；
   同一任务同时最多一个在途调用。
 
-## 配置（daemon 环境变量）
+## 配置
+
+工作区所有者和管理员可在 **Settings → Model Gateway → 任务进度摘要** 配置传输通道、
+OpenAI 兼容模型和 Claude 兜底模型。设置保存在 workspace `settings.progress_summary`，
+随 daemon 心跳下发，下一次任务启动时生效；模型输入留空即使用内置默认值。
+
+| 配置项 | workspace settings | daemon 环境变量 | 内置默认 |
+| --- | --- | --- | --- |
+| 传输通道 | `progress_summary.transport` | `MULTIREMI_PROGRESS_SUMMARY_TRANSPORT` | `auto` |
+| Claude 模型 | `progress_summary.model` | `MULTIREMI_PROGRESS_SUMMARY_MODEL` | `claude-haiku-4-5-20251001` |
+| OpenAI 兼容模型 | `progress_summary.openai_model` | `MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL` | `gpt-5.6-luna` |
+
+优先级为 **daemon 环境变量 > workspace settings > 内置默认**。workspace settings 只接受上表三个
+非敏感字段；API key 不得写入 settings，因为该对象会下发给 workspace 成员和 daemon。网关地址、
+凭证及触发阈值仍仅在 daemon 环境配置：
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |

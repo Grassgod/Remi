@@ -114,6 +114,7 @@ import {
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
 import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
 import { resolveWorkspaceGcPolicy, type WorkspaceGcPolicy } from "@daemon/agent-runtime/workspace/gc-policy.js";
+import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 import {
   IsomorphicGitWorktreeInspector,
   type GitWorktreeInspector,
@@ -2422,7 +2423,15 @@ export class MultiremiDaemon {
     providerEnv?: Record<string, string>,
   ): Promise<TaskProgressSummarizer | null> {
     try {
-      const config = await resolveTaskProgressSummaryConfig(providerEnv);
+      const workspacePolicy = resolveWorkspaceProgressSummaryPolicy(
+        this.workspaceSettings.get(task.workspaceId),
+      );
+      const config = await resolveTaskProgressSummaryConfig(
+        providerEnv,
+        process.env,
+        undefined,
+        workspacePolicy,
+      );
       if (!config.enabled) return null;
       const credentials = resolveSummarizerCredentials(providerEnv);
       const hasOpenAiTransport = (config.transport === "auto" || config.transport === "openai")
