@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 597,
+    "routeCount": 603,
     "routeCountByPrefix": {
       "native": 195,
-      "compat": 389,
+      "compat": 395,
       "root": 13
     },
-    "getRoutes": 259,
-    "getRoutesWithBody": 256,
+    "getRoutes": 262,
+    "getRoutesWithBody": 259,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 338,
+    "mutationRoutes": 341,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -368,6 +368,9 @@
     "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/sources",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "GET /api/workspaces/:workspaceId/scm/events",
@@ -408,6 +411,7 @@
     "PATCH /api/workspaces/:id",
     "PATCH /api/workspaces/:id/members/:memberId",
     "PATCH /api/workspaces/:id/repos/:repositoryId",
+    "PATCH /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "POST /api/agents",
     "POST /api/agents/:id/archive",
@@ -615,6 +619,8 @@
     "POST /api/workspaces/:id/repository-wikis/atlas",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve",
+    "POST /api/workspaces/:workspaceId/feishu/sources",
     "POST /api/workspaces/:workspaceId/scm/connections",
     "POST /api/workspaces/:workspaceId/scm/connections/:connectionId/verify",
     "POST /auth/google",
@@ -960,6 +966,9 @@
     "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/sources",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "GET /api/workspaces/:workspaceId/scm/events",
@@ -7521,6 +7530,72 @@
             "id": "dashboard.usage.daily",
             "command": "remi dashboard usage daily",
             "capability": "dashboard.usage.daily",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.list",
+            "command": "remi feishu messages list",
+            "capability": "feishu.messages.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.resolve",
+            "command": "remi feishu messages resolve",
+            "capability": "feishu.messages.resolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.add",
+            "command": "remi feishu source add",
+            "capability": "feishu.source.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.get",
+            "command": "remi feishu source get",
+            "capability": "feishu.source.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.list",
+            "command": "remi feishu source list",
+            "capability": "feishu.source.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.update",
+            "command": "remi feishu source update",
+            "capability": "feishu.source.update",
             "outputs": [
               "table",
               "json",
@@ -19518,6 +19593,35 @@
             "last_reported_at": null
           }
         ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/messages",
+      "route": "GET /api/workspaces/:workspaceId/feishu/messages",
+      "path": "/api/workspaces/local/feishu/messages",
+      "status": 200,
+      "body": {
+        "messages": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/sources",
+      "route": "GET /api/workspaces/:workspaceId/feishu/sources",
+      "path": "/api/workspaces/local/feishu/sources",
+      "status": 200,
+      "body": {
+        "sources": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+      "route": "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+      "path": "/api/workspaces/local/feishu/sources/fsrc_snapshot",
+      "status": 404,
+      "body": {
+        "error": "Feishu source not found"
       }
     },
     {

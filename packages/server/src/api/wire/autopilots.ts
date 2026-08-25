@@ -422,6 +422,7 @@ const SYSTEM_EVENT_ISSUE_STATUSES = new Set([
 function validateSystemEventConfig(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "event_config is required for system_event triggers";
   const config = value as Record<string, unknown>;
+  if (config.resource === "feishu_source") return validateFeishuSystemEventConfig(config);
   const allowedKeys = new Set(["resource", "event", "conditions", "project_id", "projectId"]);
   if (Object.keys(config).some((key) => !allowedKeys.has(key))) return "event_config contains unsupported fields";
   if (config.resource !== "issue") return "event_config.resource must be issue";
@@ -447,6 +448,37 @@ function validateSystemEventConfig(value: unknown): string | null {
   const projectId = config.project_id ?? config.projectId;
   if (projectId !== undefined && projectId !== null && (typeof projectId !== "string" || !projectId.trim())) {
     return "event_config.project_id must be a non-empty string or null";
+  }
+  return null;
+}
+
+function validateFeishuSystemEventConfig(config: Record<string, unknown>): string | null {
+  const allowedKeys = new Set([
+    "resource",
+    "event",
+    "source_ids",
+    "sourceIds",
+    "trigger_issue_id",
+    "triggerIssueId",
+  ]);
+  if (Object.keys(config).some((key) => !allowedKeys.has(key))) {
+    return "event_config contains unsupported fields";
+  }
+  if (config.event !== "messages_ingested") return "event_config.event must be messages_ingested";
+  const triggerIssueId = config.trigger_issue_id ?? config.triggerIssueId;
+  if (typeof triggerIssueId !== "string" || !triggerIssueId.trim()) {
+    return "event_config.trigger_issue_id is required";
+  }
+  const sourceIds = config.source_ids ?? config.sourceIds;
+  if (sourceIds !== undefined && !Array.isArray(sourceIds)) {
+    return "event_config.source_ids must be an array";
+  }
+  if (Array.isArray(sourceIds)) {
+    for (let index = 0; index < sourceIds.length; index += 1) {
+      if (typeof sourceIds[index] !== "string" || !sourceIds[index].trim()) {
+        return `event_config.source_ids[${index}] must be a non-empty string`;
+      }
+    }
   }
   return null;
 }

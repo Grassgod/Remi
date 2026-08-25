@@ -1144,6 +1144,95 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_system_events_resource
       ON multiremi_system_events(workspace_id, resource, event, resource_id, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_sources (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      name TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT 'personal_automation',
+      endpoint TEXT NOT NULL,
+      allowlist TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      retention_days INTEGER NOT NULL DEFAULT 90,
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+      access_token_encrypted TEXT,
+      access_token_hint TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, endpoint)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_sources_poll
+      ON multiremi_feishu_sources(enabled, workspace_id, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_sync_cursors (
+      source_id TEXT NOT NULL,
+      stream TEXT NOT NULL,
+      cursor TEXT,
+      watermark TEXT,
+      last_started_at TEXT,
+      last_completed_at TEXT,
+      last_error TEXT,
+      lease_owner TEXT,
+      lease_until TEXT,
+      lease_token TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(source_id, stream),
+      FOREIGN KEY(source_id) REFERENCES multiremi_feishu_sources(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_sync_cursors_lease
+      ON multiremi_feishu_sync_cursors(lease_until, source_id, stream);
+
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_messages (
+      message_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      source_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      chat_type TEXT,
+      chat_name TEXT,
+      thread_id TEXT,
+      root_id TEXT,
+      parent_id TEXT,
+      sender TEXT NOT NULL DEFAULT '{}',
+      content TEXT NOT NULL DEFAULT '{}',
+      searchable_text TEXT NOT NULL DEFAULT '',
+      content_fingerprint TEXT NOT NULL,
+      message_app_link TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      recalled INTEGER NOT NULL DEFAULT 0,
+      edited INTEGER NOT NULL DEFAULT 0,
+      ingested_at TEXT NOT NULL,
+      processed_at TEXT,
+      FOREIGN KEY(source_id) REFERENCES multiremi_feishu_sources(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_unprocessed
+      ON multiremi_feishu_messages(workspace_id, processed_at, created_at, message_id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_chat
+      ON multiremi_feishu_messages(workspace_id, chat_id, created_at, message_id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_source
+      ON multiremi_feishu_messages(source_id, ingested_at, message_id);
+
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_message_outcomes (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      message_id TEXT NOT NULL,
+      outcome_kind TEXT NOT NULL,
+      ref TEXT,
+      reason TEXT,
+      task_id TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(message_id) REFERENCES multiremi_feishu_messages(message_id) ON DELETE CASCADE,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_message_outcomes_message
+      ON multiremi_feishu_message_outcomes(message_id, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_message_outcomes_task
+      ON multiremi_feishu_message_outcomes(task_id, created_at)
+      WHERE task_id IS NOT NULL;
+
     CREATE TABLE IF NOT EXISTS multiremi_webhook_deliveries (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',

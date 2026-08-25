@@ -18,6 +18,7 @@ import type {
   CreateAutopilotTriggerInput,
   MultiremiAutopilot,
   MultiremiAutopilotEventConfig,
+  MultiremiAutopilotFeishuEventConfig,
   MultiremiAutopilotRun,
   MultiremiAutopilotScmEventConfig,
   MultiremiAutopilotSystemEventConfig,
@@ -253,6 +254,11 @@ export class AutopilotsRepo {
     )) {
       throw new Error("event_config.project_id must match the Autopilot project");
     }
+    for (const trigger of systemEventTriggers) {
+      if (trigger.eventConfig?.resource === "feishu_source") {
+        this.assertFeishuEventConfigScope(trigger.eventConfig, { ...current, projectId: nextProjectId });
+      }
+    }
     const now = nowIso();
     this.ctx.db.run(
       `UPDATE multiremi_autopilots SET
@@ -331,14 +337,17 @@ export class AutopilotsRepo {
     if ((kind === "system_event" || kind === "scm_event") && !eventConfig) {
       throw new Error(`event_config is required for ${kind} triggers`);
     }
-    if (kind === "system_event" && eventConfig?.resource !== "issue") {
-      throw new Error("system_event triggers require an issue event_config");
+    if (kind === "system_event" && eventConfig?.resource !== "issue" && eventConfig?.resource !== "feishu_source") {
+      throw new Error("system_event triggers require an issue or feishu_source event_config");
     }
     if (kind === "scm_event" && eventConfig?.resource !== "scm") {
       throw new Error("scm_event triggers require an SCM event_config");
     }
     if (eventConfig?.resource === "scm") {
       this.assertScmEventConfigScope(eventConfig, autopilot.workspaceId);
+    }
+    if (eventConfig?.resource === "feishu_source") {
+      this.assertFeishuEventConfigScope(eventConfig, autopilot);
     }
     if (kind !== "system_event" && kind !== "scm_event" && eventConfig) {
       throw new Error("event_config is only valid for system_event or scm_event triggers");
@@ -418,14 +427,17 @@ export class AutopilotsRepo {
     if ((current.kind === "system_event" || current.kind === "scm_event") && !eventConfig) {
       throw new Error(`event_config is required for ${current.kind} triggers`);
     }
-    if (current.kind === "system_event" && eventConfig?.resource !== "issue") {
-      throw new Error("system_event triggers require an issue event_config");
+    if (current.kind === "system_event" && eventConfig?.resource !== "issue" && eventConfig?.resource !== "feishu_source") {
+      throw new Error("system_event triggers require an issue or feishu_source event_config");
     }
     if (current.kind === "scm_event" && eventConfig?.resource !== "scm") {
       throw new Error("scm_event triggers require an SCM event_config");
     }
     if (eventConfig?.resource === "scm" && enabled) {
       this.assertScmEventConfigScope(eventConfig, autopilot.workspaceId);
+    }
+    if (eventConfig?.resource === "feishu_source" && enabled) {
+      this.assertFeishuEventConfigScope(eventConfig, autopilot);
     }
     if (current.kind !== "system_event" && current.kind !== "scm_event" && eventConfig) {
       throw new Error("event_config is only valid for system_event or scm_event triggers");
@@ -658,7 +670,9 @@ export class AutopilotsRepo {
             source: "system_event",
             triggerId: trigger.id,
             eventId: event.id,
-            triggerIssueId: event.resourceId,
+            triggerIssueId: trigger.eventConfig?.resource === "feishu_source"
+              ? trigger.eventConfig.triggerIssueId
+              : event.resourceId,
             payload: event.payload,
           }));
         }
@@ -841,6 +855,27 @@ export class AutopilotsRepo {
     if (!agent?.ownerId) return [];
     const owner = this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId, agent.ownerId);
     return owner ? [owner.id] : [];
+  }
+
+  private assertFeishuEventConfigScope(
+    config: MultiremiAutopilotFeishuEventConfig,
+    autopilot: MultiremiAutopilot,
+  ): void {
+    const issue = this.ctx.issues().getIssue(config.triggerIssueId);
+    if (!issue || issue.workspaceId !== autopilot.workspaceId) {
+      throw new Error("event_config.trigger_issue_id must reference an issue in this workspace");
+    }
+    if (autopilot.projectId && issue.projectId !== autopilot.projectId) {
+      throw new Error("event_config.trigger_issue_id must reference an issue in the Autopilot project");
+    }
+    for (const sourceId of config.sourceIds ?? config.source_ids ?? []) {
+      const source = this.ctx.db.query(
+        "SELECT workspace_id FROM multiremi_feishu_sources WHERE id = ?",
+      ).get(sourceId) as Row | null;
+      if (!source || String(source.workspace_id) !== autopilot.workspaceId) {
+        throw new Error("event_config.source_ids must reference Feishu sources in this workspace");
+      }
+    }
   }
 
   private assertScmEventConfigScope(
@@ -1041,7 +1076,16 @@ export class AutopilotsRepo {
         }
         if (eventId) {
           const event = this.getSystemEvent(eventId);
-          if (!event || event.resourceId !== issue.id || event.workspaceId !== issue.workspaceId) {
+          const trigger = triggerId ? this.getAutopilotTrigger(triggerId) : null;
+          const feishuConfig = trigger?.eventConfig?.resource === "feishu_source"
+            ? trigger.eventConfig
+            : null;
+          const eventBelongsToTarget = feishuConfig
+            ? feishuConfig.triggerIssueId === issue.id
+              && Boolean(event)
+              && systemEventMatchesConfig(event!, feishuConfig)
+            : event?.resourceId === issue.id;
+          if (!event || !eventBelongsToTarget || event.workspaceId !== issue.workspaceId) {
             throw new Error("System event does not belong to the trigger issue");
           }
         }
@@ -1470,7 +1514,34 @@ function normalizeAutopilotEventConfig(value: unknown): MultiremiAutopilotEventC
   if (value == null) return null;
   if (!isRecord(value)) throw new Error("event_config must be an object");
   if (value.resource === "scm") return normalizeScmEventConfig(value);
+  if (value.resource === "feishu_source") return normalizeFeishuEventConfig(value);
   return normalizeSystemEventConfig(value);
+}
+
+function normalizeFeishuEventConfig(value: Record<string, unknown>): MultiremiAutopilotFeishuEventConfig {
+  if (value.event !== "messages_ingested") {
+    throw new Error("event_config.event must be messages_ingested");
+  }
+  const triggerIssueId = cleanOptionalString(value.triggerIssueId ?? value.trigger_issue_id);
+  if (!triggerIssueId) throw new Error("event_config.trigger_issue_id is required");
+  const sourceIdsValue = value.sourceIds ?? value.source_ids;
+  if (sourceIdsValue != null && !Array.isArray(sourceIdsValue)) {
+    throw new Error("event_config.source_ids must be an array");
+  }
+  const sourceIds = sourceIdsValue == null
+    ? []
+    : [...new Set(sourceIdsValue.map((sourceId, index) => {
+      const normalized = cleanOptionalString(sourceId);
+      if (!normalized) throw new Error(`event_config.source_ids[${index}] must be a non-empty string`);
+      return normalized;
+    }))];
+  return {
+    resource: "feishu_source",
+    event: "messages_ingested",
+    triggerIssueId,
+    trigger_issue_id: triggerIssueId,
+    ...(sourceIds.length ? { sourceIds, source_ids: sourceIds } : {}),
+  };
 }
 
 function normalizeSystemEventConfig(value: unknown): MultiremiAutopilotSystemEventConfig {
@@ -1840,7 +1911,13 @@ function systemEventMatchesConfig(
   event: MultiremiSystemEvent,
   config: MultiremiAutopilotEventConfig | null,
 ): boolean {
-  if (!config || config.resource !== "issue" || config.resource !== event.resource || config.event !== event.event) return false;
+  if (!config || config.resource === "scm" || config.resource !== event.resource) return false;
+  if (config.resource === "feishu_source") {
+    if (event.event !== config.event) return false;
+    const sourceIds = config.sourceIds ?? config.source_ids ?? [];
+    return sourceIds.length === 0 || sourceIds.includes(event.resourceId);
+  }
+  if (config.event !== event.event) return false;
   // Task lifecycle status writes belong to the automation run that assigned
   // the task. Keep them in the outbox for audit/replay visibility, but never
   // feed them back into system-event automations: otherwise an `in_review`

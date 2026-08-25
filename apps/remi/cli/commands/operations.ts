@@ -1,6 +1,7 @@
 import {
   ResourceResolver,
   sanitizeCliDetails,
+  CliError,
   type CliApiClient,
   type CliHttpMethod,
   type CliIdentity,
@@ -16,16 +17,19 @@ import {
   PAGE_OPTIONS,
   YES_OPTION,
   clientFor,
+  booleanOption,
   commandOptions,
   encodePath,
   extractRecords,
   positional,
+  integerOption,
   queryOptions,
   renderResource,
   requestBody,
   requireConfirmation,
   requiredWorkspace,
   stringOption,
+  stringOptions,
 } from "./resource-common.js";
 
 const HUMAN: readonly CliIdentity[] = ["human"];
@@ -59,6 +63,7 @@ export function operationsCommandSpecs(): CommandSpec[] {
     ...daemonSpecs(),
     ...autopilotSpecs(),
     ...scmSpecs(),
+    ...feishuSpecs(),
     ...inboxSpecs(),
     ...notificationSpecs(),
     ...pinSpecs(),
@@ -229,6 +234,83 @@ function scmSpecs(): CommandSpec[] {
     op({ id: "scm.change-request.list", path: ["scm", "change-request", "list"], description: "List change requests linked to an issue", method: "GET", apiPath: (i) => `/api/issues/${encodePath(positional(i, 0, "issue"))}/change-requests`, auth: HUMAN_TASK, positionals: [ref("issue")], collections: ["changeRequests"] }),
     op({ id: "scm.change-request.link", path: ["scm", "change-request", "link"], description: "Link a change request to an issue", method: "PUT", apiPath: changeRequestPath, mutation: "write", auth: HUMAN_TASK, positionals: [ref("issue"), ref("change-request")] }),
     op({ id: "scm.change-request.unlink", path: ["scm", "change-request", "unlink"], description: "Unlink a change request from an issue", method: "DELETE", apiPath: changeRequestPath, mutation: "destructive", auth: HUMAN_TASK, positionals: [ref("issue"), ref("change-request")] }),
+  ];
+}
+
+function feishuSpecs(): CommandSpec[] {
+  const workspaceBase = (i: CommandInvocation) =>
+    `/api/workspaces/${encodePath(requiredWorkspace(i))}/feishu`;
+  const source = (i: CommandInvocation) =>
+    `${workspaceBase(i)}/sources/${encodePath(positional(i, 0, "source"))}`;
+  const sourceFields: readonly CliOptionSpec[] = [
+    { name: "name", type: "string", valueName: "name", description: "Source display name" },
+    { name: "endpoint", type: "string", valueName: "url", description: "personal_automation base URL" },
+    { name: "chat", type: "string", valueName: "chat-id", repeatable: true, description: "Allowlisted chat ID" },
+    { name: "clear-allowlist", type: "boolean", conflictsWith: ["chat"], description: "Replace the allowlist with an empty list" },
+    { name: "enabled", type: "boolean", description: "Enable or disable ingestion" },
+    { name: "retention-days", type: "integer", valueName: "days", description: "Message retention period" },
+    { name: "poll-interval-seconds", type: "integer", valueName: "seconds", description: "Minimum poll interval" },
+  ];
+  const sourceBody = (i: CommandInvocation) => requestBody(i, {
+    name: stringOption(i, "name") ?? undefined,
+    endpoint: stringOption(i, "endpoint") ?? undefined,
+    allowlist: booleanOption(i, "clear-allowlist")
+      ? []
+      : i.options.chat === undefined ? undefined : stringOptions(i, "chat"),
+    enabled: booleanOption(i, "enabled") ?? undefined,
+    retention_days: integerOption(i, "retention-days") ?? undefined,
+    poll_interval_seconds: integerOption(i, "poll-interval-seconds") ?? undefined,
+  });
+  return [
+    group("feishu", "Ingest and process allowlisted Feishu messages"),
+    op({ id: "feishu.source.list", path: ["feishu", "source", "list"], description: "List Feishu message sources", method: "GET", apiPath: (i) => `${workspaceBase(i)}/sources`, auth: HUMAN, collections: ["sources"] }),
+    op({ id: "feishu.source.get", path: ["feishu", "source", "get"], description: "Get a Feishu message source", method: "GET", apiPath: source, auth: HUMAN, positionals: [ref("source")] }),
+    op({ id: "feishu.source.add", path: ["feishu", "source", "add"], description: "Add a personal_automation Feishu source", method: "POST", apiPath: (i) => `${workspaceBase(i)}/sources`, mutation: "write", auth: HUMAN, options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
+    op({ id: "feishu.source.update", path: ["feishu", "source", "update"], description: "Update a Feishu source and its allowlist", method: "PATCH", apiPath: source, mutation: "write", auth: HUMAN, positionals: [ref("source")], options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
+    op({
+      id: "feishu.messages.list",
+      path: ["feishu", "messages", "list"],
+      description: "List ingested Feishu messages",
+      method: "GET",
+      apiPath: (i) => `${workspaceBase(i)}/messages`,
+      auth: HUMAN_TASK,
+      options: [
+        { name: "unprocessed", type: "boolean", description: "Only messages without an outcome" },
+        { name: "since", type: "string", valueName: "timestamp", description: "Earliest message timestamp" },
+        { name: "until", type: "string", valueName: "timestamp", description: "Latest message timestamp" },
+        { name: "chat", type: "string", valueName: "chat-id", description: "Filter by chat ID" },
+      ],
+      query: (i) => ({
+        limit: integerOption(i, "limit"),
+        unprocessed: booleanOption(i, "unprocessed"),
+        since: stringOption(i, "since"),
+        until: stringOption(i, "until"),
+        chat: stringOption(i, "chat"),
+      }),
+      collections: ["messages"],
+    }),
+    op({
+      id: "feishu.messages.resolve",
+      path: ["feishu", "messages", "resolve"],
+      description: "Record a message outcome and mark it processed",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/messages/${encodePath(positional(i, 0, "message"))}/resolve`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      positionals: [ref("message")],
+      options: [
+        { name: "outcome", type: "string", valueName: "kind", required: true, description: "issue_created, notified, reply_drafted, ignored, or dismissed" },
+        { name: "ref", type: "string", valueName: "type:id", description: "Created issue, inbox item, or draft reference" },
+        { name: "reason", type: "string", valueName: "text", description: "Decision reason" },
+        { name: "task-id", type: "string", valueName: "id", description: "Processing task ID (human calls only)" },
+      ],
+      body: (i) => requestBody(i, {
+        outcome: requiredStringOption(i, "outcome"),
+        ref: stringOption(i, "ref") ?? undefined,
+        reason: stringOption(i, "reason") ?? undefined,
+        task_id: stringOption(i, "task-id") ?? undefined,
+      }),
+    }),
   ];
 }
 
@@ -476,4 +558,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function capital(value: string): string {
   return value.slice(0, 1).toUpperCase() + value.slice(1);
+}
+
+function requiredStringOption(invocation: CommandInvocation, name: string): string {
+  const value = stringOption(invocation, name);
+  if (!value) throw new CliError("usage", `--${name} is required`);
+  return value;
 }

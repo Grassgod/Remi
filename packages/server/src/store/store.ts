@@ -14,6 +14,13 @@ import {
   type RecordScmCanonicalEventResult,
   type ScmConnectionWithRepositories,
 } from "@multiremi/store/repos/scm-repo.js";
+import {
+  FeishuIngestRepo,
+  type ClaimFeishuSyncStreamInput,
+  type IngestedFeishuMessageInput,
+  type IngestFeishuBatchResult,
+  type UpdateClaimedFeishuSyncCursorInput,
+} from "@multiremi/store/repos/feishu-ingest-repo.js";
 import type {
   ScmSnapshotEventFactory,
   ScmSnapshotEventWriteResult,
@@ -310,8 +317,15 @@ import type {
   MultiremiScmRepositoryBinding,
   MultiremiScmSyncCursor,
   MultiremiScmSyncStream,
+  CreateMultiremiFeishuSourceInput,
+  MultiremiFeishuMessage,
+  MultiremiFeishuMessageOutcome,
+  MultiremiFeishuSource,
+  MultiremiFeishuSyncCursor,
   RecordScmCanonicalEventInput,
+  ResolveMultiremiFeishuMessageInput,
   ReleaseScmSyncStreamInput,
+  UpdateMultiremiFeishuSourceInput,
   UpdateScmConnectionInput,
   UpdateClaimedScmSyncCursorInput,
   UpsertScmEntitySnapshotInput,
@@ -335,6 +349,7 @@ export class MultiremiStore {
   private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
   private scm: ScmRepo;
+  private feishuIngest: FeishuIngestRepo;
   private usage: UsageRepo;
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
@@ -364,6 +379,7 @@ export class MultiremiStore {
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
     this.scm = new ScmRepo(this.ctx);
+    this.feishuIngest = new FeishuIngestRepo(this.ctx);
     this.usage = new UsageRepo(this.ctx);
     this.squads = new SquadsRepo(this.ctx);
     this.analytics = new AnalyticsRepo(this.ctx);
@@ -1181,6 +1197,72 @@ runMigrations(this.db);
 
   countRecentFeedbackByUser(userId: string, since = new Date(Date.now() - 60 * 60 * 1000).toISOString()): number {
     return this.feedback.countRecentFeedbackByUser(userId, since);
+  }
+
+  listFeishuSources(input: { workspaceId?: string | null; enabled?: boolean } = {}): MultiremiFeishuSource[] {
+    return this.feishuIngest.listSources(input);
+  }
+
+  getFeishuSource(id: string): MultiremiFeishuSource | null {
+    return this.feishuIngest.getSource(id);
+  }
+
+  createFeishuSource(input: CreateMultiremiFeishuSourceInput): MultiremiFeishuSource {
+    return this.feishuIngest.createSource(input);
+  }
+
+  updateFeishuSource(id: string, input: UpdateMultiremiFeishuSourceInput): MultiremiFeishuSource {
+    return this.feishuIngest.updateSource(id, input);
+  }
+
+  getFeishuSyncCursor(sourceId: string, stream: string): MultiremiFeishuSyncCursor | null {
+    return this.feishuIngest.getSyncCursor(sourceId, stream);
+  }
+
+  claimFeishuSyncStream(input: ClaimFeishuSyncStreamInput): MultiremiFeishuSyncCursor | null {
+    return this.feishuIngest.claimSyncStream(input);
+  }
+
+  updateClaimedFeishuSyncCursor(input: UpdateClaimedFeishuSyncCursorInput): MultiremiFeishuSyncCursor | null {
+    return this.feishuIngest.updateClaimedSyncCursor(input);
+  }
+
+  releaseFeishuSyncStream(sourceId: string, stream: string, leaseToken: string): boolean {
+    return this.feishuIngest.releaseSyncStream(sourceId, stream, leaseToken);
+  }
+
+  ingestFeishuBatch(sourceId: string, messages: readonly IngestedFeishuMessageInput[]): IngestFeishuBatchResult {
+    return this.feishuIngest.ingestBatch(sourceId, messages);
+  }
+
+  getFeishuMessage(messageId: string): MultiremiFeishuMessage | null {
+    return this.feishuIngest.getMessage(messageId);
+  }
+
+  listFeishuMessages(input: {
+    workspaceId: string;
+    unprocessed?: boolean;
+    since?: string | null;
+    until?: string | null;
+    chatId?: string | null;
+    limit?: number;
+  }): MultiremiFeishuMessage[] {
+    return this.feishuIngest.listMessages(input);
+  }
+
+  listFeishuMessageOutcomes(messageId: string): MultiremiFeishuMessageOutcome[] {
+    return this.feishuIngest.listMessageOutcomes(messageId);
+  }
+
+  resolveFeishuMessage(messageId: string, input: ResolveMultiremiFeishuMessageInput): {
+    message: MultiremiFeishuMessage;
+    outcome: MultiremiFeishuMessageOutcome;
+  } {
+    return this.feishuIngest.resolveMessage(messageId, input);
+  }
+
+  deleteExpiredFeishuMessages(now?: Date): number {
+    return this.feishuIngest.deleteExpiredMessages(now);
   }
 
   listScmConnections(input: {

@@ -28,6 +28,7 @@
     "daemon",
     "autopilot",
     "scm",
+    "feishu",
     "inbox",
     "notification",
     "pin",
@@ -5713,6 +5714,114 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "feishu.group": {
+      "command": "remi feishu",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.source.list": {
+      "command": "remi feishu source list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.source.get": {
+      "command": "remi feishu source get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.source.add": {
+      "command": "remi feishu source add",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.source.update": {
+      "command": "remi feishu source update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.messages.list": {
+      "command": "remi feishu messages list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.messages.resolve": {
+      "command": "remi feishu messages resolve",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.resolve",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "inbox.group": {
       "command": "remi inbox",
       "aliases": [],
@@ -8097,6 +8206,15 @@
     "GET /api/workspaces/:id/ssh-mesh": {
       "command": "workspace.ssh-mesh.get"
     },
+    "GET /api/workspaces/:workspaceId/feishu/messages": {
+      "command": "feishu.messages.list"
+    },
+    "GET /api/workspaces/:workspaceId/feishu/sources": {
+      "command": "feishu.source.list"
+    },
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId": {
+      "command": "feishu.source.get"
+    },
     "GET /api/workspaces/:workspaceId/scm/connections": {
       "command": "scm.connection.list"
     },
@@ -8220,6 +8338,9 @@
     },
     "PATCH /api/workspaces/:id/repos/:repositoryId": {
       "command": "repo.update"
+    },
+    "PATCH /api/workspaces/:workspaceId/feishu/sources/:sourceId": {
+      "command": "feishu.source.update"
     },
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId": {
       "command": "scm.connection.update"
@@ -8935,6 +9056,12 @@
     },
     "POST /api/workspaces/:id/ssh-mesh/test": {
       "command": "workspace.ssh-mesh.test"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve": {
+      "command": "feishu.messages.resolve"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/sources": {
+      "command": "feishu.source.add"
     },
     "POST /api/workspaces/:workspaceId/scm/connections": {
       "command": "scm.connection.create"

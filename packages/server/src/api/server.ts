@@ -24,6 +24,7 @@ import { registerCloudBillingRoutes } from "./routers/cloud-billing.js";
 import { registerMeRoutes } from "./routers/me.js";
 import { registerWorkspaceRoutes } from "./routers/workspaces.js";
 import { registerScmRoutes } from "./routers/scm.js";
+import { registerFeishuIngestRoutes } from "./routers/feishu-ingest.js";
 import { registerMemberRoutes } from "./routers/members.js";
 import { registerInvitationRoutes } from "./routers/invitations.js";
 import { registerAgentRoutes } from "./routers/agents.js";
@@ -108,6 +109,8 @@ import {
   type ScmConnectionVerifier,
 } from "@multiremi/scm/verification.js";
 import { scmIngestionStore } from "@multiremi/scm/store.js";
+import { FeishuIngestScheduler } from "@multiremi/feishu-ingest/scheduler.js";
+import { feishuIngestionStore } from "@multiremi/feishu-ingest/store.js";
 import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
@@ -168,6 +171,8 @@ export interface MultiremiApiOptions {
   sessionArchives?: SessionArchiveService;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
   scmPolling?: ScmPollingScheduler | null;
+  /** Undefined enables server-owned Feishu ingestion; null explicitly disables it. */
+  feishuIngest?: FeishuIngestScheduler | null;
   /** Disable every server-owned background job for a read-only blue/green candidate. */
   backgroundJobs?: boolean;
   verifyScmConnection?: ScmConnectionVerifier;
@@ -441,6 +446,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   registerMeRoutes(app, deps);
   registerWorkspaceRoutes(app, deps);
   registerScmRoutes(app, deps);
+  registerFeishuIngestRoutes(app, deps);
   registerMemberRoutes(app, deps);
   registerInvitationRoutes(app, deps);
   app.post("/api/lark/binding/redeem", async (c) => {
@@ -525,6 +531,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       ? new ScmPollingScheduler({ store: scmIngestionStore(store) })
       : options.scmPolling)
     : null;
+  const feishuIngest = backgroundJobs
+    ? (options.feishuIngest === undefined
+      ? new FeishuIngestScheduler({ store: feishuIngestionStore(store) })
+      : options.feishuIngest)
+    : null;
   const controlPlaneSshMesh = backgroundJobs
     ? (options.controlPlaneSshMesh === undefined
       ? createControlPlaneSshMeshFromEnv(store)
@@ -532,6 +543,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     : null;
   scheduler?.start();
   scmPolling?.start();
+  feishuIngest?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
@@ -747,6 +759,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     unsubscribeWorkspaceEvent();
     scheduler?.stop();
     scmPolling?.stop();
+    feishuIngest?.stop();
     return stopServer(closeActiveConnections);
   };
   return server;

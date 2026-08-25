@@ -2570,6 +2570,122 @@ export interface RemoveSquadMemberInput {
   memberId: string;
 }
 
+// ─── Feishu message ingestion ───────────────────────────────────────────────────────────────────
+
+export type MultiremiFeishuSourceType = "personal_automation";
+
+export interface MultiremiFeishuAllowlistEntry {
+  chatId: string;
+  addedAt: string;
+}
+
+export interface MultiremiFeishuSource {
+  id: string;
+  workspaceId: string;
+  name: string;
+  type: MultiremiFeishuSourceType;
+  endpoint: string;
+  allowlist: MultiremiFeishuAllowlistEntry[];
+  enabled: boolean;
+  retentionDays: number;
+  pollIntervalSeconds: number;
+  accessTokenSet: boolean;
+  accessTokenHint: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateMultiremiFeishuSourceInput {
+  id?: string;
+  workspaceId?: string;
+  workspace_id?: string;
+  name?: string | null;
+  type?: MultiremiFeishuSourceType;
+  endpoint: string;
+  allowlist?: Array<string | Partial<MultiremiFeishuAllowlistEntry>>;
+  enabled?: boolean;
+  retentionDays?: number;
+  retention_days?: number;
+  pollIntervalSeconds?: number;
+  poll_interval_seconds?: number;
+}
+
+export interface UpdateMultiremiFeishuSourceInput {
+  name?: string | null;
+  endpoint?: string;
+  allowlist?: Array<string | Partial<MultiremiFeishuAllowlistEntry>>;
+  enabled?: boolean;
+  retentionDays?: number;
+  retention_days?: number;
+  pollIntervalSeconds?: number;
+  poll_interval_seconds?: number;
+}
+
+export interface MultiremiFeishuSyncCursor {
+  sourceId: string;
+  stream: string;
+  cursor: Record<string, unknown> | null;
+  watermark: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseUntil: string | null;
+  leaseToken: string | null;
+  updatedAt: string;
+}
+
+export interface MultiremiFeishuMessage {
+  messageId: string;
+  workspaceId: string;
+  sourceId: string;
+  chatId: string;
+  chatType: string | null;
+  chatName: string | null;
+  threadId: string | null;
+  rootId: string | null;
+  parentId: string | null;
+  sender: Record<string, unknown>;
+  content: Record<string, unknown>;
+  searchableText: string;
+  contentFingerprint: string;
+  messageAppLink: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  recalled: boolean;
+  edited: boolean;
+  ingestedAt: string;
+  processedAt: string | null;
+}
+
+export type MultiremiFeishuMessageOutcomeKind =
+  | "issue_created"
+  | "notified"
+  | "reply_drafted"
+  | "ignored"
+  | "dismissed";
+
+export interface MultiremiFeishuMessageOutcome {
+  id: string;
+  workspaceId: string;
+  messageId: string;
+  outcomeKind: MultiremiFeishuMessageOutcomeKind;
+  ref: string | null;
+  reason: string | null;
+  taskId: string | null;
+  createdAt: string;
+}
+
+export interface ResolveMultiremiFeishuMessageInput {
+  workspaceId?: string;
+  workspace_id?: string;
+  outcome: MultiremiFeishuMessageOutcomeKind;
+  ref?: string | null;
+  reason?: string | null;
+  taskId?: string | null;
+  task_id?: string | null;
+}
+
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────
 
 export type MultiremiAutopilotStatus = "active" | "paused" | "archived";
@@ -2604,6 +2720,15 @@ export interface MultiremiAutopilotSystemEventConfig {
   project_id?: string | null;
 }
 
+export interface MultiremiAutopilotFeishuEventConfig {
+  resource: "feishu_source";
+  event: "messages_ingested";
+  sourceIds?: string[];
+  source_ids?: string[];
+  triggerIssueId: string;
+  trigger_issue_id?: string;
+}
+
 export interface MultiremiAutopilotScmEventConfig {
   resource: "scm";
   events: MultiremiScmCanonicalEventType[];
@@ -2616,6 +2741,7 @@ export interface MultiremiAutopilotScmEventConfig {
 
 export type MultiremiAutopilotEventConfig =
   | MultiremiAutopilotSystemEventConfig
+  | MultiremiAutopilotFeishuEventConfig
   | MultiremiAutopilotScmEventConfig;
 
 export type MultiremiSystemEventStatus = "pending" | "processing" | "processed" | "failed";
@@ -2623,8 +2749,8 @@ export type MultiremiSystemEventStatus = "pending" | "processing" | "processed" 
 export interface MultiremiSystemEvent {
   id: string;
   workspaceId: string;
-  resource: "issue";
-  event: "status_changed";
+  resource: "issue" | "feishu_source";
+  event: "status_changed" | "messages_ingested";
   resourceId: string;
   projectId: string | null;
   payload: Record<string, unknown>;

@@ -24,7 +24,7 @@ const DOMAINS = [
   "issue", "comment", "session", "share", "label", "attachment",
   "chat", "task",
   "agent", "squad", "skill", "plugin",
-  "runtime", "daemon", "autopilot", "scm",
+  "runtime", "daemon", "autopilot", "scm", "feishu",
   "inbox", "notification", "pin", "dashboard", "platform", "billing", "lark",
 ];
 
@@ -558,6 +558,12 @@ function mappedOperationsCommand(route: string): string | null {
     [/^DELETE \/api\/workspaces\/:workspaceId\/scm\/connections\/:connectionId\/repositories\/:repositoryId$/, "scm.repository.unbind"],
     [/^GET \/api\/workspaces\/:workspaceId\/scm\/events$/, "scm.event.list"],
     [/^GET \/api\/workspaces\/:workspaceId\/scm\/events\/:eventId$/, "scm.event.get"],
+    [/^GET \/api\/workspaces\/:workspaceId\/feishu\/sources$/, "feishu.source.list"],
+    [/^POST \/api\/workspaces\/:workspaceId\/feishu\/sources$/, "feishu.source.add"],
+    [/^GET \/api\/workspaces\/:workspaceId\/feishu\/sources\/:sourceId$/, "feishu.source.get"],
+    [/^PATCH \/api\/workspaces\/:workspaceId\/feishu\/sources\/:sourceId$/, "feishu.source.update"],
+    [/^GET \/api\/workspaces\/:workspaceId\/feishu\/messages$/, "feishu.messages.list"],
+    [/^POST \/api\/workspaces\/:workspaceId\/feishu\/messages\/:messageId\/resolve$/, "feishu.messages.resolve"],
     [/^GET \/api\/issues\/:id\/change-requests$/, "scm.change-request.list"],
     [/^PUT \/api\/issues\/:issueId\/change-requests\/:changeRequestId$/, "scm.change-request.link"],
     [/^DELETE \/api\/issues\/:issueId\/change-requests\/:changeRequestId$/, "scm.change-request.unlink"],
@@ -621,6 +627,7 @@ function plannedCommand(route: string): { domain: string; command: string } {
   if (segments[0] === "multiremi") segments.shift();
   let rawDomain = segments[0] ?? "platform";
   if (rawDomain === "workspaces" && segments.includes("scm")) rawDomain = "scm";
+  else if (rawDomain === "workspaces" && segments.includes("feishu")) rawDomain = "feishu";
   else if (rawDomain === "issues" && segments.includes("change-requests")) rawDomain = "scm";
   else if (rawDomain === "workspaces" && segments.includes("lark")) rawDomain = "lark";
   else if (rawDomain === "workspaces" && segments.includes("session-archive")) rawDomain = "session";
