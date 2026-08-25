@@ -214,10 +214,11 @@ describe("Multiremi notification channels", () => {
   });
 
   it("redacts known credential values before recording or listing sender errors", async () => {
-    const canarySecret = "qa+canary/secret?=value";
+    const configuredSecret = "  qa+canary/secret?=value  ";
+    const canarySecret = configuredSecret.trim();
     const encodedSecret = encodeURIComponent(canarySecret);
     const base64Secret = Buffer.from(canarySecret).toString("base64");
-    process.env.MULTIREMI_FEISHU_APP_SECRET = canarySecret;
+    process.env.MULTIREMI_FEISHU_APP_SECRET = configuredSecret;
     const sender: OutboundNotificationSender = {
       async send(): Promise<void> {
         throw new Error(`raw=${canarySecret} query=${encodedSecret} b64=${base64Secret}`);
@@ -313,6 +314,92 @@ describe("Multiremi notification channels", () => {
     for (const representation of [appId, appSecret, encodedSecret, base64Secret, arbitrarySdkText]) {
       expect(responseBody).not.toContain(representation);
     }
+  });
+
+  it("fails closed when an SDK error field getter throws", async () => {
+    const getterDiagnostic = "UNBOUNDED_SDK_GETTER_DIAGNOSTIC";
+    const sdkError = new Error("ordinary SDK failure");
+    Object.defineProperty(sdkError, "code", {
+      get(): never {
+        throw new Error(getterDiagnostic);
+      },
+    });
+    const { createFeishuGroupSender } = await import("@multiremi/notifications/feishu-group-sender.js");
+    const sender = createFeishuGroupSender(
+      {
+        MULTIREMI_FEISHU_APP_ID: "qa-app-id",
+        MULTIREMI_FEISHU_APP_SECRET: "qa-app-secret",
+      },
+      {
+        async sendCard(): Promise<never> {
+          throw sdkError;
+        },
+      },
+    );
+    const current = createTestStore(sender, { maxAttempts: 1 });
+    createChannel(current, { eventTypes: ["issue_assigned"] });
+    createAssignedIssue(current, "Getter-safe Feishu failure");
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+
+    const failed = await waitForDelivery(current, pending.id, "failed");
+
+    expect(failed.lastError).toBe("feishu_send_failed category=unknown");
+    expect(failed.lastError).not.toContain(getterDiagnostic);
+  });
+
+  it("does not derive provider codes from arbitrary SDK messages", async () => {
+    const messageNumber = "1234567890";
+    const { createFeishuGroupSender } = await import("@multiremi/notifications/feishu-group-sender.js");
+    const sender = createFeishuGroupSender(
+      {
+        MULTIREMI_FEISHU_APP_ID: "qa-app-id",
+        MULTIREMI_FEISHU_APP_SECRET: "qa-app-secret",
+      },
+      {
+        async sendCard(): Promise<never> {
+          throw new Error(`upstream diagnostic code ${messageNumber}`);
+        },
+      },
+    );
+    const current = createTestStore(sender, { maxAttempts: 1 });
+    createChannel(current, { eventTypes: ["issue_assigned"] });
+    createAssignedIssue(current, "Message-code Feishu failure");
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+
+    const failed = await waitForDelivery(current, pending.id, "failed");
+
+    expect(failed.lastError).toBe("feishu_send_failed category=unknown");
+    expect(failed.lastError).not.toContain(messageNumber);
+  });
+
+  it("drops structured numeric diagnostics that equal normalized credentials", async () => {
+    const appId = " 1234567890 ";
+    const appSecret = " 9876543210 ";
+    const { createFeishuGroupSender } = await import("@multiremi/notifications/feishu-group-sender.js");
+    const sender = createFeishuGroupSender(
+      {
+        MULTIREMI_FEISHU_APP_ID: appId,
+        MULTIREMI_FEISHU_APP_SECRET: appSecret,
+      },
+      {
+        async sendCard(): Promise<never> {
+          throw Object.assign(new Error("structured SDK failure"), {
+            code: appSecret.trim(),
+            statusCode: appId.trim(),
+          });
+        },
+      },
+    );
+    const current = createTestStore(sender, { maxAttempts: 1 });
+    createChannel(current, { eventTypes: ["issue_assigned"] });
+    createAssignedIssue(current, "Credential-code Feishu failure");
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+
+    const failed = await waitForDelivery(current, pending.id, "failed");
+
+    expect(failed.lastError).toBe("feishu_send_failed category=unknown");
+    expect(failed.lastError).not.toContain(appId.trim());
+    expect(failed.lastError).not.toContain(appSecret.trim());
   });
 
   it("forbids non-admin members from creating outbound channels", async () => {

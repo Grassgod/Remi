@@ -45,7 +45,7 @@ export function createFeishuGroupSender(
         });
         await (dependencies.sendCard ?? sendCardFeishu)(client, chatId, notification.card);
       } catch (error) {
-        const failure = controlledFeishuFailure(error);
+        const failure = controlledFeishuFailure(error, [appId, appSecret]);
         if (failure.permanent) {
           throw new PermanentNotificationDeliveryError(failure.message);
         }
@@ -55,23 +55,34 @@ export function createFeishuGroupSender(
   };
 }
 
-function controlledFeishuFailure(error: unknown): { message: string; permanent: boolean } {
-  const providerCode = numericField(error, ["code"])
-    ?? numericField(error, ["response", "data", "code"])
-    ?? numericCodeFromMessage(error);
-  const httpStatus = numericField(error, ["status"])
-    ?? numericField(error, ["statusCode"])
-    ?? numericField(error, ["response", "status"]);
-  const category = classifyFeishuFailure(error, providerCode, httpStatus);
-  const diagnostics = [
-    `feishu_send_failed category=${category}`,
-    providerCode === null ? null : `provider_code=${providerCode}`,
-    httpStatus === null ? null : `http_status=${httpStatus}`,
-  ].filter((value): value is string => Boolean(value));
-  return {
-    message: diagnostics.join(" "),
-    permanent: category === "auth_failed" || category === "chat_not_found" || category === "forbidden",
-  };
+function controlledFeishuFailure(
+  error: unknown,
+  credentialValues: readonly string[],
+): { message: string; permanent: boolean } {
+  try {
+    const providerCode = excludeCredentialNumber(
+      numericField(error, ["code"]) ?? numericField(error, ["response", "data", "code"]),
+      credentialValues,
+    );
+    const httpStatus = excludeCredentialNumber(
+      numericField(error, ["status"])
+        ?? numericField(error, ["statusCode"])
+        ?? numericField(error, ["response", "status"]),
+      credentialValues,
+    );
+    const category = classifyFeishuFailure(error, providerCode, httpStatus);
+    const diagnostics = [
+      `feishu_send_failed category=${category}`,
+      providerCode === null ? null : `provider_code=${providerCode}`,
+      httpStatus === null ? null : `http_status=${httpStatus}`,
+    ].filter((value): value is string => Boolean(value));
+    return {
+      message: diagnostics.join(" "),
+      permanent: category === "auth_failed" || category === "chat_not_found" || category === "forbidden",
+    };
+  } catch {
+    return { message: "feishu_send_failed category=unknown", permanent: false };
+  }
 }
 
 function classifyFeishuFailure(
@@ -106,29 +117,41 @@ function classifyFeishuFailure(
   return "unknown";
 }
 
-function numericCodeFromMessage(error: unknown): number | null {
-  if (!(error instanceof Error)) return null;
-  const match = error.message.match(/\bcode\s+(-?\d{1,12})\b/iu);
-  return match ? Number(match[1]) : null;
-}
-
 function numericField(value: unknown, path: readonly string[]): number | null {
-  const field = nestedField(value, path);
-  if (typeof field === "number" && Number.isSafeInteger(field)) return field;
-  if (typeof field === "string" && /^-?\d{1,12}$/u.test(field)) return Number(field);
-  return null;
+  try {
+    const field = nestedField(value, path);
+    if (typeof field === "number" && Number.isSafeInteger(field)) return field;
+    if (typeof field === "string" && /^-?\d{1,12}$/u.test(field)) return Number(field);
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function stringField(value: unknown, path: readonly string[]): string | null {
-  const field = nestedField(value, path);
-  return typeof field === "string" ? field : null;
+  try {
+    const field = nestedField(value, path);
+    return typeof field === "string" ? field : null;
+  } catch {
+    return null;
+  }
 }
 
 function nestedField(value: unknown, path: readonly string[]): unknown {
   let current = value;
   for (const part of path) {
     if (!current || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[part];
+    try {
+      current = Reflect.get(current, part);
+    } catch {
+      return undefined;
+    }
   }
   return current;
+}
+
+function excludeCredentialNumber(value: number | null, credentialValues: readonly string[]): number | null {
+  if (value === null) return null;
+  const serialized = String(value);
+  return credentialValues.some((credential) => credential.trim() === serialized) ? null : value;
 }

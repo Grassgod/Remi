@@ -29,6 +29,12 @@ export function redactNotificationError(
 
 function addCredentialRepresentations(values: Set<string>, value: string | undefined): void {
   if (!value) return;
+  addSingleCredentialRepresentations(values, value);
+  const trimmed = value.trim();
+  if (trimmed && trimmed !== value) addSingleCredentialRepresentations(values, trimmed);
+}
+
+function addSingleCredentialRepresentations(values: Set<string>, value: string): void {
   values.add(value);
   try {
     const encoded = encodeURIComponent(value);
