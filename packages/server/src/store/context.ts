@@ -12,7 +12,7 @@ import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
-import { inboxRouteFor } from "@multiremi/store/inbox-routing.js";
+import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import type {
   AddSessionParticipantInput,
   CreateIssueCommentInput,
@@ -730,6 +730,7 @@ export class StoreContext {
     emitEvent?: boolean;
     issueStatus?: string | null;
   }): MultiremiInboxItem | null {
+    const routing = INBOX_ROUTING[input.type];
     const route = inboxRouteFor(input.type, { issueStatus: input.issueStatus, actorType: input.actorType });
     if (route === "workbench_only" || route === "activity_only") return null;
     const issueId = cleanOptionalString(input.issueId);
@@ -756,7 +757,7 @@ export class StoreContext {
         member.id,
         recipientType,
         member.id,
-        input.severity ?? "info",
+        input.severity ?? routing?.severity ?? "info",
         input.actorType ?? "system",
         input.actorId ?? null,
         input.type,

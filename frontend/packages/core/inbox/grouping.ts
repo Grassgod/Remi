@@ -1,4 +1,5 @@
 import type { InboxItem } from "../types";
+import { isInboxLedgerType } from "@multiremi/contracts";
 
 export type InboxSourceFilter = "all" | "automation" | "mentions" | "assignments";
 export type InboxDateGroup = "today" | "yesterday" | "this_week" | "earlier";
@@ -10,6 +11,35 @@ export interface InboxItemGroup {
 
 const MENTION_TYPES = new Set(["comment_mention", "mentioned"]);
 const ASSIGNMENT_TYPES = new Set(["issue_assigned", "unassigned", "assignee_changed"]);
+
+export function inboxItemSelectionKey(item: InboxItem): string {
+  return isInboxLedgerType(item.type) ? item.id : item.issue_id ?? item.id;
+}
+
+/**
+ * Preserve ledger events as individual rows while retaining the existing
+ * Linear-style issue grouping for actionable notifications.
+ */
+export function deduplicateInboxItems(items: InboxItem[]): InboxItem[] {
+  const active = items.filter((item) => !item.archived);
+  const groups = new Map<string, InboxItem[]>();
+  for (const item of active) {
+    const key = inboxItemSelectionKey(item);
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  const visible: InboxItem[] = [];
+  for (const group of groups.values()) {
+    group.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+    if (group[0]) visible.push(group[0]);
+  }
+  return visible.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  );
+}
 
 export function filterInboxItemsBySource(
   items: InboxItem[],
@@ -53,9 +83,8 @@ export function groupInboxItemsByDate(items: InboxItem[], now = new Date()): Inb
 }
 
 export function countAttentionUnreadInboxItems(items: InboxItem[]): number {
-  return items.filter((item) =>
-    !item.archived
-    && !item.read
+  return deduplicateInboxItems(items).filter((item) =>
+    !item.read
     && (item.severity === "attention" || item.severity === "action_required")
   ).length;
 }

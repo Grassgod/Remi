@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { InboxItem, InboxItemType, InboxSeverity } from "../types";
 import {
   countAttentionUnreadInboxItems,
+  deduplicateInboxItems,
   filterInboxItemsBySource,
   groupInboxItemsByDate,
+  inboxItemSelectionKey,
 } from "./grouping";
 
 function item(
@@ -83,5 +85,39 @@ describe("inbox grouping", () => {
     ];
 
     expect(countAttentionUnreadInboxItems(items)).toBe(2);
+  });
+
+  it("keeps every ledger event while preserving issue-level action grouping", () => {
+    const items = [
+      item("mention-latest", "comment_mention", "2026-08-26T10:04:00.000Z", {
+        issue_id: "issue-1",
+        severity: "attention",
+      }),
+      item("assignment-hidden", "issue_assigned", "2026-08-26T10:03:00.000Z", {
+        issue_id: "issue-1",
+        severity: "attention",
+      }),
+      item("run-failed", "autopilot_run_failed", "2026-08-26T10:02:00.000Z", {
+        issue_id: "issue-1",
+        severity: "attention",
+      }),
+      item("run-completed", "autopilot_run_completed", "2026-08-26T10:01:00.000Z", {
+        issue_id: "issue-1",
+      }),
+    ];
+
+    const visible = deduplicateInboxItems(items);
+
+    expect(visible.map((entry) => entry.id)).toEqual([
+      "mention-latest",
+      "run-failed",
+      "run-completed",
+    ]);
+    expect(inboxItemSelectionKey(visible[0]!)).toBe("issue-1");
+    expect(inboxItemSelectionKey(visible[1]!)).toBe("run-failed");
+    expect(items.filter((entry) => entry.severity === "attention")).toHaveLength(3);
+    expect(countAttentionUnreadInboxItems(items)).toBe(
+      visible.filter((entry) => entry.severity === "attention" && !entry.read).length,
+    );
   });
 });

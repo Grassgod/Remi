@@ -24,6 +24,7 @@
   },
   "list": {
     "empty": "No notifications",
+    "filtered_empty": "No notifications match this filter",
     "mark_group_read": "Mark group as read",
     "mark_done_tooltip": "Mark as done",
     "archive_tooltip": "Archive",

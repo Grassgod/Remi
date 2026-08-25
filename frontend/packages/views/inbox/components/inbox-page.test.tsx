@@ -40,12 +40,12 @@ vi.mock("@multiremi/core/issues/stores/draft-store", () => ({
   }),
 }));
 
-vi.mock("@multiremi/core/inbox/queries", () => ({
+vi.mock("@multiremi/core/inbox/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multiremi/core/inbox/queries")>()),
   inboxListOptions: (wsId: string) => ({
     queryKey: ["inbox", wsId],
     queryFn: listInbox,
   }),
-  deduplicateInboxItems: (items: unknown[]) => items,
   useInboxUnreadCount: () => 0,
 }));
 
@@ -201,6 +201,65 @@ describe("InboxPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Automation" }));
     expect(screen.getByText("automation-today")).toBeInTheDocument();
     expect(screen.queryByText("assignment-yesterday")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mentions" }));
+    expect(screen.getByText("No notifications match this filter")).toBeInTheDocument();
+  });
+
+  it("renders same-issue ledger history independently from newer action rows", async () => {
+    listInbox.mockResolvedValue([
+      {
+        id: "mention-latest",
+        type: "comment_mention",
+        issue_id: "issue-1",
+        title: "Mention",
+        severity: "info",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:04:00.000Z",
+      },
+      {
+        id: "assignment-hidden",
+        type: "issue_assigned",
+        issue_id: "issue-1",
+        title: "Assignment",
+        severity: "info",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:03:00.000Z",
+      },
+      {
+        id: "run-failed",
+        type: "autopilot_run_failed",
+        issue_id: "issue-1",
+        title: "Run failed",
+        severity: "attention",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:02:00.000Z",
+      },
+      {
+        id: "run-completed",
+        type: "autopilot_run_completed",
+        issue_id: "issue-1",
+        title: "Run completed",
+        severity: "info",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:01:00.000Z",
+      },
+    ]);
+    renderInbox();
+
+    expect(await screen.findByText("mention-latest")).toBeInTheDocument();
+    expect(screen.queryByText("assignment-hidden")).not.toBeInTheDocument();
+    expect(screen.getByText("run-failed")).toBeInTheDocument();
+    expect(screen.getByText("run-completed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("run-failed"));
+    expect(replace).toHaveBeenLastCalledWith("/test/inbox?issue=run-failed");
+    fireEvent.click(screen.getByText("mention-latest"));
+    expect(replace).toHaveBeenLastCalledWith("/test/inbox?issue=issue-1");
   });
 
   it("marks the unread rows in a date group as read", async () => {

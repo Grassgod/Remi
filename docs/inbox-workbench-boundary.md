@@ -55,6 +55,8 @@ Every inbox `type` must have a row in `INBOX_ROUTING`
 there. `inboxRouteFor()` returns `activity_only` for an unregistered type, so a producer
 added without a registry entry is silently dropped rather than silently spamming — and a
 unit test enumerates every `createInboxItem` call site to make that failure loud in CI.
+The registry also owns the default severity used by `createInboxItem`; any explicit
+producer override is tested against that registered value.
 
 Routes that depend on the issue's status at emit time (R2) pass it in:
 `inboxRouteFor(type, { issueStatus })`.
@@ -105,6 +107,8 @@ The inbox is read in periodic batches, not one row at a time:
 - rows grouped by day (Today / Yesterday / This week / Earlier);
 - a source filter (All / Automation / Mentions / Assignments);
 - **mark this group read** in addition to the existing mark-all-read;
+- R3 ledger events remain one row per event even when several runs share an issue; R1/R2
+  action notifications retain the existing one-row-per-issue grouping;
 - every row shows a one-line self-contained summary from `details`, so a sweep down the
   list is enough to know what happened.
 

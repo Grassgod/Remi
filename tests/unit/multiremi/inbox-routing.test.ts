@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { INBOX_ROUTE_BY_TYPE } from "@multiremi/contracts";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 
 describe("inbox routing", () => {
@@ -23,10 +24,17 @@ describe("inbox routing", () => {
       .toBe("activity_only");
   });
 
+  it("keeps the server registry aligned with the shared frontend routing contract", () => {
+    expect(Object.keys(INBOX_ROUTING).sort()).toEqual(Object.keys(INBOX_ROUTE_BY_TYPE).sort());
+    for (const [type, route] of Object.entries(INBOX_ROUTE_BY_TYPE)) {
+      expect(INBOX_ROUTING[type]?.route).toBe(route);
+    }
+  });
+
   it("registers every createInboxItem call site type", () => {
     const sourceRoot = resolve(import.meta.dir, "../../../packages/server/src");
     const files = [...new Bun.Glob("**/*.ts").scanSync({ cwd: sourceRoot, absolute: true })];
-    const calls: Array<{ file: string; type: string }> = [];
+    const calls: Array<{ file: string; type: string; severity?: string }> = [];
     let invocationCount = 0;
 
     for (const file of files) {
@@ -34,8 +42,9 @@ describe("inbox routing", () => {
       invocationCount += [...source.matchAll(/\.createInboxItem\s*\(/g)].length;
       for (const match of source.matchAll(/\.createInboxItem\s*\(\s*\{([\s\S]*?)\n\s*\}\);/g)) {
         const type = match[1]?.match(/\btype:\s*"([^"]+)"/)?.[1];
+        const severity = match[1]?.match(/\bseverity:\s*"([^"]+)"/)?.[1];
         expect(type, `${file} has a createInboxItem call without a literal type`).toBeDefined();
-        if (type) calls.push({ file, type });
+        if (type) calls.push({ file, type, severity });
       }
     }
 
@@ -44,6 +53,10 @@ describe("inbox routing", () => {
     for (const call of calls) {
       expect(INBOX_ROUTING, `${call.file}: ${call.type} is missing from INBOX_ROUTING`)
         .toHaveProperty(call.type);
+      if (call.severity) {
+        expect(call.severity, `${call.file}: ${call.type} overrides the registered severity`)
+          .toBe(INBOX_ROUTING[call.type]?.severity);
+      }
     }
   });
 });

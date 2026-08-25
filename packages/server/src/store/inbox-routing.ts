@@ -1,10 +1,16 @@
-export type InboxRoute = "inbox_action" | "inbox_ledger" | "workbench_only" | "activity_only";
+import {
+  INBOX_ROUTE_BY_TYPE,
+  type InboxRoute,
+  type RegisteredInboxRoute,
+} from "@multiremi/contracts";
+
+export type { InboxRoute } from "@multiremi/contracts";
 
 export const WORKBENCH_VISIBLE_STATUSES = ["in_review", "blocked", "in_progress"] as const;
 
 interface InboxRoutingEntry {
   rule: "R1" | "R2" | "R3";
-  route: InboxRoute | "by_issue_status";
+  route: RegisteredInboxRoute;
   severity: "info" | "attention";
   why: string;
 }
@@ -12,43 +18,43 @@ interface InboxRoutingEntry {
 export const INBOX_ROUTING: Record<string, InboxRoutingEntry> = {
   issue_assigned: {
     rule: "R1",
-    route: "inbox_action",
+    route: INBOX_ROUTE_BY_TYPE.issue_assigned,
     severity: "info",
     why: "A member was personally assigned work that may not be visible in the workbench.",
   },
   comment_mention: {
     rule: "R1",
-    route: "inbox_action",
+    route: INBOX_ROUTE_BY_TYPE.comment_mention,
     severity: "info",
     why: "A comment explicitly addressed a member and cannot be represented at issue grain.",
   },
   comment_created: {
     rule: "R2",
-    route: "by_issue_status",
+    route: INBOX_ROUTE_BY_TYPE.comment_created,
     severity: "info",
     why: "Issue progress belongs only in the workbench while visible there; otherwise only human comments notify subscribers.",
   },
   autopilot_paused: {
     rule: "R3",
-    route: "inbox_ledger",
+    route: INBOX_ROUTE_BY_TYPE.autopilot_paused,
     severity: "attention",
     why: "An automated workflow was paused and must remain available for periodic review.",
   },
   autopilot_run_completed: {
     rule: "R3",
-    route: "inbox_ledger",
+    route: INBOX_ROUTE_BY_TYPE.autopilot_run_completed,
     severity: "info",
     why: "A completed automated run is a durable result, not a human processing queue item.",
   },
   autopilot_run_failed: {
     rule: "R3",
-    route: "inbox_ledger",
+    route: INBOX_ROUTE_BY_TYPE.autopilot_run_failed,
     severity: "attention",
     why: "A failed automated run is a durable result that deserves periodic attention.",
   },
   autopilot_run_overdue: {
     rule: "R3",
-    route: "inbox_ledger",
+    route: INBOX_ROUTE_BY_TYPE.autopilot_run_overdue,
     severity: "attention",
     why: "An overdue automated run is a durable inspection result; its producer is implemented separately.",
   },

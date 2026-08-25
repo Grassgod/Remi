@@ -15,6 +15,7 @@ import {
 import {
   filterInboxItemsBySource,
   groupInboxItemsByDate,
+  inboxItemSelectionKey,
   type InboxDateGroup,
   type InboxSourceFilter,
 } from "@multiremi/core/inbox";
@@ -119,7 +120,7 @@ export function InboxPage() {
   );
   const itemGroups = useMemo(() => groupInboxItemsByDate(filteredItems), [filteredItems]);
 
-  const selected = items.find((i) => (i.issue_id ?? i.id) === selectedKey) ?? null;
+  const selected = items.find((item) => inboxItemSelectionKey(item) === selectedKey) ?? null;
 
   // Track the last key we actually resolved against the inbox list. Lets the
   // fallback effect distinguish "shared-link to a notification not in our
@@ -220,7 +221,7 @@ export function InboxPage() {
 
   const handleSelect = (item: InboxItem) => {
     setSelectedKey(
-      item.issue_id ?? item.id,
+      inboxItemSelectionKey(item),
       item.details?.issue_session_id ?? undefined,
     );
   };
@@ -229,14 +230,14 @@ export function InboxPage() {
     const idx = items.findIndex((i) => i.id === id);
     const archived = idx >= 0 ? items[idx] : null;
     const wasSelected =
-      !!archived && (archived.issue_id ?? archived.id) === selectedKey;
+      !!archived && inboxItemSelectionKey(archived) === selectedKey;
     if (wasSelected) {
       // List is sorted newest-first; prefer the next (older) item, fall back
       // to the previous (newer) one when archiving at the bottom, and only
       // clear the selection when nothing else is left.
       const next = items[idx + 1] ?? items[idx - 1] ?? null;
       setSelectedKey(
-        next ? (next.issue_id ?? next.id) : "",
+        next ? inboxItemSelectionKey(next) : "",
         next?.details?.issue_session_id ?? undefined,
       );
     }
@@ -288,7 +289,7 @@ export function InboxPage() {
   };
 
   const handleArchiveAllRead = () => {
-    const readKeys = items.filter((i) => i.read).map((i) => i.issue_id ?? i.id);
+    const readKeys = items.filter((item) => item.read).map(inboxItemSelectionKey);
     if (readKeys.includes(selectedKey)) setSelectedKey("");
     archiveAllReadMutation.mutate(undefined, {
       onError: (err) =>
@@ -405,7 +406,7 @@ export function InboxPage() {
       {filteredItems.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <Inbox className="mb-3 h-8 w-8 text-muted-foreground/50" />
-          <p className="text-sm">{t(($) => $.list.empty)}</p>
+          <p className="text-sm">{t(($) => $.list.filtered_empty)}</p>
         </div>
       ) : itemGroups.map((group) => {
         const hasUnread = group.items.some((item) => !item.read);
@@ -434,7 +435,7 @@ export function InboxPage() {
               <InboxListItem
                 key={item.id}
                 item={item}
-                isSelected={(item.issue_id ?? item.id) === selectedKey}
+                isSelected={inboxItemSelectionKey(item) === selectedKey}
                 onClick={() => handleSelect(item)}
                 onArchive={() => handleArchive(item.id)}
               />
@@ -447,9 +448,9 @@ export function InboxPage() {
 
   const detailContent = selected?.issue_id ? (
     // Key by issue_id (not inbox-item id): a new comment/reaction generates a
-    // new inbox notification for the same issue, and the dedup helper picks the
-    // newest one — keying on its id would remount IssueDetail on every event,
-    // wiping the comment composer draft and resetting scroll position.
+    // new inbox notification for the same issue. Keying on the notification id
+    // would remount IssueDetail on every event, wiping the comment composer
+    // draft and resetting scroll position.
     <ErrorBoundary resetKeys={[selected.issue_id]}>
       <IssueDetail
         key={selected.issue_id}
@@ -458,7 +459,7 @@ export function InboxPage() {
         layoutId="multimira_inbox_issue_detail_layout"
         highlightCommentId={selected.details?.comment_id ?? undefined}
         initialIssueSessionId={
-          urlIssue === selected.issue_id && urlSession
+          urlIssue === inboxItemSelectionKey(selected) && urlSession
             ? urlSession
             : selected.details?.issue_session_id ?? undefined
         }

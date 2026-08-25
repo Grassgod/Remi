@@ -1,7 +1,9 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { InboxItem } from "../types";
-import { countAttentionUnreadInboxItems } from "./grouping";
+import { countAttentionUnreadInboxItems, deduplicateInboxItems } from "./grouping";
+
+export { deduplicateInboxItems } from "./grouping";
 
 export const inboxKeys = {
   all: (wsId: string) => ["inbox", wsId] as const,
@@ -39,32 +41,4 @@ export function useInboxAttentionUnreadCount(wsId: string | null | undefined): n
     select: countAttentionUnreadInboxItems,
   });
   return data ?? 0;
-}
-
-/**
- * Deduplicate inbox items by issue_id (one entry per issue, Linear-style).
- * Exported for consumers to use in useMemo — not in queryOptions select
- * (to avoid new array references on every cache update).
- */
-export function deduplicateInboxItems(items: InboxItem[]): InboxItem[] {
-  const active = items.filter((i) => !i.archived);
-  const groups = new Map<string, InboxItem[]>();
-  for (const item of active) {
-    const key = item.issue_id ?? item.id;
-    const group = groups.get(key) ?? [];
-    group.push(item);
-    groups.set(key, group);
-  }
-  const merged: InboxItem[] = [];
-  for (const group of groups.values()) {
-    group.sort(
-      (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-    );
-    if (group[0]) merged.push(group[0]);
-  }
-  return merged.sort(
-    (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  );
 }

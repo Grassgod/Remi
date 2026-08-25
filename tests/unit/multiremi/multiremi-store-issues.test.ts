@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
+import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -418,7 +419,9 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       bob.id,
       carol.id,
     ].sort());
-    expect(store.listInboxItems(bob.id).filter((item) => item.type === "comment_mention")).toHaveLength(1);
+    const mentions = store.listInboxItems(bob.id).filter((item) => item.type === "comment_mention");
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0]?.severity).toBe(INBOX_ROUTING.comment_mention?.severity);
     expect(store.listInboxItems(bob.id).filter((item) => item.type === "comment_created")).toHaveLength(0);
     expect(store.listInboxItems(alice.id).some((item) => item.type === "comment_mention")).toBe(true);
 
