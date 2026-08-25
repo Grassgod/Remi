@@ -5,6 +5,7 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { daemonRuntimeId } from "@multiremi/store/helpers.js";
+import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import {
   authenticatedRequestUserId,
   cleanString,
@@ -66,6 +67,9 @@ export function isTaskTokenForbiddenRequest(request: Request): boolean {
     || path.startsWith("/api/multiremi/members") || path.startsWith("/api/multiremi/tokens")) return true;
   if (path.startsWith("/api/workspaces/")) {
     if (/^\/api\/workspaces\/[^/]+\/repos$/.test(path) && method === "GET") return false;
+    if (/^\/api\/workspaces\/[^/]+\/repos\/[^/]+\/wiki\/build$/.test(path) && method === "POST") return true;
+    if (/^\/api\/workspaces\/[^/]+\/repos\/[^/]+\/wiki(?:\/.*)?$/.test(path)
+      && (method === "GET" || method === "POST" || method === "PUT" || method === "DELETE")) return false;
     return true;
   }
   if (path === "/api/runtimes" || path.startsWith("/api/runtimes/")
@@ -283,6 +287,25 @@ export function denyTaskTokenProjectAccess(
   const issue = task?.issueId ? store.getIssue(task.issueId) : null;
   if (!issue?.projectId || issue.projectId !== projectId) return c.json({ error: "project not found" }, 404);
   return null;
+}
+
+/**
+ * Repository Wiki access mirrors the repositories materialized into this
+ * task's working copy. Hide every other workspace repository with a 404.
+ */
+export function denyTaskTokenRepositoryWikiAccess(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  repositoryId: string,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTaskWithAgent(token.taskId);
+  const allowed = task?.workspaceId === workspaceId
+    && resolveTaskRepositoryWikiRepositories(store, task)
+      .some((repository) => repository.id === repositoryId);
+  return allowed ? null : c.json({ error: "repository not found" }, 404);
 }
 
 export function denyTaskTokenCommentAccess(

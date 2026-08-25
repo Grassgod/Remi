@@ -6,6 +6,83 @@ import { createStore, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — authentication and token scoping", () => {
+  it("scopes task-token Repository Wiki CRUD to the task project repository", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.updateWorkspace(workspace.id, {
+      repos: [
+        { id: "repo_alpha", name: "alpha", url: "git@github.com:acme/alpha.git", source: "github" },
+        { id: "repo_beta", name: "beta", url: "git@github.com:acme/beta.git", source: "github" },
+      ],
+    });
+    const project = store.createProject({ title: "Alpha project", workspaceId: workspace.id });
+    store.createProjectResource(project.id, {
+      resourceType: "github_repo",
+      resourceRef: { url: "git@github.com:acme/alpha.git" },
+    });
+    const agent = store.createAgent({ name: "Wiki agent", provider: "codex", workspaceId: workspace.id });
+    const issue = store.createIssue({ title: "Update Alpha Wiki", workspaceId: workspace.id, projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: workspace.id, prompt: "work" });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const daemonToken = await store.createAccessToken({
+      name: "Daemon",
+      type: "daemon",
+      purpose: "daemon",
+      workspaceId: workspace.id,
+      userId: "local",
+      daemonId: "daemon_local",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const auth = { Authorization: `Bearer ${taskToken.token}` };
+    const jsonAuth = { ...auth, "Content-Type": "application/json" };
+    const root = `/api/workspaces/${workspace.id}/repos/repo_alpha/wiki`;
+
+    expect((await app.request(root, { headers: auth })).status).toBe(200);
+    const createdResponse = await app.request(root, {
+      method: "POST",
+      headers: jsonAuth,
+      body: JSON.stringify({ path: "overview.md", title: "Overview", body: "Alpha facts" }),
+    });
+    expect(createdResponse.status).toBe(201);
+    const created = (await createdResponse.json() as any).doc;
+    expect((await app.request(`${root}/${created.id}`, { headers: auth })).status).toBe(200);
+
+    const updated = await app.request(`${root}/${created.id}`, {
+      method: "PUT",
+      headers: jsonAuth,
+      body: JSON.stringify({ body: "Alpha facts v2", expected_version: 1 }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json() as any).doc.version).toBe(2);
+    expect((await app.request(`${root}/${created.id}/revisions`, { headers: auth })).status).toBe(200);
+
+    const foreignRoot = `/api/workspaces/${workspace.id}/repos/repo_beta/wiki`;
+    for (const [method, path] of [
+      ["GET", foreignRoot],
+      ["POST", foreignRoot],
+      ["GET", `${foreignRoot}/secret`],
+      ["PUT", `${foreignRoot}/secret`],
+      ["DELETE", `${foreignRoot}/secret`],
+      ["GET", `${foreignRoot}/secret/revisions`],
+    ] as const) {
+      const foreign = await app.request(path, { method, headers: jsonAuth });
+      expect(foreign.status).toBe(404);
+      expect(await foreign.json()).toEqual({ error: "repository not found" });
+    }
+
+    const build = await app.request(`${root}/build`, { method: "POST", headers: auth });
+    expect(build.status).toBe(403);
+    expect(await build.json()).toEqual({ error: "forbidden for task token" });
+
+    const daemon = await app.request(root, {
+      headers: { Authorization: `Bearer ${daemonToken.token}` },
+    });
+    expect(daemon.status).toBe(403);
+    expect(await daemon.json()).toEqual({ error: "forbidden for daemon token" });
+
+    expect((await app.request(`${root}/${created.id}`, { method: "DELETE", headers: auth })).status).toBe(200);
+  });
+
   // Native browser loads (<img src="/api/attachments/…/content">) cannot set
   // an Authorization header — they authenticate via the HttpOnly login cookie,
   // accepted for safe methods only so cookie auth can never mutate state.
