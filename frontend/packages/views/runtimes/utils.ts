@@ -145,6 +145,15 @@ const MODEL_PRICING: Record<
   string,
   { input: number; output: number; cacheRead: number; cacheWrite: number }
 > = {
+  // -- Anthropic: Claude 5 family (platform.claude.com/docs pricing; cache
+  //    priced at the standard ratios: read = 0.1x input, write = 1.25x input) --
+  "claude-fable-5":     { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
+  "claude-mythos-5":    { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
+  "claude-opus-5":      { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25 },
+  // Sonnet 5 priced at the standard $3/$15 sticker (intro $2/$10 runs through
+  // 2026-08-31; we price post-intro so the dashboard doesn't jump in September).
+  "claude-sonnet-5":    { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75 },
+
   // -- Anthropic: current generation (4.5+ — Opus dropped from 15/75 to 5/25 here) --
   "claude-haiku-4-5":   { input: 1,    output: 5,    cacheRead: 0.10, cacheWrite: 1.25 },
   "claude-sonnet-4-5":  { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75 },

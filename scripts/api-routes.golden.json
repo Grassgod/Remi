@@ -11250,10 +11250,10 @@
       "status": 200,
       "body": [
         {
-          "date": "2026-01-01",
-          "totalSeconds": 0,
-          "taskCount": 5,
-          "failedCount": 0
+          "agent_id": "agt_snapshot",
+          "total_seconds": 0,
+          "task_count": 5,
+          "failed_count": 0
         }
       ]
     },
@@ -11265,9 +11265,9 @@
       "body": [
         {
           "date": "2026-01-01",
-          "totalSeconds": 0,
-          "taskCount": 5,
-          "failedCount": 0
+          "total_seconds": 0,
+          "task_count": 5,
+          "failed_count": 0
         }
       ]
     },
@@ -11278,13 +11278,14 @@
       "status": 200,
       "body": [
         {
-          "agentId": "agt_snapshot",
+          "agent_id": "agt_snapshot",
           "model": "claude-sonnet-4",
-          "inputTokens": 10,
-          "outputTokens": 5,
-          "cacheReadTokens": 0,
-          "cacheWriteTokens": 0,
-          "taskCount": 1
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "total_tokens": 0,
+          "task_count": 1
         }
       ]
     },
@@ -11296,14 +11297,15 @@
       "body": [
         {
           "date": "2026-01-01",
-          "runtimeId": "rt_snapshot",
+          "runtime_id": "rt_snapshot",
           "provider": "unknown",
           "model": "claude-sonnet-4",
-          "inputTokens": 10,
-          "outputTokens": 5,
-          "cacheReadTokens": 0,
-          "cacheWriteTokens": 0,
-          "taskCount": 1
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "total_tokens": 0,
+          "task_count": 1
         }
       ]
     },
@@ -17196,6 +17198,7 @@
             "outputTokens": 5,
             "cacheReadTokens": 0,
             "cacheWriteTokens": 0,
+            "totalTokens": 0,
             "taskCount": 1
           }
         ]

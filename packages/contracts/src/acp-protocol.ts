@@ -242,6 +242,21 @@ export type PromptContent =
 
 export interface PromptResult {
   stopReason: StopReason;
+  /**
+   * Accumulated token usage for the whole prompt turn. Both bridges settle
+   * `session/prompt` with this shape: claude-agent-acp (dist/acp-agent.js
+   * `sessionUsage()`) fills all five fields; codex-acp (dist/index.js
+   * `toPromptUsage()`) has no `cachedWriteTokens` and adds `thoughtTokens`.
+   * This is the only place the input/output split is available — the
+   * `usage_update` notification stream only carries `{used, size, cost}`.
+   */
+  usage?: {
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    cachedReadTokens?: number | null;
+    cachedWriteTokens?: number | null;
+    totalTokens?: number | null;
+  } | null;
 }
 
 export type StopReason = "end_turn" | "tool_deferred" | "cancelled" | "interrupted" | "max_turns";

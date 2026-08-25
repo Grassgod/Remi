@@ -1086,6 +1086,38 @@ function extractChunkText(content: unknown): string {
   return text;
 }
 
+/**
+ * Merge streamed usage with the prompt settle result. The settle result is
+ * the only carrier of the input/output token split (MUL-92): the streamed
+ * `usage_update` notifications only report context occupancy (`used`), which
+ * accumulateUsage stores as totalTokens. Prefer the settle values; keep the
+ * stream-derived numbers as fallback so a bridge that settles without
+ * `usage` still reports what it streamed. Field names differ per bridge:
+ * claude-agent-acp fills all five, codex-acp omits cachedWriteTokens.
+ */
+export function resolvePromptUsage(
+  streamed: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    totalTokens: number;
+  },
+  settle: PromptResult["usage"],
+): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; totalTokens: number } {
+  const settled = (value: number | null | undefined, fallback: number): number => {
+    const parsed = Number(value ?? Number.NaN);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
+  return {
+    inputTokens: settled(settle?.inputTokens, streamed.inputTokens),
+    outputTokens: settled(settle?.outputTokens, streamed.outputTokens),
+    cacheReadTokens: settled(settle?.cachedReadTokens, streamed.cacheReadTokens),
+    cacheWriteTokens: settled(settle?.cachedWriteTokens, streamed.cacheWriteTokens),
+    totalTokens: settled(settle?.totalTokens, streamed.totalTokens),
+  };
+}
+
 function accumulateUsage(state: PromptState, update: SessionUpdate): void {
   const u = update as Record<string, any>;
   // ACP wire format ({used, size, cost}): `used` is total context tokens with
@@ -1102,15 +1134,18 @@ function buildAgentResponse(entry: PoolEntry, result: PromptResult): AgentRespon
   // Reset per-prompt state for next prompt
   entry.promptState = createPromptState();
 
+  const resolved = resolvePromptUsage(usage, result.usage);
+
   return createAgentResponse({
     text,
     sessionId: entry.acpSessionId,
     model: usage.model,
     costUsd: usage.costUsd || null,
-    inputTokens: usage.inputTokens || null,
-    outputTokens: usage.outputTokens || null,
-    totalTokens: usage.totalTokens || null,
-    cacheReadInputTokens: usage.cacheReadTokens || null,
+    inputTokens: resolved.inputTokens || null,
+    outputTokens: resolved.outputTokens || null,
+    totalTokens: resolved.totalTokens || null,
+    cacheReadInputTokens: resolved.cacheReadTokens || null,
+    cacheCreateInputTokens: resolved.cacheWriteTokens || null,
     contextWindow: usage.contextWindowSize,
     durationMs,
     toolCalls: completedToolCount > 0 ? [{ count: completedToolCount }] : undefined,

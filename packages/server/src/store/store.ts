@@ -216,6 +216,7 @@ import type {
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeUpdateInput,
+  MultiremiAgentRuntime,
   MultiremiRuntime,
   MultiremiRuntimeDaily,
   MultiremiRuntimeModel,
@@ -1903,6 +1904,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageDaily[] {
     return this.usage.listUsageDaily(input);
   }
@@ -1921,6 +1923,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageByHour[] {
     return this.usage.listUsageByHour(input);
   }
@@ -1930,6 +1933,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiTaskActivityByHour[] {
     return this.usage.listTaskActivityByHour(input);
   }
@@ -1939,8 +1943,18 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiRuntimeDaily[] {
     return this.usage.listRuntimeDaily(input);
+  }
+
+  listAgentRuntime(input: {
+    workspaceId?: string | null;
+    projectId?: string | null;
+    runtimeId?: string | null;
+    days?: number;
+  } = {}): MultiremiAgentRuntime[] {
+    return this.usage.listAgentRuntime(input);
   }
   heartbeatRuntime(runtimeId: string, options: {
     claimPending?: boolean;

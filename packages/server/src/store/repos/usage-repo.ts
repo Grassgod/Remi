@@ -3,6 +3,7 @@
 import { nullableString, parseTaskUsageEntries, type RuntimeUsageEntry } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import type {
+  MultiremiAgentRuntime,
   MultiremiRuntimeDaily,
   MultiremiRuntimeUsage,
   MultiremiTaskActivityByHour,
@@ -64,11 +65,12 @@ export class UsageRepo {
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageDaily[] {
     const rows = this.filteredUsageTaskRows(input);
     const buckets = new Map<string, MultiremiUsageDaily & { taskIds: Set<string> }>();
     for (const row of rows) {
-      const date = usageDate(row);
+      const date = usageDate(row, input.tz);
       for (const entry of parseTaskUsageEntries(row.usage)) {
         const key = [date, nullableString(row.runtime_id) ?? "", entry.provider, entry.model].join("\u0000");
         const current = buckets.get(key) ?? {
@@ -80,6 +82,7 @@ export class UsageRepo {
           outputTokens: 0,
           cacheReadTokens: 0,
           cacheWriteTokens: 0,
+          totalTokens: 0,
           taskCount: 0,
           taskIds: new Set<string>(),
         };
@@ -112,6 +115,7 @@ export class UsageRepo {
           outputTokens: 0,
           cacheReadTokens: 0,
           cacheWriteTokens: 0,
+          totalTokens: 0,
           taskCount: 0,
           taskIds: new Set<string>(),
         };
@@ -135,11 +139,12 @@ export class UsageRepo {
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageByHour[] {
     const rows = this.filteredUsageTaskRows(input);
     const buckets = new Map<string, MultiremiUsageByHour & { taskIds: Set<string> }>();
     for (const row of rows) {
-      const hour = usageHour(row);
+      const hour = usageHour(row, input.tz);
       for (const entry of parseTaskUsageEntries(row.usage)) {
         const key = [hour, entry.model].join("\u0000");
         const current = buckets.get(key) ?? {
@@ -167,11 +172,12 @@ export class UsageRepo {
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiTaskActivityByHour[] {
     const rows = this.filteredUsageTaskRows(input, { includeTasksWithoutUsage: true });
     const counts = new Map<number, number>();
     for (const row of rows) {
-      const hour = usageHour(row);
+      const hour = usageHour(row, input.tz);
       counts.set(hour, (counts.get(hour) ?? 0) + 1);
     }
     return [...counts.entries()]
@@ -184,11 +190,12 @@ export class UsageRepo {
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiRuntimeDaily[] {
     const rows = this.filteredUsageTaskRows(input, { includeTasksWithoutUsage: true });
     const buckets = new Map<string, MultiremiRuntimeDaily>();
     for (const row of rows) {
-      const date = usageDate(row);
+      const date = usageDate(row, input.tz);
       const current = buckets.get(date) ?? { date, totalSeconds: 0, taskCount: 0, failedCount: 0 };
       current.taskCount += 1;
       if (String(row.status ?? "") === "failed") current.failedCount += 1;
@@ -196,6 +203,33 @@ export class UsageRepo {
       buckets.set(date, current);
     }
     return [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date));
+  }
+
+  /** Per-agent run-time rollup for the dashboard leaderboard: every task in
+   *  the window counts (usage-less tasks included), grouped by the agent that
+   *  ran it — the same row set listRuntimeDaily buckets by date, so the
+   *  leaderboard totals always reconcile with the overview cards. */
+  listAgentRuntime(input: {
+    workspaceId?: string | null;
+    projectId?: string | null;
+    runtimeId?: string | null;
+    days?: number;
+  } = {}): MultiremiAgentRuntime[] {
+    const rows = this.filteredUsageTaskRows(input, { includeTasksWithoutUsage: true });
+    const buckets = new Map<string, MultiremiAgentRuntime>();
+    for (const row of rows) {
+      const agentId = String(row.agent_id ?? "");
+      const current = buckets.get(agentId) ?? { agentId, totalSeconds: 0, taskCount: 0, failedCount: 0 };
+      current.taskCount += 1;
+      if (String(row.status ?? "") === "failed") current.failedCount += 1;
+      current.totalSeconds += taskRunSeconds(row);
+      buckets.set(agentId, current);
+    }
+    return [...buckets.values()].sort((left, right) =>
+      right.totalSeconds - left.totalSeconds ||
+      right.taskCount - left.taskCount ||
+      left.agentId.localeCompare(right.agentId),
+    );
   }
 
 
@@ -255,16 +289,45 @@ function usageTimestamp(row: Row): string {
   );
 }
 
-function usageDate(row: Row): string {
+function usageDate(row: Row, tz?: string | null): string {
   const date = new Date(usageTimestamp(row));
   if (!Number.isFinite(date.getTime())) return String(row.created_at ?? "").slice(0, 10);
+  const formatter = tz ? tzFormatter(tz, "date") : null;
+  if (formatter) return formatter.format(date);
   return date.toISOString().slice(0, 10);
 }
 
-function usageHour(row: Row): number {
+function usageHour(row: Row, tz?: string | null): number {
   const date = new Date(usageTimestamp(row));
   if (!Number.isFinite(date.getTime())) return 0;
+  const formatter = tz ? tzFormatter(tz, "hour") : null;
+  if (formatter) {
+    const hour = Number(formatter.format(date));
+    // "24" appears for midnight under some ICU versions (h23 vs h24 quirks).
+    if (Number.isFinite(hour)) return hour === 24 ? 0 : hour;
+  }
   return date.getUTCHours();
+}
+
+// Day/hour bucketing follows the viewer's timezone (`tz` query param) so the
+// "daily" chart cuts at the user's midnight, not UTC's. Invalid tz values are
+// remembered as null so a bad client can't pay the try/catch cost per row.
+const tzFormatters = new Map<string, Intl.DateTimeFormat | null>();
+
+function tzFormatter(tz: string, kind: "date" | "hour"): Intl.DateTimeFormat | null {
+  const key = `${kind} ${tz}`;
+  if (tzFormatters.has(key)) return tzFormatters.get(key)!;
+  let formatter: Intl.DateTimeFormat | null = null;
+  try {
+    formatter = kind === "date"
+      // en-CA renders as YYYY-MM-DD, matching the UTC slice() format.
+      ? new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })
+      : new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" });
+  } catch {
+    formatter = null;
+  }
+  tzFormatters.set(key, formatter);
+  return formatter;
 }
 
 function usageSince(days: number | undefined): string | null {
