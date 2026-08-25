@@ -2553,8 +2553,10 @@ export class IssuesRepo {
       // still-queued task: it has not been claimed, so its session projection is
       // built later and already carries this comment. A dispatched or running
       // task has its context frozen, so a follow-up there must get its own turn.
-      // Human mentions are never coalesced — each human comment dispatches
-      // individually, by request (see triggerAssigneeAutoResponse).
+      // Human mentions are never coalesced, so that a mentioning comment and a
+      // plain one behave alike: an un-mentioned human comment always dispatches
+      // individually (no batching, by request — see triggerAssigneeAutoResponse),
+      // and deduping only the mentioning variant would make the two diverge.
       const queuedTask = comment.authorType === "agent"
         ? this.findQueuedTaskForIssueAndAgent(issue.id, agent.id, comment.issueSessionId)
         : null;
