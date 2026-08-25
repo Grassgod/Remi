@@ -13,7 +13,11 @@
     "run_time_label": "运行时长 · {{days}}天",
     "run_time_hint": "共 {{tasks}} 个任务",
     "tasks_label": "任务数 · {{days}}天",
-    "tasks_hint": "失败 {{failed}} 个"
+    "tasks_hint": "失败 {{failed}} 个",
+    "unavailable_hint": "加载失败 · 数值不可用，并非 0",
+    "not_collected": "区间内有 {{tasks}} 个任务，但未采集到 token 用量",
+    "no_tasks": "区间内没有任务",
+    "cost_unpriced": "所用模型缺少定价，费用不可用"
   },
   "dim": {
     "label": "维度",
@@ -29,7 +33,11 @@
     "metric_tokens": "Token",
     "metric_time": "运行时长",
     "metric_tasks": "任务数",
-    "no_data": "所选时间范围内暂无消耗。"
+    "no_data": "所选时间范围内暂无消耗。",
+    "no_tasks": "所选时间范围内没有任务。",
+    "load_failed": "该数据加载失败——数值不可用，并非 0。",
+    "not_collected": "区间内有任务运行，但未采集到 token 用量。",
+    "cost_unpriced": "已记录 token，但所用模型缺少定价，无法折算费用。"
   },
   "weekly": {
     "title_cost": "每周费用",
@@ -46,13 +54,22 @@
     "header_cost": "费用",
     "header_time": "运行时长",
     "header_tasks": "任务数",
-    "no_data": "所选时间范围内暂无智能体活动。"
+    "no_data": "所选时间范围内暂无智能体活动。",
+    "load_failed": "排行榜数据加载失败——数值不可用，并非 0。"
   },
   "empty": {
     "title": "暂无消耗数据",
-    "body": "当智能体在这里开始执行任务后，它们的 token 消耗和运行时长将出现在此处。"
+    "body": "当智能体在这里开始执行任务后，它们的 token 消耗和运行时长将出现在此处。",
+    "zero_hint": "所选时间范围内确实没有任务运行，这里的 0 是真实测量值。"
   },
   "duration": {
-    "less_than_minute": "<1分钟"
+    "less_than_minute": "<1分钟",
+    "zero": "0 分钟"
+  },
+  "error": {
+    "title": "用量数据不可用",
+    "body": "用量数据加载失败，这不代表用量为 0。请重试。",
+    "partial": "部分用量数据加载失败，相关数值以「—」显示，并非 0。",
+    "retry": "重试"
   }
 }

@@ -312,63 +312,139 @@ describe("SquadListSchema member preview drift", () => {
   });
 });
 
-// The workspace dashboard and runtime-detail pages were re-pointed at the
-// unified `task_usage_hourly` rollup. Every numeric field drives chart /
-// KPI math, and string keys (date / agent_id / model) bucket the series.
-// The contract these schemas must hold: a row missing a field degrades
-// that field to a sane default rather than dropping the WHOLE array to
-// the `[]` fallback — one drifted row must not blank the entire chart.
+// The workspace dashboard schemas are STRICT (MUL-93): a row missing a
+// field means the wire contract drifted, and the old `.default(0)` behavior
+// silently rendered that drift as "$0.00 / 0 tokens / 0 tasks" — fabricated
+// measurements. The dashboard endpoints parse with `parseStrictResponse`,
+// so a drifted body must FAIL parsing (→ ApiContractError → the page's
+// explicit unavailable state), never coerce to zeros. Runtime-detail
+// schemas keep the lenient coerce-to-default policy for now — their wire
+// layer has a compat mapper and their consumers still expect it.
 describe("dashboard + runtime usage schema drift", () => {
-  it("coerces a missing numeric field to 0 instead of dropping the array", () => {
+  it("rejects a row missing a numeric field instead of fabricating a 0", () => {
+    expect(
+      DashboardUsageDailyListSchema.safeParse([
+        { date: "2026-05-19", model: "claude-opus-4-7", input_tokens: 100 },
+      ]).success,
+    ).toBe(false);
+  });
+
+  it("rejects a camelCase row (the drifted-wire shape that rendered all zeros)", () => {
+    // Regression shape from MUL-91/MUL-92: the server serialized store rows
+    // (camelCase) directly; lenient defaults turned every row into zeros.
+    expect(
+      DashboardUsageDailyListSchema.safeParse([
+        {
+          date: "2026-05-19",
+          model: "claude-opus-4-7",
+          inputTokens: 100,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          taskCount: 1,
+        },
+      ]).success,
+    ).toBe(false);
+  });
+
+  it("rejects a missing agent_id on the agent panels", () => {
+    expect(
+      DashboardAgentRunTimeListSchema.safeParse([
+        { total_seconds: 42, task_count: 3, failed_count: 0 },
+      ]).success,
+    ).toBe(false);
+    expect(
+      DashboardUsageByAgentListSchema.safeParse([
+        { model: "claude-opus-4-7", input_tokens: 7 },
+      ]).success,
+    ).toBe(false);
+  });
+
+  it("accepts a complete snake_case row and keeps its values", () => {
     const parsed = DashboardUsageDailyListSchema.parse([
-      { date: "2026-05-19", model: "claude-opus-4-7", input_tokens: 100 },
+      {
+        date: "2026-05-19",
+        model: "claude-opus-4-7",
+        input_tokens: 100,
+        output_tokens: 5,
+        cache_read_tokens: 1,
+        cache_write_tokens: 2,
+        task_count: 3,
+      },
     ]);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.output_tokens).toBe(0);
-    expect(parsed[0]?.cache_read_tokens).toBe(0);
-    expect(parsed[0]?.cache_write_tokens).toBe(0);
+    expect(parsed[0]?.input_tokens).toBe(100);
+    expect(parsed[0]?.task_count).toBe(3);
   });
 
-  it("coerces a missing date key to \"\" so the rest of the series survives", () => {
-    const parsed = DashboardUsageDailyListSchema.parse([
-      { model: "claude-opus-4-7", input_tokens: 5 },
-    ]);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.date).toBe("");
+  it("accepts an empty array — the only wire shape that means a real zero", () => {
+    expect(DashboardUsageDailyListSchema.parse([])).toEqual([]);
+    expect(DashboardAgentRunTimeListSchema.parse([])).toEqual([]);
   });
 
-  it("coerces a missing agent_id key to \"\" for the agent-runtime panel", () => {
-    const parsed = DashboardAgentRunTimeListSchema.parse([
-      { total_seconds: 42, task_count: 3, failed_count: 0 },
-    ]);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.agent_id).toBe("");
+  it("rejects runtime usage / by-agent rows missing fields (strict, MUL-93)", () => {
+    // The token-bearing runtime rollups follow the same strict policy as
+    // the dashboard: a missing token field must fail the row, not become 0.
+    expect(RuntimeUsageListSchema.safeParse([{ date: "2026-05-19" }]).success).toBe(false);
+    expect(RuntimeUsageByAgentListSchema.safeParse([{ model: "x" }]).success).toBe(false);
   });
 
-  it("coerces a missing agent_id key to \"\" for the usage-by-agent panel", () => {
-    const parsed = DashboardUsageByAgentListSchema.parse([
-      { model: "claude-opus-4-7", input_tokens: 7 },
+  it("accepts a complete runtime usage row and keeps its values", () => {
+    const parsed = RuntimeUsageListSchema.parse([
+      {
+        runtime_id: "r-1",
+        date: "2026-05-19",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        input_tokens: 12,
+        output_tokens: 3,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+      },
     ]);
-    expect(parsed[0]?.agent_id).toBe("");
+    expect(parsed[0]?.input_tokens).toBe(12);
   });
 
-  it("coerces missing fields on every runtime usage schema", () => {
-    expect(RuntimeUsageListSchema.parse([{ date: "2026-05-19" }])[0]?.input_tokens).toBe(0);
+  it("coerces missing fields on the hour-of-day schemas (still lenient)", () => {
+    // Density visualizations prefer a degraded bucket over a dropped chart,
+    // and no dollar/token KPI derives from these rows.
     expect(RuntimeHourlyActivityListSchema.parse([{ hour: 9 }])[0]?.count).toBe(0);
-    expect(RuntimeUsageByAgentListSchema.parse([{ model: "x" }])[0]?.agent_id).toBe("");
     expect(RuntimeUsageByHourListSchema.parse([{ hour: 9 }])[0]?.model).toBe("");
   });
 
-  it("rejects a non-array body so parseWithFallback can return its fallback", () => {
+  it("rejects a non-array body", () => {
     expect(DashboardUsageDailyListSchema.safeParse(null).success).toBe(false);
     expect(RuntimeUsageListSchema.safeParse({ rows: [] }).success).toBe(false);
   });
 
   it("keeps unknown server-side fields via .loose()", () => {
     const parsed = RuntimeUsageListSchema.parse([
-      { date: "2026-05-19", region: "us-east" },
+      {
+        runtime_id: "r-1",
+        date: "2026-05-19",
+        provider: "anthropic",
+        model: "m",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        region: "us-east",
+      },
     ]);
     expect((parsed[0] as Record<string, unknown>).region).toBe("us-east");
+
+    const dashboardParsed = DashboardUsageDailyListSchema.parse([
+      {
+        date: "2026-05-19",
+        model: "m",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        task_count: 0,
+        region: "us-east",
+      },
+    ]);
+    expect((dashboardParsed[0] as Record<string, unknown>).region).toBe("us-east");
   });
 });
 

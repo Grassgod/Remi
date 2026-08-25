@@ -450,6 +450,11 @@
     "table_output": "输出",
     "table_cache_r": "缓存读",
     "table_cache_w": "缓存写",
-    "no_data": "还没有使用数据"
+    "no_data": "还没有使用数据",
+    "kpi_cost_unpriced": "所用模型缺少定价，费用不可用",
+    "error_title": "用量数据不可用",
+    "error_body": "用量数据加载失败，这不代表用量为 0。",
+    "retry": "重试",
+    "kpi_cache_unpriced": "所用模型缺少定价，无法计算节省金额"
   }
 }

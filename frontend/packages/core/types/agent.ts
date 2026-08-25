@@ -554,6 +554,23 @@ export interface RuntimeUsageByHour {
   task_count: number;
 }
 
+// ---------------------------------------------------------------------------
+// Workspace dashboard rollups — availability contract (MUL-93)
+//
+// All four Dashboard* rollups share one semantic: a metric value of 0 is a
+// MEASUREMENT, never a fallback. The wire can express two cases and the UI
+// must keep them distinguishable:
+//   - success + empty array / zero fields → genuinely no usage in the window
+//     ("real zero": render 0 and say so);
+//   - HTTP failure or a 2xx body that fails the strict zod schemas
+//     (frontend/packages/core/api/schemas/dashboard.ts) → metric UNAVAILABLE:
+//     the endpoint throws (ApiError / ApiContractError), the query lands in
+//     `isError`, and the UI renders a placeholder + retry, never 0 / $0.00.
+// Cost has no wire field at all — it is derived client-side from the model
+// pricing table, so "cost unavailable" additionally covers the case where
+// tokens exist but none of their models resolve to a price.
+// ---------------------------------------------------------------------------
+
 // One (date, model) bucket of token usage for the workspace dashboard.
 // Same shape as RuntimeUsage but workspace-scoped (no runtime_id, no
 // provider field on the wire) and optionally narrowed to a single project

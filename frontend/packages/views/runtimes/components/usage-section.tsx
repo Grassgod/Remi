@@ -23,6 +23,8 @@ import {
   aggregateCostByAgent,
   aggregateCostByModel,
   collectUnmappedModels,
+  hasUnpricedCacheReads,
+  hasUnpricedTokens,
   pctChange,
   sliceWindow,
   type CostByKey,
@@ -134,9 +136,12 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
   // hourly rollup on the same `tz` we pass here, so every frontend window
   // calculation shares one axis with the server.
   const tz = useViewingTimezone();
-  const { data: usage = [], isLoading: loading } = useQuery(
-    runtimeUsageOptions(runtimeId, 180, tz),
-  );
+  const {
+    data: usage = [],
+    isLoading: loading,
+    isError,
+    refetch,
+  } = useQuery(runtimeUsageOptions(runtimeId, 180, tz));
   const [dim, setDim] = useState<Exclude<WhenTab, "heatmap">>("daily");
   const [days, setDays] = useState<TimeRange>(30);
   // Subscribe so the KPI cards (which call estimateCost at render-time, not
@@ -146,6 +151,9 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
   useCustomPricingStore((s) => s.pricings);
 
   if (loading) return <UsageSkeleton />;
+  // Failed fetch is NOT "no usage" — zeros here would be fabricated (MUL-93).
+  // Surface the failure and give the user a retry entry point.
+  if (isError) return <UsageError onRetry={() => refetch()} />;
   if (usage.length === 0) return <UsageEmpty />;
 
   // Slice the cached 180-day window into the user's selected sub-window AND
@@ -175,6 +183,18 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
     cacheableTokens > 0 ? Math.round((totals.cacheRead / cacheableTokens) * 100) : 0;
 
   const costDelta = pctChange(totals.cost, prevTotals.cost);
+
+  // Cost is a client-side derivation from the pricing table. When a $0
+  // total includes tokens from unpriced models, the figure is underivable —
+  // declare it unavailable instead of showing a fabricated $0.00 (MUL-93).
+  // Both checks key on unpriced models' actual token CONTRIBUTION to the
+  // metric's dimension: a zero-token unpriced row, or an unpriced model
+  // with no cache reads, must not poison a real $0.00 from priced
+  // free-tier models.
+  const costUnavailable =
+    tokensTotal > 0 && totals.cost === 0 && hasUnpricedTokens(filtered);
+  const cacheSavingsUnavailable =
+    totals.cacheSavings === 0 && hasUnpricedCacheReads(filtered);
 
   return (
     <div className="space-y-5">
@@ -224,9 +244,11 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
       <div className="grid grid-cols-3 divide-x rounded-lg border bg-card">
         <KpiCard
           label={t(($) => $.usage.kpi_cost_label, { days })}
-          value={fmtMoney(totals.cost)}
+          value={costUnavailable ? "—" : fmtMoney(totals.cost)}
           hint={
-            costDelta == null ? undefined : (
+            costUnavailable ? (
+              <span>{t(($) => $.usage.kpi_cost_unpriced)}</span>
+            ) : costDelta == null ? undefined : (
               <span
                 className={
                   costDelta > 0
@@ -246,15 +268,19 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
         />
         <KpiCard
           label={t(($) => $.usage.kpi_cache_label, { days })}
-          value={fmtMoney(totals.cacheSavings)}
+          value={cacheSavingsUnavailable ? "—" : fmtMoney(totals.cacheSavings)}
           accent={totals.cacheSavings > 0 ? "success" : "default"}
           hint={
-            <span>
-              {t(($) => $.usage.kpi_cache_hint, {
-                pct: cacheHitRate,
-                reads: formatTokens(totals.cacheRead),
-              })}
-            </span>
+            cacheSavingsUnavailable ? (
+              <span>{t(($) => $.usage.kpi_cache_unpriced)}</span>
+            ) : (
+              <span>
+                {t(($) => $.usage.kpi_cache_hint, {
+                  pct: cacheHitRate,
+                  reads: formatTokens(totals.cacheRead),
+                })}
+              </span>
+            )
           }
         />
         <KpiCard
@@ -520,9 +546,19 @@ function EmptyChartState({ usage }: { usage: RuntimeUsage[] }) {
 // whenever the selected window contains any model that isn't priced. Covers
 // the partial-unmapping case where the chart still renders (so EmptyChartState
 // never fires) but some tokens are silently contributing $0 to totals.
+//
+// Exported for the workspace dashboard, which prices the same per-(date,
+// model) shape client-side and has the same silent-$0 failure mode. The prop
+// is the minimal priceable row, so both RuntimeUsage and DashboardUsageDaily
+// rows fit.
 // ---------------------------------------------------------------------------
 
-function UnmappedPricingNotice({ usage }: { usage: RuntimeUsage[] }) {
+type PriceableUsageRow = Pick<
+  RuntimeUsage,
+  "model" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens"
+>;
+
+export function UnmappedPricingNotice({ usage }: { usage: readonly PriceableUsageRow[] }) {
   const { t } = useT("runtimes");
   const [dialogOpen, setDialogOpen] = useState(false);
   const unmapped = collectUnmappedModels(usage);
@@ -615,7 +651,11 @@ function CostByBlock({
 
   // by-agent is server-side aggregation (fetched lazily on tab activation).
   // by-model derives from the daily cache the parent already has — free.
-  const { data: byAgentRows = [] } = useQuery({
+  const {
+    data: byAgentRows = [],
+    isError: byAgentFailed,
+    refetch: refetchByAgent,
+  } = useQuery({
     ...runtimeUsageByAgentOptions(runtimeId, days, tz),
     enabled: tab === "agent",
   });
@@ -660,7 +700,29 @@ function CostByBlock({
         <span className="text-xs text-muted-foreground">{caption}</span>
       </div>
       <div className="pt-4">
-        {tab === "agent" && (
+        {/* A failed by-agent fetch must not read as "no agent spent
+            anything" (MUL-93) — CostByList's empty copy would be a
+            fabricated conclusion. */}
+        {tab === "agent" && byAgentFailed && (
+          <div
+            role="alert"
+            className="flex flex-col items-center gap-2 py-4 text-center"
+          >
+            <AlertCircle className="h-4 w-4 text-warning" />
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.usage.error_body)}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => refetchByAgent()}
+            >
+              {t(($) => $.usage.retry)}
+            </Button>
+          </div>
+        )}
+        {tab === "agent" && !byAgentFailed && (
           <CostByList
             rows={byAgent}
             renderKey={(key) => {
@@ -731,8 +793,12 @@ function CostByList({
             <div className="text-right text-xs tabular-nums text-muted-foreground">
               {formatTokens(row.tokens)}
             </div>
+            {/* $0.00 for a row whose tokens are all unpriced would be a
+                fabricated figure — render "—" instead (MUL-93). */}
             <div className="text-right text-sm font-medium tabular-nums">
-              ${row.cost.toFixed(2)}
+              {row.tokens > 0 && row.cost === 0 && row.unpricedTokens > 0
+                ? "—"
+                : `$${row.cost.toFixed(2)}`}
             </div>
           </div>
         );
@@ -840,6 +906,33 @@ function UsageEmpty() {
       <p className="mt-2 text-xs text-muted-foreground">
         {t(($) => $.usage.no_data)}
       </p>
+    </div>
+  );
+}
+
+// Distinct from UsageEmpty on purpose: "we couldn't load the data" must
+// never be presented as "there is no data" (MUL-93).
+function UsageError({ onRetry }: { onRetry: () => void }) {
+  const { t } = useT("runtimes");
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-center rounded-lg border border-dashed py-8"
+    >
+      <AlertCircle className="h-5 w-5 text-warning" />
+      <p className="mt-2 text-xs font-medium">{t(($) => $.usage.error_title)}</p>
+      <p className="mt-1 max-w-md text-center text-xs text-muted-foreground">
+        {t(($) => $.usage.error_body)}
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="mt-3"
+        onClick={onRetry}
+      >
+        {t(($) => $.usage.retry)}
+      </Button>
     </div>
   );
 }

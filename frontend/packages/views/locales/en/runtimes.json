@@ -473,6 +473,11 @@
     "table_output": "Output",
     "table_cache_r": "Cache R",
     "table_cache_w": "Cache W",
-    "no_data": "No usage data yet"
+    "no_data": "No usage data yet",
+    "kpi_cost_unpriced": "No pricing for the models used — cost unavailable",
+    "error_title": "Usage data unavailable",
+    "error_body": "Usage data failed to load. This does not mean usage is zero.",
+    "retry": "Retry",
+    "kpi_cache_unpriced": "No pricing for the models used — savings can't be calculated"
   }
 }
