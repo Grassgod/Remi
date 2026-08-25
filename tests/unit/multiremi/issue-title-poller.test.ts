@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { issueTitleContentHash, shouldAutoRetitle } from "@multiremi/issue-title/eligibility.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
+import { issueWithEligibilityContext } from "@multiremi/issue-title/service.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -48,6 +50,7 @@ describe("Issue title scheduler", () => {
     const renamed = [first, second].find((issue) => store.getIssue(issue.id)?.title === "实现 Issue 自动命名");
     expect(renamed).toBeDefined();
     expect(store.getIssueAutoTitleMetadata(renamed!.id).count).toBe(1);
+    expect(store.getIssueAutoTitleMetadata(renamed!.id).content_hash).toBe(issueTitleContentHash(DESCRIPTION));
   });
 
   it("silently skips an eligible Issue when its gateway is unconfigured", async () => {
@@ -57,6 +60,25 @@ describe("Issue title scheduler", () => {
 
     await expect(scheduler.runOnce()).resolves.toEqual({ attempted: 1, applied: 0, skipped: 1, failed: 0 });
     expect(store.getIssue(issue.id)?.title).toBe("Remi");
+    expect(store.getIssueAutoTitleMetadata(issue.id)).toEqual({});
+  });
+
+  it("does not consume an automatic attempt when the model request fails", async () => {
+    const store = createLocalStore();
+    store.upsertRelayConfig("local", "codex", {
+      fragment: CODEX_FRAGMENT,
+      tokenOp: "set",
+      authToken: "secret-not-for-output",
+    });
+    const issue = store.createIssue({ title: "Remi", description: DESCRIPTION });
+    const scheduler = new IssueTitleScheduler({
+      store,
+      now: () => FUTURE,
+      httpRequest: async () => ({ status: 500, text: "gateway failure" }),
+    });
+
+    await expect(scheduler.runOnce()).resolves.toEqual({ attempted: 1, applied: 0, skipped: 0, failed: 1 });
+    expect(store.getIssueAutoTitleMetadata(issue.id)).toEqual({});
   });
 
   it("coalesces overlapping ticks into one run", async () => {
@@ -74,5 +96,42 @@ describe("Issue title scheduler", () => {
     });
     await Promise.all([scheduler.runOnce(), scheduler.runOnce()]);
     expect(calls).toBe(1);
+  });
+
+  it("stops selecting a low-quality title after three valid kept decisions", async () => {
+    const store = createLocalStore();
+    store.upsertRelayConfig("local", "codex", {
+      fragment: CODEX_FRAGMENT,
+      tokenOp: "set",
+      authToken: "secret-not-for-output",
+    });
+    const issue = store.createIssue({ title: "Remi", description: DESCRIPTION });
+    let calls = 0;
+    const scheduler = new IssueTitleScheduler({
+      store,
+      now: () => FUTURE,
+      httpRequest: async () => {
+        calls += 1;
+        const content = calls === 2
+          ? '{"title":"无需改名","keep":true}'
+          : '{"title":"Remi","keep":false}';
+        return {
+          status: 200,
+          text: JSON.stringify({ choices: [{ message: { content } }] }),
+        };
+      },
+    });
+
+    const runs = [];
+    for (let index = 0; index < 5; index += 1) runs.push(await scheduler.runOnce());
+
+    expect(runs.map((result) => result.attempted)).toEqual([1, 1, 1, 0, 0]);
+    expect(calls).toBe(3);
+    expect(store.getIssueAutoTitleMetadata(issue.id)).toMatchObject({
+      count: 3,
+      content_hash: issueTitleContentHash(DESCRIPTION),
+      source: "auto",
+    });
+    expect(shouldAutoRetitle(issueWithEligibilityContext(store, store.getIssue(issue.id)!), FUTURE)).toBe(false);
   });
 });

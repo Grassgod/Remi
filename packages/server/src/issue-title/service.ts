@@ -36,8 +36,11 @@ export async function retitleIssue(
   const issue = store.getIssue(issueId);
   if (!issue) throw new Error(`Issue not found: ${issueId}`);
   const previousTitle = issue.title;
+  const generatedDescription = issue.description ?? "";
+  const generatedContentHash = issueTitleContentHash(generatedDescription);
+  const now = options.now ?? new Date();
   const enriched = issueWithEligibilityContext(store, issue);
-  if (options.source === "auto" && !shouldAutoRetitle(enriched, options.now ?? new Date())) {
+  if (options.source === "auto" && !shouldAutoRetitle(enriched, now)) {
     return { title: previousTitle, previousTitle, applied: false, reason: "not_eligible" };
   }
 
@@ -59,16 +62,23 @@ export async function retitleIssue(
     };
   }
 
-  if (generated.keep || generated.title === previousTitle) {
-    return { title: previousTitle, previousTitle, applied: false, reason: "kept" };
-  }
+  const kept = generated.keep || generated.title === previousTitle;
   if (!options.apply) {
-    return { title: generated.title, previousTitle, applied: false, reason: "generated" };
+    return {
+      title: kept ? previousTitle : generated.title,
+      previousTitle,
+      applied: false,
+      reason: kept ? "kept" : "generated",
+    };
   }
 
   if (options.source === "auto") {
     const latest = store.getIssue(issue.id);
-    if (!latest || !shouldAutoRetitle(issueWithEligibilityContext(store, latest), options.now ?? new Date())) {
+    if (
+      !latest ||
+      issueTitleContentHash(latest.description ?? "") !== generatedContentHash ||
+      !shouldAutoRetitle(issueWithEligibilityContext(store, latest), now)
+    ) {
       return {
         title: latest?.title ?? previousTitle,
         previousTitle,
@@ -78,16 +88,22 @@ export async function retitleIssue(
     }
   }
 
-  store.updateIssue(issue.id, { title: generated.title });
   const previousMetadata = store.getIssueAutoTitleMetadata(issue.id);
-  store.setIssueAutoTitleMetadata(issue.id, {
+  const nextMetadata = {
     ...previousMetadata,
-    generated_at: (options.now ?? new Date()).toISOString(),
+    generated_at: now.toISOString(),
     model: generated.model,
     source: options.source,
-    content_hash: issueTitleContentHash(issue.description ?? ""),
+    content_hash: generatedContentHash,
     count: (previousMetadata.count ?? 0) + (options.source === "auto" ? 1 : 0),
-  });
+  };
+  if (kept) {
+    if (options.source === "auto") store.setIssueAutoTitleMetadata(issue.id, nextMetadata);
+    return { title: previousTitle, previousTitle, applied: false, reason: "kept" };
+  }
+
+  store.updateIssue(issue.id, { title: generated.title });
+  store.setIssueAutoTitleMetadata(issue.id, nextMetadata);
   store.appendIssueActivity(issue.id, {
     actorType: "system",
     actorId: null,

@@ -116,3 +116,29 @@ describe("POST /api/multiremi/issues/:id/retitle", () => {
     });
   });
 });
+
+describe("Issue auto-title metadata isolation", () => {
+  it("returns 400 when public metadata routes try to mutate auto_title", async () => {
+    const store = createLocalStore();
+    const issue = store.createIssue({ title: "Remi" });
+    store.setIssueAutoTitleMetadata(issue.id, { locked: true, count: 2 });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const paths = [
+      `/api/multiremi/issues/${issue.id}/metadata/auto_title`,
+      `/api/issues/${issue.id}/metadata/auto_title`,
+    ];
+
+    for (const path of paths) {
+      for (const method of ["PUT", "DELETE"]) {
+        const response = await app.request(path, {
+          method,
+          headers: { Authorization: "Bearer root-secret", "content-type": "application/json" },
+          body: method === "PUT" ? JSON.stringify({ value: "overwrite" }) : undefined,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "auto_title is reserved for system metadata" });
+      }
+    }
+    expect(store.getIssueAutoTitleMetadata(issue.id)).toEqual({ locked: true, count: 2 });
+  });
+});

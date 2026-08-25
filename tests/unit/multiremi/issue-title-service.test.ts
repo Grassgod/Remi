@@ -110,4 +110,44 @@ describe("Issue title service", () => {
     });
     expect(store.getIssue(issue.id)?.title).toBe("人工编辑后的明确标题");
   });
+
+  it("discards an automatic result when the description changes during generation", async () => {
+    const store = createLocalStore();
+    store.upsertRelayConfig("local", "codex", {
+      fragment: CODEX_FRAGMENT,
+      tokenOp: "set",
+      authToken: "secret",
+    });
+    const issue = store.createIssue({
+      title: "Remi",
+      description: "登录认证流程持续失败，需要修复会话刷新和凭据校验逻辑。",
+    });
+    const result = await retitleIssue(store, issue.id, {
+      source: "auto",
+      apply: true,
+      now: new Date(Date.now() + 6 * 60 * 1_000),
+      httpRequest: async () => {
+        store.updateIssue(issue.id, {
+          description: "支付订单发生重复扣款，需要修复幂等校验和退款处理逻辑。",
+        });
+        return {
+          status: 200,
+          text: JSON.stringify({ choices: [{ message: { content: '{"title":"修复登录认证流程失败问题","keep":false}' } }] }),
+        };
+      },
+    });
+
+    expect(result).toEqual({
+      title: "Remi",
+      previousTitle: "Remi",
+      applied: false,
+      reason: "not_eligible",
+    });
+    expect(store.getIssue(issue.id)).toMatchObject({
+      title: "Remi",
+      description: "支付订单发生重复扣款，需要修复幂等校验和退款处理逻辑。",
+    });
+    expect(store.getIssueAutoTitleMetadata(issue.id)).toEqual({});
+    expect(store.listIssueActivity(issue.id).some((activity) => activity.type === "title_renamed")).toBe(false);
+  });
 });

@@ -1468,7 +1468,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
-    return c.json({ metadata: store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value) });
+    try {
+      return c.json({ metadata: store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value) });
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.put("/api/issues/:id/metadata/:key", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1476,20 +1482,38 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
-    return c.json(store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value));
+    try {
+      return c.json(store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value));
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.delete("/api/multiremi/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    return c.json({ metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key")) });
+    try {
+      return c.json({ metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key")) });
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.delete("/api/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key")));
+    try {
+      return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key")));
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
 }
