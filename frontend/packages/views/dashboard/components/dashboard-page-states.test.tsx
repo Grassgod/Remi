@@ -332,4 +332,34 @@ describe("DashboardPage — cost without pricing", () => {
       screen.getAllByText(/No pricing for the models used/).length,
     ).toBeGreaterThanOrEqual(1);
   });
+
+  it("keeps a real $0.00 cost when unpriced models contributed no tokens", () => {
+    // QA round-2 repro: a free-tier priced model (every rate 0) with real
+    // tokens plus a zero-token unpriced row. Cost is genuinely $0.00 —
+    // presence of an unpriced model name alone must not flip it to "—".
+    setStates({
+      daily: {
+        data: [
+          usageRow({ model: "glm-4.7-flash", input_tokens: 10_000 }),
+          usageRow({
+            model: "totally-unknown-model-xyz",
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            task_count: 0,
+          }),
+        ],
+      },
+      "by-agent": {
+        data: [usageRow({ agent_id: "agent-1", model: "glm-4.7-flash", input_tokens: 10_000 })],
+      },
+      "agent-runtime": { data: [RUN_TIME_ROW] },
+      "runtime-daily": { data: [RUN_TIME_DAILY_ROW] },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    expect(screen.getAllByText("$0.00").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/No pricing for the models used/)).toBeNull();
+  });
 });

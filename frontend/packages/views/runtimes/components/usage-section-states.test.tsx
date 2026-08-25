@@ -209,6 +209,82 @@ describe("UsageSection — cost without pricing (MUL-93)", () => {
     ).toBeTruthy();
   });
 
+  it("keeps a real $0.00 cache savings when all cache reads are priced (free tier) despite an unpriced input-only model", () => {
+    // QA round-2 minimal repro: glm-4.7-flash is priced with every rate at
+    // 0, so its cache-read savings are genuinely $0.00. The unpriced model
+    // contributed NO cache reads, so it must not flip cache savings to
+    // "—" — only the Cost KPI (which its input tokens do pollute) may.
+    usageState.current = {
+      data: [
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "zai",
+          model: "glm-4.7-flash",
+          input_tokens: 10_000,
+          output_tokens: 500,
+          cache_read_tokens: 2_000,
+          cache_write_tokens: 0,
+        },
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: "totally-unknown-model-xyz",
+          input_tokens: 5_000,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+      ],
+    };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // Cache savings: real $0.00 (all cache reads priced at a real rate of 0).
+    expect(screen.getByText("$0.00")).toBeTruthy();
+    expect(screen.queryByText(/savings can't be calculated/)).toBeNull();
+    // Cost: unpriced input tokens contributed → genuinely underivable.
+    expect(screen.getByText("—")).toBeTruthy();
+    expect(
+      screen.getByText(/No pricing for the models used — cost unavailable/),
+    ).toBeTruthy();
+  });
+
+  it("keeps a real $0.00 cost when the only unpriced model is a zero-token row", () => {
+    // A zero-token unpriced entry (the server does not drop all-zero usage
+    // entries) must not poison the free-tier model's real $0.00.
+    usageState.current = {
+      data: [
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "zai",
+          model: "glm-4.7-flash",
+          input_tokens: 10_000,
+          output_tokens: 500,
+          cache_read_tokens: 2_000,
+          cache_write_tokens: 0,
+        },
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: "totally-unknown-model-xyz",
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+      ],
+    };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // Cost KPI and cache-savings KPI both show the real $0.00; nothing on
+    // the page claims unavailability.
+    expect(screen.getAllByText("$0.00").length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("—")).toBeNull();
+  });
+
   it("keeps a priced $0-free window rendering the real dollar figure", () => {
     usageState.current = {
       data: [

@@ -23,6 +23,8 @@ import {
   aggregateCostByAgent,
   aggregateCostByModel,
   collectUnmappedModels,
+  hasUnpricedCacheReads,
+  hasUnpricedTokens,
   pctChange,
   sliceWindow,
   type CostByKey,
@@ -182,19 +184,17 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
 
   const costDelta = pctChange(totals.cost, prevTotals.cost);
 
-  // Cost is a client-side derivation from the pricing table. When tokens
-  // exist but none of their models resolve to a price, $0.00 would be a
-  // fabricated number — declare the metric unavailable instead (MUL-93).
-  const unmappedInWindow = collectUnmappedModels(filtered);
+  // Cost is a client-side derivation from the pricing table. When a $0
+  // total includes tokens from unpriced models, the figure is underivable —
+  // declare it unavailable instead of showing a fabricated $0.00 (MUL-93).
+  // Both checks key on unpriced models' actual token CONTRIBUTION to the
+  // metric's dimension: a zero-token unpriced row, or an unpriced model
+  // with no cache reads, must not poison a real $0.00 from priced
+  // free-tier models.
   const costUnavailable =
-    tokensTotal > 0 && totals.cost === 0 && unmappedInWindow.length > 0;
-  // Cache savings is the same derivation applied to cache-read tokens: if
-  // cache reads happened but none priced, $0.00 savings is equally
-  // fabricated. No cache reads at all → $0.00 is a real measurement.
+    tokensTotal > 0 && totals.cost === 0 && hasUnpricedTokens(filtered);
   const cacheSavingsUnavailable =
-    totals.cacheRead > 0 &&
-    totals.cacheSavings === 0 &&
-    unmappedInWindow.length > 0;
+    totals.cacheSavings === 0 && hasUnpricedCacheReads(filtered);
 
   return (
     <div className="space-y-5">

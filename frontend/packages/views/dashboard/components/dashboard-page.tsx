@@ -41,8 +41,8 @@ import {
   addDaysIso,
   aggregateByDate,
   aggregateByWeek,
-  collectUnmappedModels,
   formatTokens,
+  hasUnpricedTokens,
   todayIso,
 } from "../../runtimes/utils";
 import { UnmappedPricingNotice } from "../../runtimes/components/usage-section";
@@ -330,7 +330,6 @@ export function DashboardPage() {
   // or a real measurement (including a genuine 0).
   const tokensTotal =
     totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
-  const unmappedModels = collectUnmappedModels(dailyUsageInWindow);
   const tokensFailed = dailyQuery.isError === true;
   const runTimeFailed = runTimeQuery.isError === true;
   const usageNotCollected =
@@ -338,11 +337,14 @@ export function DashboardPage() {
     !runTimeFailed &&
     tokensTotal === 0 &&
     runTimeTotals.taskCount > 0;
+  // Keyed on unpriced models' actual token contribution, not their mere
+  // presence — a zero-token unpriced row must not poison a real $0.00
+  // from priced free-tier models (MUL-93).
   const costUnpriced =
     !tokensFailed &&
     tokensTotal > 0 &&
     totals.cost === 0 &&
-    unmappedModels.length > 0;
+    hasUnpricedTokens(dailyUsageInWindow);
 
   return (
     <div className="flex h-full flex-col">
