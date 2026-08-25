@@ -2584,11 +2584,13 @@ export interface MultiremiFeishuSource {
   workspaceId: string;
   name: string;
   type: MultiremiFeishuSourceType;
-  endpoint: string;
+  endpointName: string;
   allowlist: MultiremiFeishuAllowlistEntry[];
   enabled: boolean;
   retentionDays: number;
   pollIntervalSeconds: number;
+  unprocessedRetrySeconds: number;
+  unprocessedRetryLimit: number;
   accessTokenSet: boolean;
   accessTokenHint: string | null;
   createdAt: string;
@@ -2601,24 +2603,34 @@ export interface CreateMultiremiFeishuSourceInput {
   workspace_id?: string;
   name?: string | null;
   type?: MultiremiFeishuSourceType;
-  endpoint: string;
+  endpointName?: string;
+  endpoint_name?: string;
   allowlist?: Array<string | Partial<MultiremiFeishuAllowlistEntry>>;
   enabled?: boolean;
   retentionDays?: number;
   retention_days?: number;
   pollIntervalSeconds?: number;
   poll_interval_seconds?: number;
+  unprocessedRetrySeconds?: number;
+  unprocessed_retry_seconds?: number;
+  unprocessedRetryLimit?: number;
+  unprocessed_retry_limit?: number;
 }
 
 export interface UpdateMultiremiFeishuSourceInput {
   name?: string | null;
-  endpoint?: string;
+  endpointName?: string;
+  endpoint_name?: string;
   allowlist?: Array<string | Partial<MultiremiFeishuAllowlistEntry>>;
   enabled?: boolean;
   retentionDays?: number;
   retention_days?: number;
   pollIntervalSeconds?: number;
   poll_interval_seconds?: number;
+  unprocessedRetrySeconds?: number;
+  unprocessed_retry_seconds?: number;
+  unprocessedRetryLimit?: number;
+  unprocessed_retry_limit?: number;
 }
 
 export interface MultiremiFeishuSyncCursor {
@@ -2656,6 +2668,16 @@ export interface MultiremiFeishuMessage {
   edited: boolean;
   ingestedAt: string;
   processedAt: string | null;
+  retryCount: number;
+  lastRetryAt: string | null;
+}
+
+export interface MultiremiFeishuSourceStatus {
+  sourceId: string;
+  unprocessedCount: number;
+  timedOutCount: number;
+  oldestUnprocessedAt: string | null;
+  maximumRetryCount: number;
 }
 
 export type MultiremiFeishuMessageOutcomeKind =
@@ -2684,6 +2706,15 @@ export interface ResolveMultiremiFeishuMessageInput {
   reason?: string | null;
   taskId?: string | null;
   task_id?: string | null;
+}
+
+export interface NotifyMultiremiFeishuMessageInput {
+  summary: string;
+}
+
+export interface DraftReplyMultiremiFeishuMessageInput {
+  draftText?: string;
+  draft_text?: string;
 }
 
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────

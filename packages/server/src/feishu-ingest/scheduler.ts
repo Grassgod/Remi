@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import { createLogger } from "@shared/logger.js";
 import type { MultiremiFeishuSource, MultiremiFeishuSyncCursor } from "@multiremi/contracts/types.js";
 import { PersonalAutomationFeishuAdapter, PersonalAutomationFeishuError } from "./personal-automation.js";
+import {
+  feishuSidecarEndpointsFromEnv,
+  type FeishuSidecarEndpointRegistry,
+} from "./endpoints.js";
 import type { FeishuIngestionStore, FeishuSourceAdapter } from "./types.js";
 
 const log = createLogger("multiremi-feishu-ingest");
 const STREAM = "messages";
+const UNPROCESSED_STREAM = "unprocessed";
 const DEFAULT_TICK_INTERVAL_MS = 10_000;
 const DEFAULT_LEASE_MS = 5 * 60 * 1_000;
 const DEFAULT_MAX_PAGES_PER_SOURCE = 25;
@@ -20,6 +25,7 @@ export interface FeishuIngestSchedulerOptions {
   maxPagesPerSource?: number;
   leaseOwner?: string;
   now?: () => Date;
+  sidecarEndpoints?: FeishuSidecarEndpointRegistry;
 }
 
 export interface FeishuIngestRunResult {
@@ -31,6 +37,8 @@ export interface FeishuIngestRunResult {
   updated: number;
   eventsCreated: number;
   deleted: number;
+  retried: number;
+  dismissed: number;
 }
 
 export class FeishuIngestScheduler {
@@ -41,6 +49,7 @@ export class FeishuIngestScheduler {
   private readonly maxPagesPerSource: number;
   private readonly leaseOwner: string;
   private readonly now: () => Date;
+  private readonly sidecarEndpoints: FeishuSidecarEndpointRegistry;
   private readonly inFlight = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private tickPromise: Promise<FeishuIngestRunResult> | null = null;
@@ -55,6 +64,7 @@ export class FeishuIngestScheduler {
     this.maxPagesPerSource = Math.max(1, options.maxPagesPerSource ?? DEFAULT_MAX_PAGES_PER_SOURCE);
     this.leaseOwner = options.leaseOwner?.trim() || `feishu-ingest:${process.pid}:${randomUUID()}`;
     this.now = options.now ?? (() => new Date());
+    this.sidecarEndpoints = options.sidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
   }
 
   start(): void {
@@ -89,16 +99,27 @@ export class FeishuIngestScheduler {
       updated: 0,
       eventsCreated: 0,
       deleted: this.store.deleteExpiredMessages(now),
+      retried: 0,
+      dismissed: 0,
     };
-    for (const source of this.store.listSources({ enabled: true })) {
+    for (const source of this.store.listSources()) {
+      const reconciliation = this.reconcileUnprocessed(source, now);
+      result.retried += reconciliation.retried;
+      result.dismissed += reconciliation.dismissed;
+      if (reconciliation.eventId) result.eventsCreated += 1;
+      if (!source.enabled) {
+        result.skipped += 1;
+        continue;
+      }
       const adapter = this.adapters.get(source.type);
+      const endpoint = this.sidecarEndpoints.get(source.endpointName);
       const cursor = this.store.getSyncCursor(source.id, STREAM);
-      if (!adapter || source.allowlist.length === 0 || !feishuPollIsDue(source, cursor, now)) {
+      if (!adapter || !endpoint || source.allowlist.length === 0 || !feishuPollIsDue(source, cursor, now)) {
         result.skipped += 1;
         continue;
       }
       result.attempted += 1;
-      const sourceResult = await this.pollSource(source, cursor, adapter, now);
+      const sourceResult = await this.pollSource(source, endpoint, cursor, adapter, now);
       if (sourceResult.error) result.failed += 1;
       else if (sourceResult.completed) result.completed += 1;
       else result.skipped += 1;
@@ -109,8 +130,31 @@ export class FeishuIngestScheduler {
     return result;
   }
 
+  private reconcileUnprocessed(
+    source: MultiremiFeishuSource,
+    now: Date,
+  ): { retried: number; dismissed: number; eventId: string | null } {
+    if (!this.store.hasDueUnprocessedMessages(source.id, now)) {
+      return { retried: 0, dismissed: 0, eventId: null };
+    }
+    const lease = this.store.claimSyncStream({
+      sourceId: source.id,
+      stream: UNPROCESSED_STREAM,
+      owner: this.leaseOwner,
+      now: now.toISOString(),
+      leaseMs: this.leaseMs,
+    });
+    if (!lease?.leaseToken) return { retried: 0, dismissed: 0, eventId: null };
+    try {
+      return this.store.reconcileUnprocessedMessages(source.id, now);
+    } finally {
+      this.store.releaseSyncStream(source.id, UNPROCESSED_STREAM, lease.leaseToken);
+    }
+  }
+
   private async pollSource(
     source: MultiremiFeishuSource,
+    endpoint: string,
     previous: MultiremiFeishuSyncCursor | null,
     adapter: FeishuSourceAdapter,
     startedAt: Date,
@@ -145,6 +189,7 @@ export class FeishuIngestScheduler {
       for (let page = 0; page < this.maxPagesPerSource; page += 1) {
         const result = await adapter.poll({
           source,
+          endpoint,
           cursor: pageCursor,
           start: cycle.start,
           end: cycle.end,

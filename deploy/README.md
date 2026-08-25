@@ -86,6 +86,11 @@ The updater may use this Compose file after cutover. Set
 `MULTIREMI_PLATFORM_OPENVIKING_CONTAINER` so externally managed dependencies
 still appear in the service status panel.
 
+Feishu message ingestion uses an operator-owned endpoint registry instead of
+accepting arbitrary URLs from users or agents. See
+[`docs/feishu-message-ingestion.md`](../docs/feishu-message-ingestion.md) for
+the fail-closed environment contract and a review-only Compose sidecar example.
+
 ## Drain-protected updates (MUL-74)
 
 Update and rollback operations drain the platform before touching containers

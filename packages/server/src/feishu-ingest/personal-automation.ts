@@ -105,7 +105,7 @@ export class PersonalAutomationFeishuAdapter implements FeishuSourceAdapter {
   }
 
   private async request(context: FeishuPollContext, body: Record<string, unknown>): Promise<PersonalAutomationResponse> {
-    const endpoint = agentEndpoint(context.source.endpoint);
+    const endpoint = agentEndpoint(context.endpoint);
     let lastError: unknown = null;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
       try {

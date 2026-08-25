@@ -7,6 +7,7 @@ import type { ProjectKnowledgeServiceContract } from "@multiremi/project-knowled
 import type { RepositoryWikiServiceContract } from "@multiremi/repository-wiki/service.js";
 import type { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { ScmConnectionVerifier } from "@multiremi/scm/verification.js";
+import type { FeishuSidecarEndpointRegistry } from "@multiremi/feishu-ingest/endpoints.js";
 
 /**
  * The values `createMultiremiApp` closes over. Domain routers receive them
@@ -27,4 +28,5 @@ export interface RouterDeps {
   repositoryWiki: RepositoryWikiServiceContract;
   sessionArchives: SessionArchiveService;
   verifyScmConnection: ScmConnectionVerifier;
+  feishuSidecarEndpoints: FeishuSidecarEndpointRegistry;
 }

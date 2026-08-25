@@ -1149,16 +1149,18 @@ export function runMigrations(db: SqlDatabase): void {
       workspace_id TEXT NOT NULL DEFAULT 'local',
       name TEXT NOT NULL DEFAULT '',
       type TEXT NOT NULL DEFAULT 'personal_automation',
-      endpoint TEXT NOT NULL,
+      endpoint_name TEXT NOT NULL,
       allowlist TEXT NOT NULL DEFAULT '[]',
       enabled INTEGER NOT NULL DEFAULT 1,
       retention_days INTEGER NOT NULL DEFAULT 90,
       poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+      unprocessed_retry_seconds INTEGER NOT NULL DEFAULT 900,
+      unprocessed_retry_limit INTEGER NOT NULL DEFAULT 3,
       access_token_encrypted TEXT,
       access_token_hint TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      UNIQUE(workspace_id, endpoint)
+      UNIQUE(workspace_id, endpoint_name)
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_sources_poll
@@ -1204,6 +1206,8 @@ export function runMigrations(db: SqlDatabase): void {
       edited INTEGER NOT NULL DEFAULT 0,
       ingested_at TEXT NOT NULL,
       processed_at TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      last_retry_at TEXT,
       FOREIGN KEY(source_id) REFERENCES multiremi_feishu_sources(id) ON DELETE CASCADE
     );
 
@@ -1213,6 +1217,8 @@ export function runMigrations(db: SqlDatabase): void {
       ON multiremi_feishu_messages(workspace_id, chat_id, created_at, message_id);
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_source
       ON multiremi_feishu_messages(source_id, ingested_at, message_id);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_source_unprocessed
+      ON multiremi_feishu_messages(source_id, processed_at, last_retry_at, ingested_at, message_id);
 
     CREATE TABLE IF NOT EXISTS multiremi_feishu_message_outcomes (
       id TEXT PRIMARY KEY,

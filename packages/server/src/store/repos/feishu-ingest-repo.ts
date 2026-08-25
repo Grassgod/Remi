@@ -1,6 +1,7 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { normalizeFeishuSidecarEndpointName } from "@multiremi/feishu-ingest/endpoints.js";
 import type {
   CreateMultiremiFeishuSourceInput,
   MultiremiFeishuAllowlistEntry,
@@ -9,6 +10,8 @@ import type {
   MultiremiFeishuMessageOutcomeKind,
   MultiremiFeishuSource,
   MultiremiFeishuSyncCursor,
+  MultiremiInboxItem,
+  MultiremiFeishuSourceStatus,
   ResolveMultiremiFeishuMessageInput,
   UpdateMultiremiFeishuSourceInput,
 } from "@multiremi/contracts/types.js";
@@ -60,6 +63,27 @@ export interface IngestFeishuBatchResult {
   eventId: string | null;
 }
 
+export interface CreateFeishuInboxOutcomeInput {
+  workspaceId: string;
+  recipientId: string;
+  taskId?: string | null;
+  actorType: "agent" | "member";
+  actorId: string | null;
+  text: string;
+}
+
+export interface CreateFeishuInboxOutcomeResult {
+  message: MultiremiFeishuMessage;
+  outcome: MultiremiFeishuMessageOutcome;
+  inboxItem: MultiremiInboxItem;
+}
+
+export interface ReconcileFeishuUnprocessedResult {
+  retried: number;
+  dismissed: number;
+  eventId: string | null;
+}
+
 const OUTCOME_KINDS = new Set<MultiremiFeishuMessageOutcomeKind>([
   "issue_created",
   "notified",
@@ -98,29 +122,38 @@ export class FeishuIngestRepo {
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
     const type = input.type ?? "personal_automation";
     if (type !== "personal_automation") throw new Error("unsupported Feishu source type");
-    const endpoint = normalizeEndpoint(input.endpoint);
+    const endpointName = normalizeFeishuSidecarEndpointName(input.endpointName ?? input.endpoint_name);
     const now = nowIso();
     const id = cleanOptionalString(input.id) ?? createId("fsrc");
     const name = cleanOptionalString(input.name) ?? "Personal Automation";
     const allowlist = normalizeAllowlist(input.allowlist ?? [], [], now);
     const retentionDays = normalizeRetentionDays(input.retentionDays ?? input.retention_days);
     const pollIntervalSeconds = normalizePollInterval(input.pollIntervalSeconds ?? input.poll_interval_seconds);
+    const unprocessedRetrySeconds = normalizeUnprocessedRetrySeconds(
+      input.unprocessedRetrySeconds ?? input.unprocessed_retry_seconds,
+    );
+    const unprocessedRetryLimit = normalizeUnprocessedRetryLimit(
+      input.unprocessedRetryLimit ?? input.unprocessed_retry_limit,
+    );
     this.ctx.db.run(
       `INSERT INTO multiremi_feishu_sources (
-        id, workspace_id, name, type, endpoint, allowlist, enabled,
-        retention_days, poll_interval_seconds, access_token_encrypted,
-        access_token_hint, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+        id, workspace_id, name, type, endpoint_name, allowlist, enabled,
+        retention_days, poll_interval_seconds, unprocessed_retry_seconds,
+        unprocessed_retry_limit, access_token_encrypted, access_token_hint,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
       [
         id,
         workspaceId,
         name,
         type,
-        endpoint,
+        endpointName,
         toJson(allowlist),
         input.enabled === false ? 0 : 1,
         retentionDays,
         pollIntervalSeconds,
+        unprocessedRetrySeconds,
+        unprocessedRetryLimit,
         now,
         now,
       ],
@@ -137,12 +170,15 @@ export class FeishuIngestRepo {
       : normalizeAllowlist(input.allowlist, current.allowlist, now);
     this.ctx.db.run(
       `UPDATE multiremi_feishu_sources SET
-        name = ?, endpoint = ?, allowlist = ?, enabled = ?, retention_days = ?,
-        poll_interval_seconds = ?, updated_at = ?
+        name = ?, endpoint_name = ?, allowlist = ?, enabled = ?, retention_days = ?,
+        poll_interval_seconds = ?, unprocessed_retry_seconds = ?,
+        unprocessed_retry_limit = ?, updated_at = ?
        WHERE id = ?`,
       [
         input.name === undefined ? current.name : cleanOptionalString(input.name) ?? "Personal Automation",
-        input.endpoint === undefined ? current.endpoint : normalizeEndpoint(input.endpoint),
+        input.endpointName === undefined && input.endpoint_name === undefined
+          ? current.endpointName
+          : normalizeFeishuSidecarEndpointName(input.endpointName ?? input.endpoint_name),
         toJson(allowlist),
         input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
         input.retentionDays === undefined && input.retention_days === undefined
@@ -151,6 +187,12 @@ export class FeishuIngestRepo {
         input.pollIntervalSeconds === undefined && input.poll_interval_seconds === undefined
           ? current.pollIntervalSeconds
           : normalizePollInterval(input.pollIntervalSeconds ?? input.poll_interval_seconds),
+        input.unprocessedRetrySeconds === undefined && input.unprocessed_retry_seconds === undefined
+          ? current.unprocessedRetrySeconds
+          : normalizeUnprocessedRetrySeconds(input.unprocessedRetrySeconds ?? input.unprocessed_retry_seconds),
+        input.unprocessedRetryLimit === undefined && input.unprocessed_retry_limit === undefined
+          ? current.unprocessedRetryLimit
+          : normalizeUnprocessedRetryLimit(input.unprocessedRetryLimit ?? input.unprocessed_retry_limit),
         now,
         id,
       ],
@@ -381,13 +423,109 @@ export class FeishuIngestRepo {
     return rows.map(toOutcome);
   }
 
+  getSourceStatus(sourceId: string): MultiremiFeishuSourceStatus {
+    const source = this.getSource(sourceId);
+    if (!source) throw new Error(`Feishu source not found: ${sourceId}`);
+    const backlog = this.ctx.db.query(
+      `SELECT COUNT(*) AS count, MIN(ingested_at) AS oldest, MAX(retry_count) AS maximum_retry_count
+       FROM multiremi_feishu_messages
+       WHERE source_id = ? AND processed_at IS NULL`,
+    ).get(sourceId) as Row;
+    const timedOut = this.ctx.db.query(
+      `SELECT COUNT(*) AS count
+       FROM multiremi_feishu_message_outcomes o
+       JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
+       WHERE m.source_id = ? AND o.outcome_kind = 'dismissed' AND o.reason = 'unprocessed_timeout'`,
+    ).get(sourceId) as Row;
+    return {
+      sourceId,
+      unprocessedCount: Number(backlog.count ?? 0),
+      timedOutCount: Number(timedOut.count ?? 0),
+      oldestUnprocessedAt: nullableString(backlog.oldest),
+      maximumRetryCount: Number(backlog.maximum_retry_count ?? 0),
+    };
+  }
+
+  hasDueUnprocessedMessages(sourceId: string, now: Date): boolean {
+    const source = this.getSource(sourceId);
+    if (!source) return false;
+    const cutoff = new Date(now.getTime() - source.unprocessedRetrySeconds * 1_000).toISOString();
+    const row = this.ctx.db.query(
+      `SELECT 1 AS found FROM multiremi_feishu_messages
+       WHERE source_id = ? AND processed_at IS NULL
+         AND COALESCE(last_retry_at, ingested_at) <= ?
+       LIMIT 1`,
+    ).get(sourceId, cutoff) as Row | null;
+    return Boolean(row);
+  }
+
+  reconcileUnprocessedMessages(
+    sourceId: string,
+    now: Date,
+    limit = 500,
+  ): ReconcileFeishuUnprocessedResult {
+    const source = this.getSource(sourceId);
+    if (!source) throw new Error(`Feishu source not found: ${sourceId}`);
+    const reconciledAt = now.toISOString();
+    const cutoff = new Date(now.getTime() - source.unprocessedRetrySeconds * 1_000).toISOString();
+    return this.ctx.db.transaction(() => {
+      const rows = this.ctx.db.query(
+        `SELECT message_id, retry_count FROM multiremi_feishu_messages
+         WHERE source_id = ? AND processed_at IS NULL
+           AND COALESCE(last_retry_at, ingested_at) <= ?
+         ORDER BY ingested_at ASC, message_id ASC
+         LIMIT ?`,
+      ).all(sourceId, cutoff, Math.max(1, Math.min(2_000, Math.floor(limit)))) as Row[];
+      let retried = 0;
+      let dismissed = 0;
+      for (const row of rows) {
+        const messageId = String(row.message_id);
+        const retryCount = Number(row.retry_count ?? 0);
+        if (retryCount >= source.unprocessedRetryLimit) {
+          const changed = this.ctx.db.run(
+            `UPDATE multiremi_feishu_messages SET processed_at = ?
+             WHERE message_id = ? AND processed_at IS NULL AND retry_count = ?
+               AND COALESCE(last_retry_at, ingested_at) <= ?`,
+            [reconciledAt, messageId, retryCount, cutoff],
+          ).changes;
+          if (!changed) continue;
+          this.insertOutcome({
+            workspaceId: source.workspaceId,
+            messageId,
+            outcomeKind: "dismissed",
+            ref: null,
+            reason: "unprocessed_timeout",
+            taskId: null,
+            createdAt: reconciledAt,
+          });
+          dismissed += 1;
+          continue;
+        }
+        retried += this.ctx.db.run(
+          `UPDATE multiremi_feishu_messages
+           SET retry_count = retry_count + 1, last_retry_at = ?
+           WHERE message_id = ? AND processed_at IS NULL AND retry_count = ?
+             AND COALESCE(last_retry_at, ingested_at) <= ?`,
+          [reconciledAt, messageId, retryCount, cutoff],
+        ).changes;
+      }
+      const eventId = retried > 0
+        ? this.createMessagesIngestedEvent(source, retried, reconciledAt, { retry: true })
+        : null;
+      return { retried, dismissed, eventId };
+    })();
+  }
+
   resolveMessage(messageId: string, input: ResolveMultiremiFeishuMessageInput): {
     message: MultiremiFeishuMessage;
     outcome: MultiremiFeishuMessageOutcome;
   } {
     if (!OUTCOME_KINDS.has(input.outcome)) throw new Error("invalid Feishu message outcome");
+    if (input.outcome === "notified" || input.outcome === "reply_drafted") {
+      throw new Error(`${input.outcome} outcomes must use the dedicated Feishu command`);
+    }
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
-    const ref = cleanOptionalString(input.ref);
+    let ref = cleanOptionalString(input.ref);
     const reason = cleanOptionalString(input.reason);
     const taskId = cleanOptionalString(input.taskId ?? input.task_id);
     if (["issue_created", "notified", "reply_drafted"].includes(input.outcome) && !ref) {
@@ -399,73 +537,158 @@ export class FeishuIngestRepo {
     return this.ctx.db.transaction(() => {
       const message = this.getMessage(messageId);
       if (!message || message.workspaceId !== workspaceId) throw new Error(`Feishu message not found: ${messageId}`);
-      if (taskId) {
-        const task = this.ctx.db.query("SELECT workspace_id FROM multiremi_tasks WHERE id = ?").get(taskId) as Row | null;
-        if (!task || String(task.workspace_id) !== workspaceId) {
-          throw new Error("task_id must reference a task in this workspace");
-        }
+      this.assertTaskWorkspace(taskId, workspaceId);
+      if (input.outcome === "issue_created") {
+        const issueRef = ref?.startsWith("issue:") ? ref.slice("issue:".length) : ref;
+        const issue = issueRef ? this.ctx.issues().getIssueByRef(issueRef, workspaceId) : null;
+        if (!issue) throw new Error("ref must reference an issue in this workspace");
+        ref = `issue:${issue.id}`;
       }
-      const id = createId("fout");
       const createdAt = nowIso();
-      this.ctx.db.run(
-        `INSERT INTO multiremi_feishu_message_outcomes (
-          id, workspace_id, message_id, outcome_kind, ref, reason, task_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          workspaceId,
-          messageId,
-          input.outcome,
-          ref,
-          reason,
-          taskId,
-          createdAt,
-        ],
-      );
-      this.ctx.db.run(
-        "UPDATE multiremi_feishu_messages SET processed_at = COALESCE(processed_at, ?) WHERE message_id = ?",
-        [createdAt, messageId],
-      );
-      const outcomeRow = this.ctx.db.query(
-        "SELECT * FROM multiremi_feishu_message_outcomes WHERE id = ?",
-      ).get(id) as Row | null;
-      if (!outcomeRow) throw new Error("Feishu message outcome insert failed");
-      return { message: this.getMessage(messageId)!, outcome: toOutcome(outcomeRow) };
+      const outcome = this.insertOutcome({
+        workspaceId,
+        messageId,
+        outcomeKind: input.outcome,
+        ref,
+        reason,
+        taskId,
+        createdAt,
+      });
+      this.markMessageProcessed(messageId, createdAt);
+      return { message: this.getMessage(messageId)!, outcome };
     })();
   }
 
-  deleteExpiredMessages(now: Date = new Date()): number {
-    let deleted = 0;
-    for (const source of this.listSources()) {
-      const cutoff = new Date(now.getTime() - source.retentionDays * 24 * 60 * 60 * 1_000).toISOString();
-      deleted += this.ctx.db.run(
-        "DELETE FROM multiremi_feishu_messages WHERE source_id = ? AND ingested_at < ?",
-        [source.id, cutoff],
-      ).changes;
-    }
-    return deleted;
+  createInboxOutcome(
+    messageId: string,
+    outcomeKind: "notified" | "reply_drafted",
+    input: CreateFeishuInboxOutcomeInput,
+  ): CreateFeishuInboxOutcomeResult {
+    const text = cleanRequiredText(input.text, outcomeKind === "notified" ? "summary" : "draft_text");
+    return this.ctx.db.transaction(() => {
+      const message = this.getMessage(messageId);
+      if (!message || message.workspaceId !== input.workspaceId) {
+        throw new Error(`Feishu message not found: ${messageId}`);
+      }
+      const taskId = cleanOptionalString(input.taskId);
+      this.assertTaskWorkspace(taskId, input.workspaceId);
+      const inboxItem = this.ctx.createInboxItem({
+        workspaceId: input.workspaceId,
+        memberId: input.recipientId,
+        severity: outcomeKind === "reply_drafted" ? "attention" : "info",
+        type: outcomeKind === "reply_drafted" ? "feishu_reply_draft" : "feishu_message_notification",
+        title: outcomeKind === "reply_drafted" ? "飞书回复草稿" : "飞书消息提醒",
+        body: text,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        details: {
+          message_id: message.messageId,
+          source_id: message.sourceId,
+          chat_id: message.chatId,
+          message_app_link: message.messageAppLink,
+          outcome_kind: outcomeKind,
+        },
+        emitEvent: false,
+      });
+      if (!inboxItem) throw new Error("Inbox recipient is unavailable or notifications are muted");
+      const createdAt = nowIso();
+      const outcome = this.insertOutcome({
+        workspaceId: input.workspaceId,
+        messageId,
+        outcomeKind,
+        ref: `inbox:${inboxItem.id}`,
+        reason: null,
+        taskId,
+        createdAt,
+      });
+      this.markMessageProcessed(messageId, createdAt);
+      return { message: this.getMessage(messageId)!, outcome, inboxItem };
+    })();
   }
-}
 
-function normalizeEndpoint(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : "";
-  if (!raw) throw new Error("Feishu source endpoint is required");
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error("Feishu source endpoint must be an http or https URL");
+  private assertTaskWorkspace(taskId: string | null, workspaceId: string): void {
+    if (!taskId) return;
+    const task = this.ctx.db.query("SELECT workspace_id FROM multiremi_tasks WHERE id = ?").get(taskId) as Row | null;
+    if (!task || String(task.workspace_id) !== workspaceId) {
+      throw new Error("task_id must reference a task in this workspace");
+    }
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Feishu source endpoint must be an http or https URL");
+
+  private insertOutcome(input: {
+    workspaceId: string;
+    messageId: string;
+    outcomeKind: MultiremiFeishuMessageOutcomeKind;
+    ref: string | null;
+    reason: string | null;
+    taskId: string | null;
+    createdAt: string;
+  }): MultiremiFeishuMessageOutcome {
+    const id = createId("fout");
+    this.ctx.db.run(
+      `INSERT INTO multiremi_feishu_message_outcomes (
+        id, workspace_id, message_id, outcome_kind, ref, reason, task_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, input.workspaceId, input.messageId, input.outcomeKind, input.ref, input.reason, input.taskId, input.createdAt],
+    );
+    const row = this.ctx.db.query("SELECT * FROM multiremi_feishu_message_outcomes WHERE id = ?").get(id) as Row | null;
+    if (!row) throw new Error("Feishu message outcome insert failed");
+    return toOutcome(row);
   }
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname.toLowerCase())) {
-    throw new Error("personal_automation endpoints must use a loopback host");
+
+  private markMessageProcessed(messageId: string, processedAt: string): void {
+    this.ctx.db.run(
+      "UPDATE multiremi_feishu_messages SET processed_at = COALESCE(processed_at, ?) WHERE message_id = ?",
+      [processedAt, messageId],
+    );
   }
-  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error("Feishu source endpoint must not contain credentials, query, or fragment");
+
+  private createMessagesIngestedEvent(
+    source: MultiremiFeishuSource,
+    messageCount: number,
+    createdAt: string,
+    extraPayload: Record<string, unknown> = {},
+  ): string {
+    const eventId = createId("sev");
+    this.ctx.db.run(
+      `INSERT INTO multiremi_system_events (
+        id, workspace_id, resource, event, resource_id, project_id, payload,
+        status, attempt_count, available_at, lease_until, last_error, created_at, processed_at
+      ) VALUES (?, ?, 'feishu_source', 'messages_ingested', ?, NULL, ?, 'pending', 0, ?, NULL, NULL, ?, NULL)`,
+      [
+        eventId,
+        source.workspaceId,
+        source.id,
+        toJson({ source_id: source.id, message_count: messageCount, ...extraPayload }),
+        createdAt,
+        createdAt,
+      ],
+    );
+    return eventId;
   }
-  return parsed.toString().replace(/\/$/u, "");
+
+  deleteExpiredMessages(now: Date = new Date()): number {
+    return this.ctx.db.transaction(() => {
+      let deleted = 0;
+      for (const source of this.listSources()) {
+        const cutoff = new Date(now.getTime() - source.retentionDays * 24 * 60 * 60 * 1_000).toISOString();
+        // Keep retention behavior deterministic even when a SQLite deployment
+        // has not enabled foreign-key enforcement for this connection.
+        this.ctx.db.run(
+          `DELETE FROM multiremi_feishu_message_outcomes
+           WHERE message_id IN (
+             SELECT message_id FROM multiremi_feishu_messages
+             WHERE source_id = ? AND ingested_at < ?
+           )`,
+          [source.id, cutoff],
+        );
+        deleted += this.ctx.db.run(
+          "DELETE FROM multiremi_feishu_messages WHERE source_id = ? AND ingested_at < ?",
+          [source.id, cutoff],
+        ).changes;
+      }
+      return deleted;
+    })();
+  }
 }
 
 function normalizeAllowlist(
@@ -503,10 +726,33 @@ function normalizePollInterval(value: unknown): number {
   return parsed;
 }
 
+function normalizeUnprocessedRetrySeconds(value: unknown): number {
+  const parsed = value === undefined ? 900 : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 60 || parsed > 86_400) {
+    throw new Error("Feishu source unprocessed_retry_seconds must be between 60 and 86400");
+  }
+  return parsed;
+}
+
+function normalizeUnprocessedRetryLimit(value: unknown): number {
+  const parsed = value === undefined ? 3 : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 20) {
+    throw new Error("Feishu source unprocessed_retry_limit must be between 1 and 20");
+  }
+  return parsed;
+}
+
 function normalizeTimestamp(value: string, field: string): string {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) throw new Error(`${field} must be an RFC3339 timestamp`);
   return new Date(timestamp).toISOString();
+}
+
+function cleanRequiredText(value: unknown, field: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) throw new Error(`${field} is required`);
+  if (text.length > 20_000) throw new Error(`${field} must not exceed 20000 characters`);
+  return text;
 }
 
 function encodeCursor(value: Record<string, unknown> | null): string | null {
@@ -519,11 +765,13 @@ function toSource(row: Row): MultiremiFeishuSource {
     workspaceId: String(row.workspace_id ?? "local"),
     name: String(row.name ?? ""),
     type: "personal_automation",
-    endpoint: String(row.endpoint),
+    endpointName: String(row.endpoint_name),
     allowlist: parseJson<MultiremiFeishuAllowlistEntry[]>(row.allowlist, []),
     enabled: Number(row.enabled ?? 0) === 1,
     retentionDays: Number(row.retention_days ?? 90),
     pollIntervalSeconds: Number(row.poll_interval_seconds ?? 15),
+    unprocessedRetrySeconds: Number(row.unprocessed_retry_seconds ?? 900),
+    unprocessedRetryLimit: Number(row.unprocessed_retry_limit ?? 3),
     accessTokenSet: Boolean(row.access_token_encrypted),
     accessTokenHint: nullableString(row.access_token_hint),
     createdAt: String(row.created_at),
@@ -569,6 +817,8 @@ function toMessage(row: Row): MultiremiFeishuMessage {
     edited: Number(row.edited ?? 0) === 1,
     ingestedAt: String(row.ingested_at),
     processedAt: nullableString(row.processed_at),
+    retryCount: Number(row.retry_count ?? 0),
+    lastRetryAt: nullableString(row.last_retry_at),
   };
 }
 

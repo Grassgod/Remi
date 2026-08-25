@@ -1,6 +1,8 @@
 import type { Context, Hono } from "hono";
 import type {
   CreateMultiremiFeishuSourceInput,
+  DraftReplyMultiremiFeishuMessageInput,
+  NotifyMultiremiFeishuMessageInput,
   ResolveMultiremiFeishuMessageInput,
   UpdateMultiremiFeishuSourceInput,
 } from "@multiremi/contracts/types.js";
@@ -12,7 +14,7 @@ import {
   readJsonStrictAllowEmpty,
   requireWorkspaceAdmin,
 } from "../helpers.js";
-import { currentAccessToken } from "../wire/index.js";
+import { currentAccessToken, currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
@@ -34,6 +36,8 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateMultiremiFeishuSourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
+      const endpointName = body.endpointName ?? body.endpoint_name ?? "";
+      requireConfiguredEndpoint(deps, endpointName);
       if (workspaceId === "local") store.ensureLocalWorkspace();
       const source = store.createFeishuSource({ ...body, workspaceId });
       publishWorkspaceEvent(c, store, "feishu:source_created", workspaceId, { source });
@@ -49,12 +53,23 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ source: loaded.source });
   });
 
+  app.get("/api/workspaces/:workspaceId/feishu/sources/:sourceId/status", (c) => {
+    const loaded = loadSource(c, deps);
+    if (loaded instanceof Response) return loaded;
+    return c.json({ status: store.getFeishuSourceStatus(loaded.source.id) });
+  });
+
   app.patch("/api/workspaces/:workspaceId/feishu/sources/:sourceId", async (c) => {
     const loaded = loadSource(c, deps, true);
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrictAllowEmpty<UpdateMultiremiFeishuSourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
+      const requestedEndpointName = body.endpointName ?? body.endpoint_name;
+      if (requestedEndpointName !== undefined) requireConfiguredEndpoint(deps, requestedEndpointName);
+      const resultingEndpointName = requestedEndpointName ?? loaded.source.endpointName;
+      const resultingEnabled = body.enabled ?? loaded.source.enabled;
+      if (resultingEnabled) requireConfiguredEndpoint(deps, resultingEndpointName);
       const source = store.updateFeishuSource(loaded.source.id, body);
       publishWorkspaceEvent(c, store, "feishu:source_updated", source.workspaceId, { source });
       return c.json({ source });
@@ -99,6 +114,51 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
       return feishuIngestErrorResponse(c, error);
     }
   });
+
+  app.post("/api/workspaces/:workspaceId/feishu/messages/:messageId/notify", async (c) => {
+    const body = await readJsonStrict<NotifyMultiremiFeishuMessageInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return createInboxOutcomeResponse(c, deps, "notified", body.summary);
+  });
+
+  app.post("/api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply", async (c) => {
+    const body = await readJsonStrict<DraftReplyMultiremiFeishuMessageInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return createInboxOutcomeResponse(c, deps, "reply_drafted", body.draftText ?? body.draft_text ?? "");
+  });
+}
+
+function createInboxOutcomeResponse(
+  c: Context,
+  deps: RouterDeps,
+  outcomeKind: "notified" | "reply_drafted",
+  text: string,
+): Response {
+  const workspaceId = c.req.param("workspaceId") ?? "";
+  const denied = denyCurrentUserWorkspaceAccess(c, deps.store, workspaceId);
+  if (denied) return denied;
+  const token = currentAccessToken(c);
+  const taskToken = token?.type === "task" ? token : null;
+  try {
+    const result = deps.store.createFeishuInboxOutcome(c.req.param("messageId") ?? "", outcomeKind, {
+      workspaceId,
+      recipientId: taskToken?.userId ?? currentRequestUserId(c),
+      taskId: taskToken?.taskId ?? null,
+      actorType: taskToken ? "agent" : "member",
+      actorId: taskToken?.agentId ?? currentRequestUserId(c),
+      text,
+    });
+    deps.store.emitWorkspaceEvent({
+      type: "inbox:new",
+      workspaceId,
+      actorType: taskToken ? "agent" : "member",
+      actorId: taskToken?.agentId ?? currentRequestUserId(c),
+      payload: { item: result.inboxItem },
+    });
+    return c.json({ ...result, outcomes: deps.store.listFeishuMessageOutcomes(result.message.messageId) }, 201);
+  } catch (error) {
+    return feishuIngestErrorResponse(c, error);
+  }
 }
 
 function loadSource(
@@ -134,17 +194,29 @@ function cleanQuery(value: string | undefined): string | null {
   return cleaned ? cleaned : null;
 }
 
+function requireConfiguredEndpoint(deps: RouterDeps, endpointName: string): void {
+  if (!deps.feishuSidecarEndpoints.has(endpointName)) {
+    throw new Error("Feishu sidecar endpoint_name is not configured by the server");
+  }
+}
+
 function feishuIngestErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("Feishu source not found") || message.startsWith("Feishu message not found")) {
     return c.json({ error: message }, 404);
   }
+  if (message === "Inbox recipient is unavailable or notifications are muted") {
+    return c.json({ error: message }, 409);
+  }
   if (
     message.includes("required")
     || message.includes("must be")
+    || message.includes("must reference")
     || message.includes("unsupported")
     || message.includes("invalid")
     || message.includes("Invalid")
+    || message.includes("not configured")
+    || message.includes("dedicated Feishu command")
   ) {
     return c.json({ error: message }, 400);
   }

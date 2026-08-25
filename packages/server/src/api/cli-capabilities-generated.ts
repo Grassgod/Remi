@@ -4012,6 +4012,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "feishu.source.status": {
+      "command": "remi feishu source status",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.source.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "feishu.source.add": {
       "command": "remi feishu source add",
       "auth": [
@@ -4056,6 +4069,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "feishu.messages.resolve",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.notify": {
+      "command": "remi feishu messages notify",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.notify",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.draft-reply": {
+      "command": "remi feishu messages draft-reply",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.draft-reply",
       "output": [
         "table",
         "json",

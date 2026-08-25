@@ -68,6 +68,8 @@ export function isTaskTokenForbiddenRequest(request: Request): boolean {
   if (path.startsWith("/api/workspaces/")) {
     if (/^\/api\/workspaces\/[^/]+\/feishu\/messages$/.test(path) && method === "GET") return false;
     if (/^\/api\/workspaces\/[^/]+\/feishu\/messages\/[^/]+\/resolve$/.test(path) && method === "POST") return false;
+    if (/^\/api\/workspaces\/[^/]+\/feishu\/messages\/[^/]+\/(notify|draft-reply)$/.test(path) && method === "POST") return false;
+    if (/^\/api\/workspaces\/[^/]+\/feishu\/sources\/[^/]+\/status$/.test(path) && method === "GET") return false;
     if (/^\/api\/workspaces\/[^/]+\/repos$/.test(path) && method === "GET") return false;
     if (/^\/api\/workspaces\/[^/]+\/repos\/[^/]+\/wiki\/build$/.test(path) && method === "POST") return true;
     if (/^\/api\/workspaces\/[^/]+\/repos\/[^/]+\/wiki(?:\/.*)?$/.test(path)

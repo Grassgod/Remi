@@ -55,9 +55,11 @@ option contract. All capability commands declare their authentication identities
 mutation class, and `table|json|jsonl` output contract in the Registry.
 
 The Feishu ingestion domain exposes source administration through
-`remi feishu source list|get|add|update` and task-safe processing through
-`remi feishu messages list|resolve`. An empty source allowlist means zero
-ingestion; `source update --clear-allowlist` restores that state.
+`remi feishu source list|get|status|add|update` and task-safe processing through
+`remi feishu messages list|resolve|notify|draft-reply`. `notify` and
+`draft-reply` atomically create a real Inbox item and its audited outcome;
+generic `resolve` cannot forge those outcomes. An empty source allowlist means
+zero ingestion; `source update --clear-allowlist` restores that state.
 
 The current main integration also exposes archived Issue recovery, Workspace
 prompt/archive settings, and Repository Wiki administration through:

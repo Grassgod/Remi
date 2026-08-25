@@ -163,6 +163,7 @@ export interface IssuesSurface {
   createIssue(input: CreateIssueInput): MultiremiIssue;
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment;
   getIssue(id: string): MultiremiIssue | null;
+  getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null;
   getIssueComment(id: string): MultiremiIssueComment | null;
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];

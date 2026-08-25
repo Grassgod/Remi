@@ -5756,6 +5756,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "feishu.source.status": {
+      "command": "remi feishu source status",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.source.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "feishu.source.add": {
       "command": "remi feishu source add",
       "aliases": [],
@@ -5813,6 +5830,40 @@
         "task"
       ],
       "capability": "feishu.messages.resolve",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.messages.notify": {
+      "command": "remi feishu messages notify",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.notify",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.messages.draft-reply": {
+      "command": "remi feishu messages draft-reply",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.draft-reply",
       "mutation": "write",
       "output": [
         "table",
@@ -8215,6 +8266,9 @@
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId": {
       "command": "feishu.source.get"
     },
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status": {
+      "command": "feishu.source.status"
+    },
     "GET /api/workspaces/:workspaceId/scm/connections": {
       "command": "scm.connection.list"
     },
@@ -9056,6 +9110,12 @@
     },
     "POST /api/workspaces/:id/ssh-mesh/test": {
       "command": "workspace.ssh-mesh.test"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply": {
+      "command": "feishu.messages.draft-reply"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify": {
+      "command": "feishu.messages.notify"
     },
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve": {
       "command": "feishu.messages.resolve"

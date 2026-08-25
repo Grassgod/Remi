@@ -16,9 +16,12 @@ import {
 } from "@multiremi/store/repos/scm-repo.js";
 import {
   FeishuIngestRepo,
+  type CreateFeishuInboxOutcomeInput,
+  type CreateFeishuInboxOutcomeResult,
   type ClaimFeishuSyncStreamInput,
   type IngestedFeishuMessageInput,
   type IngestFeishuBatchResult,
+  type ReconcileFeishuUnprocessedResult,
   type UpdateClaimedFeishuSyncCursorInput,
 } from "@multiremi/store/repos/feishu-ingest-repo.js";
 import type {
@@ -322,6 +325,7 @@ import type {
   MultiremiFeishuMessageOutcome,
   MultiremiFeishuSource,
   MultiremiFeishuSyncCursor,
+  MultiremiFeishuSourceStatus,
   RecordScmCanonicalEventInput,
   ResolveMultiremiFeishuMessageInput,
   ReleaseScmSyncStreamInput,
@@ -1254,11 +1258,35 @@ runMigrations(this.db);
     return this.feishuIngest.listMessageOutcomes(messageId);
   }
 
+  getFeishuSourceStatus(sourceId: string): MultiremiFeishuSourceStatus {
+    return this.feishuIngest.getSourceStatus(sourceId);
+  }
+
+  hasDueUnprocessedFeishuMessages(sourceId: string, now: Date): boolean {
+    return this.feishuIngest.hasDueUnprocessedMessages(sourceId, now);
+  }
+
+  reconcileUnprocessedFeishuMessages(
+    sourceId: string,
+    now: Date,
+    limit?: number,
+  ): ReconcileFeishuUnprocessedResult {
+    return this.feishuIngest.reconcileUnprocessedMessages(sourceId, now, limit);
+  }
+
   resolveFeishuMessage(messageId: string, input: ResolveMultiremiFeishuMessageInput): {
     message: MultiremiFeishuMessage;
     outcome: MultiremiFeishuMessageOutcome;
   } {
     return this.feishuIngest.resolveMessage(messageId, input);
+  }
+
+  createFeishuInboxOutcome(
+    messageId: string,
+    outcomeKind: "notified" | "reply_drafted",
+    input: CreateFeishuInboxOutcomeInput,
+  ): CreateFeishuInboxOutcomeResult {
+    return this.feishuIngest.createInboxOutcome(messageId, outcomeKind, input);
   }
 
   deleteExpiredFeishuMessages(now?: Date): number {

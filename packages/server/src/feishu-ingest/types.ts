@@ -6,6 +6,7 @@ import type {
   ClaimFeishuSyncStreamInput,
   IngestedFeishuMessageInput,
   IngestFeishuBatchResult,
+  ReconcileFeishuUnprocessedResult,
   UpdateClaimedFeishuSyncCursorInput,
 } from "@multiremi/store/repos/feishu-ingest-repo.js";
 
@@ -17,6 +18,7 @@ export interface FeishuPollPage {
 
 export interface FeishuPollContext {
   source: MultiremiFeishuSource;
+  endpoint: string;
   cursor: Record<string, unknown> | null;
   start: Date;
   end: Date;
@@ -36,5 +38,7 @@ export interface FeishuIngestionStore {
   updateClaimedSyncCursor(input: UpdateClaimedFeishuSyncCursorInput): MultiremiFeishuSyncCursor | null;
   releaseSyncStream(sourceId: string, stream: string, leaseToken: string): boolean;
   ingestBatch(sourceId: string, messages: readonly IngestedFeishuMessageInput[]): IngestFeishuBatchResult;
+  hasDueUnprocessedMessages(sourceId: string, now: Date): boolean;
+  reconcileUnprocessedMessages(sourceId: string, now: Date, limit?: number): ReconcileFeishuUnprocessedResult;
   deleteExpiredMessages(now?: Date): number;
 }

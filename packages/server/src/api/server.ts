@@ -112,6 +112,10 @@ import { scmIngestionStore } from "@multiremi/scm/store.js";
 import { FeishuIngestScheduler } from "@multiremi/feishu-ingest/scheduler.js";
 import { feishuIngestionStore } from "@multiremi/feishu-ingest/store.js";
 import {
+  feishuSidecarEndpointsFromEnv,
+  type FeishuSidecarEndpointRegistry,
+} from "@multiremi/feishu-ingest/endpoints.js";
+import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
   authorizeDaemonWebSocketRequest,
@@ -173,6 +177,8 @@ export interface MultiremiApiOptions {
   scmPolling?: ScmPollingScheduler | null;
   /** Undefined enables server-owned Feishu ingestion; null explicitly disables it. */
   feishuIngest?: FeishuIngestScheduler | null;
+  /** Server-owned name-to-URL registry. User input never supplies a fetch URL. */
+  feishuSidecarEndpoints?: FeishuSidecarEndpointRegistry;
   /** Disable every server-owned background job for a read-only blue/green candidate. */
   backgroundJobs?: boolean;
   verifyScmConnection?: ScmConnectionVerifier;
@@ -196,6 +202,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
+  const feishuSidecarEndpoints = options.feishuSidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
     store,
@@ -213,6 +220,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     projectKnowledge,
     repositoryWiki,
     sessionArchives,
+    feishuSidecarEndpoints,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
   };
 
@@ -521,6 +529,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
 export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
   const store = options.store ?? new MultiremiStore();
+  const feishuSidecarEndpoints = options.feishuSidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
   const backgroundJobs = options.backgroundJobs
     ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
   const scheduler = backgroundJobs
@@ -533,7 +542,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     : null;
   const feishuIngest = backgroundJobs
     ? (options.feishuIngest === undefined
-      ? new FeishuIngestScheduler({ store: feishuIngestionStore(store) })
+      ? new FeishuIngestScheduler({ store: feishuIngestionStore(store), sidecarEndpoints: feishuSidecarEndpoints })
       : options.feishuIngest)
     : null;
   const controlPlaneSshMesh = backgroundJobs
@@ -554,6 +563,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     scheduler,
     realtimeState,
     sessionArchives,
+    feishuSidecarEndpoints,
   });
   const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";

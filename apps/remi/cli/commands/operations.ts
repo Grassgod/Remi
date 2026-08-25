@@ -244,27 +244,32 @@ function feishuSpecs(): CommandSpec[] {
     `${workspaceBase(i)}/sources/${encodePath(positional(i, 0, "source"))}`;
   const sourceFields: readonly CliOptionSpec[] = [
     { name: "name", type: "string", valueName: "name", description: "Source display name" },
-    { name: "endpoint", type: "string", valueName: "url", description: "personal_automation base URL" },
+    { name: "endpoint-name", type: "string", valueName: "name", description: "Server-configured sidecar endpoint name" },
     { name: "chat", type: "string", valueName: "chat-id", repeatable: true, description: "Allowlisted chat ID" },
     { name: "clear-allowlist", type: "boolean", conflictsWith: ["chat"], description: "Replace the allowlist with an empty list" },
     { name: "enabled", type: "boolean", description: "Enable or disable ingestion" },
     { name: "retention-days", type: "integer", valueName: "days", description: "Message retention period" },
     { name: "poll-interval-seconds", type: "integer", valueName: "seconds", description: "Minimum poll interval" },
+    { name: "unprocessed-retry-seconds", type: "integer", valueName: "seconds", description: "Delay before retrying unresolved messages" },
+    { name: "unprocessed-retry-limit", type: "integer", valueName: "count", description: "Retries before timeout dismissal" },
   ];
   const sourceBody = (i: CommandInvocation) => requestBody(i, {
     name: stringOption(i, "name") ?? undefined,
-    endpoint: stringOption(i, "endpoint") ?? undefined,
+    endpoint_name: stringOption(i, "endpoint-name") ?? undefined,
     allowlist: booleanOption(i, "clear-allowlist")
       ? []
       : i.options.chat === undefined ? undefined : stringOptions(i, "chat"),
     enabled: booleanOption(i, "enabled") ?? undefined,
     retention_days: integerOption(i, "retention-days") ?? undefined,
     poll_interval_seconds: integerOption(i, "poll-interval-seconds") ?? undefined,
+    unprocessed_retry_seconds: integerOption(i, "unprocessed-retry-seconds") ?? undefined,
+    unprocessed_retry_limit: integerOption(i, "unprocessed-retry-limit") ?? undefined,
   });
   return [
     group("feishu", "Ingest and process allowlisted Feishu messages"),
     op({ id: "feishu.source.list", path: ["feishu", "source", "list"], description: "List Feishu message sources", method: "GET", apiPath: (i) => `${workspaceBase(i)}/sources`, auth: HUMAN, collections: ["sources"] }),
     op({ id: "feishu.source.get", path: ["feishu", "source", "get"], description: "Get a Feishu message source", method: "GET", apiPath: source, auth: HUMAN, positionals: [ref("source")] }),
+    op({ id: "feishu.source.status", path: ["feishu", "source", "status"], description: "Show unresolved backlog and timeout counts", method: "GET", apiPath: (i) => `${source(i)}/status`, auth: HUMAN_TASK, positionals: [ref("source")] }),
     op({ id: "feishu.source.add", path: ["feishu", "source", "add"], description: "Add a personal_automation Feishu source", method: "POST", apiPath: (i) => `${workspaceBase(i)}/sources`, mutation: "write", auth: HUMAN, options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
     op({ id: "feishu.source.update", path: ["feishu", "source", "update"], description: "Update a Feishu source and its allowlist", method: "PATCH", apiPath: source, mutation: "write", auth: HUMAN, positionals: [ref("source")], options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
     op({
@@ -299,8 +304,8 @@ function feishuSpecs(): CommandSpec[] {
       auth: HUMAN_TASK,
       positionals: [ref("message")],
       options: [
-        { name: "outcome", type: "string", valueName: "kind", required: true, description: "issue_created, notified, reply_drafted, ignored, or dismissed" },
-        { name: "ref", type: "string", valueName: "type:id", description: "Created issue, inbox item, or draft reference" },
+        { name: "outcome", type: "string", valueName: "kind", required: true, description: "issue_created, ignored, or dismissed" },
+        { name: "ref", type: "string", valueName: "issue:id", description: "Existing issue reference for issue_created" },
         { name: "reason", type: "string", valueName: "text", description: "Decision reason" },
         { name: "task-id", type: "string", valueName: "id", description: "Processing task ID (human calls only)" },
       ],
@@ -310,6 +315,30 @@ function feishuSpecs(): CommandSpec[] {
         reason: stringOption(i, "reason") ?? undefined,
         task_id: stringOption(i, "task-id") ?? undefined,
       }),
+    }),
+    op({
+      id: "feishu.messages.notify",
+      path: ["feishu", "messages", "notify"],
+      description: "Create an Inbox reminder for a Feishu message",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/messages/${encodePath(positional(i, 0, "message"))}/notify`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      positionals: [ref("message")],
+      options: [{ name: "summary", type: "string", valueName: "text", required: true, description: "Reminder summary" }],
+      body: (i) => requestBody(i, { summary: requiredStringOption(i, "summary") }),
+    }),
+    op({
+      id: "feishu.messages.draft-reply",
+      path: ["feishu", "messages", "draft-reply"],
+      description: "Create an Inbox reply draft for a Feishu message",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/messages/${encodePath(positional(i, 0, "message"))}/draft-reply`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      positionals: [ref("message")],
+      options: [{ name: "draft-text", type: "string", valueName: "text", required: true, description: "Reply draft text" }],
+      body: (i) => requestBody(i, { draft_text: requiredStringOption(i, "draft-text") }),
     }),
   ];
 }

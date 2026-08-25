@@ -10,6 +10,9 @@ export function feishuIngestionStore(store: MultiremiStore): FeishuIngestionStor
     releaseSyncStream: (sourceId, stream, leaseToken) =>
       store.releaseFeishuSyncStream(sourceId, stream, leaseToken),
     ingestBatch: (sourceId, messages) => store.ingestFeishuBatch(sourceId, messages),
+    hasDueUnprocessedMessages: (sourceId, now) => store.hasDueUnprocessedFeishuMessages(sourceId, now),
+    reconcileUnprocessedMessages: (sourceId, now, limit) =>
+      store.reconcileUnprocessedFeishuMessages(sourceId, now, limit),
     deleteExpiredMessages: (now) => store.deleteExpiredFeishuMessages(now),
   };
 }
