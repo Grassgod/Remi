@@ -125,6 +125,9 @@
   "human_requests": {
     "permission_title": "권한 승인이 필요합니다",
     "question_title": "에이전트 질문",
+    "context_expand": "펼치기",
+    "context_collapse": "접기",
+    "context_truncated": "이전 컨텍스트는 생략되었습니다",
     "answer_placeholder": "답변을 입력하세요…",
     "other_answer_placeholder": "기타 답변 (선택)…",
     "submit": "제출",

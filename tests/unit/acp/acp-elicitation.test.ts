@@ -5,6 +5,7 @@ import {
   answersToElicitationContent,
 } from "@acp/index.js";
 import type { ElicitationCreateParams } from "@acp/index.js";
+import { sliceElicitationContext } from "@multiremi/daemon.js";
 
 // Mirrors the request shape the Claude ACP agent (>= 0.44.0) builds from the
 // AskUserQuestion tool in askUserQuestionsToCreateRequest().
@@ -252,5 +253,41 @@ describe("answersToElicitationContent", () => {
     const questions = elicitationToQuestions(askRequest())!;
     expect(answersToElicitationContent(questions, { "Which library should we use?": "  " })).toEqual({});
     expect(answersToElicitationContent(questions, {})).toEqual({});
+  });
+});
+
+describe("sliceElicitationContext", () => {
+  it("consumes only assistant text emitted after the previous question", () => {
+    const firstText = "First decision context.";
+    const first = sliceElicitationContext(firstText, 0, "First question?", ["First question?"]);
+    expect(first.context).toEqual({ text: firstText });
+
+    const secondText = "Second decision context.";
+    const second = sliceElicitationContext(
+      firstText + secondText,
+      first.offset,
+      "Second question?",
+      ["Second question?"],
+    );
+    expect(second.context).toEqual({ text: secondText });
+    expect(second.offset).toBe((firstText + secondText).length);
+  });
+
+  it("omits context that only repeats the question or payload message", () => {
+    const repeated = "  Which library should we use?\n";
+    const result = sliceElicitationContext(
+      repeated,
+      0,
+      "Which library should we use?",
+      ["Which library should we use?"],
+    );
+    expect(result.context).toBeUndefined();
+    expect(result.offset).toBe(repeated.length);
+  });
+
+  it("keeps the last 4000 characters and marks truncated context", () => {
+    const result = sliceElicitationContext("a".repeat(4_001), 0, "Question?", ["Question?"]);
+    expect(result.context?.text).toHaveLength(4_000);
+    expect(result.context).toEqual({ text: "a".repeat(4_000), truncated: true });
   });
 });
