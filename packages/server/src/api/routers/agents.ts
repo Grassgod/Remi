@@ -16,6 +16,7 @@ import {
   readJson,
   readJsonStrict,
   recordAgentCreatedAnalytics,
+  requireHumanWorkspaceAdmin,
   requestedAgentWorkspaceId,
   resolveAgentRequestProvider,
   runtimeForAgentInput,
@@ -245,6 +246,18 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     const input = withAgentUpdateRequestContext(c, store, loaded.agent, body);
     if (input instanceof Response) return input;
     const agent = store.updateAgent(loaded.agent.id, input);
+    publishAgentLifecycleEvent(c, store, "agent:status", agent);
+    return c.json(agentCompatibilityResponse(store, agent, c));
+  });
+  app.put("/api/agents/:id/supervisor", async (c) => {
+    const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const denied = requireHumanWorkspaceAdmin(c, store, loaded.agent.workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ enabled?: boolean }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400);
+    const agent = store.setAgentSupervisor(loaded.agent.id, body.enabled);
     publishAgentLifecycleEvent(c, store, "agent:status", agent);
     return c.json(agentCompatibilityResponse(store, agent, c));
   });

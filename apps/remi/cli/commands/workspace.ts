@@ -74,6 +74,10 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite("workspace.env.update", ["workspace", "env", "update"], "Replace workspace environment", "/env", "PUT", [
       { name: "set", type: "string", valueName: "key=value", repeatable: true, description: "Set an environment entry" },
     ], envBody),
+    scopedRead("workspace.organizer.get", ["workspace", "organizer", "get"], "Read Organizer mode", "/organizer"),
+    scopedWrite("workspace.organizer.update", ["workspace", "organizer", "update"], "Update Organizer mode", "/organizer", "PUT", [
+      { name: "mode", type: "string", valueName: "report_only|act", description: "Organizer action mode" },
+    ], organizerBody),
     scopedRead("workspace.ssh-mesh.get", ["workspace", "ssh-mesh", "get"], "Read SSH mesh settings", "/ssh-mesh"),
     scopedWrite("workspace.ssh-mesh.update", ["workspace", "ssh-mesh", "update"], "Update SSH mesh settings", "/ssh-mesh", "PUT"),
     scopedWrite("workspace.ssh-mesh.rotate", ["workspace", "ssh-mesh", "rotate"], "Rotate SSH mesh key material", "/ssh-mesh/rotate", "POST"),
@@ -280,6 +284,14 @@ async function issueArchiveBody(invocation: CommandInvocation): Promise<Record<s
   });
   if (!Number.isSafeInteger(body.ttl_ms) || !Number.isSafeInteger(body.sweep_interval_ms)) {
     throw new CliError("usage", "workspace issue-archive update requires --ttl-ms and --sweep-interval-ms or input JSON");
+  }
+  return body;
+}
+
+async function organizerBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const body = await requestBody(invocation, { mode: stringOption(invocation, "mode") ?? undefined });
+  if (body.mode !== "report_only" && body.mode !== "act") {
+    throw new CliError("usage", "workspace organizer update requires --mode report_only|act or input JSON");
   }
   return body;
 }

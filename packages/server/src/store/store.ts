@@ -659,6 +659,10 @@ runMigrations(this.db);
     return this.agents.updateAgent(id, input);
   }
 
+  setAgentSupervisor(id: string, supervisor: boolean): MultiremiAgent {
+    return this.agents.setAgentSupervisor(id, supervisor);
+  }
+
   archiveAgent(id: string): MultiremiAgent {
     return this.agents.archiveAgent(id);
   }
@@ -1529,7 +1533,9 @@ runMigrations(this.db);
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,
   ): Promise<MultiremiCreatedAccessToken> {
-    return this.accessTokens.createTaskAccessToken(task, userId);
+    const agent = this.getAgent(task.agentId);
+    const scopes = agent?.supervisor ? ["organizer:supervisor"] : [];
+    return this.accessTokens.createTaskAccessToken(task, userId, scopes);
   }
 
   listAccessTokens(workspaceId?: string | null): MultiremiAccessToken[] {

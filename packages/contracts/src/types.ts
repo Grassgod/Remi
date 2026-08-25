@@ -85,6 +85,7 @@ export interface MultiremiAgent {
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  supervisor?: boolean;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -2967,6 +2968,7 @@ export interface MultiremiAccessToken {
   name: string;
   type: MultiremiAccessTokenType;
   purpose: MultiremiAccessTokenPurpose;
+  scopes?: string[];
   tokenPrefix: string;
   lastUsedAt: string | null;
   expiresAt: string | null;

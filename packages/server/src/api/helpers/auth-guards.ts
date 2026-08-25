@@ -429,6 +429,18 @@ export function requireWorkspaceAdmin(c: Context, store: MultiremiStore, workspa
   return c.json({ error: "insufficient permissions" }, 403);
 }
 
+/** Sensitive privilege configuration must never be delegated to an agent task. */
+export function requireHumanWorkspaceAdmin(c: Context, store: MultiremiStore, workspaceId: string): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type === "task" || token?.type === "daemon") {
+    return c.json({
+      error: "this endpoint requires a human workspace administrator",
+      code: "human_admin_required",
+    }, 403);
+  }
+  return requireWorkspaceAdmin(c, store, workspaceId);
+}
+
 export function loadCurrentWorkspaceMember(
   c: Context,
   store: MultiremiStore,
