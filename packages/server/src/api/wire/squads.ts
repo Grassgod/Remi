@@ -13,7 +13,7 @@ export function squadCompatibilityResponse(store: MultiremiStore, squad: Multire
     name: squad.name,
     description: squad.description,
     instructions: squad.instructions,
-    avatar_url: null,
+    avatar_url: squad.avatarUrl,
     leader_id: squad.leaderId,
     creator_id: squad.creatorId,
     created_at: squad.createdAt,
