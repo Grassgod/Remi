@@ -22,6 +22,16 @@ const relayRef = vi.hoisted(() => ({
 const mockRefetchRelay = vi.hoisted(() => vi.fn());
 const mockUpdateRelay = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSetDiscovery = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockUpdateWorkspace = vi.hoisted(() => vi.fn());
+const mockSetQueryData = vi.hoisted(() => vi.fn());
+const workspaceRef = vi.hoisted(() => ({
+  current: {
+    id: "workspace-1",
+    slug: "acme",
+    name: "Acme",
+    settings: {} as Record<string, unknown>,
+  },
+}));
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey?: unknown[] }) => {
@@ -37,12 +47,16 @@ vi.mock("@tanstack/react-query", () => ({
     }
     return { data: membersRef.current, isPending: membersRef.pending };
   },
-  useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ setQueryData: mockSetQueryData, invalidateQueries: vi.fn() }),
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
+vi.mock("@multiremi/core/paths", () => ({
+  useCurrentWorkspace: () => workspaceRef.current,
+}));
 vi.mock("@multiremi/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"], queryFn: vi.fn() }),
+  workspaceKeys: { list: () => ["workspaces", "list"] },
 }));
 vi.mock("@multiremi/core/auth", () => ({
   useAuthStore: Object.assign(
@@ -56,6 +70,7 @@ vi.mock("@multiremi/core/api", () => ({
     updateRelayConfig: mockUpdateRelay,
     setRelayDiscovery: mockSetDiscovery,
     revealRelayToken: vi.fn(() => Promise.resolve("sk-revealed")),
+    updateWorkspace: mockUpdateWorkspace,
   },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -79,6 +94,11 @@ describe("ModelGatewayTab", () => {
     };
     relayRef.pending = false;
     relayRef.error = null;
+    workspaceRef.current.settings = {};
+    mockUpdateWorkspace.mockImplementation(async (_id: string, input: { settings: Record<string, unknown> }) => ({
+      ...workspaceRef.current,
+      settings: input.settings,
+    }));
   });
 
   it("renders discovery toggle and both engine sections for an admin", () => {
@@ -86,6 +106,7 @@ describe("ModelGatewayTab", () => {
     expect(screen.getByText("Auto-discover models")).toBeInTheDocument();
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("Task progress summaries")).toBeInTheDocument();
     // claude fragment is pre-filled from server config
     expect(screen.getByDisplayValue(/ANTHROPIC_BASE_URL/)).toBeInTheDocument();
   });
@@ -99,7 +120,7 @@ describe("ModelGatewayTab", () => {
 
   it("saves the claude fragment with token_op keep when the token was untouched", async () => {
     render(<ModelGatewayTab />, { wrapper: Wrapper });
-    const [claudeSaveButton] = screen.getAllByRole("button", { name: /Save/ });
+    const [claudeSaveButton] = screen.getAllByRole("button", { name: /^Save$/ });
     if (!claudeSaveButton) throw new Error("Claude save button not found");
     await userEvent.click(claudeSaveButton);
     await waitFor(() => expect(mockUpdateRelay).toHaveBeenCalled());
@@ -108,6 +129,36 @@ describe("ModelGatewayTab", () => {
       "claude",
       expect.objectContaining({ token_op: "keep", fragment: expect.stringContaining("ANTHROPIC_BASE_URL") }),
     );
+  });
+
+  it("persists allowlisted progress summary settings without dropping other workspace settings", async () => {
+    workspaceRef.current.settings = {
+      retained_setting: "yes",
+      progress_summary: {
+        transport: "openai",
+        model: "claude-workspace",
+        openai_model: "gpt-workspace",
+        openai_api_key: "must-not-survive",
+      },
+    };
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByLabelText("OpenAI-compatible model")).toHaveValue("gpt-workspace");
+    await user.clear(screen.getByLabelText("OpenAI-compatible model"));
+    await user.type(screen.getByLabelText("OpenAI-compatible model"), "gpt-custom");
+    await user.click(screen.getByRole("button", { name: "Save summary settings" }));
+
+    await waitFor(() => expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
+      settings: {
+        retained_setting: "yes",
+        progress_summary: {
+          transport: "openai",
+          model: "claude-workspace",
+          openai_model: "gpt-custom",
+        },
+      },
+    }));
   });
 
   it("renders a skeleton instead of an empty savable form while the config loads", () => {

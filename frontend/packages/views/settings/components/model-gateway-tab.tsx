@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertCircle, Eye, EyeOff, Save, Waypoints } from "lucide-react";
+import { Activity, AlertCircle, Eye, EyeOff, Save, Waypoints } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardContent } from "@multiremi/ui/components/ui/card";
 import { Label } from "@multiremi/ui/components/ui/label";
@@ -11,16 +11,32 @@ import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Switch } from "@multiremi/ui/components/ui/switch";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multiremi/ui/components/ui/select";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { runtimeModelsKeys } from "@multiremi/core/runtimes";
-import { memberListOptions } from "@multiremi/core/workspace/queries";
+import { memberListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { api } from "@multiremi/core/api";
 import type { RelayConfigResponse, RelayEngineConfig } from "@multiremi/core/api";
+import type { Workspace } from "@multiremi/core/types";
 import { useT } from "../../i18n";
 import { ClaudeMark, OpenAIMark } from "./engine-marks";
 
 type Engine = "claude" | "codex";
+type ProgressSummaryTransport = "auto" | "api" | "cli" | "openai";
+
+interface ProgressSummarySettings {
+  transport: ProgressSummaryTransport;
+  model: string;
+  openAiModel: string;
+}
 
 const ENGINE_PLACEHOLDER: Record<Engine, string> = {
   claude: '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://…"\n  }\n}',
@@ -32,6 +48,7 @@ const relayKeys = { config: (wsId: string) => ["relay-config", wsId] as const };
 export function ModelGatewayTab() {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
+  const workspace = useCurrentWorkspace();
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
 
@@ -116,6 +133,8 @@ export function ModelGatewayTab() {
             </CardContent>
           </Card>
 
+          {workspace ? <ProgressSummarySection workspace={workspace} /> : null}
+
           <EngineSection engine="claude" config={config.claude ?? null} wsId={wsId} />
           <EngineSection engine="codex" config={config.codex ?? null} wsId={wsId} />
 
@@ -124,6 +143,145 @@ export function ModelGatewayTab() {
       )}
     </div>
   );
+}
+
+function ProgressSummarySection({ workspace }: { workspace: Workspace }) {
+  const { t } = useT("settings");
+  const qc = useQueryClient();
+  const resolved = readProgressSummarySettings(workspace.settings);
+  const [transport, setTransport] = useState<ProgressSummaryTransport>(resolved.transport);
+  const [model, setModel] = useState(resolved.model);
+  const [openAiModel, setOpenAiModel] = useState(resolved.openAiModel);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const next = readProgressSummarySettings(workspace.settings);
+    setTransport(next.transport);
+    setModel(next.model);
+    setOpenAiModel(next.openAiModel);
+  }, [workspace.settings]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const progressSummary: Record<string, string> = { transport };
+      const normalizedModel = model.trim();
+      const normalizedOpenAiModel = openAiModel.trim();
+      if (normalizedModel) progressSummary.model = normalizedModel;
+      if (normalizedOpenAiModel) progressSummary.openai_model = normalizedOpenAiModel;
+      const updated = await api.updateWorkspace(workspace.id, {
+        settings: {
+          ...(workspace.settings ?? {}),
+          progress_summary: progressSummary,
+        },
+      });
+      qc.setQueryData(workspaceKeys.list(), (old: Workspace[] | undefined) =>
+        old?.map((candidate) => candidate.id === updated.id ? updated : candidate),
+      );
+      toast.success(t(($) => $.modelGateway.progress_saved));
+    } catch (error) {
+      toast.error(error instanceof Error
+        ? error.message
+        : t(($) => $.modelGateway.save_failed));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          {t(($) => $.modelGateway.progress_title)}
+        </h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(($) => $.modelGateway.progress_description)}
+        </p>
+      </div>
+      <Card>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="progress-summary-transport">
+              {t(($) => $.modelGateway.progress_transport_label)}
+            </Label>
+            <Select
+              value={transport}
+              onValueChange={(value) => setTransport(value as ProgressSummaryTransport)}
+            >
+              <SelectTrigger id="progress-summary-transport" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">{t(($) => $.modelGateway.progress_transport_auto)}</SelectItem>
+                <SelectItem value="openai">{t(($) => $.modelGateway.progress_transport_openai)}</SelectItem>
+                <SelectItem value="api">{t(($) => $.modelGateway.progress_transport_api)}</SelectItem>
+                <SelectItem value="cli">{t(($) => $.modelGateway.progress_transport_cli)}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="progress-summary-openai-model">
+                {t(($) => $.modelGateway.progress_openai_model_label)}
+              </Label>
+              <Input
+                id="progress-summary-openai-model"
+                value={openAiModel}
+                onChange={(event) => setOpenAiModel(event.target.value)}
+                placeholder="gpt-5.6-luna"
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.modelGateway.progress_openai_model_hint)}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="progress-summary-claude-model">
+                {t(($) => $.modelGateway.progress_claude_model_label)}
+              </Label>
+              <Input
+                id="progress-summary-claude-model"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                placeholder="claude-haiku-4-5-20251001"
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.modelGateway.progress_claude_model_hint)}
+              </p>
+            </div>
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button type="button" size="sm" onClick={save} disabled={saving}>
+              <Save className="h-3.5 w-3.5" />
+              {saving
+                ? t(($) => $.modelGateway.saving)
+                : t(($) => $.modelGateway.progress_save)}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function readProgressSummarySettings(
+  settings: Record<string, unknown> | undefined,
+): ProgressSummarySettings {
+  const raw = settings?.progress_summary;
+  const progress = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const transport = typeof progress.transport === "string"
+    && ["auto", "api", "cli", "openai"].includes(progress.transport)
+    ? progress.transport as ProgressSummaryTransport
+    : "auto";
+  return {
+    transport,
+    model: typeof progress.model === "string" ? progress.model : "",
+    openAiModel: typeof progress.openai_model === "string" ? progress.openai_model : "",
+  };
 }
 
 function ConfigSkeleton() {
