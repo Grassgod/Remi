@@ -18,8 +18,12 @@ export function inboxItemSelectionKey(item: InboxItem): string {
   return inboxItemSelectionKind(item) === "item" ? item.id : item.issue_id ?? item.id;
 }
 
+// Selecting by issue id is only safe when the row actually has one. Ledger
+// rows never do by design, and issue-less types such as quick_create_failed
+// render a self-contained detail too — both must select by inbox-row id so the
+// URL never claims an inbox id is an issue id.
 export function inboxItemSelectionKind(item: InboxItem): InboxItemSelectionKind {
-  return isInboxLedgerType(item.type) ? "item" : "issue";
+  return isInboxLedgerType(item.type) || !item.issue_id ? "item" : "issue";
 }
 
 /**

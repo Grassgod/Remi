@@ -268,6 +268,29 @@ describe("InboxPage", () => {
     expect(replace).toHaveBeenLastCalledWith("/test/inbox?issue=issue-1");
   });
 
+  it("links an issue-less notification by inbox id instead of claiming it is an issue", async () => {
+    listInbox.mockResolvedValue([
+      {
+        id: "legacy-failure",
+        type: "quick_create_failed",
+        issue_id: null,
+        title: "legacy-failure",
+        severity: "attention",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:00:00.000Z",
+      },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByText("legacy-failure"));
+
+    expect(replace).toHaveBeenLastCalledWith("/test/inbox?item=legacy-failure");
+    expect(
+      replace.mock.calls.some(([path]) => String(path).startsWith("/test/issues/")),
+    ).toBe(false);
+  });
+
   it("marks the unread rows in a date group as read", async () => {
     const now = new Date().toISOString();
     listInbox.mockResolvedValue([

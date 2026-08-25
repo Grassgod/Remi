@@ -6,6 +6,7 @@ import {
   filterInboxItemsBySource,
   groupInboxItemsByDate,
   inboxItemSelectionKey,
+  inboxItemSelectionKind,
 } from "./grouping";
 
 function item(
@@ -119,5 +120,24 @@ describe("inbox grouping", () => {
     expect(countAttentionUnreadInboxItems(items)).toBe(
       visible.filter((entry) => entry.severity === "attention" && !entry.read).length,
     );
+  });
+
+  it("selects issue-less rows by inbox id so no URL claims one is an issue id", () => {
+    const legacy = item("legacy-failure", "quick_create_failed", "2026-08-26T10:00:00.000Z", {
+      issue_id: null,
+      severity: "attention",
+    });
+    const ledger = item("run-1", "autopilot_run_failed", "2026-08-26T10:00:00.000Z", {
+      issue_id: "issue-1",
+    });
+    const action = item("mention-1", "comment_mention", "2026-08-26T10:00:00.000Z", {
+      issue_id: "issue-1",
+    });
+
+    expect(inboxItemSelectionKind(legacy)).toBe("item");
+    expect(inboxItemSelectionKey(legacy)).toBe("legacy-failure");
+    expect(inboxItemSelectionKind(ledger)).toBe("item");
+    expect(inboxItemSelectionKind(action)).toBe("issue");
+    expect(inboxItemSelectionKey(action)).toBe("issue-1");
   });
 });

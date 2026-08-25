@@ -511,11 +511,16 @@ export class IssuesRepo {
       id,
     ]);
     this.ctx.db.run("UPDATE multiremi_autopilot_runs SET issue_id = NULL WHERE issue_id = ?", [id]);
-    const inboxLedgerPlaceholders = INBOX_LEDGER_TYPES.map(() => "?").join(", ");
-    this.ctx.db.run(
-      `UPDATE multiremi_inbox_items SET issue_id = NULL WHERE issue_id = ? AND type IN (${inboxLedgerPlaceholders})`,
-      [id, ...INBOX_LEDGER_TYPES],
-    );
+    // Detach ledger rows first so the delete below only sweeps the actionable
+    // notifications left behind. An empty registry would render `IN ()`, which
+    // Postgres rejects — skipping the update then means "no ledger to keep".
+    if (INBOX_LEDGER_TYPES.length > 0) {
+      const inboxLedgerPlaceholders = INBOX_LEDGER_TYPES.map(() => "?").join(", ");
+      this.ctx.db.run(
+        `UPDATE multiremi_inbox_items SET issue_id = NULL WHERE issue_id = ? AND type IN (${inboxLedgerPlaceholders})`,
+        [id, ...INBOX_LEDGER_TYPES],
+      );
+    }
     this.ctx.db.run("DELETE FROM multiremi_inbox_items WHERE issue_id = ?", [id]);
     // PostgreSQL intentionally does not rely on FK cascades and SQLite tests
     // may run with them disabled. Remove the machine-local checkout record
