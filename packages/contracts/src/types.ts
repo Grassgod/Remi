@@ -2678,6 +2678,12 @@ export interface MultiremiFeishuSourceStatus {
   timedOutCount: number;
   oldestUnprocessedAt: string | null;
   maximumRetryCount: number;
+  lastSuccessfulIngestAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorAt: string | null;
+  lagSeconds: number | null;
+  consecutiveFailures: number;
+  connectionAlertedAt: string | null;
 }
 
 export type MultiremiFeishuMessageOutcomeKind =
@@ -2715,6 +2721,18 @@ export interface NotifyMultiremiFeishuMessageInput {
 export interface DraftReplyMultiremiFeishuMessageInput {
   draftText?: string;
   draft_text?: string;
+}
+
+export interface CreateIssueFromMultiremiFeishuMessageInput {
+  title: string;
+  description?: string | null;
+  priority?: MultiremiIssuePriority | string;
+  projectId?: string | null;
+  project_id?: string | null;
+  assigneeType?: MultiremiAssigneeType | null;
+  assignee_type?: MultiremiAssigneeType | null;
+  assigneeId?: string | null;
+  assignee_id?: string | null;
 }
 
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────

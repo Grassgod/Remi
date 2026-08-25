@@ -1,11 +1,13 @@
 import type { Context, Hono } from "hono";
 import type {
+  CreateIssueFromMultiremiFeishuMessageInput,
   CreateMultiremiFeishuSourceInput,
   DraftReplyMultiremiFeishuMessageInput,
   NotifyMultiremiFeishuMessageInput,
   ResolveMultiremiFeishuMessageInput,
   UpdateMultiremiFeishuSourceInput,
 } from "@multiremi/contracts/types.js";
+import { publishIssueCreated } from "../helpers/store-bridge.js";
 import {
   denyCurrentUserWorkspaceAccess,
   isJsonApiError,
@@ -126,6 +128,31 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     return createInboxOutcomeResponse(c, deps, "reply_drafted", body.draftText ?? body.draft_text ?? "");
   });
+
+  app.post("/api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue", async (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<CreateIssueFromMultiremiFeishuMessageInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const token = currentAccessToken(c);
+    const taskToken = token?.type === "task" ? token : null;
+    try {
+      const result = store.createFeishuIssueOutcome(c.req.param("messageId"), {
+        ...body,
+        workspaceId,
+        taskId: taskToken?.taskId ?? null,
+        createdBy: taskToken?.userId ?? currentRequestUserId(c),
+      });
+      if (result.created) publishIssueCreated(c, store, result.issue);
+      return c.json(
+        { ...result, outcomes: store.listFeishuMessageOutcomes(result.message.messageId) },
+        result.created ? 201 : 200,
+      );
+    } catch (error) {
+      return feishuIngestErrorResponse(c, error);
+    }
+  });
 }
 
 function createInboxOutcomeResponse(
@@ -217,6 +244,7 @@ function feishuIngestErrorResponse(c: Context, error: unknown): Response {
     || message.includes("Invalid")
     || message.includes("not configured")
     || message.includes("dedicated Feishu command")
+    || message.includes("assigned only by dedicated Feishu outcome commands")
   ) {
     return c.json({ error: message }, 400);
   }

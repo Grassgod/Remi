@@ -567,6 +567,7 @@ function mappedOperationsCommand(route: string): string | null {
     [/^POST \/api\/workspaces\/:workspaceId\/feishu\/messages\/:messageId\/resolve$/, "feishu.messages.resolve"],
     [/^POST \/api\/workspaces\/:workspaceId\/feishu\/messages\/:messageId\/notify$/, "feishu.messages.notify"],
     [/^POST \/api\/workspaces\/:workspaceId\/feishu\/messages\/:messageId\/draft-reply$/, "feishu.messages.draft-reply"],
+    [/^POST \/api\/workspaces\/:workspaceId\/feishu\/messages\/:messageId\/create-issue$/, "feishu.messages.create-issue"],
     [/^GET \/api\/issues\/:id\/change-requests$/, "scm.change-request.list"],
     [/^PUT \/api\/issues\/:issueId\/change-requests\/:changeRequestId$/, "scm.change-request.link"],
     [/^DELETE \/api\/issues\/:issueId\/change-requests\/:changeRequestId$/, "scm.change-request.unlink"],

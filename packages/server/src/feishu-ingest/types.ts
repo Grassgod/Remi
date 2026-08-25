@@ -38,6 +38,8 @@ export interface FeishuIngestionStore {
   updateClaimedSyncCursor(input: UpdateClaimedFeishuSyncCursorInput): MultiremiFeishuSyncCursor | null;
   releaseSyncStream(sourceId: string, stream: string, leaseToken: string): boolean;
   ingestBatch(sourceId: string, messages: readonly IngestedFeishuMessageInput[]): IngestFeishuBatchResult;
+  recordConnectionSuccess(sourceId: string, completedAt: string): void;
+  recordConnectionFailure(sourceId: string, errorCode: string, failedAt: string): void;
   hasDueUnprocessedMessages(sourceId: string, now: Date): boolean;
   reconcileUnprocessedMessages(sourceId: string, now: Date, limit?: number): ReconcileFeishuUnprocessedResult;
   deleteExpiredMessages(now?: Date): number;

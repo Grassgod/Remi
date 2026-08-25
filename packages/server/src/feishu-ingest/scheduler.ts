@@ -114,7 +114,7 @@ export class FeishuIngestScheduler {
       const adapter = this.adapters.get(source.type);
       const endpoint = this.sidecarEndpoints.get(source.endpointName);
       const cursor = this.store.getSyncCursor(source.id, STREAM);
-      if (!adapter || !endpoint || source.allowlist.length === 0 || !feishuPollIsDue(source, cursor, now)) {
+      if (source.allowlist.length === 0 || !feishuPollIsDue(source, cursor, now)) {
         result.skipped += 1;
         continue;
       }
@@ -154,9 +154,9 @@ export class FeishuIngestScheduler {
 
   private async pollSource(
     source: MultiremiFeishuSource,
-    endpoint: string,
+    endpoint: string | null | undefined,
     previous: MultiremiFeishuSyncCursor | null,
-    adapter: FeishuSourceAdapter,
+    adapter: FeishuSourceAdapter | undefined,
     startedAt: Date,
   ): Promise<{ completed: boolean; inserted: number; updated: number; eventsCreated: number; error: string | null }> {
     if (this.inFlight.has(source.id)) {
@@ -180,6 +180,8 @@ export class FeishuIngestScheduler {
         return { completed: false, inserted, updated, eventsCreated, error: null };
       }
       leaseToken = cursor.leaseToken;
+      if (!adapter) throw new PersonalAutomationFeishuError("adapter_unavailable", false);
+      if (!endpoint) throw new PersonalAutomationFeishuError("sidecar_endpoint_unconfigured", false);
       const cycle = pollingCycle(source, cursor, startedAt);
       cursor = this.writeClaimedCursor(source.id, leaseToken, cursor, {
         lastStartedAt: startedAt.toISOString(),
@@ -213,6 +215,7 @@ export class FeishuIngestScheduler {
             lastCompletedAt: completedAt,
             lastError: null,
           });
+          this.store.recordConnectionSuccess(source.id, completedAt);
           return { completed: true, inserted, updated, eventsCreated, error: null };
         }
       }
@@ -222,7 +225,7 @@ export class FeishuIngestScheduler {
         log.warn(`Feishu ingest lease was lost for source ${source.id}`);
         return { completed: false, inserted, updated, eventsCreated, error: null };
       }
-      const message = errorMessage(error).slice(0, 500);
+      const message = connectionErrorCode(error);
       if (leaseToken && cursor) {
         try {
           this.writeClaimedCursor(source.id, leaseToken, cursor, { lastError: message });
@@ -230,6 +233,7 @@ export class FeishuIngestScheduler {
           if (!(writeError instanceof FeishuLeaseLostError)) throw writeError;
         }
       }
+      this.store.recordConnectionFailure(source.id, message, this.now().toISOString());
       log.warn(`Feishu ingest failed for source ${source.id}: ${message}`);
       return { completed: false, inserted, updated, eventsCreated, error: message };
     } finally {
@@ -279,6 +283,11 @@ export class FeishuIngestScheduler {
 }
 
 class FeishuLeaseLostError extends Error {}
+
+function connectionErrorCode(error: unknown): string {
+  if (error instanceof PersonalAutomationFeishuError) return error.code;
+  return "ingest_failed";
+}
 
 export function feishuPollIsDue(
   source: MultiremiFeishuSource,

@@ -5,6 +5,7 @@ import { createLogger } from "@shared/logger.js";
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
 const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
+const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -1156,6 +1157,11 @@ export function runMigrations(db: SqlDatabase): void {
       poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
       unprocessed_retry_seconds INTEGER NOT NULL DEFAULT 900,
       unprocessed_retry_limit INTEGER NOT NULL DEFAULT 3,
+      last_successful_ingest_at TEXT,
+      last_error_code TEXT,
+      last_error_at TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      connection_alerted_at TEXT,
       access_token_encrypted TEXT,
       access_token_hint TEXT,
       created_at TEXT NOT NULL,
@@ -1217,9 +1223,6 @@ export function runMigrations(db: SqlDatabase): void {
       ON multiremi_feishu_messages(workspace_id, chat_id, created_at, message_id);
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_source
       ON multiremi_feishu_messages(source_id, ingested_at, message_id);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_source_unprocessed
-      ON multiremi_feishu_messages(source_id, processed_at, last_retry_at, ingested_at, message_id);
-
     CREATE TABLE IF NOT EXISTS multiremi_feishu_message_outcomes (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1939,6 +1942,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");
   addColumnIfMissing(db, "multiremi_inbox_items", "details TEXT");
   ensureInboxGenericSchema(db);
+  runMigrationOnce(db, FEISHU_INGEST_V2_MIGRATION, () => ensureFeishuIngestV2Schema(db));
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_autopilots", "session_policy TEXT NOT NULL DEFAULT 'new'");
@@ -2337,6 +2341,32 @@ function addColumnIfMissing(db: SqlDatabase, table: string, definition: string):
     }
     return false;
   }
+}
+
+function ensureFeishuIngestV2Schema(db: SqlDatabase): void {
+  addColumnIfMissing(db, "multiremi_feishu_sources", "endpoint_name TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "unprocessed_retry_seconds INTEGER NOT NULL DEFAULT 900");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "unprocessed_retry_limit INTEGER NOT NULL DEFAULT 3");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "last_successful_ingest_at TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "last_error_code TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "last_error_at TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "consecutive_failures INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_feishu_sources", "connection_alerted_at TEXT");
+  // V1 stored arbitrary URLs. They cannot be trusted as V2 endpoint names, so
+  // legacy sources are disabled and must be explicitly rebound by an admin.
+  db.run(
+    `UPDATE multiremi_feishu_sources
+     SET endpoint_name = 'legacy_' || LOWER(id), enabled = 0
+     WHERE endpoint_name IS NULL OR endpoint_name = ''`,
+  );
+  addColumnIfMissing(db, "multiremi_feishu_messages", "retry_count INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_feishu_messages", "last_retry_at TEXT");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_feishu_sources_endpoint_name
+      ON multiremi_feishu_sources(workspace_id, endpoint_name);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_messages_source_unprocessed
+      ON multiremi_feishu_messages(source_id, processed_at, last_retry_at, ingested_at, message_id);
+  `);
 }
 
 function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {

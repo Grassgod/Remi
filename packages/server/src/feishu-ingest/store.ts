@@ -10,6 +10,10 @@ export function feishuIngestionStore(store: MultiremiStore): FeishuIngestionStor
     releaseSyncStream: (sourceId, stream, leaseToken) =>
       store.releaseFeishuSyncStream(sourceId, stream, leaseToken),
     ingestBatch: (sourceId, messages) => store.ingestFeishuBatch(sourceId, messages),
+    recordConnectionSuccess: (sourceId, completedAt) =>
+      store.recordFeishuConnectionSuccess(sourceId, completedAt),
+    recordConnectionFailure: (sourceId, errorCode, failedAt) =>
+      store.recordFeishuConnectionFailure(sourceId, errorCode, failedAt),
     hasDueUnprocessedMessages: (sourceId, now) => store.hasDueUnprocessedFeishuMessages(sourceId, now),
     reconcileUnprocessedMessages: (sourceId, now, limit) =>
       store.reconcileUnprocessedFeishuMessages(sourceId, now, limit),

@@ -5839,6 +5839,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "feishu.messages.create-issue": {
+      "command": "remi feishu messages create-issue",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.create-issue",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "feishu.messages.notify": {
       "command": "remi feishu messages notify",
       "aliases": [],
@@ -9110,6 +9127,9 @@
     },
     "POST /api/workspaces/:id/ssh-mesh/test": {
       "command": "workspace.ssh-mesh.test"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue": {
+      "command": "feishu.messages.create-issue"
     },
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply": {
       "command": "feishu.messages.draft-reply"

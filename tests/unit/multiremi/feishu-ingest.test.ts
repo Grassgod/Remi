@@ -55,12 +55,18 @@ describe("Feishu message ingestion", () => {
     expect(() => store.resolveFeishuMessage(allowed.messageId, {
       workspaceId: "local",
       outcome: "issue_created",
-    })).toThrow("ref is required");
+    })).toThrow("dedicated Feishu command");
     expect(() => store.resolveFeishuMessage(allowed.messageId, {
       workspaceId: "local",
       outcome: "notified",
       ref: "inbox:fake",
     })).toThrow("dedicated Feishu command");
+    expect(() => store.resolveFeishuMessage(allowed.messageId, {
+      workspaceId: "local",
+      outcome: "ignored",
+      ref: "issue:fake",
+      reason: "forged ref",
+    })).toThrow("assigned only by dedicated Feishu outcome commands");
 
     const ignored = store.resolveFeishuMessage(allowed.messageId, {
       workspaceId: "local",
@@ -68,16 +74,15 @@ describe("Feishu message ingestion", () => {
       reason: "casual conversation",
     });
     expect(ignored.message.processedAt).toBeString();
-    const issue = store.createIssue({ title: "Tracked from Feishu" });
-    const linked = store.resolveFeishuMessage(allowed.messageId, {
+    const dismissed = store.resolveFeishuMessage(allowed.messageId, {
       workspaceId: "local",
-      outcome: "issue_created",
-      ref: `issue:${issue.key}`,
+      outcome: "dismissed",
+      reason: "superseded",
     });
-    expect(linked.outcome.ref).toBe(`issue:${issue.id}`);
+    expect(dismissed.outcome.reason).toBe("superseded");
     const outcomeKinds = store.listFeishuMessageOutcomes(allowed.messageId).map((entry) => entry.outcomeKind);
     expect(outcomeKinds).toHaveLength(2);
-    expect(outcomeKinds).toEqual(expect.arrayContaining(["ignored", "issue_created"]));
+    expect(outcomeKinds).toEqual(expect.arrayContaining(["ignored", "dismissed"]));
     expect(store.listFeishuMessages({ workspaceId: "local", unprocessed: true })).toEqual([]);
   });
 
@@ -339,14 +344,25 @@ describe("Feishu message ingestion", () => {
     expect(forgedIssue.status).toBe(400);
     expect(store.listFeishuMessageOutcomes("om_issue")).toEqual([]);
 
-    const issue = store.createIssue({ title: "Real Feishu follow-up" });
-    const linkedIssue = await app.request("/api/workspaces/local/feishu/messages/om_issue/resolve", {
+    const linkedIssue = await app.request("/api/workspaces/local/feishu/messages/om_issue/create-issue", {
       method: "POST",
       headers,
-      body: JSON.stringify({ outcome: "issue_created", ref: `issue:${issue.key}` }),
+      body: JSON.stringify({ title: "Real Feishu follow-up", description: "Created atomically" }),
     });
-    expect(linkedIssue.status).toBe(200);
-    expect((await linkedIssue.json()).outcome.ref).toBe(`issue:${issue.id}`);
+    expect(linkedIssue.status).toBe(201);
+    const linkedIssueBody = await linkedIssue.json();
+    expect(linkedIssueBody.outcome.ref).toBe(`issue:${linkedIssueBody.issue.id}`);
+    expect(linkedIssueBody.issue.contextRefs).toEqual([
+      expect.objectContaining({ type: "feishu_message", message_id: "om_issue" }),
+    ]);
+    const replayedIssue = await app.request("/api/workspaces/local/feishu/messages/om_issue/create-issue", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "This retry must not create a duplicate" }),
+    });
+    expect(replayedIssue.status).toBe(200);
+    expect((await replayedIssue.json()).issue.id).toBe(linkedIssueBody.issue.id);
+    expect(store.listIssues({ workspaceId: "local" }).filter((entry) => entry.title.includes("Feishu"))).toHaveLength(1);
 
     const missingRecipientCredential = await store.createTaskAccessToken(task, "missing-user");
     const inboxCountBefore = store.listInboxItems().length;
@@ -399,12 +415,66 @@ describe("Feishu message ingestion", () => {
     expect(store.listFeishuMessageOutcomes("om_retry")).toEqual([
       expect.objectContaining({ outcomeKind: "dismissed", reason: "unprocessed_timeout", taskId: null }),
     ]);
-    expect(store.getFeishuSourceStatus(source.id)).toEqual({
+    expect(store.getFeishuSourceStatus(source.id)).toMatchObject({
       sourceId: source.id,
       unprocessedCount: 0,
       timedOutCount: 1,
       oldestUnprocessedAt: null,
       maximumRetryCount: 0,
+    });
+  });
+
+  it("reports connection lag and sends one alert per failure episode", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const source = store.createFeishuSource({
+      endpointName: "local",
+      pollIntervalSeconds: 3,
+      allowlist: [{ chatId: "oc_health01", addedAt: "2026-08-25T10:00:00.000Z" }],
+    });
+    const adapter = new SequencedAdapter([
+      new Error("secret-shaped transport failure"),
+      new Error("second transport failure"),
+      new Error("third transport failure"),
+      new Error("fourth transport failure"),
+      { messages: [], cursor: null, done: true },
+    ]);
+    let current = new Date("2026-08-25T10:10:00.000Z");
+    const scheduler = new FeishuIngestScheduler({
+      store: feishuIngestionStore(store),
+      adapters: [adapter],
+      sidecarEndpoints,
+      now: () => current,
+    });
+
+    for (let failure = 1; failure <= 4; failure += 1) {
+      expect(await scheduler.runOnce(current)).toMatchObject({ attempted: 1, failed: 1 });
+      expect(store.getFeishuSourceStatus(source.id, current)).toMatchObject({
+        sourceId: source.id,
+        lastSuccessfulIngestAt: null,
+        lastErrorCode: "ingest_failed",
+        lastErrorAt: current.toISOString(),
+        lagSeconds: null,
+        consecutiveFailures: failure,
+        connectionAlertedAt: failure >= 3 ? expect.any(String) : null,
+      });
+      current = new Date(current.getTime() + 60_000);
+    }
+    const alerts = store.listInboxItems().filter((item) => item.type === "feishu_ingest_connection_alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      severity: "attention",
+      details: { source_id: source.id, error_code: "ingest_failed", consecutive_failures: 3 },
+    });
+    expect(JSON.stringify(alerts[0])).not.toContain("secret-shaped");
+
+    expect(await scheduler.runOnce(current)).toMatchObject({ completed: 1, failed: 0 });
+    expect(store.getFeishuSourceStatus(source.id, current)).toMatchObject({
+      lastSuccessfulIngestAt: current.toISOString(),
+      lastErrorCode: "ingest_failed",
+      lagSeconds: 0,
+      consecutiveFailures: 0,
+      connectionAlertedAt: null,
     });
   });
 

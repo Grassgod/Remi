@@ -66,6 +66,12 @@ recreate the sidecar whenever it replaces the API container.
   `unprocessed_timeout`.
 - `notify` and `draft-reply` create Inbox items only. Ingestion never sends a
   Feishu message; a draft still requires a separate human-approved send path.
-- Source status exposes unresolved backlog, terminal timeout count, oldest
-  unresolved timestamp, and maximum retry count through
-  `remi feishu source status <source>`.
+- `create-issue` creates the Issue and its audited `issue_created` outcome in
+  one transaction. Replaying the command returns the same Issue instead of
+  creating a duplicate.
+- Source status exposes the most recent successful ingestion, last sanitized
+  error code, connection lag, consecutive failures, unresolved backlog, and
+  timeout count through `remi feishu source status <source>`.
+- After three consecutive connection failures, the workspace owner receives a
+  deduplicated Inbox alert. Further failures do not create more alerts until a
+  successful poll resets the failure episode.

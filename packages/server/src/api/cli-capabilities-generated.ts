@@ -4075,6 +4075,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "feishu.messages.create-issue": {
+      "command": "remi feishu messages create-issue",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.create-issue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "feishu.messages.notify": {
       "command": "remi feishu messages notify",
       "auth": [

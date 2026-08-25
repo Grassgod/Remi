@@ -106,6 +106,78 @@ describe("store migrations", () => {
     ]));
   });
 
+  it("upgrades the first Feishu ingestion schema without trusting its stored endpoint URL", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_feishu_sources (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'personal_automation',
+        endpoint TEXT NOT NULL,
+        allowlist TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        retention_days INTEGER NOT NULL DEFAULT 90,
+        poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+        access_token_encrypted TEXT,
+        access_token_hint TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, endpoint)
+      );
+      CREATE TABLE multiremi_feishu_messages (
+        message_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        source_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        sender TEXT NOT NULL DEFAULT '{}',
+        content TEXT NOT NULL DEFAULT '{}',
+        searchable_text TEXT NOT NULL DEFAULT '',
+        content_fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        ingested_at TEXT NOT NULL,
+        processed_at TEXT
+      );
+      INSERT INTO multiremi_feishu_sources (
+        id, workspace_id, name, endpoint, created_at, updated_at
+      ) VALUES (
+        'fsrc_legacy', 'local', 'Legacy', 'http://127.0.0.1:8042',
+        '2026-08-25T00:00:00.000Z', '2026-08-25T00:00:00.000Z'
+      );
+      INSERT INTO multiremi_feishu_messages (
+        message_id, source_id, chat_id, content_fingerprint, created_at, ingested_at
+      ) VALUES (
+        'om_legacy', 'fsrc_legacy', 'oc_legacy', 'fingerprint',
+        '2026-08-25T00:01:00.000Z', '2026-08-25T00:02:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_feishu_sources")).toEqual(expect.arrayContaining([
+      "endpoint_name", "unprocessed_retry_seconds", "unprocessed_retry_limit",
+      "last_successful_ingest_at", "last_error_code", "last_error_at",
+      "consecutive_failures", "connection_alerted_at",
+    ]));
+    expect(columnNames(database, "multiremi_feishu_messages")).toEqual(expect.arrayContaining([
+      "retry_count", "last_retry_at",
+    ]));
+    expect(database.query(
+      "SELECT endpoint_name, enabled FROM multiremi_feishu_sources WHERE id = 'fsrc_legacy'",
+    ).get()).toEqual({ endpoint_name: "legacy_fsrc_legacy", enabled: 0 });
+    expect(database.query(
+      "SELECT retry_count, last_retry_at FROM multiremi_feishu_messages WHERE message_id = 'om_legacy'",
+    ).get()).toEqual({ retry_count: 0, last_retry_at: null });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_v2'",
+    ).get()).toEqual({ count: 1 });
+
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_v2'",
+    ).get()).toEqual({ count: 1 });
+  });
+
   it("migrates legacy GitHub PR projections and settings without dual-writing", () => {
     const database = freshDb();
     migrate(database);

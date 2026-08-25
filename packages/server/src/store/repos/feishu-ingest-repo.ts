@@ -3,6 +3,7 @@ import type { StoreContext } from "@multiremi/store/context.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { normalizeFeishuSidecarEndpointName } from "@multiremi/feishu-ingest/endpoints.js";
 import type {
+  CreateIssueFromMultiremiFeishuMessageInput,
   CreateMultiremiFeishuSourceInput,
   MultiremiFeishuAllowlistEntry,
   MultiremiFeishuMessage,
@@ -11,6 +12,7 @@ import type {
   MultiremiFeishuSource,
   MultiremiFeishuSyncCursor,
   MultiremiInboxItem,
+  MultiremiIssue,
   MultiremiFeishuSourceStatus,
   ResolveMultiremiFeishuMessageInput,
   UpdateMultiremiFeishuSourceInput,
@@ -78,6 +80,19 @@ export interface CreateFeishuInboxOutcomeResult {
   inboxItem: MultiremiInboxItem;
 }
 
+export interface CreateFeishuIssueOutcomeInput extends CreateIssueFromMultiremiFeishuMessageInput {
+  workspaceId: string;
+  taskId?: string | null;
+  createdBy?: string | null;
+}
+
+export interface CreateFeishuIssueOutcomeResult {
+  message: MultiremiFeishuMessage;
+  outcome: MultiremiFeishuMessageOutcome;
+  issue: MultiremiIssue;
+  created: boolean;
+}
+
 export interface ReconcileFeishuUnprocessedResult {
   retried: number;
   dismissed: number;
@@ -91,6 +106,8 @@ const OUTCOME_KINDS = new Set<MultiremiFeishuMessageOutcomeKind>([
   "ignored",
   "dismissed",
 ]);
+
+const CONNECTION_ALERT_THRESHOLD = 3;
 
 export class FeishuIngestRepo {
   constructor(private readonly ctx: StoreContext) {}
@@ -423,9 +440,14 @@ export class FeishuIngestRepo {
     return rows.map(toOutcome);
   }
 
-  getSourceStatus(sourceId: string): MultiremiFeishuSourceStatus {
+  getSourceStatus(sourceId: string, now: Date = new Date()): MultiremiFeishuSourceStatus {
     const source = this.getSource(sourceId);
     if (!source) throw new Error(`Feishu source not found: ${sourceId}`);
+    const connection = this.ctx.db.query(
+      `SELECT last_successful_ingest_at, last_error_code, last_error_at,
+              consecutive_failures, connection_alerted_at
+       FROM multiremi_feishu_sources WHERE id = ?`,
+    ).get(sourceId) as Row;
     const backlog = this.ctx.db.query(
       `SELECT COUNT(*) AS count, MIN(ingested_at) AS oldest, MAX(retry_count) AS maximum_retry_count
        FROM multiremi_feishu_messages
@@ -437,13 +459,84 @@ export class FeishuIngestRepo {
        JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
        WHERE m.source_id = ? AND o.outcome_kind = 'dismissed' AND o.reason = 'unprocessed_timeout'`,
     ).get(sourceId) as Row;
+    const lastSuccessfulIngestAt = nullableString(connection.last_successful_ingest_at);
+    const successfulAt = lastSuccessfulIngestAt ? Date.parse(lastSuccessfulIngestAt) : Number.NaN;
     return {
       sourceId,
       unprocessedCount: Number(backlog.count ?? 0),
       timedOutCount: Number(timedOut.count ?? 0),
       oldestUnprocessedAt: nullableString(backlog.oldest),
       maximumRetryCount: Number(backlog.maximum_retry_count ?? 0),
+      lastSuccessfulIngestAt,
+      lastErrorCode: nullableString(connection.last_error_code),
+      lastErrorAt: nullableString(connection.last_error_at),
+      lagSeconds: Number.isFinite(successfulAt)
+        ? Math.max(0, Math.floor((now.getTime() - successfulAt) / 1_000))
+        : null,
+      consecutiveFailures: Number(connection.consecutive_failures ?? 0),
+      connectionAlertedAt: nullableString(connection.connection_alerted_at),
     };
+  }
+
+  recordConnectionSuccess(sourceId: string, completedAt: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_feishu_sources
+       SET last_successful_ingest_at = ?, consecutive_failures = 0,
+           connection_alerted_at = NULL, updated_at = ?
+       WHERE id = ?`,
+      [completedAt, completedAt, sourceId],
+    );
+  }
+
+  recordConnectionFailure(sourceId: string, errorCode: string, failedAt: string): MultiremiInboxItem | null {
+    const normalizedCode = normalizeConnectionErrorCode(errorCode);
+    return this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `UPDATE multiremi_feishu_sources
+         SET last_error_code = ?, last_error_at = ?,
+             consecutive_failures = consecutive_failures + 1, updated_at = ?
+         WHERE id = ?`,
+        [normalizedCode, failedAt, failedAt, sourceId],
+      );
+      const source = this.ctx.db.query(
+        `SELECT id, workspace_id, name, consecutive_failures, connection_alerted_at
+         FROM multiremi_feishu_sources WHERE id = ?`,
+      ).get(sourceId) as Row | null;
+      if (!source
+        || Number(source.consecutive_failures ?? 0) < CONNECTION_ALERT_THRESHOLD
+        || nullableString(source.connection_alerted_at)) return null;
+      const recipient = this.ctx.db.query(
+        `SELECT id FROM multiremi_workspace_members
+         WHERE workspace_id = ? AND archived_at IS NULL
+         ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+                  created_at ASC, id ASC
+         LIMIT 1`,
+      ).get(String(source.workspace_id)) as Row | null;
+      if (!recipient) return null;
+      const item = this.ctx.createInboxItem({
+        workspaceId: String(source.workspace_id),
+        memberId: String(recipient.id),
+        severity: "attention",
+        type: "feishu_ingest_connection_alert",
+        title: "飞书消息源连接异常",
+        body: `消息源 ${String(source.name)} 连续拉取失败，请检查 sidecar 连接。`,
+        actorType: "system",
+        actorId: null,
+        details: {
+          source_id: sourceId,
+          error_code: normalizedCode,
+          consecutive_failures: Number(source.consecutive_failures),
+        },
+        emitEvent: true,
+      });
+      if (!item) return null;
+      this.ctx.db.run(
+        `UPDATE multiremi_feishu_sources SET connection_alerted_at = ?, updated_at = ?
+         WHERE id = ? AND connection_alerted_at IS NULL`,
+        [failedAt, failedAt, sourceId],
+      );
+      return item;
+    })();
   }
 
   hasDueUnprocessedMessages(sourceId: string, now: Date): boolean {
@@ -521,16 +614,14 @@ export class FeishuIngestRepo {
     outcome: MultiremiFeishuMessageOutcome;
   } {
     if (!OUTCOME_KINDS.has(input.outcome)) throw new Error("invalid Feishu message outcome");
-    if (input.outcome === "notified" || input.outcome === "reply_drafted") {
+    if (["issue_created", "notified", "reply_drafted"].includes(input.outcome)) {
       throw new Error(`${input.outcome} outcomes must use the dedicated Feishu command`);
     }
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
-    let ref = cleanOptionalString(input.ref);
+    const ref = cleanOptionalString(input.ref);
     const reason = cleanOptionalString(input.reason);
     const taskId = cleanOptionalString(input.taskId ?? input.task_id);
-    if (["issue_created", "notified", "reply_drafted"].includes(input.outcome) && !ref) {
-      throw new Error(`ref is required for ${input.outcome} outcomes`);
-    }
+    if (ref) throw new Error("ref is assigned only by dedicated Feishu outcome commands");
     if (["ignored", "dismissed"].includes(input.outcome) && !reason) {
       throw new Error(`reason is required for ${input.outcome} outcomes`);
     }
@@ -538,12 +629,6 @@ export class FeishuIngestRepo {
       const message = this.getMessage(messageId);
       if (!message || message.workspaceId !== workspaceId) throw new Error(`Feishu message not found: ${messageId}`);
       this.assertTaskWorkspace(taskId, workspaceId);
-      if (input.outcome === "issue_created") {
-        const issueRef = ref?.startsWith("issue:") ? ref.slice("issue:".length) : ref;
-        const issue = issueRef ? this.ctx.issues().getIssueByRef(issueRef, workspaceId) : null;
-        if (!issue) throw new Error("ref must reference an issue in this workspace");
-        ref = `issue:${issue.id}`;
-      }
       const createdAt = nowIso();
       const outcome = this.insertOutcome({
         workspaceId,
@@ -603,6 +688,70 @@ export class FeishuIngestRepo {
       });
       this.markMessageProcessed(messageId, createdAt);
       return { message: this.getMessage(messageId)!, outcome, inboxItem };
+    })();
+  }
+
+  createIssueOutcome(
+    messageId: string,
+    input: CreateFeishuIssueOutcomeInput,
+  ): CreateFeishuIssueOutcomeResult {
+    const title = cleanRequiredText(input.title, "title");
+    return this.ctx.db.transaction(() => {
+      const message = this.getMessage(messageId);
+      if (!message || message.workspaceId !== input.workspaceId) {
+        throw new Error(`Feishu message not found: ${messageId}`);
+      }
+      const taskId = cleanOptionalString(input.taskId);
+      this.assertTaskWorkspace(taskId, input.workspaceId);
+      // UPDATE is deliberately a no-op: it locks this message row on Postgres,
+      // making retries and concurrent workers observe an already-created outcome.
+      this.ctx.db.run(
+        "UPDATE multiremi_feishu_messages SET processed_at = processed_at WHERE message_id = ?",
+        [messageId],
+      );
+      const existingRow = this.ctx.db.query(
+        `SELECT * FROM multiremi_feishu_message_outcomes
+         WHERE message_id = ? AND outcome_kind = 'issue_created'
+         ORDER BY created_at ASC, id ASC LIMIT 1`,
+      ).get(messageId) as Row | null;
+      if (existingRow) {
+        const outcome = toOutcome(existingRow);
+        const issueId = outcome.ref?.startsWith("issue:") ? outcome.ref.slice("issue:".length) : "";
+        const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
+        if (!issue || issue.workspaceId !== input.workspaceId) {
+          throw new Error("existing Feishu issue outcome is invalid");
+        }
+        return { message: this.getMessage(messageId)!, outcome, issue, created: false };
+      }
+      const issue = this.ctx.issues().createIssue({
+        title,
+        description: input.description ?? null,
+        priority: input.priority,
+        workspaceId: input.workspaceId,
+        projectId: input.projectId ?? input.project_id ?? null,
+        assigneeType: input.assigneeType ?? input.assignee_type ?? null,
+        assigneeId: input.assigneeId ?? input.assignee_id ?? null,
+        contextRefs: [{
+          type: "feishu_message",
+          message_id: message.messageId,
+          source_id: message.sourceId,
+          chat_id: message.chatId,
+          message_app_link: message.messageAppLink,
+        }],
+        createdBy: cleanOptionalString(input.createdBy),
+      });
+      const createdAt = nowIso();
+      const outcome = this.insertOutcome({
+        workspaceId: input.workspaceId,
+        messageId,
+        outcomeKind: "issue_created",
+        ref: `issue:${issue.id}`,
+        reason: null,
+        taskId,
+        createdAt,
+      });
+      this.markMessageProcessed(messageId, createdAt);
+      return { message: this.getMessage(messageId)!, outcome, issue, created: true };
     })();
   }
 
@@ -753,6 +902,11 @@ function cleanRequiredText(value: unknown, field: string): string {
   if (!text) throw new Error(`${field} is required`);
   if (text.length > 20_000) throw new Error(`${field} must not exceed 20000 characters`);
   return text;
+}
+
+function normalizeConnectionErrorCode(value: unknown): string {
+  const code = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[a-z0-9][a-z0-9_.-]{0,127}$/u.test(code) ? code : "ingest_failed";
 }
 
 function encodeCursor(value: Record<string, unknown> | null): string | null {

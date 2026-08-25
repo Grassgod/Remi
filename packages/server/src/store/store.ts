@@ -18,6 +18,8 @@ import {
   FeishuIngestRepo,
   type CreateFeishuInboxOutcomeInput,
   type CreateFeishuInboxOutcomeResult,
+  type CreateFeishuIssueOutcomeInput,
+  type CreateFeishuIssueOutcomeResult,
   type ClaimFeishuSyncStreamInput,
   type IngestedFeishuMessageInput,
   type IngestFeishuBatchResult,
@@ -1258,8 +1260,16 @@ runMigrations(this.db);
     return this.feishuIngest.listMessageOutcomes(messageId);
   }
 
-  getFeishuSourceStatus(sourceId: string): MultiremiFeishuSourceStatus {
-    return this.feishuIngest.getSourceStatus(sourceId);
+  getFeishuSourceStatus(sourceId: string, now?: Date): MultiremiFeishuSourceStatus {
+    return this.feishuIngest.getSourceStatus(sourceId, now);
+  }
+
+  recordFeishuConnectionSuccess(sourceId: string, completedAt: string): void {
+    this.feishuIngest.recordConnectionSuccess(sourceId, completedAt);
+  }
+
+  recordFeishuConnectionFailure(sourceId: string, errorCode: string, failedAt: string): MultiremiInboxItem | null {
+    return this.feishuIngest.recordConnectionFailure(sourceId, errorCode, failedAt);
   }
 
   hasDueUnprocessedFeishuMessages(sourceId: string, now: Date): boolean {
@@ -1287,6 +1297,13 @@ runMigrations(this.db);
     input: CreateFeishuInboxOutcomeInput,
   ): CreateFeishuInboxOutcomeResult {
     return this.feishuIngest.createInboxOutcome(messageId, outcomeKind, input);
+  }
+
+  createFeishuIssueOutcome(
+    messageId: string,
+    input: CreateFeishuIssueOutcomeInput,
+  ): CreateFeishuIssueOutcomeResult {
+    return this.feishuIngest.createIssueOutcome(messageId, input);
   }
 
   deleteExpiredFeishuMessages(now?: Date): number {
