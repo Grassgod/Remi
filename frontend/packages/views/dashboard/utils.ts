@@ -9,6 +9,7 @@ import {
   estimateCost,
   formatDateLabel,
   formatShortDate,
+  isModelPriced,
   todayIso,
   weekStartIso,
 } from "../runtimes/utils";
@@ -63,6 +64,9 @@ export interface AgentCostRow {
   tokens: number;
   cost: number;
   taskCount: number;
+  /** Tokens whose model didn't resolve to a price — they contribute $0 to
+   *  `cost`, so a non-zero value here means `cost` under-reports. */
+  unpricedTokens: number;
 }
 
 // Fold per-(agent, model) rows into one row per agent. Cost is the sum
@@ -76,10 +80,13 @@ export function aggregateAgentTokens(rows: DashboardUsageByAgent[]): AgentCostRo
       tokens: 0,
       cost: 0,
       taskCount: 0,
+      unpricedTokens: 0,
     };
-    entry.tokens +=
+    const rowTokens =
       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    entry.tokens += rowTokens;
     entry.cost += estimateCost(r);
+    if (!isModelPriced(r.model)) entry.unpricedTokens += rowTokens;
     entry.taskCount += r.task_count;
     map.set(r.agent_id, entry);
   }
@@ -92,6 +99,17 @@ export interface AgentDashboardRow {
   cost: number;
   seconds: number;
   taskCount: number;
+  /** True when `cost` cannot honestly be stated as a dollar figure (MUL-93):
+   *  either every recorded token belongs to an unpriced model (cost would
+   *  read $0.00 while spend clearly happened), or the agent ran tasks but no
+   *  token usage was recorded at all, so cost is underivable. The UI renders
+   *  "—" instead of $0.00 for these rows. */
+  costUnavailable: boolean;
+  /** True when a run-time rollup row backed this agent. Without one,
+   *  `seconds: 0` means "no terminal run recorded" (e.g. tokens reported by
+   *  an in-flight task) — rendering it as "<1m" would fabricate a duration,
+   *  so the UI shows "—" instead. */
+  hasRunTime: boolean;
 }
 
 // Merge per-agent token totals with per-agent run-time totals into one
@@ -119,11 +137,16 @@ export function mergeAgentDashboardRows(
       cost: r.cost,
       seconds: rt?.total_seconds ?? 0,
       taskCount: rt ? rt.task_count : r.taskCount,
+      // Tokens recorded but every model unpriced → $0.00 would be fabricated.
+      costUnavailable: r.tokens > 0 && r.cost === 0 && r.unpricedTokens > 0,
+      hasRunTime: rt !== undefined,
     });
   }
   // Agents with run-time rows but zero tokens still belong on the list
   // (a task that errored before producing usage). Their token columns
-  // stay at 0.
+  // stay at 0 — that's a factual "no usage recorded" — but cost is marked
+  // unavailable because a dollar figure can't be derived from unrecorded
+  // usage.
   for (const r of runTimeRows) {
     if (merged.has(r.agent_id)) continue;
     merged.set(r.agent_id, {
@@ -132,6 +155,8 @@ export function mergeAgentDashboardRows(
       cost: 0,
       seconds: r.total_seconds,
       taskCount: r.task_count,
+      costUnavailable: r.task_count > 0,
+      hasRunTime: true,
     });
   }
   return Array.from(merged.values()).toSorted((a, b) => {

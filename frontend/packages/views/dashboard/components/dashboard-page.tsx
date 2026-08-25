@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { BarChart3, FolderKanban } from "lucide-react";
+import { AlertCircle, BarChart3, FolderKanban } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import { Button } from "@multiremi/ui/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -40,9 +41,11 @@ import {
   addDaysIso,
   aggregateByDate,
   aggregateByWeek,
+  collectUnmappedModels,
   formatTokens,
   todayIso,
 } from "../../runtimes/utils";
+import { UnmappedPricingNotice } from "../../runtimes/components/usage-section";
 import { useT } from "../../i18n";
 import {
   aggregateAgentTokens,
@@ -234,11 +237,23 @@ export function DashboardPage() {
     runTimeQuery.isLoading ||
     runTimeDailyQuery.isLoading;
 
+  // Availability per series (MUL-93). A failed fetch — HTTP error or a 2xx
+  // body that failed the strict contract schemas — must surface as "data
+  // unavailable + retry", never silently collapse to zeros via `?? []`.
+  const queries = [dailyQuery, byAgentQuery, runTimeQuery, runTimeDailyQuery];
+  const anyError = queries.some((q) => q.isError === true);
+  const allError = queries.every((q) => q.isError === true);
+  const retryFailed = () => {
+    for (const q of queries) if (q.isError === true) void q.refetch();
+  };
+
   // Four independent rollups, but the empty-state is one decision — only
-  // show "no data yet" when ALL came back empty so a project with tokens
-  // but no runs (or vice-versa) doesn't look broken.
+  // show "no data yet" when ALL four SUCCEEDED and came back empty. That is
+  // the only case where "zero" is a real measurement; a failed series must
+  // not be mistaken for an empty one.
   const hasNoData =
     !isLoading &&
+    queries.every((q) => q.isSuccess === true) &&
     dailyUsage.length === 0 &&
     byAgentUsage.length === 0 &&
     runTimeRows.length === 0 &&
@@ -307,6 +322,28 @@ export function DashboardPage() {
     [agentTokenRows, runTimeRows],
   );
 
+  // Metric-level availability (MUL-93). Each KPI resolves to one of four
+  // honest states: failed (series didn't load), not-collected (tasks ran
+  // but no token usage was recorded — the cross-series signal that the
+  // usage pipeline is broken, see MUL-92), unpriced (tokens exist but no
+  // model resolves to a price, so a dollar figure would be fabricated),
+  // or a real measurement (including a genuine 0).
+  const tokensTotal =
+    totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
+  const unmappedModels = collectUnmappedModels(dailyUsageInWindow);
+  const tokensFailed = dailyQuery.isError === true;
+  const runTimeFailed = runTimeQuery.isError === true;
+  const usageNotCollected =
+    !tokensFailed &&
+    !runTimeFailed &&
+    tokensTotal === 0 &&
+    runTimeTotals.taskCount > 0;
+  const costUnpriced =
+    !tokensFailed &&
+    tokensTotal > 0 &&
+    totals.cost === 0 &&
+    unmappedModels.length > 0;
+
   return (
     <div className="flex h-full flex-col">
       {/* h-auto + min-h-12 + flex-wrap: the toolbar (project filter,
@@ -346,44 +383,114 @@ export function DashboardPage() {
 
           {isLoading ? (
             <DashboardSkeleton />
+          ) : allError ? (
+            <DashboardError onRetry={retryFailed} />
           ) : hasNoData ? (
             <DashboardEmpty />
           ) : (
             <>
+              {/* Partial-failure banner — some series loaded, some didn't.
+                  The affected tiles below render "—"; this banner names the
+                  situation and owns the retry entry point. */}
+              {anyError && (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs"
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+                  <p className="min-w-0 flex-1 text-foreground">
+                    {t(($) => $.error.partial)}
+                  </p>
+                  <Button type="button" variant="outline" size="sm" onClick={retryFailed}>
+                    {t(($) => $.error.retry)}
+                  </Button>
+                </div>
+              )}
+
+              {/* Pricing-gap banner — partial unmapping keeps the charts
+                  rendering while unpriced tokens silently contribute $0 to
+                  totals; give that gap a visible entry point (same component
+                  the runtime usage page uses). */}
+              <UnmappedPricingNotice usage={dailyUsageInWindow} />
+
               {/* KPI row — same 3-divide-x card grid the runtime usage
-                  section uses, expanded to four tiles. */}
+                  section uses, expanded to four tiles. Every tile prefers an
+                  explicit "—" + reason over a fabricated 0 (MUL-93); a
+                  rendered 0 is always a real measurement. */}
               <div className="grid grid-cols-1 divide-y rounded-lg border bg-card sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
                 <KpiCard
                   label={t(($) => $.kpi.cost_label, { days })}
-                  value={fmtMoney(totals.cost)}
+                  value={
+                    tokensFailed || usageNotCollected || costUnpriced
+                      ? "—"
+                      : fmtMoney(totals.cost)
+                  }
+                  hint={
+                    tokensFailed
+                      ? t(($) => $.kpi.unavailable_hint)
+                      : usageNotCollected
+                        ? t(($) => $.kpi.not_collected, {
+                            tasks: runTimeTotals.taskCount,
+                          })
+                        : costUnpriced
+                          ? t(($) => $.kpi.cost_unpriced)
+                          : undefined
+                  }
                 />
                 <KpiCard
                   label={t(($) => $.kpi.tokens_label, { days })}
-                  value={formatTokens(
-                    totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
-                  )}
-                  hint={t(($) => $.kpi.tokens_hint, {
-                    input: formatTokens(totals.input),
-                    output: formatTokens(totals.output),
-                  })}
+                  value={
+                    tokensFailed || usageNotCollected
+                      ? "—"
+                      : formatTokens(tokensTotal)
+                  }
+                  hint={
+                    tokensFailed
+                      ? t(($) => $.kpi.unavailable_hint)
+                      : usageNotCollected
+                        ? t(($) => $.kpi.not_collected, {
+                            tasks: runTimeTotals.taskCount,
+                          })
+                        : t(($) => $.kpi.tokens_hint, {
+                            input: formatTokens(totals.input),
+                            output: formatTokens(totals.output),
+                          })
+                  }
                 />
                 <KpiCard
                   label={t(($) => $.kpi.run_time_label, { days })}
-                  value={formatDuration(
-                    runTimeTotals.totalSeconds,
-                    t(($) => $.duration.less_than_minute),
-                  )}
-                  hint={t(($) => $.kpi.run_time_hint, {
-                    tasks: runTimeTotals.taskCount,
-                  })}
+                  value={
+                    runTimeFailed
+                      ? "—"
+                      : runTimeTotals.taskCount === 0
+                        ? t(($) => $.duration.zero)
+                        : formatDuration(
+                            runTimeTotals.totalSeconds,
+                            t(($) => $.duration.less_than_minute),
+                          )
+                  }
+                  hint={
+                    runTimeFailed
+                      ? t(($) => $.kpi.unavailable_hint)
+                      : runTimeTotals.taskCount === 0
+                        ? t(($) => $.kpi.no_tasks)
+                        : t(($) => $.kpi.run_time_hint, {
+                            tasks: runTimeTotals.taskCount,
+                          })
+                  }
                 />
                 <KpiCard
                   label={t(($) => $.kpi.tasks_label, { days })}
-                  value={String(runTimeTotals.taskCount)}
-                  hint={t(($) => $.kpi.tasks_hint, {
-                    failed: runTimeTotals.failedCount,
-                  })}
-                  accent={runTimeTotals.failedCount > 0 ? "default" : "default"}
+                  value={runTimeFailed ? "—" : String(runTimeTotals.taskCount)}
+                  hint={
+                    runTimeFailed
+                      ? t(($) => $.kpi.unavailable_hint)
+                      : runTimeTotals.taskCount === 0
+                        ? t(($) => $.kpi.no_tasks)
+                        : t(($) => $.kpi.tasks_hint, {
+                            failed: runTimeTotals.failedCount,
+                          })
+                  }
                 />
               </div>
 
@@ -403,6 +510,11 @@ export function DashboardPage() {
                 weeklyTime={weeklyTime}
                 weeklyTasks={weeklyTasks}
                 lessThanMinuteLabel={t(($) => $.duration.less_than_minute)}
+                tokensFailed={tokensFailed}
+                timeFailed={runTimeDailyQuery.isError === true}
+                usageNotCollected={usageNotCollected}
+                costUnpriced={costUnpriced}
+                onRetry={retryFailed}
               />
 
               {/* Per-agent leaderboard — user picks the ranking metric;
@@ -411,6 +523,9 @@ export function DashboardPage() {
                 rows={agentRows}
                 agents={agents}
                 lessThanMinuteLabel={t(($) => $.duration.less_than_minute)}
+                tokensFailed={byAgentQuery.isError === true}
+                runTimeFailed={runTimeFailed}
+                onRetry={retryFailed}
               />
             </>
           )}
@@ -490,6 +605,11 @@ function TrendBlock({
   weeklyTime,
   weeklyTasks,
   lessThanMinuteLabel,
+  tokensFailed,
+  timeFailed,
+  usageNotCollected,
+  costUnpriced,
+  onRetry,
 }: {
   dim: Dim;
   dailyCost: ReturnType<typeof aggregateByDate>["dailyCostStack"];
@@ -501,6 +621,15 @@ function TrendBlock({
   weeklyTime: ReturnType<typeof aggregateWeeklyTime>;
   weeklyTasks: ReturnType<typeof aggregateWeeklyTasks>;
   lessThanMinuteLabel: string;
+  /** Token/cost series (usage/daily) failed to load. */
+  tokensFailed: boolean;
+  /** Time/tasks series (runtime/daily) failed to load. */
+  timeFailed: boolean;
+  /** Tasks ran in the window but no token usage was recorded. */
+  usageNotCollected: boolean;
+  /** Tokens exist but no model resolves to a price. */
+  costUnpriced: boolean;
+  onRetry: () => void;
 }) {
   const { t } = useT("usage");
   const [metric, setMetric] = useState<DailyMetric>("tokens");
@@ -531,6 +660,23 @@ function TrendBlock({
         : metric === "time"
           ? totalSeconds === 0
           : totalTasks === 0;
+
+  // Why is the chart empty? An all-zero series has four honest answers
+  // (MUL-93) and they must not share one "no usage" caption: the series
+  // failed to load, usage wasn't collected, tokens can't be priced, or
+  // there genuinely was nothing in the window.
+  const metricFailed =
+    metric === "cost" || metric === "tokens" ? tokensFailed : timeFailed;
+  const placeholder: "failed" | "not_collected" | "unpriced" | "empty" | null =
+    !isEmpty && !metricFailed
+      ? null
+      : metricFailed
+        ? "failed"
+        : (metric === "cost" || metric === "tokens") && usageNotCollected
+          ? "not_collected"
+          : metric === "cost" && costUnpriced
+            ? "unpriced"
+            : "empty";
 
   const title =
     dim === "weekly"
@@ -565,12 +711,29 @@ function TrendBlock({
         />
       </div>
       <div className="min-h-[240px]">
-        {isEmpty ? (
+        {placeholder !== null ? (
           <div className="flex aspect-[3/1] flex-col items-center justify-center gap-2 rounded-md border border-dashed bg-muted/20 p-6 text-center">
-            <BarChart3 className="h-5 w-5 text-muted-foreground/50" />
+            {placeholder === "failed" ? (
+              <AlertCircle className="h-5 w-5 text-warning" />
+            ) : (
+              <BarChart3 className="h-5 w-5 text-muted-foreground/50" />
+            )}
             <p className="text-xs text-muted-foreground">
-              {t(($) => $.daily.no_data)}
+              {placeholder === "failed"
+                ? t(($) => $.daily.load_failed)
+                : placeholder === "not_collected"
+                  ? t(($) => $.daily.not_collected)
+                  : placeholder === "unpriced"
+                    ? t(($) => $.daily.cost_unpriced)
+                    : metric === "time" || metric === "tasks"
+                      ? t(($) => $.daily.no_tasks)
+                      : t(($) => $.daily.no_data)}
             </p>
+            {placeholder === "failed" && (
+              <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+                {t(($) => $.error.retry)}
+              </Button>
+            )}
           </div>
         ) : dim === "weekly" ? (
           metric === "cost" ? (
@@ -620,10 +783,18 @@ function Leaderboard({
   rows,
   agents,
   lessThanMinuteLabel,
+  tokensFailed,
+  runTimeFailed,
+  onRetry,
 }: {
   rows: AgentDashboardRow[];
   agents: { id: string; name: string }[];
   lessThanMinuteLabel: string;
+  /** usage/by-agent failed — token + cost columns are unavailable. */
+  tokensFailed: boolean;
+  /** agent-runtime failed — time + tasks columns are unavailable. */
+  runTimeFailed: boolean;
+  onRetry: () => void;
 }) {
   const { t } = useT("usage");
   const [sortBy, setSortBy] = useState<LeaderboardSort>("tokens");
@@ -667,7 +838,22 @@ function Leaderboard({
           </span>
         </div>
       </div>
-      {sortedRows.length === 0 ? (
+      {tokensFailed && runTimeFailed ? (
+        // Both sources failed — an empty list here would read as "no agent
+        // activity", which is a fabrication (MUL-93).
+        <div
+          role="alert"
+          className="flex flex-col items-center gap-2 px-4 py-8 text-center"
+        >
+          <AlertCircle className="h-5 w-5 text-warning" />
+          <p className="text-xs text-muted-foreground">
+            {t(($) => $.leaderboard.load_failed)}
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+            {t(($) => $.error.retry)}
+          </Button>
+        </div>
+      ) : sortedRows.length === 0 ? (
         <p className="px-4 py-8 text-center text-xs text-muted-foreground">
           {t(($) => $.leaderboard.no_data)}
         </p>
@@ -708,25 +894,33 @@ function Leaderboard({
                       style={{ width: `${pct}%` }}
                     />
                   </div>
+                  {/* Per-cell honesty (MUL-93): a column whose source
+                      series failed, or a cost that can't be derived
+                      (unpriced models / usage never recorded), renders "—"
+                      instead of a fabricated 0 / $0.00. */}
                   <div
                     className={`text-right text-xs tabular-nums ${sortBy === "tokens" ? "font-medium text-foreground" : "text-muted-foreground"}`}
                   >
-                    {formatTokens(row.tokens)}
+                    {tokensFailed ? "—" : formatTokens(row.tokens)}
                   </div>
                   <div
                     className={`text-right tabular-nums ${sortBy === "cost" ? "text-sm font-medium" : "text-xs text-muted-foreground"}`}
                   >
-                    ${row.cost.toFixed(2)}
+                    {tokensFailed || row.costUnavailable
+                      ? "—"
+                      : `$${row.cost.toFixed(2)}`}
                   </div>
                   <div
                     className={`text-right text-xs tabular-nums ${sortBy === "time" ? "font-medium text-foreground" : "text-muted-foreground"}`}
                   >
-                    {formatDuration(row.seconds, lessThanMinuteLabel)}
+                    {runTimeFailed || !row.hasRunTime
+                      ? "—"
+                      : formatDuration(row.seconds, lessThanMinuteLabel)}
                   </div>
                   <div
                     className={`text-right text-xs tabular-nums ${sortBy === "tasks" ? "font-medium text-foreground" : "text-muted-foreground"}`}
                   >
-                    {row.taskCount}
+                    {runTimeFailed ? "—" : row.taskCount}
                   </div>
                 </div>
               );
@@ -757,6 +951,40 @@ function DashboardEmpty() {
       <p className="mt-1 max-w-md text-xs text-muted-foreground">
         {t(($) => $.empty.body)}
       </p>
+      {/* Only rendered when every series loaded successfully AND came back
+          empty — so this zero is a real measurement, and we say so to keep
+          it distinguishable from the unavailable/error states (MUL-93). */}
+      <p className="mt-2 max-w-md text-xs text-muted-foreground/70">
+        {t(($) => $.empty.zero_hint)}
+      </p>
+    </div>
+  );
+}
+
+// Every series failed — the page has no trustworthy number to show, so it
+// shows none: an explicit failure card with a retry entry point instead of
+// a grid of fabricated zeros (MUL-93).
+function DashboardError({ onRetry }: { onRetry: () => void }) {
+  const { t } = useT("usage");
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-center rounded-lg border border-dashed py-12 text-center"
+    >
+      <AlertCircle className="h-6 w-6 text-warning" />
+      <p className="mt-3 text-sm font-medium">{t(($) => $.error.title)}</p>
+      <p className="mt-1 max-w-md text-xs text-muted-foreground">
+        {t(($) => $.error.body)}
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="mt-4"
+        onClick={onRetry}
+      >
+        {t(($) => $.error.retry)}
+      </Button>
     </div>
   );
 }

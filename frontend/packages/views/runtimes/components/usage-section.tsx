@@ -134,9 +134,12 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
   // hourly rollup on the same `tz` we pass here, so every frontend window
   // calculation shares one axis with the server.
   const tz = useViewingTimezone();
-  const { data: usage = [], isLoading: loading } = useQuery(
-    runtimeUsageOptions(runtimeId, 180, tz),
-  );
+  const {
+    data: usage = [],
+    isLoading: loading,
+    isError,
+    refetch,
+  } = useQuery(runtimeUsageOptions(runtimeId, 180, tz));
   const [dim, setDim] = useState<Exclude<WhenTab, "heatmap">>("daily");
   const [days, setDays] = useState<TimeRange>(30);
   // Subscribe so the KPI cards (which call estimateCost at render-time, not
@@ -146,6 +149,9 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
   useCustomPricingStore((s) => s.pricings);
 
   if (loading) return <UsageSkeleton />;
+  // Failed fetch is NOT "no usage" — zeros here would be fabricated (MUL-93).
+  // Surface the failure and give the user a retry entry point.
+  if (isError) return <UsageError onRetry={() => refetch()} />;
   if (usage.length === 0) return <UsageEmpty />;
 
   // Slice the cached 180-day window into the user's selected sub-window AND
@@ -175,6 +181,13 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
     cacheableTokens > 0 ? Math.round((totals.cacheRead / cacheableTokens) * 100) : 0;
 
   const costDelta = pctChange(totals.cost, prevTotals.cost);
+
+  // Cost is a client-side derivation from the pricing table. When tokens
+  // exist but none of their models resolve to a price, $0.00 would be a
+  // fabricated number — declare the metric unavailable instead (MUL-93).
+  const unmappedInWindow = collectUnmappedModels(filtered);
+  const costUnavailable =
+    tokensTotal > 0 && totals.cost === 0 && unmappedInWindow.length > 0;
 
   return (
     <div className="space-y-5">
@@ -224,9 +237,11 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
       <div className="grid grid-cols-3 divide-x rounded-lg border bg-card">
         <KpiCard
           label={t(($) => $.usage.kpi_cost_label, { days })}
-          value={fmtMoney(totals.cost)}
+          value={costUnavailable ? "—" : fmtMoney(totals.cost)}
           hint={
-            costDelta == null ? undefined : (
+            costUnavailable ? (
+              <span>{t(($) => $.usage.kpi_cost_unpriced)}</span>
+            ) : costDelta == null ? undefined : (
               <span
                 className={
                   costDelta > 0
@@ -520,9 +535,19 @@ function EmptyChartState({ usage }: { usage: RuntimeUsage[] }) {
 // whenever the selected window contains any model that isn't priced. Covers
 // the partial-unmapping case where the chart still renders (so EmptyChartState
 // never fires) but some tokens are silently contributing $0 to totals.
+//
+// Exported for the workspace dashboard, which prices the same per-(date,
+// model) shape client-side and has the same silent-$0 failure mode. The prop
+// is the minimal priceable row, so both RuntimeUsage and DashboardUsageDaily
+// rows fit.
 // ---------------------------------------------------------------------------
 
-function UnmappedPricingNotice({ usage }: { usage: RuntimeUsage[] }) {
+type PriceableUsageRow = Pick<
+  RuntimeUsage,
+  "model" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens"
+>;
+
+export function UnmappedPricingNotice({ usage }: { usage: readonly PriceableUsageRow[] }) {
   const { t } = useT("runtimes");
   const [dialogOpen, setDialogOpen] = useState(false);
   const unmapped = collectUnmappedModels(usage);
@@ -840,6 +865,33 @@ function UsageEmpty() {
       <p className="mt-2 text-xs text-muted-foreground">
         {t(($) => $.usage.no_data)}
       </p>
+    </div>
+  );
+}
+
+// Distinct from UsageEmpty on purpose: "we couldn't load the data" must
+// never be presented as "there is no data" (MUL-93).
+function UsageError({ onRetry }: { onRetry: () => void }) {
+  const { t } = useT("runtimes");
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-center rounded-lg border border-dashed py-8"
+    >
+      <AlertCircle className="h-5 w-5 text-warning" />
+      <p className="mt-2 text-xs font-medium">{t(($) => $.usage.error_title)}</p>
+      <p className="mt-1 max-w-md text-center text-xs text-muted-foreground">
+        {t(($) => $.usage.error_body)}
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="mt-3"
+        onClick={onRetry}
+      >
+        {t(($) => $.usage.retry)}
+      </Button>
     </div>
   );
 }

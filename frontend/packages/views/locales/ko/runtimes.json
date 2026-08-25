@@ -473,6 +473,10 @@
     "table_output": "출력",
     "table_cache_r": "캐시 R",
     "table_cache_w": "캐시 W",
-    "no_data": "아직 사용량 데이터가 없습니다"
+    "no_data": "아직 사용량 데이터가 없습니다",
+    "kpi_cost_unpriced": "사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다",
+    "error_title": "사용량 데이터를 불러올 수 없음",
+    "error_body": "사용량 데이터를 불러오지 못했습니다. 사용량이 0이라는 뜻이 아닙니다.",
+    "retry": "다시 시도"
   }
 }

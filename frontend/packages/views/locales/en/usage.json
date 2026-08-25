@@ -13,7 +13,11 @@
     "run_time_label": "Run time · {{days}}D",
     "run_time_hint": "Across {{tasks}} tasks",
     "tasks_label": "Tasks · {{days}}D",
-    "tasks_hint": "{{failed}} failed"
+    "tasks_hint": "{{failed}} failed",
+    "unavailable_hint": "Failed to load — value unavailable, not zero",
+    "not_collected": "{{tasks}} tasks ran, but no token usage was recorded",
+    "no_tasks": "No tasks in this window",
+    "cost_unpriced": "No pricing for the models used — cost unavailable"
   },
   "dim": {
     "label": "Dimension",
@@ -29,7 +33,11 @@
     "metric_tokens": "Tokens",
     "metric_time": "Time",
     "metric_tasks": "Tasks",
-    "no_data": "No usage in this window."
+    "no_data": "No usage in this window.",
+    "no_tasks": "No tasks in this window.",
+    "load_failed": "This series failed to load — values are unavailable, not zero.",
+    "not_collected": "Tasks ran in this window, but no token usage was recorded.",
+    "cost_unpriced": "Tokens recorded, but the models used have no pricing — cost can't be derived."
   },
   "weekly": {
     "title_cost": "Weekly cost",
@@ -46,13 +54,22 @@
     "header_cost": "Cost",
     "header_time": "Time",
     "header_tasks": "Tasks",
-    "no_data": "No agent activity in this window."
+    "no_data": "No agent activity in this window.",
+    "load_failed": "Leaderboard data failed to load — values are unavailable, not zero."
   },
   "empty": {
     "title": "No usage yet",
-    "body": "Once agents start running tasks here, their token spend and run time will appear in this view."
+    "body": "Once agents start running tasks here, their token spend and run time will appear in this view.",
+    "zero_hint": "No tasks ran in the selected window, so these zeros are real measurements."
   },
   "duration": {
-    "less_than_minute": "<1m"
+    "less_than_minute": "<1m",
+    "zero": "0m"
+  },
+  "error": {
+    "title": "Usage data unavailable",
+    "body": "Usage data failed to load. This does not mean usage is zero — retry to reload.",
+    "partial": "Some usage series failed to load — affected values show “—” instead of 0.",
+    "retry": "Retry"
   }
 }
