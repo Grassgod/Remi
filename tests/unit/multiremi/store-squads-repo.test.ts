@@ -34,6 +34,26 @@ describe("SquadsRepo", () => {
     expect(repo.listSquads("local").map((entry) => entry.id)).not.toContain(squad.id);
   });
 
+  it("persists the avatar and only rewrites it when the update carries one", () => {
+    const repo = createRepo();
+    const squad = repo.createSquad({ name: "Platform", workspaceId: "local", avatarUrl: "/api/attachments/att_1" });
+
+    expect(repo.getSquad(squad.id)?.avatarUrl).toBe("/api/attachments/att_1");
+
+    // A rename must not wipe the avatar the way an unconditional write would.
+    expect(repo.updateSquad(squad.id, { name: "Platform team" }).avatarUrl).toBe("/api/attachments/att_1");
+    expect(repo.updateSquad(squad.id, { avatarUrl: "/api/attachments/att_2" }).avatarUrl).toBe("/api/attachments/att_2");
+    expect(repo.updateSquad(squad.id, { avatarUrl: null }).avatarUrl).toBeNull();
+  });
+
+  it("defaults a squad created without an avatar to null", () => {
+    const repo = createRepo();
+    const squad = repo.createSquad({ name: "Triage", workspaceId: "local" });
+
+    expect(squad.avatarUrl).toBeNull();
+    expect(repo.getSquad(squad.id)?.avatarUrl).toBeNull();
+  });
+
   it("clears project defaults when a squad is archived", () => {
     const repo = createRepo();
     const leader = store!.createAgent({ name: "Leader", provider: "claude" });
