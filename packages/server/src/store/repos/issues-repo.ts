@@ -19,6 +19,7 @@ import { type StoreContext, toInboxItem, toIssueComment } from "@multiremi/store
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
+import { INBOX_LEDGER_TYPES } from "@multiremi/contracts";
 import type {
   AssignIssueInput,
   AssignIssueResult,
@@ -510,6 +511,12 @@ export class IssuesRepo {
       id,
     ]);
     this.ctx.db.run("UPDATE multiremi_autopilot_runs SET issue_id = NULL WHERE issue_id = ?", [id]);
+    const inboxLedgerPlaceholders = INBOX_LEDGER_TYPES.map(() => "?").join(", ");
+    this.ctx.db.run(
+      `UPDATE multiremi_inbox_items SET issue_id = NULL WHERE issue_id = ? AND type IN (${inboxLedgerPlaceholders})`,
+      [id, ...INBOX_LEDGER_TYPES],
+    );
+    this.ctx.db.run("DELETE FROM multiremi_inbox_items WHERE issue_id = ?", [id]);
     // PostgreSQL intentionally does not rely on FK cascades and SQLite tests
     // may run with them disabled. Remove the machine-local checkout record
     // and archive control-plane rows explicitly so deleting an Issue cannot

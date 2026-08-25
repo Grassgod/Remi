@@ -37,6 +37,7 @@
   },
   "detail": {
     "select_prompt": "选择一条通知查看详情",
+    "item_unavailable": "这条通知已不可用",
     "empty": "收件箱为空",
     "original_input": "原始输入",
     "edit_advanced": "在完整表单中编辑",

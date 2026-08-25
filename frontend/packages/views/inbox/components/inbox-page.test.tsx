@@ -22,6 +22,8 @@ vi.mock("@multiremi/core/paths", () => ({
     inbox: () => "/test/inbox",
     inboxIssue: (issueId: string, sessionId?: string) =>
       `/test/inbox?issue=${issueId}${sessionId ? `&session=${sessionId}` : ""}`,
+    inboxItem: (itemId: string, sessionId?: string) =>
+      `/test/inbox?item=${itemId}${sessionId ? `&session=${sessionId}` : ""}`,
     issueDetail: (id: string) => `/test/issues/${id}`,
     issueSession: (id: string, sessionId: string) =>
       `/test/issues/${id}?session=${sessionId}`,
@@ -257,7 +259,11 @@ describe("InboxPage", () => {
     expect(screen.getByText("run-completed")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("run-failed"));
-    expect(replace).toHaveBeenLastCalledWith("/test/inbox?issue=run-failed");
+    expect(replace).toHaveBeenLastCalledWith("/test/inbox?item=run-failed");
+    fireEvent.click(screen.getByRole("button", { name: "Select Review session" }));
+    expect(replace).toHaveBeenLastCalledWith(
+      "/test/inbox?item=run-failed&session=session-review",
+    );
     fireEvent.click(screen.getByText("mention-latest"));
     expect(replace).toHaveBeenLastCalledWith("/test/inbox?issue=issue-1");
   });
@@ -360,5 +366,49 @@ describe("InboxPage", () => {
         "/test/issues/issue-missing?session=session-main",
       );
     });
+  });
+
+  it("keeps an unavailable ledger item link in the inbox instead of treating it as an issue", async () => {
+    navigationState.searchParams = new URLSearchParams("item=inbox-missing");
+    listInbox.mockResolvedValue([]);
+
+    renderInbox();
+
+    expect(
+      await screen.findByText("This notification is no longer available"),
+    ).toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith("/test/inbox");
+    expect(
+      replace.mock.calls.some(([path]) => String(path).startsWith("/test/issues/")),
+    ).toBe(false);
+  });
+
+  it("renders detached ledger history without an issue detail or broken navigation", async () => {
+    navigationState.searchParams = new URLSearchParams("item=run-detached");
+    listInbox.mockResolvedValue([{
+      id: "run-detached",
+      workspace_id: "ws-1",
+      recipient_type: "member",
+      recipient_id: "member-1",
+      actor_type: "system",
+      actor_id: null,
+      type: "autopilot_run_failed",
+      severity: "attention",
+      issue_id: null,
+      issue_status: null,
+      title: "Nightly cleanup failed",
+      body: "Failed after 12s · scheduled · disk full",
+      details: { issue_id: "issue-deleted" },
+      read: true,
+      archived: false,
+      created_at: "2026-08-25T10:00:00.000Z",
+    }]);
+
+    renderInbox();
+
+    expect(await screen.findByText("Nightly cleanup failed")).toBeInTheDocument();
+    expect(screen.getByText("Failed after 12s · scheduled · disk full")).toBeInTheDocument();
+    expect(screen.queryByTestId("issue-detail")).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
   });
 });

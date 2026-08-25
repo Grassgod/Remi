@@ -37,6 +37,7 @@
   },
   "detail": {
     "select_prompt": "詳細を表示する通知を選択してください",
+    "item_unavailable": "この通知は利用できなくなりました",
     "empty": "インボックスは空です",
     "original_input": "元の入力",
     "edit_advanced": "詳細フォームで編集",

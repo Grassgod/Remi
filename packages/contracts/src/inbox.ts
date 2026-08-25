@@ -13,10 +13,20 @@ export const INBOX_ROUTE_BY_TYPE = {
 
 export type RegisteredInboxType = keyof typeof INBOX_ROUTE_BY_TYPE;
 
-const INBOX_LEDGER_TYPE_SET: ReadonlySet<string> = new Set(
+export type InboxLedgerType = {
+  [Type in RegisteredInboxType]: (typeof INBOX_ROUTE_BY_TYPE)[Type] extends "inbox_ledger"
+    ? Type
+    : never;
+}[RegisteredInboxType];
+
+export const INBOX_LEDGER_TYPES: readonly InboxLedgerType[] = Object.freeze(
   Object.entries(INBOX_ROUTE_BY_TYPE)
     .filter(([, route]) => route === "inbox_ledger")
-    .map(([type]) => type),
+    .map(([type]) => type as InboxLedgerType),
+);
+
+const INBOX_LEDGER_TYPE_SET: ReadonlySet<string> = new Set(
+  INBOX_LEDGER_TYPES,
 );
 
 export function isInboxLedgerType(type: string): boolean {

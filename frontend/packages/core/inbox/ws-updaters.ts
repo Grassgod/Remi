@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { isInboxLedgerType } from "@multiremi/contracts";
 import { inboxKeys } from "./queries";
 import type { InboxItem, IssueStatus } from "../types";
 
@@ -25,16 +26,19 @@ export function onInboxIssueStatusChanged(
   );
 }
 
-// Mirrors the DB-level ON DELETE CASCADE on inbox_item.issue_id: when an issue
-// is deleted, all inbox items that referenced it are gone server-side, so drop
-// them from the cache too.
+// The server preserves ledger history without a live issue link and removes
+// actionable notifications. Apply the same lifecycle immediately in cache.
 export function onInboxIssueDeleted(
   qc: QueryClient,
   wsId: string,
   issueId: string,
 ) {
   qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-    old?.filter((i) => i.issue_id !== issueId),
+    old?.flatMap((item) => {
+      if (item.issue_id !== issueId) return [item];
+      if (!isInboxLedgerType(item.type)) return [];
+      return [{ ...item, issue_id: null, issue_status: null }];
+    }),
   );
 }
 

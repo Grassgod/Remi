@@ -16,7 +16,9 @@ import {
   filterInboxItemsBySource,
   groupInboxItemsByDate,
   inboxItemSelectionKey,
+  inboxItemSelectionKind,
   type InboxDateGroup,
+  type InboxItemSelectionKind,
   type InboxSourceFilter,
 } from "@multiremi/core/inbox";
 import {
@@ -95,16 +97,30 @@ export function InboxPage() {
   const { t: tCommon } = useT("common");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
+  const urlItem = searchParams.get("item") ?? "";
   const urlSession = searchParams.get("session") ?? "";
+  const urlSelectionKey = urlItem || urlIssue;
+  const urlSelectionKind: InboxItemSelectionKind = urlItem ? "item" : "issue";
   const wsPaths = useWorkspacePaths();
 
-  const [selectedKey, setSelectedKeyState] = useState(() => urlIssue);
+  const [selectedKey, setSelectedKeyState] = useState(() => urlSelectionKey);
+  const [selectedKind, setSelectedKind] = useState<InboxItemSelectionKind>(
+    () => urlSelectionKind,
+  );
+  const [unavailableItem, setUnavailableItem] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<InboxSourceFilter>("all");
+  const unavailableRedirectRef = useRef(false);
 
   // Sync from URL when searchParams change (e.g. navigation)
   useEffect(() => {
-    setSelectedKeyState(urlIssue);
-  }, [urlIssue]);
+    setSelectedKeyState(urlSelectionKey);
+    setSelectedKind(urlSelectionKind);
+    if (unavailableRedirectRef.current && !urlSelectionKey) {
+      unavailableRedirectRef.current = false;
+    } else {
+      setUnavailableItem(false);
+    }
+  }, [urlSelectionKey, urlSelectionKind]);
 
   const wsId = useWorkspaceId();
   const {
@@ -132,26 +148,36 @@ export function InboxPage() {
   }, [selected, selectedKey]);
 
   const setSelectedKey = useCallback(
-    (key: string, sessionId?: string) => {
+    (key: string, sessionId?: string, kind: InboxItemSelectionKind = "issue") => {
       setSelectedKeyState(key);
-      replace(key ? wsPaths.inboxIssue(key, sessionId) : wsPaths.inbox());
+      setSelectedKind(kind);
+      setUnavailableItem(false);
+      replace(
+        key
+          ? kind === "item"
+            ? wsPaths.inboxItem(key, sessionId)
+            : wsPaths.inboxIssue(key, sessionId)
+          : wsPaths.inbox(),
+      );
     },
     [replace, wsPaths],
   );
 
   const handleIssueSessionChange = useCallback(
     (sessionId: string) => {
-      if (selectedKey) replace(wsPaths.inboxIssue(selectedKey, sessionId));
+      if (!selectedKey) return;
+      replace(
+        selectedKind === "item"
+          ? wsPaths.inboxItem(selectedKey, sessionId)
+          : wsPaths.inboxIssue(selectedKey, sessionId),
+      );
     },
-    [replace, selectedKey, wsPaths],
+    [replace, selectedKey, selectedKind, wsPaths],
   );
 
-  // Shared inbox links (?issue=<id>) may point to notifications not in this
-  // user's inbox (archived, or never received). Fall back to the issue page
-  // so the URL still resolves to something meaningful. But if the key was
-  // previously resolvable (e.g. the issue was just deleted in another tab
-  // and `onInboxIssueDeleted` pruned the cache), the issue detail would 404
-  // too — clear the selection and stay on /inbox instead.
+  // Existing ?issue= links fall back to the issue page when their notification
+  // is unavailable. A ledger ?item= link cannot safely do that because its key
+  // is an inbox-row id, so keep the user in the inbox and show an explicit state.
   useEffect(() => {
     if (loading) return;
     // A failed list request says nothing about whether the key is in this
@@ -164,6 +190,13 @@ export function InboxPage() {
       setSelectedKey("");
       return;
     }
+    if (selectedKind === "item") {
+      setSelectedKeyState("");
+      setUnavailableItem(true);
+      unavailableRedirectRef.current = true;
+      replace(wsPaths.inbox());
+      return;
+    }
     replace(
       urlIssue === selectedKey && urlSession
         ? wsPaths.issueSession(selectedKey, urlSession)
@@ -174,6 +207,7 @@ export function InboxPage() {
     loadFailed,
     selectedKey,
     selected,
+    selectedKind,
     replace,
     wsPaths,
     setSelectedKey,
@@ -223,6 +257,7 @@ export function InboxPage() {
     setSelectedKey(
       inboxItemSelectionKey(item),
       item.details?.issue_session_id ?? undefined,
+      inboxItemSelectionKind(item),
     );
   };
 
@@ -239,6 +274,7 @@ export function InboxPage() {
       setSelectedKey(
         next ? inboxItemSelectionKey(next) : "",
         next?.details?.issue_session_id ?? undefined,
+        next ? inboxItemSelectionKind(next) : "issue",
       );
     }
     archiveMutation.mutate(id, {
@@ -446,7 +482,12 @@ export function InboxPage() {
     </div>
   );
 
-  const detailContent = selected?.issue_id ? (
+  const detailContent = unavailableItem ? (
+    <div className="flex h-full flex-col items-center justify-center px-6 text-center text-muted-foreground">
+      <AlertCircle className="mb-3 h-10 w-10 text-muted-foreground/30" />
+      <p className="text-sm">{t(($) => $.detail.item_unavailable)}</p>
+    </div>
+  ) : selected?.issue_id ? (
     // Key by issue_id (not inbox-item id): a new comment/reaction generates a
     // new inbox notification for the same issue. Keying on the notification id
     // would remount IssueDetail on every event, wiping the comment composer
@@ -459,17 +500,15 @@ export function InboxPage() {
         layoutId="multimira_inbox_issue_detail_layout"
         highlightCommentId={selected.details?.comment_id ?? undefined}
         initialIssueSessionId={
-          urlIssue === inboxItemSelectionKey(selected) && urlSession
+          urlSelectionKey === inboxItemSelectionKey(selected) && urlSession
             ? urlSession
             : selected.details?.issue_session_id ?? undefined
         }
         onIssueSessionChange={handleIssueSessionChange}
         onDelete={() => {
-          // Issue deletion CASCADE-deletes the inbox item server-side, and the
-          // issue:deleted WS event prunes it from the inbox cache. Just clear
-          // the selection — calling archive here would 404 on a row that no
-          // longer exists.
-          setSelectedKey("");
+          // Ledger rows survive with issue_id cleared and switch to the
+          // self-contained detail below. Action rows are deleted server-side.
+          if (inboxItemSelectionKind(selected) === "issue") setSelectedKey("");
         }}
         onDone={() => {
           handleArchive(selected.id);
@@ -555,7 +594,7 @@ export function InboxPage() {
     }
 
     // Mobile: show detail full-screen when an item is selected
-    if (selected) {
+    if (selected || unavailableItem) {
       return (
         <div className="flex flex-1 flex-col min-h-0">
           <div className="flex h-12 shrink-0 items-center border-b px-2">

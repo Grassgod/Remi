@@ -470,6 +470,42 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.listInboxItems(bob.id).filter((item) => item.type === "issue_assigned")).toHaveLength(0);
   });
 
+  it("preserves ledger history and removes action notifications when deleting an issue", () => {
+    const store = createStore();
+    const member = store.createWorkspaceMember({ name: "Ledger owner" });
+    const issue = store.createIssue({ title: "Delete with history" });
+    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
+    const action = store.listInboxItems(member.id).find((item) => item.type === "issue_assigned")!;
+    const details = JSON.stringify({ issue_id: issue.id, run_id: "run-delete" });
+    db!.run(
+      `INSERT INTO multiremi_inbox_items (
+        id, workspace_id, issue_id, member_id, recipient_type, recipient_id,
+        severity, actor_type, actor_id, type, title, body, details, read, archived, created_at
+      ) SELECT ?, workspace_id, issue_id, member_id, recipient_type, recipient_id,
+        'attention', 'system', NULL, 'autopilot_run_failed', 'Run failed',
+        'Failed after 12s', ?, 0, 0, ?
+      FROM multiremi_inbox_items WHERE id = ?`,
+      ["inb-ledger-delete", details, "2026-08-25T10:00:00.000Z", action.id],
+    );
+
+    expect(store.deleteIssue(issue.id)).toBe(true);
+
+    const rows = db!.query(
+      "SELECT id, issue_id, type, details FROM multiremi_inbox_items WHERE member_id = ? ORDER BY id",
+    ).all(member.id) as Array<{ id: string; issue_id: string | null; type: string; details: string | null }>;
+    expect(rows).toEqual([{
+      id: "inb-ledger-delete",
+      issue_id: null,
+      type: "autopilot_run_failed",
+      details,
+    }]);
+    expect(store.listInboxItems(member.id)[0]).toMatchObject({
+      id: "inb-ledger-delete",
+      issueId: null,
+      details: { issue_id: issue.id, run_id: "run-delete" },
+    });
+  });
+
   it("tracks comment threads, reactions, and attachments", () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Collaborate with context" });

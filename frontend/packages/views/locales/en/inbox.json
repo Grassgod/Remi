@@ -37,6 +37,7 @@
   },
   "detail": {
     "select_prompt": "Select a notification to view details",
+    "item_unavailable": "This notification is no longer available",
     "empty": "Your inbox is empty",
     "original_input": "Original input",
     "edit_advanced": "Edit as advanced form",

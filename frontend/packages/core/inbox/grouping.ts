@@ -9,11 +9,17 @@ export interface InboxItemGroup {
   items: InboxItem[];
 }
 
+export type InboxItemSelectionKind = "item" | "issue";
+
 const MENTION_TYPES = new Set(["comment_mention", "mentioned"]);
 const ASSIGNMENT_TYPES = new Set(["issue_assigned", "unassigned", "assignee_changed"]);
 
 export function inboxItemSelectionKey(item: InboxItem): string {
-  return isInboxLedgerType(item.type) ? item.id : item.issue_id ?? item.id;
+  return inboxItemSelectionKind(item) === "item" ? item.id : item.issue_id ?? item.id;
+}
+
+export function inboxItemSelectionKind(item: InboxItem): InboxItemSelectionKind {
+  return isInboxLedgerType(item.type) ? "item" : "issue";
 }
 
 /**

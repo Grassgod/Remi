@@ -112,6 +112,17 @@ The inbox is read in periodic batches, not one row at a time:
 - every row shows a one-line self-contained summary from `details`, so a sweep down the
   list is enough to know what happened.
 
+## Issue deletion lifecycle
+
+Deleting an issue must not erase the automation history that the ledger exists to retain.
+The service handles inbox rows explicitly instead of relying on database foreign-key
+cascades: R3 ledger rows remain, their live `issue_id` link is set to `NULL`, and the
+original source id remains in `details.issue_id` as historical context. R1/R2 action rows
+are deleted because their target no longer exists and they have no standalone ledger
+value. Realtime cache updates apply the same rule, so rows do not disappear and reappear
+after a refetch. A detached ledger row renders its self-contained title, type, time and
+body without offering a broken issue link.
+
 ## Invariants this change must not break
 
 - The workbench stays a storage-free, read-state-free live query. No inbox row, read state,
