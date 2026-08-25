@@ -19,6 +19,8 @@ const savedEnv = {
   server: process.env.MULTIREMI_SERVER_URL,
   workspace: process.env.MULTIREMI_WORKSPACE_ID,
   token: process.env.MULTIREMI_TOKEN,
+  project: process.env.MULTIREMI_PROJECT_ID,
+  workspaceRoot: process.env.MULTIREMI_WORKSPACE_ROOT,
 };
 
 const SPECS = [
@@ -39,6 +41,8 @@ afterEach(() => {
   restoreEnv("MULTIREMI_SERVER_URL", savedEnv.server);
   restoreEnv("MULTIREMI_WORKSPACE_ID", savedEnv.workspace);
   restoreEnv("MULTIREMI_TOKEN", savedEnv.token);
+  restoreEnv("MULTIREMI_PROJECT_ID", savedEnv.project);
+  restoreEnv("MULTIREMI_WORKSPACE_ROOT", savedEnv.workspaceRoot);
 });
 
 describe("native CLI resource contracts", () => {
@@ -370,6 +374,21 @@ describe("native CLI resource contracts", () => {
       body: "Repository facts",
       source_revision: "abc123",
     });
+  });
+
+  it("keeps native Repository Wiki status and push usable without a project", async () => {
+    useCliEnv();
+    delete process.env.MULTIREMI_PROJECT_ID;
+    const directory = mkdtempSync(join(tmpdir(), "remi-cli-repository-wiki-"));
+    tempDirectories.push(directory);
+    process.env.MULTIREMI_WORKSPACE_ROOT = directory;
+
+    for (const id of ["wiki.status", "wiki.push"]) {
+      await expect(execute(specById(id), [])).rejects.toThrow("Wiki working copy is not initialized");
+    }
+    for (const id of ["wiki.pull", "wiki.diff"]) {
+      await expect(execute(specById(id), [])).rejects.toThrow("--project is required");
+    }
   });
 
   it("preserves legacy memory body flags while rejecting empty content", async () => {
