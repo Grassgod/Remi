@@ -13,6 +13,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { SCM_PROVIDER_CAPABILITIES } from "@multiremi/scm/capabilities.js";
+import { resolveAtlasRepositoryWikiAutopilot } from "@multiremi/repository-wiki/atlas.js";
 import type {
   CreateAutopilotInput,
   CreateAutopilotTriggerInput,
@@ -942,6 +943,7 @@ export class AutopilotsRepo {
     const run = this.ctx.db.transaction(() => {
       const autopilot = this.getAutopilot(autopilotId);
       if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
+      this.assertRepositoryWikiBuildScope(autopilot, repositoryId, dedupeKey);
       if (triggerId) {
         const trigger = this.getAutopilotTrigger(triggerId);
         if (!trigger || trigger.autopilotId !== autopilot.id) throw new Error(`Autopilot trigger not found: ${triggerId}`);
@@ -1131,6 +1133,31 @@ export class AutopilotsRepo {
       sourceRevision,
     ) as { published: number } | null;
     return row != null;
+  }
+
+  private assertRepositoryWikiBuildScope(
+    autopilot: MultiremiAutopilot,
+    repositoryId: string | null,
+    dedupeKey: string | null,
+  ): void {
+    if ((repositoryId == null) !== (dedupeKey == null)) {
+      throw new Error("Repository Wiki build scope requires repository_id and dedupe_key together");
+    }
+    if (!repositoryId || !dedupeKey) return;
+
+    const repositoryAutopilot = resolveAtlasRepositoryWikiAutopilot(
+      autopilot.workspaceId,
+      this.ctx.agents().listAgents(),
+      this.listAutopilots(autopilot.workspaceId),
+    );
+    if (repositoryAutopilot?.id !== autopilot.id) {
+      throw new Error("Repository Wiki build scope requires the server-owned Atlas Repository Wiki autopilot");
+    }
+
+    const separator = dedupeKey.indexOf(":");
+    if (separator <= 0 || dedupeKey.slice(0, separator) !== repositoryId) {
+      throw new Error("Repository Wiki build dedupe_key must start with its repository_id segment");
+    }
   }
 
   getAutopilotRun(id: string): MultiremiAutopilotRunRecord | null {

@@ -789,7 +789,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("dedupes repository Wiki build runs by active build and pinned-revision key", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const runtime = store.registerRuntime({ name: "wiki-runtime", provider: "claude" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
@@ -900,6 +900,39 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(store.listAutopilotRuns(other.id)).toHaveLength(2);
   });
 
+  it("rejects forged or inconsistent repository Wiki build scope at the store boundary", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
+    const userOwned = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      assigneeId: userAgent.id,
+      executionMode: "run_only",
+    });
+    const serverOwned = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      assigneeId: atlas.id,
+      executionMode: "run_only",
+    });
+
+    expect(() => store.runAutopilot(userOwned.id, {
+      repository_id: "repo_private",
+      dedupe_key: "repo_private:incremental_update:abc123",
+    })).toThrow("server-owned Atlas Repository Wiki autopilot");
+    expect(() => store.runAutopilot(serverOwned.id, {
+      repositoryId: "repo_private",
+    })).toThrow("repository_id and dedupe_key together");
+    expect(() => store.runAutopilot(serverOwned.id, {
+      repositoryId: "repo_private",
+      dedupeKey: "repo_other:incremental_update:abc123",
+    })).toThrow("must start with its repository_id segment");
+
+    expect(store.listAutopilotRuns(serverOwned.id)).toEqual([]);
+    const ordinaryRun = store.runAutopilot(userOwned.id);
+    expect(ordinaryRun).toMatchObject({ repositoryId: null, dedupeKey: null });
+  });
+
   it("returns structured trigger summaries in slim run listings", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -912,7 +945,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         default_branch: "main",
       }],
     });
-    const agent = store.createAgent({ name: "Atlas", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
       assigneeId: agent.id,
