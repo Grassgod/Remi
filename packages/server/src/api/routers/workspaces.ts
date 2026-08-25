@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import {
   backfillWorkspaceRepositoryDefaultBranches,
+  createScmAwareGitRemoteInspector,
   denyCurrentUserWorkspaceAccess,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
@@ -193,7 +194,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       const repositories = await backfillWorkspaceRepositoryDefaultBranches(
         store,
         workspaceId,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       );
       const visible = currentAccessToken(c)?.type === "task"
         ? repositories.map(safeWorkspaceRepositoryData)
@@ -487,7 +488,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     try {
       return c.json(await inspectWorkspaceRepository(
         body,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       ));
     } catch (error) {
       if (error instanceof WorkspaceRepositoryError) {
@@ -508,7 +509,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         store,
         workspaceId,
         body,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       );
       publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
         workspace: result.workspace,
@@ -535,7 +536,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         workspaceId,
         c.req.param("repositoryId"),
         body,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       );
       publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
         workspace: result.workspace,
