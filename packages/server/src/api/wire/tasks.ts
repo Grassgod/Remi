@@ -496,8 +496,10 @@ function appendDaemonClaimAutopilotContext(store: MultiremiStore, task: Multirem
   response.autopilot_id = run.autopilotId;
   response.autopilot_source = run.source;
   if (run.payload != null) response.autopilot_trigger_payload = run.payload;
-  const scmRevision = autopilotRunSourceRevision(run);
-  if (scmRevision) response.scm_revision = scmRevision;
+  if (task.repositoryWikiContexts?.length) {
+    const scmRevision = autopilotRunSourceRevision(run);
+    if (scmRevision) response.scm_revision = scmRevision;
+  }
 
   const autopilot = store.getAutopilot(run.autopilotId);
   if (!autopilot) return;
