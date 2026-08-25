@@ -79,6 +79,10 @@
         "label": "優先度と期限",
         "description": "フォロー中のイシューの優先度や期限が変わったとき"
       },
+      "feishu_messages": {
+        "label": "Feishu メッセージ",
+        "description": "監視中の Feishu メッセージから作成された通知と返信下書き"
+      },
       "agent_activity": {
         "label": "エージェントのアクティビティ",
         "description": "エージェントのタスクが完了または失敗したとき"

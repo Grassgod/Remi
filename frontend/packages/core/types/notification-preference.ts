@@ -3,6 +3,7 @@ export type NotificationGroupKey =
   | "status_changes"
   | "comments"
   | "updates"
+  | "feishu_messages"
   | "agent_activity"
   | "system_notifications";
 

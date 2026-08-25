@@ -77,7 +77,8 @@ export interface CreateFeishuInboxOutcomeInput {
 export interface CreateFeishuInboxOutcomeResult {
   message: MultiremiFeishuMessage;
   outcome: MultiremiFeishuMessageOutcome;
-  inboxItem: MultiremiInboxItem;
+  inboxItem: MultiremiInboxItem | null;
+  delivered: boolean;
 }
 
 export interface CreateFeishuIssueOutcomeInput extends CreateIssueFromMultiremiFeishuMessageInput {
@@ -459,12 +460,19 @@ export class FeishuIngestRepo {
        JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
        WHERE m.source_id = ? AND o.outcome_kind = 'dismissed' AND o.reason = 'unprocessed_timeout'`,
     ).get(sourceId) as Row;
+    const mutedDeliveries = this.ctx.db.query(
+      `SELECT COUNT(*) AS count
+       FROM multiremi_feishu_message_outcomes o
+       JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
+       WHERE m.source_id = ? AND o.outcome_kind = 'dismissed' AND o.reason = 'recipient_muted'`,
+    ).get(sourceId) as Row;
     const lastSuccessfulIngestAt = nullableString(connection.last_successful_ingest_at);
     const successfulAt = lastSuccessfulIngestAt ? Date.parse(lastSuccessfulIngestAt) : Number.NaN;
     return {
       sourceId,
       unprocessedCount: Number(backlog.count ?? 0),
       timedOutCount: Number(timedOut.count ?? 0),
+      mutedDeliveryCount: Number(mutedDeliveries.count ?? 0),
       oldestUnprocessedAt: nullableString(backlog.oldest),
       maximumRetryCount: Number(backlog.maximum_retry_count ?? 0),
       lastSuccessfulIngestAt,
@@ -657,11 +665,31 @@ export class FeishuIngestRepo {
       }
       const taskId = cleanOptionalString(input.taskId);
       this.assertTaskWorkspace(taskId, input.workspaceId);
+      const inboxType = outcomeKind === "reply_drafted" ? "feishu_reply_draft" : "feishu_message_notification";
+      const recipient = this.ctx.resolveWorkspaceMemberForNotification(input.workspaceId, input.recipientId);
+      if (!recipient || recipient.archivedAt) throw new Error("Inbox recipient is unavailable");
+      const dismissMutedDelivery = (): CreateFeishuInboxOutcomeResult => {
+        const createdAt = nowIso();
+        const outcome = this.insertOutcome({
+          workspaceId: input.workspaceId,
+          messageId,
+          outcomeKind: "dismissed",
+          ref: null,
+          reason: "recipient_muted",
+          taskId,
+          createdAt,
+        });
+        this.markMessageProcessed(messageId, createdAt);
+        return { message: this.getMessage(messageId)!, outcome, inboxItem: null, delivered: false };
+      };
+      if (this.ctx.isNotificationMuted(input.workspaceId, recipient.id, inboxType)) {
+        return dismissMutedDelivery();
+      }
       const inboxItem = this.ctx.createInboxItem({
         workspaceId: input.workspaceId,
-        memberId: input.recipientId,
+        memberId: recipient.id,
         severity: outcomeKind === "reply_drafted" ? "attention" : "info",
-        type: outcomeKind === "reply_drafted" ? "feishu_reply_draft" : "feishu_message_notification",
+        type: inboxType,
         title: outcomeKind === "reply_drafted" ? "飞书回复草稿" : "飞书消息提醒",
         body: text,
         actorType: input.actorType,
@@ -675,7 +703,12 @@ export class FeishuIngestRepo {
         },
         emitEvent: false,
       });
-      if (!inboxItem) throw new Error("Inbox recipient is unavailable or notifications are muted");
+      if (!inboxItem) {
+        if (this.ctx.isNotificationMuted(input.workspaceId, recipient.id, inboxType)) {
+          return dismissMutedDelivery();
+        }
+        throw new Error("Inbox recipient is unavailable");
+      }
       const createdAt = nowIso();
       const outcome = this.insertOutcome({
         workspaceId: input.workspaceId,
@@ -687,7 +720,7 @@ export class FeishuIngestRepo {
         createdAt,
       });
       this.markMessageProcessed(messageId, createdAt);
-      return { message: this.getMessage(messageId)!, outcome, inboxItem };
+      return { message: this.getMessage(messageId)!, outcome, inboxItem, delivered: true };
     })();
   }
 

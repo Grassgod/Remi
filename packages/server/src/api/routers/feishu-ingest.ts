@@ -175,14 +175,19 @@ function createInboxOutcomeResponse(
       actorId: taskToken?.agentId ?? currentRequestUserId(c),
       text,
     });
-    deps.store.emitWorkspaceEvent({
-      type: "inbox:new",
-      workspaceId,
-      actorType: taskToken ? "agent" : "member",
-      actorId: taskToken?.agentId ?? currentRequestUserId(c),
-      payload: { item: result.inboxItem },
-    });
-    return c.json({ ...result, outcomes: deps.store.listFeishuMessageOutcomes(result.message.messageId) }, 201);
+    if (result.inboxItem) {
+      deps.store.emitWorkspaceEvent({
+        type: "inbox:new",
+        workspaceId,
+        actorType: taskToken ? "agent" : "member",
+        actorId: taskToken?.agentId ?? currentRequestUserId(c),
+        payload: { item: result.inboxItem },
+      });
+    }
+    return c.json(
+      { ...result, outcomes: deps.store.listFeishuMessageOutcomes(result.message.messageId) },
+      result.delivered ? 201 : 200,
+    );
   } catch (error) {
     return feishuIngestErrorResponse(c, error);
   }

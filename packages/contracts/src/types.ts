@@ -2679,6 +2679,7 @@ export interface MultiremiFeishuSourceStatus {
   sourceId: string;
   unprocessedCount: number;
   timedOutCount: number;
+  mutedDeliveryCount: number;
   oldestUnprocessedAt: string | null;
   maximumRetryCount: number;
   lastSuccessfulIngestAt: string | null;
@@ -3183,6 +3184,7 @@ export type MultiremiNotificationGroupKey =
   | "status_changes"
   | "comments"
   | "updates"
+  | "feishu_messages"
   | "agent_activity"
   | "system_notifications";
 

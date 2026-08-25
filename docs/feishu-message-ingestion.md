@@ -64,14 +64,20 @@ recreate the sidecar whenever it replaces the API container.
   messages are retried after 15 minutes by default. After three retries, the
   system records a terminal `dismissed` outcome with reason
   `unprocessed_timeout`.
-- `notify` and `draft-reply` create Inbox items only. Ingestion never sends a
-  Feishu message; a draft still requires a separate human-approved send path.
+- `notify` and `draft-reply` use the dedicated `feishu_messages` notification
+  preference group and create Inbox items only. Ingestion never sends a Feishu
+  message; a draft still requires a separate human-approved send path. When the
+  recipient explicitly mutes this group, the system records a terminal
+  `dismissed` outcome with reason `recipient_muted` instead of retrying and
+  eventually reporting an unrelated processing timeout.
 - `create-issue` creates the Issue and its audited `issue_created` outcome in
   one transaction. Replaying the command returns the same Issue instead of
   creating a duplicate.
 - Source status exposes the most recent successful ingestion, last sanitized
   error code, connection lag, consecutive failures, unresolved backlog, and
-  timeout count through `remi feishu source status <source>`.
+  timeout count, and muted-delivery count through
+  `remi feishu source status <source>`.
 - After three consecutive connection failures, the workspace owner receives a
-  deduplicated Inbox alert. Further failures do not create more alerts until a
-  successful poll resets the failure episode.
+  deduplicated Inbox alert in the `system_notifications` group, independently
+  from Feishu message reminder preferences. Further failures do not create more
+  alerts until a successful poll resets the failure episode.

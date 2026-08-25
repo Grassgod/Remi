@@ -283,6 +283,9 @@ describe("Feishu message ingestion", () => {
   it("creates real Inbox reminders and drafts while rejecting forged outcome references", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
+    // Legacy preference JSON has no feishu_messages key. Muting the old
+    // catch-all group must not mute Feishu deliveries.
+    store.updateNotificationPreferences({ preferences: { updates: "muted" } });
     const source = store.createFeishuSource({
       endpointName: "local",
       allowlist: [{ chatId: "oc_inbox01", addedAt: "2026-08-25T10:00:00.000Z" }],
@@ -306,6 +309,7 @@ describe("Feishu message ingestion", () => {
     });
     expect(notification.status).toBe(201);
     const notificationBody = await notification.json();
+    expect(notificationBody.delivered).toBe(true);
     expect(notificationBody.outcome).toMatchObject({
       outcomeKind: "notified",
       ref: `inbox:${notificationBody.inboxItem.id}`,
@@ -324,6 +328,7 @@ describe("Feishu message ingestion", () => {
     });
     expect(draft.status).toBe(201);
     const draftBody = await draft.json();
+    expect(draftBody.delivered).toBe(true);
     expect(draftBody.outcome).toMatchObject({
       outcomeKind: "reply_drafted",
       ref: `inbox:${draftBody.inboxItem.id}`,
@@ -377,6 +382,74 @@ describe("Feishu message ingestion", () => {
     expect(store.listInboxItems()).toHaveLength(inboxCountBefore);
   });
 
+  it("audits muted Feishu deliveries without suppressing connection alerts", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateNotificationPreferences({ preferences: { feishu_messages: "muted" } });
+    const source = store.createFeishuSource({
+      endpointName: "local",
+      enabled: false,
+      unprocessedRetrySeconds: 60,
+      allowlist: [{ chatId: "oc_muted001", addedAt: "2026-08-25T10:00:00.000Z" }],
+    });
+    store.ingestFeishuBatch(source.id, [
+      message("om_muted_notify", "oc_muted001", "2026-08-25T10:01:00.000Z", "notice"),
+      message("om_muted_draft", "oc_muted001", "2026-08-25T10:02:00.000Z", "question"),
+    ]);
+    const agent = store.createAgent({ name: "Muted Inbox watcher", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "process muted messages" });
+    const credential = await store.createTaskAccessToken(task, "local");
+    const headers = { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" };
+    const app = createMultiremiApp({ store, authToken: "root-secret", feishuSidecarEndpoints: sidecarEndpoints });
+
+    const notification = await app.request("/api/workspaces/local/feishu/messages/om_muted_notify/notify", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ summary: "This reminder is muted" }),
+    });
+    expect(notification.status).toBe(200);
+    expect(await notification.json()).toMatchObject({
+      delivered: false,
+      inboxItem: null,
+      outcome: { outcomeKind: "dismissed", reason: "recipient_muted", ref: null },
+    });
+
+    const draft = await app.request("/api/workspaces/local/feishu/messages/om_muted_draft/draft-reply", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ draft_text: "This draft is muted" }),
+    });
+    expect(draft.status).toBe(200);
+    expect(await draft.json()).toMatchObject({
+      delivered: false,
+      inboxItem: null,
+      outcome: { outcomeKind: "dismissed", reason: "recipient_muted", ref: null },
+    });
+
+    expect(store.listInboxItems().filter((item) =>
+      item.type === "feishu_message_notification" || item.type === "feishu_reply_draft"
+    )).toEqual([]);
+    expect(store.listFeishuMessages({ workspaceId: "local", unprocessed: true })).toEqual([]);
+    expect(store.reconcileUnprocessedFeishuMessages(source.id, new Date("2026-08-25T12:00:00.000Z"))).toMatchObject({
+      retried: 0,
+      dismissed: 0,
+    });
+    expect(store.getFeishuSourceStatus(source.id)).toMatchObject({
+      unprocessedCount: 0,
+      timedOutCount: 0,
+      mutedDeliveryCount: 2,
+    });
+
+    for (let failure = 0; failure < 3; failure += 1) {
+      store.recordFeishuConnectionFailure(
+        source.id,
+        "ingest_failed",
+        new Date(Date.UTC(2026, 7, 25, 12, failure)).toISOString(),
+      );
+    }
+    expect(store.listInboxItems().filter((item) => item.type === "feishu_ingest_connection_alert")).toHaveLength(1);
+  });
+
   it("retries stale unresolved messages and forces a terminal timeout outcome", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -425,6 +498,7 @@ describe("Feishu message ingestion", () => {
   it("reports connection lag and sends one alert per failure episode", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
+    store.updateNotificationPreferences({ preferences: { updates: "muted" } });
     const source = store.createFeishuSource({
       endpointName: "local",
       pollIntervalSeconds: 3,
