@@ -5,7 +5,7 @@
 // are snake_case and all carry `.default(0)` — so a camelCase body "parses"
 // with every number defaulted to zero and the dashboard renders all-zeros.
 // These tests lock the snake_case wire contract field-by-field.
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -337,6 +337,40 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     // A 2-day window readmits the pre-midnight task.
     const twoDays = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=2&tz=Asia/Shanghai")).json();
     expect(twoDays.map((row: any) => row.model).sort()).toEqual(["opus", "sonnet"]);
+  });
+
+  it("cuts the window at the first valid local instant on DST days where midnight does not exist", async () => {
+    // America/Santiago springs forward on 2025-09-07: local clocks jump from
+    // 23:59:59 (UTC-4) straight to 01:00 (UTC-3) — local 00:00-00:59 never
+    // exists. The cutoff for that local day is its first valid instant,
+    // 01:00 local = 2025-09-07T04:00:00Z. An offset-refinement approach
+    // oscillates here and lands on the previous day (QA repro on 08cd54ac).
+    setSystemTime(new Date("2025-09-07T12:00:00.000Z")); // local 09:00 on the DST day
+    try {
+      const store = createStore();
+      const app = createMultiremiApp({ store });
+      const before = seedRuntimeWithUsage(store, { runtimeId: "rt_dst_before", model: "sonnet" });
+      const after = seedRuntimeWithUsage(store, { runtimeId: "rt_dst_after", model: "opus" });
+      const setTimestamps = (taskId: string, iso: string) => db!.run(
+        "UPDATE multiremi_tasks SET created_at = ?, updated_at = ?, dispatched_at = ?, started_at = ? WHERE id = ?",
+        [iso, iso, iso, iso, taskId],
+      );
+      setTimestamps(before.taskId, "2025-09-07T03:30:00.000Z"); // local 09-06 23:30 — previous day
+      setTimestamps(after.taskId, "2025-09-07T04:30:00.000Z"); // local 09-07 01:30 — the DST day
+
+      const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=1&tz=America/Santiago")).json();
+      expect(daily.map((row: any) => row.model)).toEqual(["opus"]);
+      const byAgent = await (await app.request("/api/dashboard/usage/by-agent?workspace_id=local&days=1&tz=America/Santiago")).json();
+      expect(byAgent.map((row: any) => row.agent_id)).toEqual([after.agentId]);
+      const leaderboard = await (await app.request("/api/dashboard/agent-runtime?workspace_id=local&days=1&tz=America/Santiago")).json();
+      expect(leaderboard.map((row: any) => row.agent_id)).toEqual([after.agentId]);
+
+      // days=2 readmits the pre-DST-boundary task on all three endpoints.
+      const twoDays = await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=2&tz=America/Santiago")).json();
+      expect(twoDays.map((row: any) => row.model).sort()).toEqual(["opus", "sonnet"]);
+    } finally {
+      setSystemTime();
+    }
   });
 
   it("requires auth on dashboard endpoints while keeping / public when a token is configured", async () => {

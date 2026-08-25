@@ -351,36 +351,26 @@ function usageSince(days: number | undefined, tz?: string | null): string | null
   const today = formatter ? formatter.format(now) : now.toISOString().slice(0, 10);
   const [year, month, day] = today.split("-").map(Number);
   if (!year || !month || day === undefined) return new Date(now.getTime() - capped * 24 * 60 * 60 * 1000).toISOString();
-  // Start of the window as a calendar date, then resolved to the instant of
-  // local midnight in tz. Two refinement passes converge for any fixed or
-  // DST-shifting offset (offset changes between passes are at most one DST
-  // step, and the second pass re-reads the offset at the corrected instant).
+  // Start of the window as a calendar date (Date.UTC normalizes a negative
+  // day-of-month), then resolved to the FIRST VALID instant of that local
+  // date. "Local midnight" is not safe to solve for directly: on DST
+  // spring-forward days midnight may not exist (America/Santiago jumps
+  // 23:59 → 01:00), and offset-refinement loops oscillate there. The local
+  // date of an instant IS monotonic in the instant, so binary-search the
+  // boundary instead: offsets span -12h..+14h, so the day boundary lies
+  // strictly inside a ±15h bracket around the UTC midnight of the target.
   const windowStartUtc = Date.UTC(year, month - 1, day - (capped - 1));
-  let instant = windowStartUtc;
-  if (formatter && tz) {
-    for (let pass = 0; pass < 2; pass++) {
-      const offset = tzWallClockUtc(new Date(instant), tz) - instant;
-      instant = windowStartUtc - offset;
-    }
+  if (!formatter || !tz) return new Date(windowStartUtc).toISOString();
+  const targetDate = new Date(windowStartUtc).toISOString().slice(0, 10);
+  let below = windowStartUtc - 15 * 60 * 60 * 1000; // local date < targetDate here
+  let atOrAfter = windowStartUtc + 15 * 60 * 60 * 1000; // local date >= targetDate here
+  while (atOrAfter - below > 1) {
+    const mid = Math.floor((below + atOrAfter) / 2);
+    // en-CA YYYY-MM-DD compares lexicographically as a date.
+    if (formatter.format(new Date(mid)) < targetDate) below = mid;
+    else atOrAfter = mid;
   }
-  return new Date(instant).toISOString();
-}
-
-/** The instant's wall-clock time in tz, re-encoded as if it were UTC — the
- *  difference to the instant itself is the zone's UTC offset at that moment. */
-function tzWallClockUtc(date: Date, tz: string): number {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
-  return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"), get("second"));
+  return new Date(atOrAfter).toISOString();
 }
 
 function taskRunSeconds(row: Row): number {
