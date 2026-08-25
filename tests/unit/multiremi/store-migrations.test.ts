@@ -723,6 +723,77 @@ describe("store migrations", () => {
     ).get()).toEqual({ assignment_origin: "explicit" });
   });
 
+  it("resets only Codebase change-request cursors while preserving completed baselines", () => {
+    const database = freshDb();
+    migrate(database);
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260825_codebase_change_request_cursor_reset"],
+    );
+    const timestamp = "2026-08-25T00:00:00.000Z";
+    for (const [id, provider, baseUrl, apiBaseUrl] of [
+      ["scm_codebase_reset", "codebase", "https://code.byted.org", "https://codebase-api.byted.org/v2/"],
+      ["scm_github_keep", "github", "https://github.com", "https://api.github.com"],
+    ]) {
+      database.run(
+        `INSERT INTO multiremi_scm_connections (
+          id, name, provider, base_url, api_base_url, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, id, provider, baseUrl, apiBaseUrl, timestamp, timestamp],
+      );
+    }
+    const insertCursor = database.prepare(
+      `INSERT INTO multiremi_scm_sync_cursors (
+        connection_id, repository_id, stream, cursor, watermark,
+        baseline_completed_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const row of [
+      ["scm_codebase_reset", "repo_codebase", "change_requests"],
+      ["scm_codebase_reset", "repo_codebase", "comments"],
+      ["scm_codebase_reset", "repo_codebase", "reviews"],
+      ["scm_github_keep", "repo_github", "change_requests"],
+    ]) {
+      insertCursor.run(...row, JSON.stringify({ page: 9 }), timestamp, timestamp, timestamp);
+    }
+
+    migrate(database);
+
+    expect(database.query(
+      `SELECT connection_id, stream, cursor, watermark, baseline_completed_at
+       FROM multiremi_scm_sync_cursors ORDER BY connection_id, stream`,
+    ).all()).toEqual([
+      {
+        connection_id: "scm_codebase_reset",
+        stream: "change_requests",
+        cursor: null,
+        watermark: null,
+        baseline_completed_at: timestamp,
+      },
+      {
+        connection_id: "scm_codebase_reset",
+        stream: "comments",
+        cursor: JSON.stringify({ page: 9 }),
+        watermark: timestamp,
+        baseline_completed_at: timestamp,
+      },
+      {
+        connection_id: "scm_codebase_reset",
+        stream: "reviews",
+        cursor: JSON.stringify({ page: 9 }),
+        watermark: timestamp,
+        baseline_completed_at: timestamp,
+      },
+      {
+        connection_id: "scm_github_keep",
+        stream: "change_requests",
+        cursor: JSON.stringify({ page: 9 }),
+        watermark: timestamp,
+        baseline_completed_at: timestamp,
+      },
+    ]);
+  });
+
   it("adds system-event run columns before creating their unique index", () => {
     const database = freshDb();
     database.exec(`

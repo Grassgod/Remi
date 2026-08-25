@@ -228,7 +228,7 @@ describe("SCM provider adapters", () => {
     expect(result.cursor).toEqual({ page: 2 });
   });
 
-  it("calls the Codebase action API with its updated-since cursor", async () => {
+  it("polls Codebase merge requests in updated order without a created-since filter", async () => {
     const requests: Array<{ action: string | null; body: Record<string, unknown>; authorization: string | null }> = [];
     let heartbeats = 0;
     globalThis.fetch = (async (input, init) => {
@@ -303,7 +303,9 @@ describe("SCM provider adapters", () => {
     });
     expect(requests[0]?.action).toBe("ListRepoMergeRequests");
     expect(requests[0]?.body.TargetRepoId).toBe("repo-101");
-    expect(requests[0]?.body.Since).toBe("2026-08-21T07:53:00.000Z");
+    expect(requests[0]?.body).not.toHaveProperty("Since");
+    expect(requests[0]?.body.SortBy).toBe("UpdatedAt");
+    expect(requests[0]?.body.SortOrder).toBe("desc");
     expect(requests[0]?.body.Selector).toEqual({
       URL: true,
       ReviewStatus: true,
@@ -313,6 +315,92 @@ describe("SCM provider adapters", () => {
     });
     expect(requests[0]?.authorization).toBe("Bearer token");
     expect(heartbeats).toBe(2);
+  });
+
+  it("filters Codebase merge requests older than the overlap watermark and stops pagination", async () => {
+    globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({
+      ResponseMetadata: { Action: "ListRepoMergeRequests" },
+      Result: {
+        MergeRequests: [{
+          Id: "mr-old",
+          Number: 8,
+          CreatedAt: "2026-08-20T00:00:00.000Z",
+          UpdatedAt: "2026-08-21T07:52:59.000Z",
+        }],
+        TotalCount: 200,
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+    const result = await new CodebaseScmProviderAdapter().poll(codebaseContext(
+      "change_requests",
+      syncCursor("change_requests", { page: 1 }, "2026-08-21T07:55:00.000Z"),
+    ));
+
+    expect(result.observations).toHaveLength(0);
+    expect(result.cursor).toBeNull();
+    expect(result.done).toBe(true);
+  });
+
+  it("observes old Codebase merge requests updated after the overlap watermark", async () => {
+    globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({
+      ResponseMetadata: { Action: "ListRepoMergeRequests" },
+      Result: {
+        MergeRequests: [{
+          Id: "mr-updated",
+          Number: 7,
+          Title: "Merged after creation",
+          Status: "merged",
+          CreatedAt: "2026-08-01T00:00:00.000Z",
+          UpdatedAt: "2026-08-21T07:58:00.000Z",
+          MergedAt: "2026-08-21T07:58:00.000Z",
+        }],
+        TotalCount: 1,
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+    const result = await new CodebaseScmProviderAdapter().poll(codebaseContext(
+      "change_requests",
+      syncCursor("change_requests", { page: 1 }, "2026-08-21T07:55:00.000Z"),
+    ));
+
+    expect(result.observations).toHaveLength(1);
+    expect(result.observations[0]?.externalId).toBe("mr-updated");
+    expect(result.observations[0]?.payload.state).toBe("merged");
+  });
+
+  it("filters related Codebase merge requests by update time before polling comments", async () => {
+    const requests: Array<{ action: string | null; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const action = new URL(String(input)).searchParams.get("Action");
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push({ action, body });
+      const result = action === "ListRepoMergeRequests"
+        ? {
+            MergeRequests: [
+              { Id: "mr-new", UpdatedAt: "2026-08-21T07:54:00.000Z" },
+              { Id: "mr-old", UpdatedAt: "2026-08-21T07:52:59.000Z" },
+            ],
+            TotalCount: 200,
+          }
+        : { Threads: [] };
+      return new Response(JSON.stringify({ ResponseMetadata: { Action: action }, Result: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await new CodebaseScmProviderAdapter().poll(codebaseContext(
+      "comments",
+      syncCursor("comments", { page: 1 }, "2026-08-21T07:55:00.000Z"),
+    ));
+
+    expect(requests[0]?.body).not.toHaveProperty("Since");
+    expect(requests[0]?.body).toMatchObject({ SortBy: "UpdatedAt", SortOrder: "desc" });
+    expect(requests.filter((request) => request.action === "ListThreads")).toEqual([
+      expect.objectContaining({ body: expect.objectContaining({ CommentableId: "mr-new" }) }),
+    ]);
+    expect(result.cursor).toBeNull();
+    expect(result.done).toBe(true);
   });
 
   it("resumes Codebase related-MR and pipeline pages without timestamp cutoffs", async () => {
@@ -350,7 +438,11 @@ describe("SCM provider adapters", () => {
       cursor: syncCursor("comments", { page: 11 }),
     });
     expect(comments.cursor).toEqual({ page: 12 });
-    expect(requests.find((entry) => entry.action === "ListRepoMergeRequests")?.body.PageNumber).toBe(11);
+    expect(requests.find((entry) => entry.action === "ListRepoMergeRequests")?.body).toMatchObject({
+      PageNumber: 11,
+      SortBy: "UpdatedAt",
+      SortOrder: "desc",
+    });
 
     const pipelines = await adapter.poll({
       ...context("pipelines"),
@@ -371,6 +463,25 @@ function context(stream: ScmPollContext["stream"]): ScmPollContext {
     stream,
     cursor: null,
     now: new Date("2026-08-21T08:00:00.000Z"),
+  };
+}
+
+function codebaseContext(
+  stream: ScmPollContext["stream"],
+  cursor: ScmPollContext["cursor"] = null,
+): ScmPollContext {
+  return {
+    ...context(stream),
+    connection: scmConnection({
+      provider: "codebase",
+      baseUrl: "https://code.byted.org",
+      apiBaseUrl: "https://codebase-api.byted.org/v2/",
+    }),
+    binding: scmBinding({
+      externalId: "repo-101",
+      repositoryUrl: "https://code.byted.org/acme/widgets.git",
+    }),
+    cursor,
   };
 }
 

@@ -6,6 +6,7 @@ const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
 const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
+const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -1984,6 +1985,16 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_scm_repository_bindings", "assignment_origin TEXT NOT NULL DEFAULT 'explicit'");
   runMigrationOnce(db, SCM_CONNECTION_ORIGIN_MIGRATION, () => normalizeScmConnectionOrigins(db));
   runMigrationOnce(db, SCM_DEFAULT_SCOPE_MIGRATION, () => backfillSingleScmDefaults(db));
+  runMigrationOnce(db, CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION, () => {
+    db.run(
+      `UPDATE multiremi_scm_sync_cursors
+       SET cursor = NULL, watermark = NULL
+       WHERE stream = 'change_requests'
+         AND connection_id IN (
+           SELECT id FROM multiremi_scm_connections WHERE provider = 'codebase'
+         )`,
+    );
+  });
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_multiremi_scm_sync_cursors_lease
       ON multiremi_scm_sync_cursors(lease_until, connection_id, repository_id, stream);
