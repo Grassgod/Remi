@@ -2546,6 +2546,37 @@ export class IssuesRepo {
         && !this.isSquadLeaderDelegation(issue, comment.authorId, sourceTask, taskAuthoredByCommentAgent, agent.id)
       ) continue;
 
+      // One delegation per teammate per open turn. A leader routinely re-mentions
+      // the teammate it just dispatched while writing its own summary ("已派 @QA
+      // 做验收"), and every such comment used to queue another task — the teammate
+      // then ran the same job twice (MUL-101). Coalescing is only safe into a
+      // still-queued task: it has not been claimed, so its session projection is
+      // built later and already carries this comment. A dispatched or running
+      // task has its context frozen, so a follow-up there must get its own turn.
+      // Human mentions are never coalesced, so that a mentioning comment and a
+      // plain one behave alike: an un-mentioned human comment always dispatches
+      // individually (no batching, by request — see triggerAssigneeAutoResponse),
+      // and deduping only the mentioning variant would make the two diverge.
+      const queuedTask = comment.authorType === "agent"
+        ? this.findQueuedTaskForIssueAndAgent(issue.id, agent.id, comment.issueSessionId)
+        : null;
+      if (queuedTask) {
+        this.ctx.appendIssueActivity(issue.id, {
+          actorType: "system",
+          actorId: null,
+          type: "comment_mention_coalesced",
+          body: `Skipped duplicate ${agent.name}`,
+          data: {
+            commentId: comment.id,
+            assigneeType: target.assigneeType,
+            assigneeId: target.assigneeId,
+            agentId: agent.id,
+            taskId: queuedTask.id,
+          },
+        });
+        continue;
+      }
+
       const delegationId = taskAuthoredByCommentAgent ? createId("dlg") : null;
       const task = this.ctx.tasks().createTask({
         agentId: agent.id,
@@ -2655,6 +2686,34 @@ export class IssuesRepo {
       if (hasPlainMention(withoutLinks, member.name)) addTarget(member.id);
     }
     return targets;
+  }
+
+  /**
+   * The agent's task on this issue that is still waiting to be claimed, if any.
+   * Scoped to the issue Session so a queued leftover from another Session (or a
+   * Session that has since been reset) never swallows a fresh delegation.
+   */
+  private findQueuedTaskForIssueAndAgent(
+    issueId: string,
+    agentId: string,
+    issueSessionId: string | null,
+  ): MultiremiTask | null {
+    // Nullable equality is spelled out rather than `IS ?` so the statement also
+    // survives the Postgres translation, where `IS $n` is not valid syntax.
+    const sessionClause = issueSessionId === null
+      ? "issue_session_id IS NULL"
+      : "issue_session_id = ?";
+    const params: unknown[] = issueSessionId === null
+      ? [issueId, agentId]
+      : [issueId, agentId, issueSessionId];
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_tasks
+       WHERE issue_id = ? AND agent_id = ? AND status = 'queued'
+         AND ${sessionClause}
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(...params) as { id: string } | null;
+    return row ? this.ctx.tasks().getTask(row.id) : null;
   }
 
   private hasActiveTaskForIssueAndAgent(issueId: string, agentId: string): boolean {
