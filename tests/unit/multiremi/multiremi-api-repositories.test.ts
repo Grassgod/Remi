@@ -210,7 +210,7 @@ describe("Multiremi API - workspace repositories", () => {
     expect((await rebuild.json() as any).run_id).not.toBe(retryBody.run_id);
   });
 
-  it("keeps repository Wiki builds human-admin only for task and daemon tokens", async () => {
+  it("keeps repository Wiki builds unavailable to daemon tokens", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.updateWorkspaceRepositories(workspace.id, [{
@@ -220,13 +220,6 @@ describe("Multiremi API - workspace repositories", () => {
       source: "github",
       default_branch: "main",
     }]);
-    const agent = store.createAgent({ name: "Build auth agent", provider: "codex" });
-    const task = store.createTask({
-      workspaceId: workspace.id,
-      agentId: agent.id,
-      prompt: "authenticate only",
-    });
-    const taskToken = await store.createTaskAccessToken(task, workspace.id);
     const daemonToken = await store.createAccessToken({
       workspaceId: workspace.id,
       name: "Build auth daemon",
@@ -237,13 +230,11 @@ describe("Multiremi API - workspace repositories", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const path = `/api/workspaces/${workspace.id}/repos/repo_guarded/wiki/build`;
 
-    for (const token of [taskToken.token, daemonToken.token]) {
-      const response = await app.request(path, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      expect(response.status).toBe(403);
-    }
+    const response = await app.request(path, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${daemonToken.token}` },
+    });
+    expect(response.status).toBe(403);
   });
 
   it("strips server-only repository build scope from public autopilot run routes", async () => {

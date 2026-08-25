@@ -394,7 +394,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     const agent = store.createAgent({
       id: "agt_claim_context",
-      name: "Claim Context Claude",
+      name: "Atlas · LLM Wiki",
       provider: "claude",
       runtimeId: runtime.id,
     });
