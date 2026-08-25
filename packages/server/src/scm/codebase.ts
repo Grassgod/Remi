@@ -206,11 +206,12 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
   private async pollMergeRequests(context: ScmPollContext): Promise<ScmPollPage> {
     const repoId = await this.resolveRepositoryId(context);
     const page = cursorNumber(context, "page", 1);
+    const threshold = overlapWatermark(context.cursor?.watermark);
     const result = await this.action(context, "ListRepoMergeRequests", {
       TargetRepoId: repoId,
-      Since: overlapWatermarkIso(context.cursor?.watermark),
       PageNumber: page,
       PageSize: PAGE_SIZE,
+      SortBy: "UpdatedAt",
       SortOrder: "desc",
       Selector: {
         URL: true,
@@ -220,10 +221,15 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
         Version: true,
       },
     });
-    const mergeRequests = arrayRecords(valuePick(result, "MergeRequests", "merge_requests"));
+    const batch = arrayRecords(valuePick(result, "MergeRequests", "merge_requests"));
+    const mergeRequests = batch.filter((mergeRequest) => (
+      threshold === null || codebaseMergeRequestTimestamp(mergeRequest) >= threshold
+    ));
     const observations = mergeRequests.map((mergeRequest) => codebaseChangeObservation(mergeRequest, context.now));
+    const reachedWatermark = threshold !== null
+      && batch.some((mergeRequest) => codebaseMergeRequestTimestamp(mergeRequest) < threshold);
     const total = numberPick(result, "TotalCount", "total_count");
-    const hasNext = total !== null ? page * PAGE_SIZE < total : mergeRequests.length === PAGE_SIZE;
+    const hasNext = (total !== null ? page * PAGE_SIZE < total : batch.length === PAGE_SIZE) && !reachedWatermark;
     return {
       observations,
       cursor: hasNext ? { page: page + 1 } : null,
@@ -309,16 +315,22 @@ export class CodebaseScmProviderAdapter implements ScmProviderAdapter {
     repoId: string,
   ): Promise<{ mergeRequests: Record<string, unknown>[]; nextCursor: Record<string, unknown> | null }> {
     const page = cursorNumber(context, "page", 1);
+    const threshold = overlapWatermark(context.cursor?.watermark);
     const result = await this.action(context, "ListRepoMergeRequests", {
       TargetRepoId: repoId,
-      Since: overlapWatermarkIso(context.cursor?.watermark),
       PageNumber: page,
       PageSize: PAGE_SIZE,
+      SortBy: "UpdatedAt",
       SortOrder: "desc",
     });
-    const mergeRequests = arrayRecords(valuePick(result, "MergeRequests", "merge_requests"));
+    const batch = arrayRecords(valuePick(result, "MergeRequests", "merge_requests"));
+    const mergeRequests = batch.filter((mergeRequest) => (
+      threshold === null || codebaseMergeRequestTimestamp(mergeRequest) >= threshold
+    ));
+    const reachedWatermark = threshold !== null
+      && batch.some((mergeRequest) => codebaseMergeRequestTimestamp(mergeRequest) < threshold);
     const total = numberPick(result, "TotalCount", "total_count");
-    const hasNext = total !== null ? page * PAGE_SIZE < total : mergeRequests.length === PAGE_SIZE;
+    const hasNext = (total !== null ? page * PAGE_SIZE < total : batch.length === PAGE_SIZE) && !reachedWatermark;
     return { mergeRequests, nextCursor: hasNext ? { page: page + 1 } : null };
   }
 
@@ -580,9 +592,11 @@ function overlapWatermark(value: string | null | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp - OVERLAP_MS : null;
 }
 
-function overlapWatermarkIso(value: string | null | undefined): string | null {
-  const timestamp = overlapWatermark(value);
-  return timestamp === null ? null : new Date(timestamp).toISOString();
+function codebaseMergeRequestTimestamp(mergeRequest: Record<string, unknown>): number {
+  return timestampValue(
+    valuePick(mergeRequest, "UpdatedAt", "updated_at")
+      ?? valuePick(mergeRequest, "CreatedAt", "created_at"),
+  );
 }
 
 function timestampValue(value: unknown): number {
