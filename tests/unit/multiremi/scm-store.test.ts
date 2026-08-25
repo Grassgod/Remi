@@ -1054,9 +1054,10 @@ describe("SCM connection and canonical event store", () => {
     expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
   });
 
-  it("collapses change.merged and default_branch.updated at one revision into a single wiki build run", () => {
+  it("collapses Wiki revisions without exposing them to ordinary SCM automation claims", async () => {
     const { store, connection } = seedConnection();
     const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const runtime = store.registerRuntime({ name: "SCM claim runtime", provider: "claude" });
     const wiki = store.createAutopilot({
       title: "Atlas · Repository Wiki",
       workspaceId: "local",
@@ -1164,6 +1165,25 @@ describe("SCM connection and canonical event store", () => {
     const sameTitleRuns = store.listAutopilotRuns(sameTitleUserWiki.id);
     expect(sameTitleRuns).toHaveLength(2);
     expect(sameTitleRuns.every((run) => run.repositoryId === null && run.dedupeKey === null)).toBe(true);
+
+    const app = createMultiremiApp({ store });
+    const claims = new Map<string, any>();
+    for (let index = 0; index < 5; index++) {
+      const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+      expect(response.status).toBe(200);
+      const claim = (await response.json() as any).task;
+      expect(claim).not.toBeNull();
+      if (!claim) throw new Error("expected SCM automation task claim");
+      claims.set(claim.id, claim);
+      store.completeTask(claim.id, { output: "claim probe complete" });
+    }
+
+    expect(claims.get(wikiRuns[0]!.taskId!)?.scm_revision).toBe("abc123");
+    for (const run of [...announcerRuns, ...sameTitleRuns]) {
+      const claim = claims.get(run.taskId!);
+      expect(claim?.repository_wiki_contexts).toHaveLength(1);
+      expect(claim).not.toHaveProperty("scm_revision");
+    }
   });
 
   it("retries the persisted delivery set after filters change and explicitly skips disabled triggers", () => {

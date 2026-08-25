@@ -31,6 +31,7 @@ import { buildChatBootstrapTranscript } from "@multiremi/store/repos/chat-repo.j
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 import { createLogger } from "@shared/logger.js";
 import { readWorkspacePromptSettings } from "../../prompts/workspace-settings.js";
+import { resolveAtlasRepositoryWikiAutopilot } from "../../repository-wiki/atlas.js";
 import { daemonClaimAgentResponse } from "./agents.js";
 import { issueCompatibilityResponse } from "./issues.js";
 import {
@@ -496,12 +497,17 @@ function appendDaemonClaimAutopilotContext(store: MultiremiStore, task: Multirem
   response.autopilot_id = run.autopilotId;
   response.autopilot_source = run.source;
   if (run.payload != null) response.autopilot_trigger_payload = run.payload;
-  if (task.repositoryWikiContexts?.length) {
+  const autopilot = store.getAutopilot(run.autopilotId);
+  const repositoryWikiRun = resolveAtlasRepositoryWikiAutopilot(
+    task.workspaceId,
+    store.listAgents(),
+    store.listAutopilots(task.workspaceId),
+  )?.id === run.autopilotId;
+  if (repositoryWikiRun && task.repositoryWikiContexts?.length) {
     const scmRevision = autopilotRunSourceRevision(run);
     if (scmRevision) response.scm_revision = scmRevision;
   }
 
-  const autopilot = store.getAutopilot(run.autopilotId);
   if (!autopilot) return;
   response.autopilot_title = autopilot.title;
   if (autopilot.description) response.autopilot_description = autopilot.description;
