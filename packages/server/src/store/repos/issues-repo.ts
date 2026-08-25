@@ -1225,6 +1225,7 @@ export class IssuesRepo {
         issueId: id,
         memberId: assigneeId,
         type: "issue_assigned",
+        severity: "info",
         title: `${current.key} assigned to you`,
         body: current.title,
         actorType: "system",
@@ -1395,7 +1396,6 @@ export class IssuesRepo {
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
     this.notifySubscribedMembers(
       issue,
-      "comment_created",
       "New comment",
       body,
       authorType,
@@ -2469,7 +2469,6 @@ export class IssuesRepo {
 
   private notifySubscribedMembers(
     issue: MultiremiIssue,
-    type: string,
     title: string,
     body: string | null,
     actorType: string,
@@ -2486,12 +2485,13 @@ export class IssuesRepo {
       this.ctx.createInboxItem({
         issueId: issue.id,
         memberId: subscriber.userId,
-        type,
+        type: "comment_created",
         title: `${issue.key}: ${title}`,
         body,
         actorType,
         actorId,
         details,
+        issueStatus: issue.status,
       });
     }
   }

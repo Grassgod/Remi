@@ -2172,6 +2172,58 @@ export class TasksRepo {
       if (run && autopilot) {
         if (runStatus === "completed") this.ctx.analytics().recordAutopilotRunCompletedAnalytics(autopilot, run);
         else this.ctx.analytics().recordAutopilotRunFailedAnalytics(autopilot, run, failureReason);
+        const durationSeconds = autopilotRunDurationSeconds(run.triggeredAt, run.completedAt);
+        const trigger = run.source;
+        const recipients = this.ctx.resolveAutopilotNotificationRecipients(autopilot);
+        for (const recipientId of recipients) {
+          if (runStatus === "completed") {
+            const summary = summarizeAutopilotOutcome(task.result) ?? "No result summary.";
+            this.ctx.createInboxItem({
+              workspaceId: autopilot.workspaceId,
+              issueId: run.issueId,
+              memberId: recipientId,
+              type: "autopilot_run_completed",
+              severity: "info",
+              title: `${autopilot.title} completed`,
+              body: `Completed in ${durationSeconds}s | Trigger: ${trigger} | ${summary}`,
+              actorType: "system",
+              actorId: null,
+              details: {
+                autopilot_id: autopilot.id,
+                autopilot_title: autopilot.title,
+                run_id: run.id,
+                task_id: task.id,
+                trigger,
+                duration_seconds: durationSeconds,
+                issue_id: run.issueId,
+              },
+              emitEvent: true,
+            });
+          } else {
+            const reason = summarizeAutopilotOutcome(failureReason) ?? "Unknown failure.";
+            this.ctx.createInboxItem({
+              workspaceId: autopilot.workspaceId,
+              issueId: run.issueId,
+              memberId: recipientId,
+              type: "autopilot_run_failed",
+              severity: "attention",
+              title: `${autopilot.title} failed`,
+              body: `Failed after ${durationSeconds}s | Trigger: ${trigger} | ${reason}`,
+              actorType: "system",
+              actorId: null,
+              details: {
+                autopilot_id: autopilot.id,
+                autopilot_title: autopilot.title,
+                run_id: run.id,
+                task_id: task.id,
+                trigger,
+                duration_seconds: durationSeconds,
+                issue_id: run.issueId,
+              },
+              emitEvent: true,
+            });
+          }
+        }
       }
     }
     return { retry, delegationReturn };
@@ -2469,6 +2521,19 @@ export class TasksRepo {
     }
     return tasks.map((task) => ({ ...task, autopilotRunId: runByTask.get(task.id) ?? task.autopilotRunId ?? null }));
   }
+}
+
+function autopilotRunDurationSeconds(triggeredAt: string, completedAt: string | null): number {
+  const start = Date.parse(triggeredAt);
+  const end = Date.parse(completedAt ?? "");
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, Math.round((end - start) / 1000));
+}
+
+function summarizeAutopilotOutcome(value: string | null | undefined): string | null {
+  const summary = value?.replace(/\s+/g, " ").trim();
+  if (!summary) return null;
+  return summary.length > 240 ? `${summary.slice(0, 237)}...` : summary;
 }
 
 function parseJsonValue(value: string): unknown | undefined {

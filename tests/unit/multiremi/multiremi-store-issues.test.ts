@@ -428,6 +428,31 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.listInboxItems(bob.id).some((inboxItem) => inboxItem.id === item.id)).toBe(false);
   });
 
+  it("routes comment notifications by workbench visibility and human authorship", () => {
+    const store = createStore();
+    const subscriber = store.createWorkspaceMember({ name: "Subscriber" });
+    const commenter = store.createWorkspaceMember({ name: "Commenter" });
+    const agent = store.createAgent({ name: "Comment agent", provider: "codex" });
+    const cases = [
+      { title: "Visible member", status: "in_progress" as const, authorType: "member", authorId: commenter.id },
+      { title: "Visible agent", status: "blocked" as const, authorType: "agent", authorId: agent.id },
+      { title: "Hidden member", status: "backlog" as const, authorType: "member", authorId: commenter.id },
+      { title: "Hidden agent", status: "done" as const, authorType: "agent", authorId: agent.id },
+    ];
+
+    for (const input of cases) {
+      const issue = store.createIssue({ title: input.title, status: input.status, createdBy: subscriber.id });
+      store.createIssueComment(issue.id, {
+        authorType: input.authorType,
+        authorId: input.authorId,
+        body: `${input.title} progress`,
+      });
+    }
+
+    const notifications = store.listInboxItems(subscriber.id).filter((item) => item.type === "comment_created");
+    expect(notifications.map((item) => item.body)).toEqual(["Hidden member progress"]);
+  });
+
   it("honors notification preferences when creating inbox items", () => {
     const store = createStore();
     const bob = store.createWorkspaceMember({ name: "Bob Approver" });

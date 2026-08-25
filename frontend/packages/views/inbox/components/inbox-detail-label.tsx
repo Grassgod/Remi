@@ -23,6 +23,8 @@ export function useTypeLabels(): Record<InboxItemType, string> {
     due_date_changed: t(($) => $.types.due_date_changed),
     new_comment: t(($) => $.types.new_comment),
     mentioned: t(($) => $.types.mentioned),
+    comment_created: t(($) => $.types.comment_created),
+    comment_mention: t(($) => $.types.comment_mention),
     review_requested: t(($) => $.types.review_requested),
     task_completed: t(($) => $.types.task_completed),
     task_failed: t(($) => $.types.task_failed),
@@ -31,6 +33,10 @@ export function useTypeLabels(): Record<InboxItemType, string> {
     reaction_added: t(($) => $.types.reaction_added),
     quick_create_done: t(($) => $.types.quick_create_done),
     quick_create_failed: t(($) => $.types.quick_create_failed),
+    autopilot_paused: t(($) => $.types.autopilot_paused),
+    autopilot_run_completed: t(($) => $.types.autopilot_run_completed),
+    autopilot_run_failed: t(($) => $.types.autopilot_run_failed),
+    autopilot_run_overdue: t(($) => $.types.autopilot_run_overdue),
   };
 }
 
@@ -92,6 +98,15 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
       return <span>{t(($) => $.labels.removed_due_date)}</span>;
     }
     case "new_comment": {
+      if (item.body) return <span>{item.body}</span>;
+      return <span>{typeLabels[item.type]}</span>;
+    }
+    case "comment_created":
+    case "comment_mention":
+    case "autopilot_paused":
+    case "autopilot_run_completed":
+    case "autopilot_run_failed":
+    case "autopilot_run_overdue": {
       if (item.body) return <span>{item.body}</span>;
       return <span>{typeLabels[item.type]}</span>;
     }

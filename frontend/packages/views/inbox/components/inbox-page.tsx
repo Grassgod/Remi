@@ -13,12 +13,19 @@ import {
   useInboxUnreadCount,
 } from "@multiremi/core/inbox/queries";
 import {
+  filterInboxItemsBySource,
+  groupInboxItemsByDate,
+  type InboxDateGroup,
+  type InboxSourceFilter,
+} from "@multiremi/core/inbox";
+import {
   useMarkInboxRead,
   useArchiveInbox,
   useMarkAllInboxRead,
   useArchiveAllInbox,
   useArchiveAllReadInbox,
   useArchiveCompletedInbox,
+  useMarkInboxItemsRead,
 } from "@multiremi/core/inbox/mutations";
 
 import { IssueDetail } from "../../issues/components";
@@ -91,6 +98,7 @@ export function InboxPage() {
   const wsPaths = useWorkspacePaths();
 
   const [selectedKey, setSelectedKeyState] = useState(() => urlIssue);
+  const [sourceFilter, setSourceFilter] = useState<InboxSourceFilter>("all");
 
   // Sync from URL when searchParams change (e.g. navigation)
   useEffect(() => {
@@ -105,6 +113,11 @@ export function InboxPage() {
     refetch: refetchInbox,
   } = useQuery(inboxListOptions(wsId));
   const items = useMemo(() => deduplicateInboxItems(rawItems), [rawItems]);
+  const filteredItems = useMemo(
+    () => filterInboxItemsBySource(items, sourceFilter),
+    [items, sourceFilter],
+  );
+  const itemGroups = useMemo(() => groupInboxItemsByDate(filteredItems), [filteredItems]);
 
   const selected = items.find((i) => (i.issue_id ?? i.id) === selectedKey) ?? null;
 
@@ -180,6 +193,7 @@ export function InboxPage() {
   const archiveAllMutation = useArchiveAllInbox();
   const archiveAllReadMutation = useArchiveAllReadInbox();
   const archiveCompletedMutation = useArchiveCompletedInbox();
+  const markGroupReadMutation = useMarkInboxItemsRead();
   const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
 
@@ -248,6 +262,19 @@ export function InboxPage() {
     });
   };
 
+  const handleMarkGroupRead = (groupItems: InboxItem[]) => {
+    const unreadIds = groupItems.filter((item) => !item.read).map((item) => item.id);
+    if (!unreadIds.length) return;
+    markGroupReadMutation.mutate(unreadIds, {
+      onError: (err) =>
+        toast.error(
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.errors.mark_group_read_failed),
+        ),
+    });
+  };
+
   const handleArchiveAll = () => {
     setSelectedKey("");
     archiveAllMutation.mutate(undefined, {
@@ -286,6 +313,19 @@ export function InboxPage() {
   };
 
   // -- Shared sub-components --------------------------------------------------
+
+  const sourceFilters: Array<{ key: InboxSourceFilter; label: string }> = [
+    { key: "all", label: t(($) => $.filters.all) },
+    { key: "automation", label: t(($) => $.filters.automation) },
+    { key: "mentions", label: t(($) => $.filters.mentions) },
+    { key: "assignments", label: t(($) => $.filters.assignments) },
+  ];
+  const groupLabels: Record<InboxDateGroup, string> = {
+    today: t(($) => $.groups.today),
+    yesterday: t(($) => $.groups.yesterday),
+    this_week: t(($) => $.groups.this_week),
+    earlier: t(($) => $.groups.earlier),
+  };
 
   const listHeader = (
     <PageHeader className="justify-between">
@@ -341,15 +381,67 @@ export function InboxPage() {
     </div>
   ) : (
     <div>
-      {items.map((item) => (
-        <InboxListItem
-          key={item.id}
-          item={item}
-          isSelected={(item.issue_id ?? item.id) === selectedKey}
-          onClick={() => handleSelect(item)}
-          onArchive={() => handleArchive(item.id)}
-        />
-      ))}
+      <div className="overflow-x-auto border-b px-3 py-2">
+        <div
+          role="group"
+          aria-label={t(($) => $.filters.label)}
+          className="flex min-w-max items-center gap-1"
+        >
+          {sourceFilters.map((filter) => (
+            <Button
+              key={filter.key}
+              type="button"
+              size="xs"
+              variant={sourceFilter === filter.key ? "secondary" : "ghost"}
+              aria-pressed={sourceFilter === filter.key}
+              className="rounded-md"
+              onClick={() => setSourceFilter(filter.key)}
+            >
+              {filter.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+      {filteredItems.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+          <Inbox className="mb-3 h-8 w-8 text-muted-foreground/50" />
+          <p className="text-sm">{t(($) => $.list.empty)}</p>
+        </div>
+      ) : itemGroups.map((group) => {
+        const hasUnread = group.items.some((item) => !item.read);
+        return (
+          <section key={group.key} aria-labelledby={`inbox-group-${group.key}`}>
+            <div className="flex h-8 items-center justify-between border-b bg-muted/30 px-4">
+              <h2
+                id={`inbox-group-${group.key}`}
+                className="text-xs font-medium text-muted-foreground"
+              >
+                {groupLabels[group.key]}
+              </h2>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={!hasUnread || markGroupReadMutation.isPending}
+                onClick={() => handleMarkGroupRead(group.items)}
+                className="text-muted-foreground"
+              >
+                <CheckCheck />
+                {t(($) => $.list.mark_group_read)}
+              </Button>
+            </div>
+            {group.items.map((item) => (
+              <InboxListItem
+                key={item.id}
+                item={item}
+                isSelected={(item.issue_id ?? item.id) === selectedKey}
+                onClick={() => handleSelect(item)}
+                onArchive={() => handleArchive(item.id)}
+              />
+            ))}
+          </section>
+        );
+      })}
     </div>
   );
 

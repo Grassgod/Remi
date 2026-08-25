@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useInboxUnreadCount } from "@multiremi/core/inbox/queries";
+import { useInboxAttentionUnreadCount } from "@multiremi/core/inbox/queries";
 
 type BadgeCapableAPI = {
   setUnreadBadge?: (count: number) => void;
@@ -11,12 +11,12 @@ function getDesktopAPI(): BadgeCapableAPI | undefined {
 }
 
 /**
- * Mirror the inbox unread count onto the OS dock/taskbar badge. No-op on web
+ * Mirror the attention-level inbox unread count onto the OS dock/taskbar badge. No-op on web
  * (no `desktopAPI`) and on the login screen (no workspace ⇒ count defaults
  * to 0, which clears any stale badge from a previous session).
  */
 export function useDesktopUnreadBadge(wsId: string | null | undefined): void {
-  const count = useInboxUnreadCount(wsId);
+  const count = useInboxAttentionUnreadCount(wsId);
   useEffect(() => {
     getDesktopAPI()?.setUnreadBadge?.(count);
   }, [count]);

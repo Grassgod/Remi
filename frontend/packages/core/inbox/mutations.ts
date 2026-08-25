@@ -79,6 +79,29 @@ export function useMarkAllInboxRead() {
   });
 }
 
+export function useMarkInboxItemsRead() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => api.markInboxRead(id))),
+    onMutate: async (ids) => {
+      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
+      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
+      const selected = new Set(ids);
+      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
+        old?.map((item) => selected.has(item.id) ? { ...item, read: true } : item),
+      );
+      return { prev };
+    },
+    onError: (_err, _ids, ctx) => {
+      if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+    },
+  });
+}
+
 export function useArchiveAllInbox() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

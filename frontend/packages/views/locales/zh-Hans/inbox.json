@@ -9,8 +9,22 @@
     "archive_all_read": "归档全部已读",
     "archive_completed": "归档已完成"
   },
+  "filters": {
+    "label": "通知来源",
+    "all": "全部",
+    "automation": "自动化",
+    "mentions": "提及",
+    "assignments": "分配"
+  },
+  "groups": {
+    "today": "今天",
+    "yesterday": "昨天",
+    "this_week": "本周",
+    "earlier": "更早"
+  },
   "list": {
     "empty": "暂无通知",
+    "mark_group_read": "本组标为已读",
     "mark_done_tooltip": "标为已完成",
     "archive_tooltip": "归档",
     "time": {
@@ -37,6 +51,8 @@
     "due_date_changed": "截止日期已更改",
     "new_comment": "新评论",
     "mentioned": "提及了你",
+    "comment_created": "新评论",
+    "comment_mention": "提及了你",
     "review_requested": "请求审阅",
     "task_completed": "task 已完成",
     "task_failed": "task 失败",
@@ -44,7 +60,11 @@
     "agent_completed": "智能体已完成",
     "reaction_added": "添加了表情反应",
     "quick_create_done": "通过智能体创建",
-    "quick_create_failed": "通过智能体创建失败"
+    "quick_create_failed": "通过智能体创建失败",
+    "autopilot_paused": "自动化已暂停",
+    "autopilot_run_completed": "自动化已完成",
+    "autopilot_run_failed": "自动化失败",
+    "autopilot_run_overdue": "自动化已逾期"
   },
   "labels": {
     "set_status_to": "状态设为",
@@ -64,6 +84,7 @@
     "archive_failed": "归档失败",
     "mark_done_failed": "标为已完成失败",
     "mark_all_read_failed": "全部标为已读失败",
+    "mark_group_read_failed": "本组标为已读失败",
     "archive_all_failed": "归档全部失败",
     "archive_all_read_failed": "归档已读失败",
     "archive_completed_failed": "归档已完成失败"

@@ -8,6 +8,7 @@ import enInbox from "../../locales/en/inbox.json";
 const TEST_RESOURCES = { en: { common: enCommon, inbox: enInbox } };
 
 const listInbox = vi.hoisted(() => vi.fn());
+const markItemsRead = vi.hoisted(() => vi.fn());
 const navigationState = vi.hoisted(() => ({
   searchParams: new URLSearchParams(),
 }));
@@ -57,6 +58,7 @@ vi.mock("@multiremi/core/inbox/mutations", () => {
     useArchiveAllInbox: noopMutation,
     useArchiveAllReadInbox: noopMutation,
     useArchiveCompletedInbox: noopMutation,
+    useMarkInboxItemsRead: () => ({ mutate: markItemsRead, isPending: false }),
   };
 });
 
@@ -166,6 +168,54 @@ describe("InboxPage", () => {
 
     expect(await screen.findByText("No notifications")).toBeInTheDocument();
     expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+  });
+
+  it("groups notifications by date and filters by source", async () => {
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    listInbox.mockResolvedValue([
+      {
+        id: "automation-today",
+        type: "autopilot_run_completed",
+        issue_id: null,
+        title: "Daily summary completed",
+        read: false,
+        archived: false,
+        created_at: now.toISOString(),
+      },
+      {
+        id: "assignment-yesterday",
+        type: "issue_assigned",
+        issue_id: "issue-2",
+        title: "Assigned",
+        read: false,
+        archived: false,
+        created_at: yesterday.toISOString(),
+      },
+    ]);
+    renderInbox();
+
+    expect(await screen.findByRole("heading", { name: "Today" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Yesterday" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Automation" }));
+    expect(screen.getByText("automation-today")).toBeInTheDocument();
+    expect(screen.queryByText("assignment-yesterday")).not.toBeInTheDocument();
+  });
+
+  it("marks the unread rows in a date group as read", async () => {
+    const now = new Date().toISOString();
+    listInbox.mockResolvedValue([
+      { id: "today-1", type: "comment_mention", issue_id: null, title: "One", read: false, archived: false, created_at: now },
+      { id: "today-2", type: "issue_assigned", issue_id: null, title: "Two", read: false, archived: false, created_at: now },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mark group as read" }));
+    expect(markItemsRead).toHaveBeenCalledWith(
+      ["today-1", "today-2"],
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
   });
 
   it("opens issue notifications in place and keeps Session routing under inbox", async () => {
