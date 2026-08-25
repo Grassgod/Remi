@@ -221,6 +221,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.prompt.template": {
+      "command": "remi workspace prompt template",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.prompt.template",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.prompt.update": {
       "command": "remi workspace prompt update",
       "auth": [

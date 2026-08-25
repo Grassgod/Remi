@@ -46,8 +46,8 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
       maxAttempts: 3,
       issueId: secondIssue.id,
     });
-    expect(store.getIssue(firstIssue.id)?.status).toBe("todo");
-    expect(store.getIssue(secondIssue.id)?.status).toBe("todo");
+    expect(store.getIssue(firstIssue.id)?.status).toBe("in_progress");
+    expect(store.getIssue(secondIssue.id)?.status).toBe("in_progress");
   });
 
   it("applies Go retry edge rules during orphan recovery", () => {
@@ -123,9 +123,9 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
     expect(store.listTasks().some((task) => task.parentTaskId === exhaustedTask.id)).toBeFalse();
     expect(store.listTasks().some((task) => task.parentTaskId === directTask.id)).toBeFalse();
     expect(store.getAutopilotRun(run.id)?.status).toBe("failed");
-    expect(store.getIssue(retryIssue.id)?.status).toBe("todo");
-    expect(store.getIssue(run.issueId!)?.status).toBe("todo");
-    expect(store.getIssue(exhaustedIssue.id)?.status).toBe("todo");
+    expect(store.getIssue(retryIssue.id)?.status).toBe("in_progress");
+    expect(store.getIssue(run.issueId!)?.status).toBe("blocked");
+    expect(store.getIssue(exhaustedIssue.id)?.status).toBe("blocked");
   });
 
   it("auto-retries retryable daemon failures and freshens resume-unsafe sessions", () => {
@@ -159,6 +159,31 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
       sessionId: null,
       workDir: null,
     });
-    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+  });
+
+  it("blocks an issue after its final failure and returns a cancellation to todo", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Terminal states", provider: "codex" });
+    const runtime = store.registerRuntime({ name: "local-codex", provider: "codex" });
+
+    const failedIssue = store.createIssue({ title: "Final failure", assigneeType: "agent", assigneeId: agent.id });
+    const failedTask = store.createTask({
+      agentId: agent.id,
+      issueId: failedIssue.id,
+      prompt: "fail",
+      maxAttempts: 1,
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(failedTask.id);
+    store.startTask(failedTask.id);
+    store.failTask(failedTask.id, { error: "terminal", failureReason: "agent_error" });
+    expect(store.getIssue(failedIssue.id)?.status).toBe("blocked");
+
+    const cancelledIssue = store.createIssue({ title: "Cancelled", assigneeType: "agent", assigneeId: agent.id });
+    const cancelledTask = store.createTask({ agentId: agent.id, issueId: cancelledIssue.id, prompt: "cancel" });
+    expect(store.claimTask(runtime.id)?.id).toBe(cancelledTask.id);
+    store.startTask(cancelledTask.id);
+    store.cancelTask(cancelledTask.id);
+    expect(store.getIssue(cancelledIssue.id)?.status).toBe("todo");
   });
 });

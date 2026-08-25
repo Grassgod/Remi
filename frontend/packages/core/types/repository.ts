@@ -45,6 +45,21 @@ export interface RepositoryMutationResponse {
 
 export type RepositoryWikiStatus = "unbuilt" | "building" | "healthy" | "stale" | "failed";
 
+// Server-driven build lifecycle for a repository wiki. `idle` covers both
+// "never built" and "last build finished fine"; `queued`/`building` are the
+// active states the UI polls on; `failed` carries `failure_reason`.
+export type RepositoryWikiBuildStatus = "idle" | "queued" | "building" | "failed";
+
+export interface RepositoryWikiBuildInfo {
+  status: RepositoryWikiBuildStatus;
+  run_id: string | null;
+  task_id: string | null;
+  failure_reason: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  source_revision: string | null;
+}
+
 export interface RepositoryWikiSummary {
   repository_id: string;
   repository_name: string;
@@ -53,6 +68,8 @@ export interface RepositoryWikiSummary {
   source_revision: string | null;
   page_count: number;
   updated_at: string | null;
+  // Null when talking to an older server that predates build reporting.
+  build: RepositoryWikiBuildInfo | null;
 }
 
 export interface RepositoryWikiDoc {

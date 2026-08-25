@@ -62,19 +62,22 @@ describe("Bun Multiremi project docs API", () => {
     expect((await app.request("/api/projects/prj_missing/docs")).status).toBe(404);
   });
 
-  it("returns an explicit 503 when OpenViking content is not ready", async () => {
+  it("returns 503 for unreadable OpenViking content but allows cleanup", async () => {
     const store = createStore();
     const project = store.createProject({ title: "Unavailable knowledge" });
     const doc = store.createProjectDoc(project.id, { kind: "wiki", title: "Runbook", body: "SQL rollback copy" });
-    const projectKnowledge = new ProjectKnowledgeService(store, {} as any, "openviking");
+    const projectKnowledge = new ProjectKnowledgeService(store, {
+      exists: async () => false,
+      commit: async () => "oid_cleanup",
+    } as any, "openviking");
     const app = createMultiremiApp({ store, projectKnowledge });
 
     const read = await app.request(`/api/projects/${project.id}/docs/${doc.id}`);
     expect(read.status).toBe(503);
     expect((await read.json()).error).toContain("not ready");
     const deleted = await app.request(`/api/projects/${project.id}/docs/${doc.id}`, { method: "DELETE" });
-    expect(deleted.status).toBe(503);
-    expect(store.getProjectDoc(doc.id)).not.toBeNull();
+    expect(deleted.status).toBe(200);
+    expect(store.getProjectDoc(doc.id)).toBeNull();
   });
 
   it("exposes migration status and dry-run only to workspace administrators", async () => {
@@ -174,6 +177,7 @@ describe("Bun Multiremi project docs API", () => {
       body: JSON.stringify({
         kind: "memory",
         title: "Node 18 breaks the build",
+        body: "Node 18 breaks the build.",
         source_task_id: task.id,
         author_type: "member",
         author_id: "forged-member",
@@ -235,6 +239,7 @@ describe("Bun Multiremi project docs API", () => {
       body: JSON.stringify({
         kind: "memory",
         title: "Provenance is server-side",
+        body: "Provenance must come from server task identity.",
         source_task_id: foreignTask.id,
         source_issue_id: foreignIssue.id,
       }),
@@ -396,6 +401,14 @@ describe("Bun Multiremi project docs API", () => {
     });
     expect(noTitle.status).toBe(400);
     expect(await noTitle.json()).toEqual({ error: "title is required" });
+
+    const emptyMemory = await app.request(`/api/projects/${project.id}/docs`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ kind: "memory", title: "Empty memory", body: "  " }),
+    });
+    expect(emptyMemory.status).toBe(400);
+    expect(await emptyMemory.json()).toEqual({ error: "memory body is required" });
 
     const badKind = await app.request(`/api/projects/${project.id}/docs`, {
       method: "POST",

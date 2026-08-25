@@ -60,11 +60,15 @@ import {
   AutopilotsRepo,
   type MultiremiAutopilotFailureThresholdCandidate,
   type MultiremiAutopilotFailureThresholdOptions,
+  type MultiremiAutopilotRunRecord,
+  type RunAutopilotStoreInput,
 } from "@multiremi/store/repos/autopilots-repo.js";
 // The autopilot failure-monitor option/candidate shapes used to be declared here; keep the public surface unchanged.
 export type {
   MultiremiAutopilotFailureThresholdCandidate,
   MultiremiAutopilotFailureThresholdOptions,
+  MultiremiAutopilotRunRecord,
+  RunAutopilotStoreInput,
 } from "@multiremi/store/repos/autopilots-repo.js";
 import {
   AnalyticsRepo,
@@ -212,6 +216,7 @@ import type {
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeUpdateInput,
+  MultiremiAgentRuntime,
   MultiremiRuntime,
   MultiremiRuntimeDaily,
   MultiremiRuntimeModel,
@@ -1899,6 +1904,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageDaily[] {
     return this.usage.listUsageDaily(input);
   }
@@ -1908,6 +1914,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageByAgent[] {
     return this.usage.listUsageByAgent(input);
   }
@@ -1917,6 +1924,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiUsageByHour[] {
     return this.usage.listUsageByHour(input);
   }
@@ -1926,6 +1934,7 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiTaskActivityByHour[] {
     return this.usage.listTaskActivityByHour(input);
   }
@@ -1935,8 +1944,19 @@ runMigrations(this.db);
     projectId?: string | null;
     runtimeId?: string | null;
     days?: number;
+    tz?: string | null;
   } = {}): MultiremiRuntimeDaily[] {
     return this.usage.listRuntimeDaily(input);
+  }
+
+  listAgentRuntime(input: {
+    workspaceId?: string | null;
+    projectId?: string | null;
+    runtimeId?: string | null;
+    days?: number;
+    tz?: string | null;
+  } = {}): MultiremiAgentRuntime[] {
+    return this.usage.listAgentRuntime(input);
   }
   heartbeatRuntime(runtimeId: string, options: {
     claimPending?: boolean;
@@ -2156,6 +2176,15 @@ runMigrations(this.db);
 
   listIssueActivity(issueId: string): MultiremiIssueActivity[] {
     return this.issues.listIssueActivity(issueId);
+  }
+
+  recordIssueDispatchSkipped(issueId: string, input: {
+    reason: string;
+    error?: string | null;
+    assigneeType?: string | null;
+    assigneeId?: string | null;
+  }): MultiremiIssueActivity {
+    return this.issues.recordDispatchSkipped(issueId, input);
   }
 
   recordSquadLeaderEvaluation(issueId: string, input: {
@@ -2746,8 +2775,12 @@ runMigrations(this.db);
     return this.autopilots.dispatchPendingSystemEvents(now, limit);
   }
 
-  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRun[] {
+  listAutopilotRuns(autopilotId: string): MultiremiAutopilotRunRecord[] {
     return this.autopilots.listAutopilotRuns(autopilotId);
+  }
+
+  listLatestRepositoryAutopilotRuns(workspaceId: string): MultiremiAutopilotRunRecord[] {
+    return this.autopilots.listLatestRepositoryAutopilotRuns(workspaceId);
   }
 
   selectAutopilotsExceedingFailureThreshold(
@@ -2766,11 +2799,11 @@ runMigrations(this.db);
     return this.autopilots.pauseAutopilotsExceedingFailureThreshold(options);
   }
 
-  runAutopilot(autopilotId: string, input: RunAutopilotInput = {}): MultiremiAutopilotRun {
+  runAutopilot(autopilotId: string, input: RunAutopilotStoreInput = {}): MultiremiAutopilotRunRecord {
     return this.autopilots.runAutopilot(autopilotId, input);
   }
 
-  getAutopilotRun(id: string): MultiremiAutopilotRun | null {
+  getAutopilotRun(id: string): MultiremiAutopilotRunRecord | null {
     return this.autopilots.getAutopilotRun(id);
   }
 

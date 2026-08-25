@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import {
   backfillWorkspaceRepositoryDefaultBranches,
+  createScmAwareGitRemoteInspector,
   denyCurrentUserWorkspaceAccess,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
@@ -61,6 +62,7 @@ import {
   readWorkspacePromptSettings,
   WorkspacePromptRevisionConflictError,
 } from "../../prompts/workspace-settings.js";
+import { buildPlatformPromptTemplatePreview } from "../../prompts/platform-template.js";
 import { listWorkspaceRepositories } from "../helpers/repositories.js";
 import {
   discoverGatewayModels,
@@ -73,6 +75,11 @@ import {
 import type { RouterDeps } from "./deps.js";
 import { createAgentFromTemplate, getAgentTemplate } from "../agent-templates.js";
 import { sanitizeWorkspaceProgressSummarySettings } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
+import {
+  autopilotRunSourceRevision,
+  repositoryWikiBuildDedupeKey,
+  type MultiremiAutopilotRunRecord,
+} from "@multiremi/store/repos/autopilots-repo.js";
 
 const ATLAS_AGENT_NAME = "Atlas · LLM Wiki";
 const ATLAS_REPOSITORY_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
@@ -110,6 +117,14 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const workspace = store.getWorkspace(workspaceId);
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     return c.json(readWorkspacePromptSettings(workspace));
+  });
+  app.get("/api/workspaces/:id/prompt-template", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    return c.json(buildPlatformPromptTemplatePreview());
   });
   app.put("/api/workspaces/:id/prompts", async (c) => {
     const workspaceId = c.req.param("id");
@@ -184,7 +199,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       const repositories = await backfillWorkspaceRepositoryDefaultBranches(
         store,
         workspaceId,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       );
       const visible = currentAccessToken(c)?.type === "task"
         ? repositories.map(safeWorkspaceRepositoryData)
@@ -210,20 +225,34 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         current.push(doc);
         docsByRepository.set(doc.repositoryId, current);
       }
+      const buildRuns = new Map(
+        store.listLatestRepositoryAutopilotRuns(workspaceId)
+          .map((run) => [run.repositoryId!, run] as const),
+      );
       return c.json({ repositories: repositories.map((repository) => {
         const repositoryDocs = docsByRepository.get(repository.id) ?? [];
         const latest = repositoryDocs.reduce<MultiremiRepositoryWikiDoc | null>(
           (value, doc) => !value || doc.updatedAt > value.updatedAt ? doc : value,
           null,
         );
+        const build = repositoryWikiBuildState(store, buildRuns.get(repository.id) ?? null);
+        // An active build overrides the doc-derived status ("building"), and a
+        // failed last build surfaces as "failed" — the docs themselves are
+        // untouched and keep being listed either way.
+        const status = build.status === "queued" || build.status === "building"
+          ? "building"
+          : build.status === "failed"
+            ? "failed"
+            : latest?.status ?? "unbuilt";
         return {
           repository_id: repository.id,
           repository_name: repository.name,
-          status: latest?.status ?? "unbuilt",
+          status,
           status_message: latest?.statusMessage ?? null,
           source_revision: latest?.sourceRevision ?? null,
           page_count: repositoryDocs.length,
           updated_at: latest?.updatedAt ?? null,
+          build,
         };
       }) });
     } catch (error) {
@@ -378,7 +407,17 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       source: "api",
       prompt: "Bootstrap or refresh the target repository LLM Wiki from its checked-out default branch. Use the code-to-wiki plugin for analysis, preserve durable repository facts, resolve the checked-out HEAD revision, and publish changes with remi wiki push --source-revision <sha>.",
       payload: { atlas_repository_id: repositoryId, atlas_mode: "bootstrap_repository" },
+      repositoryId,
+      dedupeKey: repositoryWikiBuildDedupeKey(repositoryId, "bootstrap_repository", null),
     });
+    if (run.deduplicated) {
+      return c.json({
+        error: "A repository Wiki build is already in progress for this repository",
+        code: "repository_wiki_build_in_progress",
+        run_id: run.id,
+        task_id: run.taskId,
+      }, 409);
+    }
     return c.json({ run_id: run.id, task_id: run.taskId, status: run.status }, 202);
   });
   app.get("/api/workspaces/:id/repos/:repositoryId/wiki/:ref", async (c) => {
@@ -454,7 +493,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     try {
       return c.json(await inspectWorkspaceRepository(
         body,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       ));
     } catch (error) {
       if (error instanceof WorkspaceRepositoryError) {
@@ -475,7 +514,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         store,
         workspaceId,
         body,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       );
       publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
         workspace: result.workspace,
@@ -502,7 +541,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         workspaceId,
         c.req.param("repositoryId"),
         body,
-        deps.inspectGitRemoteRepository,
+        createScmAwareGitRemoteInspector(store, workspaceId, deps.inspectGitRemoteRepository),
       );
       publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
         workspace: result.workspace,
@@ -930,6 +969,54 @@ function sanitizeWorkspaceSettingsInput<T extends Partial<CreateWorkspaceInput>>
 
 function requireWorkspaceRepository(store: RouterDeps["store"], workspaceId: string, repositoryId: string): boolean {
   return !listWorkspaceRepositories(store, workspaceId).some((repository) => repository.id === repositoryId);
+}
+
+interface RepositoryWikiBuildState {
+  status: "idle" | "queued" | "building" | "failed";
+  run_id: string | null;
+  task_id: string | null;
+  failure_reason: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  source_revision: string | null;
+}
+
+/**
+ * Server-derived build state for a repository Wiki, from the latest
+ * repository-scoped autopilot run and its task: queued until the daemon
+ * starts the task, building while it executes, failed when the run failed,
+ * idle otherwise (no build yet, completed, or skipped).
+ */
+function repositoryWikiBuildState(
+  store: RouterDeps["store"],
+  run: MultiremiAutopilotRunRecord | null,
+): RepositoryWikiBuildState {
+  if (!run) {
+    return {
+      status: "idle",
+      run_id: null,
+      task_id: null,
+      failure_reason: null,
+      started_at: null,
+      updated_at: null,
+      source_revision: null,
+    };
+  }
+  const task = run.taskId ? store.getTask(run.taskId) : null;
+  const status: RepositoryWikiBuildState["status"] = run.status === "failed"
+    ? "failed"
+    : run.status === "running" || run.status === "issue_created"
+      ? !task || task.status === "queued" || task.status === "dispatched" ? "queued" : "building"
+      : "idle";
+  return {
+    status,
+    run_id: run.id,
+    task_id: run.taskId,
+    failure_reason: run.status === "failed" ? run.failureReason : null,
+    started_at: run.triggeredAt,
+    updated_at: run.completedAt ?? task?.updatedAt ?? run.triggeredAt,
+    source_revision: autopilotRunSourceRevision(run),
+  };
 }
 
 function repositoryWikiDocResponse(doc: MultiremiRepositoryWikiDoc): Record<string, unknown> {

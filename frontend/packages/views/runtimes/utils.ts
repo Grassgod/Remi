@@ -145,6 +145,15 @@ const MODEL_PRICING: Record<
   string,
   { input: number; output: number; cacheRead: number; cacheWrite: number }
 > = {
+  // -- Anthropic: Claude 5 family (platform.claude.com/docs pricing; cache
+  //    priced at the standard ratios: read = 0.1x input, write = 1.25x input) --
+  "claude-fable-5":     { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
+  "claude-mythos-5":    { input: 10,   output: 50,   cacheRead: 1.00, cacheWrite: 12.50 },
+  "claude-opus-5":      { input: 5,    output: 25,   cacheRead: 0.50, cacheWrite: 6.25 },
+  // Sonnet 5 priced at the standard $3/$15 sticker (intro $2/$10 runs through
+  // 2026-08-31; we price post-intro so the dashboard doesn't jump in September).
+  "claude-sonnet-5":    { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75 },
+
   // -- Anthropic: current generation (4.5+ — Opus dropped from 15/75 to 5/25 here) --
   "claude-haiku-4-5":   { input: 1,    output: 5,    cacheRead: 0.10, cacheWrite: 1.25 },
   "claude-sonnet-4-5":  { input: 3,    output: 15,   cacheRead: 0.30, cacheWrite: 3.75 },
@@ -311,13 +320,39 @@ export function isModelPriced(model: string): boolean {
 
 // Returns the unique, sorted list of model strings present in `rows` that
 // don't resolve to a price. Empty when everything's priced or there are no
-// rows.
+// rows. NOTE: this collects by model PRESENCE, including zero-token rows —
+// right for the informational pricing-gap banner, wrong for availability
+// decisions. Use the has-unpriced-token helpers below for those.
 export function collectUnmappedModels(rows: readonly Priceable[]): string[] {
   const set = new Set<string>();
   for (const r of rows) {
     if (r.model && !isModelPriced(r.model)) set.add(r.model);
   }
   return Array.from(set).toSorted();
+}
+
+// "Is this dollar figure underivable?" must key on whether unpriced models
+// actually CONTRIBUTED tokens to the metric's dimension, not on whether an
+// unpriced model merely appears in the window (MUL-93). Otherwise a
+// zero-token unpriced row poisons a real $0.00 from priced free-tier
+// models (e.g. glm-4.7-flash prices every rate at 0).
+
+// True when any unpriced row contributed tokens at all — gates the Cost
+// KPI's unavailable state.
+export function hasUnpricedTokens(rows: readonly Priceable[]): boolean {
+  return rows.some(
+    (r) =>
+      !isModelPriced(r.model) &&
+      r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens >
+        0,
+  );
+}
+
+// True when any unpriced row contributed cache-read tokens — gates the
+// Cache-savings KPI's unavailable state (savings derive from cache reads
+// only, so unpriced input/output tokens are irrelevant to it).
+export function hasUnpricedCacheReads(rows: readonly Priceable[]): boolean {
+  return rows.some((r) => !isModelPriced(r.model) && r.cache_read_tokens > 0);
 }
 
 // Anything carrying per-model token totals can be priced — RuntimeUsage,
@@ -768,6 +803,10 @@ export interface CostByKey {
   tokens: number;
   cost: number;
   taskCount: number;
+  /** Tokens whose model didn't resolve to a price — they contribute $0 to
+   *  `cost`. tokens > 0 && cost === 0 && unpricedTokens > 0 means the row's
+   *  cost is underivable and must render "—", not $0.00 (MUL-93). */
+  unpricedTokens: number;
 }
 
 // Per-(agent, model) rows → per-agent totals. Cost is summed across all
@@ -781,10 +820,13 @@ export function aggregateCostByAgent(rows: RuntimeUsageByAgent[]): CostByKey[] {
       tokens: 0,
       cost: 0,
       taskCount: 0,
+      unpricedTokens: 0,
     };
-    entry.tokens +=
+    const rowTokens =
       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    entry.tokens += rowTokens;
     entry.cost += estimateCost(r);
+    if (!isModelPriced(r.model)) entry.unpricedTokens += rowTokens;
     entry.taskCount += r.task_count;
     map.set(r.agent_id, entry);
   }
@@ -797,10 +839,13 @@ export function aggregateCostByModel(rows: RuntimeUsage[]): CostByKey[] {
   const map = new Map<string, CostByKey>();
   for (const r of rows) {
     const key = r.model || r.provider || "unknown";
-    const entry = map.get(key) ?? { key, tokens: 0, cost: 0, taskCount: 0 };
-    entry.tokens +=
+    const entry =
+      map.get(key) ?? { key, tokens: 0, cost: 0, taskCount: 0, unpricedTokens: 0 };
+    const rowTokens =
       r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    entry.tokens += rowTokens;
     entry.cost += estimateCost(r);
+    if (!isModelPriced(r.model)) entry.unpricedTokens += rowTokens;
     map.set(key, entry);
   }
   return Array.from(map.values()).toSorted((a, b) => b.cost - a.cost);

@@ -204,6 +204,9 @@ function kindSpecs(kind: KnowledgeKind): CommandSpec[] {
       const client = await clientFor(invocation);
       const body = await knowledgeBody(invocation, kind, true);
       if (typeof body.title !== "string" || !body.title.trim()) throw new CliError("usage", `${kind} title is required via --title or input JSON`);
+      if (kind === "memory" && (typeof body.body !== "string" || !body.body.trim())) {
+        throw new CliError("usage", "memory body is required via --content, --content-file, --content-stdin, or input JSON");
+      }
       const response = await projectRequest(invocation, client, projectRef, "POST", "/docs", body);
       renderResource(invocation, response.data);
     }, aliases.create),

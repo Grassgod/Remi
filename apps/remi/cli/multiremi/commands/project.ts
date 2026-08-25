@@ -6,7 +6,14 @@ import { printJson } from "../output.js";
 
 export async function project(positional: string[], options: CliOptions): Promise<void> {
   if (positional[0] !== "knowledge") {
-    throw new Error("usage: multiremi project knowledge status|backfill|verify|retry-failed ...");
+    // Only knowledge migration lives here; the project resource commands moved
+    // to the native CLI in 0.2.47. Older binaries route `remi project` into
+    // this handler, so name the canonical commands instead of a bare usage.
+    throw new Error(
+      "usage: multiremi project knowledge status|backfill|verify|retry-failed ...\n"
+        + "project list|get|search|defaults are native CLI commands: run `remi project list|get|search|defaults ...`.\n"
+        + "If that prints this same message, this remi binary predates 0.2.47 — update it (`remi update`).",
+    );
   }
   await projectKnowledge(positional.slice(1), options);
 }

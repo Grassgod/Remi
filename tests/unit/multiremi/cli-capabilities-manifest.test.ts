@@ -70,15 +70,20 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 525,
-      exempt: 70,
+      mapped: 526,
+      exempt: 71,
       missing: 0,
-      total: 595,
+      total: 597,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);
     expect(manifest.routes["GET /api/cli/context"]).toEqual({ command: "context.get" });
     expect(manifest.routes["GET /api/cli/capabilities"]).toEqual({ command: "context.get" });
+    expect(manifest.routes["GET /api/cli/latest-version"]).toEqual({
+      cli_exempt: true,
+      category: "platform_updater_internal",
+      reason: "Dashboard-only release discovery gates the CLI update control; CLI update workflows use runtime release commands.",
+    });
     expect(manifest.aliases["remi multiremi"]).toEqual({
       command: "legacy.multiremi",
       deprecated_since: "0.3.0",

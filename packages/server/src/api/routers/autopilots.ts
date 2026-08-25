@@ -40,6 +40,7 @@ import type {
   UpdateAutopilotTriggerInput,
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
+import { listWorkspaceRepositories } from "../helpers/repositories.js";
 
 function loadAutopilotForCurrentUser(
   c: Context,
@@ -272,7 +273,14 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const { autopilot } = loaded;
     const limit = boundedQueryInt(c.req.query("limit"), 20, 100);
     const offset = Math.max(0, queryInt(c.req.query("offset"), 0));
-    const runs = store.listAutopilotRuns(autopilot.id).slice(offset, offset + limit).map((run) => autopilotRunCompatibilityResponse(run, { slim: true }));
+    const repositoryNames = new Map(
+      listWorkspaceRepositories(store, autopilot.workspaceId)
+        .map((repository) => [repository.id, repository.name] as const),
+    );
+    const runs = store.listAutopilotRuns(autopilot.id).slice(offset, offset + limit).map((run) => autopilotRunCompatibilityResponse(run, {
+      slim: true,
+      resolveRepositoryName: (repositoryId) => repositoryNames.get(repositoryId) ?? null,
+    }));
     return c.json({ runs, total: runs.length });
   });
   app.get("/api/autopilots/:id/runs/:runId", (c) => {

@@ -11,3 +11,22 @@ export const WorkspaceEnvResponseSchema = z.object({
 export type WorkspaceEnvResponse = z.infer<typeof WorkspaceEnvResponseSchema>;
 
 export const EMPTY_WORKSPACE_ENV: WorkspaceEnvResponse = { workspace_id: "", env: {} };
+
+const PromptTemplateSha256Schema = z.object({
+  bootstrap: z.string().regex(/^[a-f0-9]{64}$/),
+  delta: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export const PlatformPromptTemplatePreviewSchema = z.object({
+  bootstrap: z.string(),
+  delta: z.string(),
+  sha256: PromptTemplateSha256Schema,
+}).loose();
+
+export type PlatformPromptTemplatePreview = z.infer<typeof PlatformPromptTemplatePreviewSchema>;
+
+export const EMPTY_PLATFORM_PROMPT_TEMPLATE: PlatformPromptTemplatePreview = {
+  bootstrap: "",
+  delta: "",
+  sha256: { bootstrap: "", delta: "" },
+};

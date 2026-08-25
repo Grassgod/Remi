@@ -178,6 +178,9 @@ async function createKnowledge(kind: KnowledgeKind, options: CliOptions): Promis
   addStringBodyField(body, options, "summary", "summary", false, true);
   await addKnowledgeBodyFields(body, options);
   if (kind === "memory") {
+    if (typeof body.body !== "string" || !body.body.trim()) {
+      throw new Error("memory body is required");
+    }
     const taskId = process.env.MULTIREMI_TASK_ID?.trim();
     if (taskId) body.source_task_id = taskId;
   }

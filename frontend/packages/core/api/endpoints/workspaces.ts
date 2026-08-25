@@ -1,13 +1,16 @@
 import type {
   Workspace,
   WorkspacePromptSettings,
+  PlatformPromptTemplatePreview,
   UpdateWorkspacePromptSettingsRequest,
   WorkspaceRepo,
 } from "../../types";
 import type { HttpClient } from "../http";
 import { parseWithFallback } from "../schema";
 import {
+  EMPTY_PLATFORM_PROMPT_TEMPLATE,
   EMPTY_WORKSPACE_ENV,
+  PlatformPromptTemplatePreviewSchema,
   WorkspaceEnvResponseSchema,
   type WorkspaceEnvResponse,
 } from "../schemas/workspaces";
@@ -50,6 +53,18 @@ export class WorkspacesEndpoints {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  async getWorkspacePromptTemplate(workspaceId: string): Promise<PlatformPromptTemplatePreview> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/prompt-template`,
+    );
+    return parseWithFallback(
+      raw,
+      PlatformPromptTemplatePreviewSchema,
+      EMPTY_PLATFORM_PROMPT_TEMPLATE,
+      { endpoint: "GET /api/workspaces/:id/prompt-template" },
+    );
   }
 
   // Workspace-level env for task sessions (owner/admin only). GET returns

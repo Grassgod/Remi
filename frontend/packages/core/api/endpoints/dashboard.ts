@@ -5,7 +5,7 @@ import type {
   DashboardUsageDaily,
 } from "../../types";
 import type { HttpClient } from "../http";
-import { parseWithFallback } from "../schema";
+import { parseStrictResponse } from "../schema";
 import {
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
@@ -17,10 +17,16 @@ export class DashboardEndpoints {
   constructor(readonly http: HttpClient) {}
 
   // ---------------------------------------------------------------------------
-  // Workspace dashboard — three independent rollups for `/{slug}/dashboard`.
+  // Workspace dashboard — four independent rollups for `/{slug}/dashboard`.
   // Each accepts an optional `project_id` to narrow the scope to one project.
   // Cost is computed client-side from the model pricing table (same contract
   // as the per-runtime endpoints above).
+  //
+  // These parse STRICTLY (MUL-93): a malformed 2xx body throws
+  // ApiContractError instead of degrading to `[]`/zeros. TanStack Query
+  // catches the throw and the dashboard renders an explicit unavailable
+  // state — an empty array from these methods therefore always means
+  // "genuinely no usage in the window", never "the contract drifted".
   // ---------------------------------------------------------------------------
 
   async getDashboardUsageDaily(
@@ -31,10 +37,9 @@ export class DashboardEndpoints {
     if (params.project_id) search.set("project_id", params.project_id);
     if (params.tz) search.set("tz", params.tz);
     const raw = await this.http.fetch<unknown>(`/api/dashboard/usage/daily?${search}`);
-    return parseWithFallback<DashboardUsageDaily[]>(
+    return parseStrictResponse<DashboardUsageDaily[]>(
       raw,
       DashboardUsageDailyListSchema,
-      [],
       { endpoint: "GET /api/dashboard/usage/daily" },
     );
   }
@@ -47,10 +52,9 @@ export class DashboardEndpoints {
     if (params.project_id) search.set("project_id", params.project_id);
     if (params.tz) search.set("tz", params.tz);
     const raw = await this.http.fetch<unknown>(`/api/dashboard/usage/by-agent?${search}`);
-    return parseWithFallback<DashboardUsageByAgent[]>(
+    return parseStrictResponse<DashboardUsageByAgent[]>(
       raw,
       DashboardUsageByAgentListSchema,
-      [],
       { endpoint: "GET /api/dashboard/usage/by-agent" },
     );
   }
@@ -65,10 +69,9 @@ export class DashboardEndpoints {
     // matching the per-agent token card.
     if (params.tz) search.set("tz", params.tz);
     const raw = await this.http.fetch<unknown>(`/api/dashboard/agent-runtime?${search}`);
-    return parseWithFallback<DashboardAgentRunTime[]>(
+    return parseStrictResponse<DashboardAgentRunTime[]>(
       raw,
       DashboardAgentRunTimeListSchema,
-      [],
       { endpoint: "GET /api/dashboard/agent-runtime" },
     );
   }
@@ -83,10 +86,9 @@ export class DashboardEndpoints {
     // align with the Cost / Tokens charts.
     if (params.tz) search.set("tz", params.tz);
     const raw = await this.http.fetch<unknown>(`/api/dashboard/runtime/daily?${search}`);
-    return parseWithFallback<DashboardRunTimeDaily[]>(
+    return parseStrictResponse<DashboardRunTimeDaily[]>(
       raw,
       DashboardRunTimeDailyListSchema,
-      [],
       { endpoint: "GET /api/dashboard/runtime/daily" },
     );
   }

@@ -338,6 +338,22 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.prompt.template": {
+      "command": "remi workspace prompt template",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.prompt.template",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.prompt.update": {
       "command": "remi workspace prompt update",
       "aliases": [],
@@ -7388,6 +7404,11 @@
     "GET /api/cli/context": {
       "command": "context.get"
     },
+    "GET /api/cli/latest-version": {
+      "cli_exempt": true,
+      "category": "platform_updater_internal",
+      "reason": "Dashboard-only release discovery gates the CLI update control; CLI update workflows use runtime release commands."
+    },
     "GET /api/cloud-billing/balance": {
       "command": "billing.balance"
     },
@@ -8042,6 +8063,9 @@
     },
     "GET /api/workspaces/:id/members": {
       "command": "member.list"
+    },
+    "GET /api/workspaces/:id/prompt-template": {
+      "command": "workspace.prompt.template"
     },
     "GET /api/workspaces/:id/prompts": {
       "command": "workspace.prompt.get"

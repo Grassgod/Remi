@@ -743,6 +743,7 @@ function normalizeDaemonClaimSquadContext(raw: any): any | null {
     id: stringOrNull(raw.id) ?? "",
     name: stringOrNull(raw.name) ?? "",
     leaderAgentId: stringOrNull(raw.leader_agent_id ?? raw.leaderAgentId) ?? "",
+    instructions: stringOrNull(raw.instructions),
     members: Array.isArray(raw.members)
       ? raw.members.map((member: any) => ({
         agentId: stringOrNull(member.agent_id ?? member.agentId) ?? "",

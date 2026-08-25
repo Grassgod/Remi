@@ -11,8 +11,10 @@ export interface CreateIssueRequest {
   description?: string;
   status?: IssueStatus;
   priority?: IssuePriority;
-  assignee_type?: IssueAssigneeType;
-  assignee_id?: string;
+  /** Omitting both assignee fields lets the server inherit the project's
+   *  default assignee; explicit null means "create unassigned". */
+  assignee_type?: IssueAssigneeType | null;
+  assignee_id?: string | null;
   parent_issue_id?: string;
   project_id?: string;
   start_date?: string;

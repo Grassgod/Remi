@@ -12,7 +12,11 @@
     "sync": "Event ingestion",
     "wiki": "Wiki",
     "not_connected": "Not connected",
-    "sync_modes": { "poll": "Polling", "webhook": "Webhook", "hybrid": "Hybrid" },
+    "sync_modes": {
+      "poll": "Polling",
+      "webhook": "Webhook",
+      "hybrid": "Hybrid"
+    },
     "description": "Description",
     "imported": "Imported"
   },
@@ -24,6 +28,11 @@
     "build_action": "Build with Atlas",
     "build_started": "Atlas started building the repository Wiki",
     "build_failed": "Could not start the repository Wiki build",
+    "building_action": "Building Wiki",
+    "rebuild_action": "Rebuild",
+    "build_in_progress": "A Wiki build is already in progress",
+    "build_failed_title": "Wiki build failed",
+    "view_build_log": "View build process",
     "no_match": "No Wiki pages match your filter.",
     "page_count": "{{count}} pages",
     "source_revision": "Code revision {{revision}}",

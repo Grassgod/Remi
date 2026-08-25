@@ -238,6 +238,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine$/, "workspace.relay.update"],
     [/^POST \/api\/workspaces\/:id\/relay-config\/:engine\/reveal$/, "workspace.relay.reveal"],
     [/^GET \/api\/workspaces\/:id\/prompts$/, "workspace.prompt.get"],
+    [/^GET \/api\/workspaces\/:id\/prompt-template$/, "workspace.prompt.template"],
     [/^PUT \/api\/workspaces\/:id\/prompts$/, "workspace.prompt.update"],
     [/^GET \/api\/workspaces\/:id\/issue-archive$/, "workspace.issue-archive.get"],
     [/^PUT \/api\/workspaces\/:id\/issue-archive$/, "workspace.issue-archive.update"],
@@ -598,6 +599,9 @@ function exemptRoute(route: string): CliManifestRoute | null {
   }
   if (path.startsWith("/api/platform-updater/")) {
     return exempt("platform_updater_internal", "Platform updater callback is an internal deployment control-plane protocol.");
+  }
+  if (path === "/api/cli/latest-version") {
+    return exempt("platform_updater_internal", "Dashboard-only release discovery gates the CLI update control; CLI update workflows use runtime release commands.");
   }
   if (path === "/api/config" || path === "/api/contact-sales") {
     return exempt("pure_ui", "Browser bootstrap or presentation-only action has no meaningful CLI workflow.");

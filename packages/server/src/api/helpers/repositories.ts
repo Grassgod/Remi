@@ -2,9 +2,16 @@ import { createHash } from "node:crypto";
 import { createId, nowIso } from "@multiremi/ids.js";
 import type {
   CreateProjectResourceInput,
+  MultiremiScmConnection,
   MultiremiWorkspace,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
+import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
+import {
+  createScmGitCredentialEnvironment,
+  scmGitCredentialArguments,
+} from "@multiremi/agent-plugins/scm-git-environment.js";
 
 export type WorkspaceRepositorySource = "github" | "codebase" | "unknown";
 
@@ -44,7 +51,10 @@ export interface GitRemoteMetadata {
   branches: string[];
 }
 
-export type GitRemoteInspector = (url: string) => Promise<GitRemoteMetadata>;
+export type GitRemoteInspector = (
+  url: string,
+  gitEnvironment?: Record<string, string>,
+) => Promise<GitRemoteMetadata>;
 
 export class WorkspaceRepositoryError extends Error {
   constructor(
@@ -256,15 +266,25 @@ export async function updateWorkspaceRepository(
 
 export async function inspectGitRemoteRepository(
   url: string,
+  gitEnvironment: Record<string, string> = {},
 ): Promise<GitRemoteMetadata> {
   const env = {
     ...process.env,
+    ...gitEnvironment,
     GIT_TERMINAL_PROMPT: "0",
     GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND
       ?? "ssh -o BatchMode=yes -o ConnectTimeout=10",
   };
   const proc = Bun.spawn(
-    ["git", "ls-remote", "--symref", url, "HEAD", "refs/heads/*"],
+    [
+      "git",
+      ...scmGitCredentialArguments(gitEnvironment),
+      "ls-remote",
+      "--symref",
+      url,
+      "HEAD",
+      "refs/heads/*",
+    ],
     { env, stdout: "pipe", stderr: "pipe" },
   );
   const stdoutPromise = new Response(proc.stdout).text();
@@ -290,6 +310,71 @@ export async function inspectGitRemoteRepository(
     return parseGitRemoteMetadata(stdout);
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+export function createScmAwareGitRemoteInspector(
+  store: Pick<
+    MultiremiStore,
+    "listScmConnections" | "getScmConnectionCredential" | "findScmRepositoryBindingByUrl"
+  >,
+  workspaceId: string,
+  inspectRemote: GitRemoteInspector = inspectGitRemoteRepository,
+): GitRemoteInspector {
+  return async (url) => {
+    const connections = store.listScmConnections({ workspaceId, enabled: true })
+      .filter((connection) => connection.accessTokenSet)
+      .map((connection) => matchingScmRemote(connection, url))
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+    if (connections.length === 0) return inspectRemote(url);
+
+    const binding = store.findScmRepositoryBindingByUrl(workspaceId, url);
+    const selected = (
+      (binding
+        ? connections.find((item) => item.connection.id === binding.connectionId)
+        : null)
+      ?? connections.find((item) => item.connection.isDefault)
+      ?? (connections.length === 1 ? connections[0] : null)
+    );
+    if (!selected) {
+      throw new WorkspaceRepositoryError(
+        "multiple SCM connections match this repository; bind the repository or configure one default connection",
+        409,
+      );
+    }
+
+    const credential = store.getScmConnectionCredential(selected.connection.id);
+    const password = credential?.accessToken
+      ? scmGitCredentialPassword(selected.connection.provider, credential.accessToken)
+      : "";
+    if (!password || /[\r\n]/u.test(password)) {
+      throw new WorkspaceRepositoryError(
+        "the matching SCM connection does not contain a valid access token",
+        409,
+      );
+    }
+
+    return inspectRemote(
+      selected.cloneUrl,
+      createScmGitCredentialEnvironment(
+        selected.connection.provider === "github" ? "x-access-token" : "oauth2",
+        password,
+      ),
+    );
+  };
+}
+
+function matchingScmRemote(connection: MultiremiScmConnection, url: string): {
+  connection: MultiremiScmConnection;
+  cloneUrl: string;
+} | null {
+  try {
+    return {
+      connection,
+      cloneUrl: resolveScmRepositoryRemote(url, connection.baseUrl).cloneUrl,
+    };
+  } catch {
+    return null;
   }
 }
 

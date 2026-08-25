@@ -1022,4 +1022,511 @@ describe("Multiremi API — issue endpoints", () => {
     const missing = await app.request(`/api/labels/${createdBody.label.id}`);
     expect(missing.status).toBe(404);
   });
+
+  it("inherits project scope and default assignee for non-intake task creations and dispatches a task", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const executor = store.createAgent({ name: "Default executor", provider: "claude" });
+    const worker = store.createAgent({ name: "Follow-up worker", provider: "codex" });
+    const project = store.createProject({
+      title: "Delivery project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: executor.id,
+    });
+    const otherProject = store.createProject({ title: "Sibling project" });
+    const sourceIssue = store.createIssue({
+      title: "Execution parent",
+      workspaceId: "local",
+      projectId: project.id,
+      status: "in_progress",
+    });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: sourceIssue.id,
+      agentId: worker.id,
+      prompt: "follow up",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${taskToken.token}`,
+    };
+
+    // No project + no assignee: inherits the source issue's project, backfills
+    // its default executor, and assign-on-create dispatches a task.
+    const inherited = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Follow-up inherits scope" }),
+    });
+    expect(inherited.status).toBe(201);
+    const inheritedBody = await inherited.json();
+    expect(inheritedBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+    });
+    expect(inheritedBody.issue_kind).not.toBe("intake");
+    expect(inheritedBody.source_issue_id).toBeNull();
+    expect(store.listTasksForIssue(inheritedBody.id)).toHaveLength(1);
+
+    // Explicit assignee wins over the project default.
+    const explicit = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Follow-up explicit assignee",
+        project_id: project.id,
+        assignee_type: "agent",
+        assignee_id: worker.id,
+      }),
+    });
+    expect(explicit.status).toBe(201);
+    const explicitBody = await explicit.json();
+    expect(explicitBody).toMatchObject({ assignee_type: "agent", assignee_id: worker.id });
+    expect(store.listTasksForIssue(explicitBody.id)).toHaveLength(1);
+
+    // Explicit null assignee opts out of inheritance: stays unassigned, no task.
+    const unassigned = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Follow-up explicitly unassigned",
+        project_id: project.id,
+        assignee_type: null,
+        assignee_id: null,
+      }),
+    });
+    expect(unassigned.status).toBe(201);
+    const unassignedBody = await unassigned.json();
+    expect(unassignedBody.assignee_type).toBeNull();
+    expect(unassignedBody.assignee_id).toBeNull();
+    expect(store.listTasksForIssue(unassignedBody.id)).toHaveLength(0);
+
+    // A non-intake creation may target another active project explicitly; the
+    // requested project (without defaults) leaves the issue unassigned.
+    const crossProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Follow-up other project", project_id: otherProject.id }),
+    });
+    expect(crossProject.status).toBe(201);
+    const crossProjectBody = await crossProject.json();
+    expect(crossProjectBody.project_id).toBe(otherProject.id);
+    expect(crossProjectBody.assignee_id).toBeNull();
+
+    // Human/API callers without a task token get the same backfill when they
+    // send a project and omit the assignee fields entirely.
+    const humanInherited = await app.request("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Human create inherits default", project_id: project.id }),
+    });
+    expect(humanInherited.status).toBe(201);
+    const humanInheritedBody = await humanInherited.json();
+    expect(humanInheritedBody).toMatchObject({ assignee_type: "agent", assignee_id: executor.id });
+    expect(store.listTasksForIssue(humanInheritedBody.id)).toHaveLength(1);
+  });
+
+  it("covers the intake matrix: project inheritance, explicit assignee, and explicit null opt-out", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const executor = store.createAgent({ name: "Intake default executor", provider: "claude" });
+    const worker = store.createAgent({ name: "Intake worker", provider: "codex" });
+    const project = store.createProject({
+      title: "Intake project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: executor.id,
+    });
+    const otherProject = store.createProject({ title: "Out-of-scope project" });
+    const intakeIssue = store.createIssue({
+      title: "Intake triage",
+      workspaceId: "local",
+      projectId: project.id,
+      issueKind: "intake",
+    });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: intakeIssue.id,
+      agentId: worker.id,
+      prompt: "triage",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${taskToken.token}`,
+    };
+
+    // No project + no assignee: inherits the intake project, backfills its
+    // default executor, and dispatches a task.
+    const inherited = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated inherits scope" }),
+    });
+    expect(inherited.status).toBe(201);
+    const inheritedBody = await inherited.json();
+    expect(inheritedBody).toMatchObject({
+      issue_kind: "execution",
+      source_issue_id: intakeIssue.id,
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+      status: "todo",
+    });
+    expect(store.listTasksForIssue(inheritedBody.id)).toHaveLength(1);
+
+    // Explicit project (same scope) + no assignee: same backfill.
+    const explicitProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated explicit project", project_id: project.id }),
+    });
+    expect(explicitProject.status).toBe(201);
+    const explicitProjectBody = await explicitProject.json();
+    expect(explicitProjectBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+    });
+    expect(store.listTasksForIssue(explicitProjectBody.id)).toHaveLength(1);
+
+    // No project + explicit assignee: the explicit executor wins over the default.
+    const explicitAssignee = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Generated explicit assignee",
+        assignee_type: "agent",
+        assignee_id: worker.id,
+      }),
+    });
+    expect(explicitAssignee.status).toBe(201);
+    const explicitAssigneeBody = await explicitAssignee.json();
+    expect(explicitAssigneeBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: worker.id,
+    });
+    expect(store.listTasksForIssue(explicitAssigneeBody.id)).toHaveLength(1);
+
+    // No project + explicit null assignee: opts out of inheritance, no task.
+    const unassigned = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Generated explicitly unassigned",
+        assignee_type: null,
+        assignee_id: null,
+      }),
+    });
+    expect(unassigned.status).toBe(201);
+    const unassignedBody = await unassigned.json();
+    expect(unassignedBody.assignee_type).toBeNull();
+    expect(unassignedBody.assignee_id).toBeNull();
+    expect(store.listTasksForIssue(unassignedBody.id)).toHaveLength(0);
+
+    // Explicit project outside the intake scope is rejected.
+    const crossProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated out of scope", project_id: otherProject.id }),
+    });
+    expect(crossProject.status).toBe(400);
+    expect(await crossProject.json()).toEqual({
+      error: "Generated issues must stay in the intake project's scope",
+    });
+  });
+
+  it("lets a projectless intake pick a project explicitly but rejects omitting it", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const executor = store.createAgent({ name: "Projectless intake executor", provider: "claude" });
+    const worker = store.createAgent({ name: "Projectless intake worker", provider: "codex" });
+    const project = store.createProject({
+      title: "Selectable project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: executor.id,
+    });
+    const intakeIssue = store.createIssue({
+      title: "Projectless intake",
+      workspaceId: "local",
+      issueKind: "intake",
+    });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: intakeIssue.id,
+      agentId: worker.id,
+      prompt: "triage",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${taskToken.token}`,
+    };
+
+    // The requested project binds the generated issue and supplies its default.
+    const chosen = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated with chosen project", project_id: project.id }),
+    });
+    expect(chosen.status).toBe(201);
+    const chosenBody = await chosen.json();
+    expect(chosenBody).toMatchObject({
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+      source_issue_id: intakeIssue.id,
+    });
+    expect(store.listTasksForIssue(chosenBody.id)).toHaveLength(1);
+
+    // Omitting the project while active projects exist stays an error.
+    const missingProject = await app.request("/api/issues", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ title: "Generated without project" }),
+    });
+    expect(missingProject.status).toBe(400);
+    expect(await missingProject.json()).toEqual({
+      error: "project_id is required when active projects are available",
+    });
+  });
+
+  it("requires a project for task creations when the workspace has active projects", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const worker = store.createAgent({ name: "Projectless worker", provider: "codex" });
+    store.createProject({ title: "Some active project" });
+    const sourceIssue = store.createIssue({ title: "Projectless parent", workspaceId: "local" });
+    const task = store.createTask({
+      workspaceId: "local",
+      issueId: sourceIssue.id,
+      agentId: worker.id,
+      prompt: "follow up",
+    });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+
+    const missingProject = await app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${taskToken.token}`,
+      },
+      body: JSON.stringify({ title: "Orphan follow-up" }),
+    });
+    expect(missingProject.status).toBe(400);
+    expect(await missingProject.json()).toEqual({
+      error: "project_id is required when active projects are available",
+    });
+  });
+
+  it("reports the dispatch outcome on create instead of failing silently", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Dispatch agent", provider: "claude" });
+    const member = store.createWorkspaceMember({ name: "Dispatch member" });
+    const emptySquad = store.createSquad({ name: "Empty squad" });
+    const app = createMultiremiApp({ store });
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/issues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    // 1. No assignee: created, explicitly not dispatched, no failure activity.
+    const unassigned = await create({ title: "Nobody owns this" });
+    expect(unassigned.status).toBe(201);
+    const unassignedBody = await unassigned.json();
+    expect(unassignedBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_assignee",
+      task_id: null,
+    });
+    expect(unassignedBody.dispatch_error).toBeUndefined();
+    expect(store.listIssueActivity(unassignedBody.id).map((activity) => activity.type)).not.toContain("dispatch_skipped");
+
+    // 2. Assignee resolves to no runnable agent (squad with no agent members):
+    //    the skip reason lands in the response AND on the issue activity feed.
+    const squadIssue = await create({ title: "Squad has no agents", assignee_type: "squad", assignee_id: emptySquad.id });
+    expect(squadIssue.status).toBe(201);
+    const squadBody = await squadIssue.json();
+    expect(squadBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_runnable_agent",
+      task_id: null,
+    });
+    expect(squadBody.dispatch_error).toContain("No runnable agent");
+    const skipActivity = store.listIssueActivity(squadBody.id).find((activity) => activity.type === "dispatch_skipped");
+    expect(skipActivity).toBeDefined();
+    expect(skipActivity!.data).toMatchObject({
+      reason: "no_runnable_agent",
+      assignee_type: "squad",
+      assignee_id: emptySquad.id,
+    });
+    // The skip is user-visible on the timeline endpoint, not just in the store.
+    const timeline = await app.request(`/api/issues/${squadBody.id}/timeline`);
+    const timelineBody = await timeline.json();
+    const entries = Array.isArray(timelineBody) ? timelineBody : timelineBody.entries;
+    expect(entries.some((entry: any) => entry.action === "dispatch_skipped")).toBe(true);
+
+    // 3. Member assignee: no task by design (inbox notification instead).
+    const memberIssue = await create({ title: "Human work", assignee_type: "member", assignee_id: member.id });
+    expect(memberIssue.status).toBe(201);
+    expect(await memberIssue.json()).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "member_assignee",
+      task_id: null,
+    });
+
+    // 4. Backlog is a parking lot: assignment stands, dispatch waits.
+    const backlogIssue = await create({ title: "Parked", status: "backlog", assignee_type: "agent", assignee_id: agent.id });
+    expect(backlogIssue.status).toBe(201);
+    expect(await backlogIssue.json()).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "backlog_status",
+      task_id: null,
+    });
+
+    // 5. Runnable agent: dispatched, with the task id in the response.
+    const dispatched = await create({ title: "Agent work", assignee_type: "agent", assignee_id: agent.id });
+    expect(dispatched.status).toBe(201);
+    const dispatchedBody = await dispatched.json();
+    const dispatchedTaskId = dispatchedBody.task_id;
+    expect(dispatchedBody).toMatchObject({
+      dispatch_status: "dispatched",
+      dispatch_skipped_reason: null,
+    });
+    expect(typeof dispatchedTaskId).toBe("string");
+    expect(store.getTask(dispatchedTaskId)?.issueId).toBe(dispatchedBody.id);
+  });
+
+  it("reports a generic assignment failure as assign_failed with a dispatch_skipped activity", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Broken dispatch agent", provider: "claude" });
+    const app = createMultiremiApp({ store });
+    // Force the non-"No runnable agent" error path: any store-level assignment
+    // failure (races, integrity checks) must surface, not just the known one.
+    store.assignIssue = () => {
+      throw new Error("Simulated dispatch outage");
+    };
+
+    const response = await app.request("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Doomed dispatch", assignee_type: "agent", assignee_id: agent.id }),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "assign_failed",
+      dispatch_error: "Simulated dispatch outage",
+      task_id: null,
+    });
+    const skipActivity = store.listIssueActivity(body.id).find((activity) => activity.type === "dispatch_skipped");
+    expect(skipActivity).toBeDefined();
+    expect(skipActivity!.data).toMatchObject({ reason: "assign_failed", error: "Simulated dispatch outage" });
+  });
+
+  it("keeps the dispatch-outcome contract on the idempotent generated-issue replay", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Intake agent", provider: "claude" });
+    const intake = store.createIssue({ title: "Intake source", workspaceId: "local", issueKind: "intake" });
+    const intakeTask = store.createTask({
+      workspaceId: "local",
+      issueId: intake.id,
+      agentId: agent.id,
+      prompt: "triage",
+    });
+    const taskToken = await store.createTaskAccessToken(intakeTask, "local");
+    const app = createMultiremiApp({ store });
+    const create = (body: Record<string, unknown>) =>
+      app.request("/api/issues", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${taskToken.token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+    // Unassigned generated issue: the replay must repeat the explicit
+    // "skipped" outcome, not fall back to the bare compatibility shape.
+    const first = await create({ title: "Generated unassigned" });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody).toMatchObject({ dispatch_status: "skipped", dispatch_skipped_reason: "no_assignee", task_id: null });
+    const replay = await create({ title: "Generated unassigned" });
+    expect(replay.status).toBe(200);
+    const replayBody = await replay.json();
+    expect(replayBody.id).toBe(firstBody.id);
+    expect(replayBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_assignee",
+      task_id: null,
+    });
+
+    // Dispatched generated issue: the replay reports the existing task.
+    const assigned = await create({ title: "Generated assigned", assignee_type: "agent", assignee_id: agent.id });
+    expect(assigned.status).toBe(201);
+    const assignedBody = await assigned.json();
+    const assignedTaskId = assignedBody.task_id;
+    expect(assignedBody.dispatch_status).toBe("dispatched");
+    expect(typeof assignedTaskId).toBe("string");
+    const assignedReplay = await create({ title: "Generated assigned", assignee_type: "agent", assignee_id: agent.id });
+    expect(assignedReplay.status).toBe(200);
+    const assignedReplayBody = await assignedReplay.json();
+    expect(assignedReplayBody.id).toBe(assignedBody.id);
+    expect(assignedReplayBody).toMatchObject({
+      dispatch_status: "dispatched",
+      dispatch_skipped_reason: null,
+      task_id: assignedTaskId,
+    });
+
+    // Unassigning cancels the issue's task; the replay must flip back to an
+    // explicit "skipped" instead of resurfacing the cancelled task as
+    // dispatched.
+    store.assignIssue(assignedBody.id, {});
+    expect(store.getTask(assignedTaskId)?.status).toBe("cancelled");
+    const unassignedReplay = await create({ title: "Generated assigned", assignee_type: "agent", assignee_id: agent.id });
+    expect(unassignedReplay.status).toBe(200);
+    const unassignedReplayBody = await unassignedReplay.json();
+    expect(unassignedReplayBody.id).toBe(assignedBody.id);
+    expect(unassignedReplayBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "no_assignee",
+      task_id: null,
+    });
+
+    // A generic assignment failure must replay as assign_failed with its
+    // original error (recovered from the dispatch_skipped activity), not
+    // degrade into no_runnable_agent.
+    const realAssignIssue = store.assignIssue.bind(store);
+    store.assignIssue = () => {
+      throw new Error("Simulated dispatch outage");
+    };
+    const failed = await create({ title: "Generated failing", assignee_type: "agent", assignee_id: agent.id });
+    store.assignIssue = realAssignIssue;
+    expect(failed.status).toBe(201);
+    const failedBody = await failed.json();
+    expect(failedBody).toMatchObject({ dispatch_status: "skipped", dispatch_skipped_reason: "assign_failed" });
+    const failedReplay = await create({ title: "Generated failing", assignee_type: "agent", assignee_id: agent.id });
+    expect(failedReplay.status).toBe(200);
+    const failedReplayBody = await failedReplay.json();
+    expect(failedReplayBody.id).toBe(failedBody.id);
+    expect(failedReplayBody).toMatchObject({
+      dispatch_status: "skipped",
+      dispatch_skipped_reason: "assign_failed",
+      dispatch_error: "Simulated dispatch outage",
+      task_id: null,
+    });
+  });
 });

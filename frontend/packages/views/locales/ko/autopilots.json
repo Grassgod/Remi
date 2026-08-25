@@ -108,12 +108,15 @@
     "failed": "실패함"
   },
   "run_source": {
-    "schedule": "일정",
+    "schedule": "예약 실행",
     "manual": "수동",
     "webhook": "Webhook",
     "system_event": "시스템 이벤트",
     "scm_event": "코드 이벤트",
-    "api": "API"
+    "wiki_build": "수동 빌드",
+    "change_merged": "PR/MR 병합됨",
+    "default_branch_updated": "기본 브랜치 업데이트됨",
+    "api": "API 호출"
   },
   "run": {
     "issue_linked": "이슈 연결됨",
@@ -329,7 +332,11 @@
       "all_repositories": "연결된 모든 저장소",
       "no_repositories": "사용 가능한 저장소가 없습니다. 먼저 소스 제어 설정에서 연결하세요.",
       "events_label": "이벤트",
-      "groups": { "changes": "변경", "collaboration": "협업", "delivery": "배포" },
+      "groups": {
+        "changes": "변경",
+        "collaboration": "협업",
+        "delivery": "배포"
+      },
       "events": {
         "change.opened": "변경 생성",
         "change.updated": "변경 업데이트",

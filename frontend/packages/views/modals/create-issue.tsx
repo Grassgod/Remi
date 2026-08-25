@@ -253,8 +253,11 @@ export function ManualCreatePanel({
         description: descEditorRef.current?.getMarkdown()?.trim() || undefined,
         status,
         priority,
-        assignee_type: assigneeType,
-        assignee_id: assigneeId,
+        // Explicit null (not undefined) — the server treats absent assignee
+        // fields as "inherit the project default"; the form's visible pick
+        // (or deliberate clear) is authoritative.
+        assignee_type: assigneeType ?? null,
+        assignee_id: assigneeId ?? null,
         start_date: startDate || undefined,
         due_date: dueDate || undefined,
         attachment_ids: attachmentIds.length > 0 ? attachmentIds : undefined,

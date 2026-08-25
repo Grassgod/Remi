@@ -142,6 +142,7 @@ describe("mergeAgentDashboardRows", () => {
         tokens: 3_000_000,
         cost: 12,
         taskCount: 2, // overcounted because (model-1: 1) + (model-2: 1)
+        unpricedTokens: 0,
       },
     ];
     const runTimeRows = [
@@ -163,7 +164,7 @@ describe("mergeAgentDashboardRows", () => {
     // rollup is silent on this agent. Keep the token-side estimate
     // instead of dropping the agent from the table entirely.
     const merged = mergeAgentDashboardRows(
-      [{ agentId: "agent-b", tokens: 100, cost: 0.5, taskCount: 1 }],
+      [{ agentId: "agent-b", tokens: 100, cost: 0.5, taskCount: 1, unpricedTokens: 0 }],
       [],
     );
     expect(merged[0]!.taskCount).toBe(1);
@@ -187,9 +188,9 @@ describe("mergeAgentDashboardRows", () => {
   it("sorts by cost desc with run-time as a tiebreaker", () => {
     const merged = mergeAgentDashboardRows(
       [
-        { agentId: "low", tokens: 100, cost: 1, taskCount: 1 },
-        { agentId: "high", tokens: 100, cost: 9, taskCount: 1 },
-        { agentId: "zero-cost-long", tokens: 0, cost: 0, taskCount: 0 },
+        { agentId: "low", tokens: 100, cost: 1, taskCount: 1, unpricedTokens: 0 },
+        { agentId: "high", tokens: 100, cost: 9, taskCount: 1, unpricedTokens: 0 },
+        { agentId: "zero-cost-long", tokens: 0, cost: 0, taskCount: 0, unpricedTokens: 0 },
       ],
       [
         { agent_id: "zero-cost-long", total_seconds: 1000, task_count: 5, failed_count: 0 },
@@ -309,5 +310,104 @@ describe("aggregateWeeklyTasks", () => {
       failed: 0,
       partial: true,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MUL-93 — display honesty flags. A metric value of 0 must be a measurement,
+// never a fallback: rows track when cost / run-time cannot honestly be
+// stated so the UI can render "—" instead of a fabricated 0.
+// ---------------------------------------------------------------------------
+
+describe("usage availability flags (MUL-93)", () => {
+  it("aggregateAgentTokens tracks tokens whose model has no price", () => {
+    const rows = aggregateAgentTokens([
+      {
+        agent_id: "agent-a",
+        model: "some-unknown-model",
+        input_tokens: 1_000,
+        output_tokens: 500,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        task_count: 1,
+      },
+      {
+        agent_id: "agent-a",
+        model: "claude-sonnet-4-6",
+        input_tokens: 2_000,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        task_count: 1,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.unpricedTokens).toBe(1_500);
+    expect(rows[0]!.tokens).toBe(3_500);
+  });
+
+  it("marks cost unavailable when every recorded token is unpriced", () => {
+    const merged = mergeAgentDashboardRows(
+      [
+        {
+          agentId: "agent-a",
+          tokens: 5_000,
+          cost: 0,
+          taskCount: 1,
+          unpricedTokens: 5_000,
+        },
+      ],
+      [],
+    );
+    expect(merged[0]!.costUnavailable).toBe(true);
+  });
+
+  it("keeps cost available for a genuine $0-with-pricing row", () => {
+    // All models priced, zero tokens → $0.00 is a real measurement.
+    const merged = mergeAgentDashboardRows(
+      [
+        {
+          agentId: "agent-a",
+          tokens: 0,
+          cost: 0,
+          taskCount: 0,
+          unpricedTokens: 0,
+        },
+      ],
+      [],
+    );
+    expect(merged[0]!.costUnavailable).toBe(false);
+    expect(merged[0]!.tokensUnavailable).toBe(false);
+  });
+
+  it("marks cost unavailable for run-time-only agents that ran tasks", () => {
+    // Tasks ran but no usage rows were recorded — a dollar figure cannot be
+    // derived from unrecorded usage, so $0.00 would be fabricated.
+    const merged = mergeAgentDashboardRows(
+      [],
+      [{ agent_id: "agent-c", total_seconds: 30, task_count: 2, failed_count: 0 }],
+    );
+    expect(merged[0]!.costUnavailable).toBe(true);
+    expect(merged[0]!.hasRunTime).toBe(true);
+    // tokens: 0 here means "not collected", not a measured zero — the UI
+    // renders "—" for the token column off this flag.
+    expect(merged[0]!.tokensUnavailable).toBe(true);
+  });
+
+  it("flags rows without a run-time rollup so 0s isn't rendered as <1m", () => {
+    const merged = mergeAgentDashboardRows(
+      [
+        {
+          agentId: "agent-b",
+          tokens: 100,
+          cost: 0.5,
+          taskCount: 1,
+          unpricedTokens: 0,
+        },
+      ],
+      [],
+    );
+    expect(merged[0]!.hasRunTime).toBe(false);
+    expect(merged[0]!.seconds).toBe(0);
   });
 });

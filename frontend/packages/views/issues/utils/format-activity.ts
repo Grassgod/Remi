@@ -69,6 +69,15 @@ export function formatActivity(
       return t(($) => $.activity.task_completed, { count: entry.coalesced_count ?? 1 });
     case "task_failed":
       return t(($) => $.activity.task_failed, { count: entry.coalesced_count ?? 1 });
+    case "dispatch_skipped": {
+      if (details.reason === "no_runnable_agent") {
+        return t(($) => $.activity.dispatch_skipped_no_runnable_agent);
+      }
+      const error = details.error?.trim();
+      return error
+        ? t(($) => $.activity.dispatch_skipped_reason, { reason: error })
+        : t(($) => $.activity.dispatch_skipped);
+    }
     case "squad_leader_evaluated": {
       const reason = details.reason?.trim();
       switch (details.outcome) {

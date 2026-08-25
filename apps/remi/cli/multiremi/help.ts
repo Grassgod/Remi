@@ -71,7 +71,7 @@ Commands:
   memory list            List memory in the workspace or --project scope
   memory recall <query>  Semantically recall memory (alias: memory search)
   memory read <ref>      Read memory (requires --project; alias: memory get)
-  memory remember        Store memory (requires --project and --title; alias: memory add)
+  memory remember        Store memory (requires --project, --title, and content; alias: memory add)
   memory update <ref>    Update memory (requires --project)
   memory forget <ref>    Delete memory (requires --project; alias: memory delete)
   memory backlinks <ref> List pages linking to memory (requires --project)

@@ -133,6 +133,34 @@ describe("native CLI resource contracts", () => {
     expect(bodies.get("/api/workspaces/ws_1/issue-archive")).toEqual({ ttl_ms: 86400000, sweep_interval_ms: 60000 });
   });
 
+  it("reads the platform prompt template through the workspace command", async () => {
+    useCliEnv();
+    const spec = specById("workspace.prompt.template");
+    const requests: Request[] = [];
+    globalThis.fetch = mockFetch(spec.id, requests, (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") {
+        return Response.json({ id: "ws_1", name: "Workspace" });
+      }
+      if (path === "/api/workspaces/ws_1/prompt-template") {
+        return Response.json({
+          bootstrap: "# Bootstrap Prompt",
+          delta: "# Delta Prompt",
+          sha256: { bootstrap: "a".repeat(64), delta: "b".repeat(64) },
+        });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+
+    await execute(spec, ["ws_1", "--output", "json"]);
+
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/api/cli/capabilities",
+      "/api/workspaces/ws_1",
+      "/api/workspaces/ws_1/prompt-template",
+    ]);
+  });
+
   it("lists repositories from the API without contacting the local Git helper", async () => {
     useCliEnv();
     const spec = specById("repo.list");
@@ -239,6 +267,61 @@ describe("native CLI resource contracts", () => {
     ])).rejects.toMatchObject({ code: "server", status: 500 });
   });
 
+  it("keeps project discovery open to task credentials and renders defaults columns", async () => {
+    useCliEnv();
+    for (const id of ["project.list", "project.get", "project.search", "project.defaults"]) {
+      expect(specById(id).auth, id).toContain("task");
+    }
+    const spec = specById("project.defaults");
+    globalThis.fetch = mockFetch(spec.id, [], (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/projects/prj_own") {
+        return Response.json({ id: "prj_own", title: "Own", default_assignee_type: "squad", default_assignee_id: "sqd_1" });
+      }
+      throw new Error(`unexpected request ${request.url}`);
+    });
+    const table = await execute(spec, ["prj_own"]);
+    expect(table).toContain("ASSIGNEE_TYPE");
+    expect(table).toContain("squad");
+    expect(table).toContain("sqd_1");
+    const json = await execute(spec, ["prj_own", "--output", "json"]);
+    expect(JSON.parse(json)).toEqual({
+      project_id: "prj_own",
+      default_assignee_type: "squad",
+      default_assignee_id: "sqd_1",
+    });
+  });
+
+  it("resolves a project the credential cannot GET by id through the workspace list", async () => {
+    // A task token may only GET its own issue's project by id; discovery of
+    // every other project falls back to search, then to the workspace list.
+    useCliEnv();
+    const spec = specById("project.defaults");
+    const requests: Request[] = [];
+    globalThis.fetch = mockFetch(spec.id, requests, (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/projects/prj_other") {
+        return Response.json({ error: "project not found" }, { status: 404 });
+      }
+      if (url.pathname === "/api/projects/search") {
+        return Response.json({ projects: [] });
+      }
+      if (url.pathname === "/api/projects") {
+        return Response.json({ projects: [
+          { id: "prj_own", title: "Own", default_assignee_type: "squad", default_assignee_id: "sqd_1" },
+          { id: "prj_other", title: "Other", default_assignee_type: "agent", default_assignee_id: "agt_9" },
+        ] });
+      }
+      throw new Error(`unexpected request ${request.url}`);
+    });
+    const output = await execute(spec, ["prj_other", "--output", "json"]);
+    expect(JSON.parse(output)).toEqual({
+      project_id: "prj_other",
+      default_assignee_type: "agent",
+      default_assignee_id: "agt_9",
+    });
+  });
+
   it("registers all legacy memory/wiki paths as deprecated aliases", () => {
     const registry = registryFor(SPECS);
     const aliases = [
@@ -289,7 +372,7 @@ describe("native CLI resource contracts", () => {
     });
   });
 
-  it("preserves legacy memory body flags while routing through the native command", async () => {
+  it("preserves legacy memory body flags while rejecting empty content", async () => {
     useCliEnv();
     console.log = () => {};
     const spec = specById("memory.create");
@@ -310,7 +393,7 @@ describe("native CLI resource contracts", () => {
       "--title", "Compatibility",
       "--pinned", "false",
       "--summary=",
-      "--content=",
+      "--content=Durable fact",
       "--tags=",
       "--ref", "https://example.test/source",
       "--output", "json",
@@ -320,10 +403,17 @@ describe("native CLI resource contracts", () => {
       title: "Compatibility",
       pinned: false,
       summary: null,
-      body: "",
+      body: "Durable fact",
       tags: [],
       refs: [{ type: "url", value: "https://example.test/source" }],
     });
+
+    await expect(registryFor([spec]).execute([
+      "memory", "remember",
+      "--project", "prj_1",
+      "--title", "Empty placeholder",
+      "--content=",
+    ])).rejects.toThrow("memory body is required");
     expect(spec.options?.some((option) => option.name === "content-stdin")).toBe(true);
   });
 
