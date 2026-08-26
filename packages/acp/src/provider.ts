@@ -415,6 +415,11 @@ export class AcpProvider implements Provider {
     return this._lastResponse;
   }
 
+  /** Assistant text emitted so far for the active prompt in this chat. */
+  getStreamedText(chatId: string): string {
+    return this._pool.get(chatId)?.promptState.text ?? "";
+  }
+
   /**
    * Discover the bridge's live model catalog and each model's effort values.
    * Both supported bridges rewrite `thought_level` after the `model` option is

@@ -17,6 +17,11 @@ describe("workspace progress summary settings", () => {
       body: JSON.stringify({
         settings: {
           retained_setting: "yes",
+          issue_auto_title: {
+            enabled: false,
+            model: " custom-luna ",
+            api_key: "must-not-persist",
+          },
           progress_summary: {
             transport: "OPENAI",
             model: " claude-workspace ",
@@ -31,6 +36,10 @@ describe("workspace progress summary settings", () => {
     expect(response.status).toBe(200);
     expect((await response.json()).settings).toEqual({
       retained_setting: "yes",
+      issue_auto_title: {
+        enabled: false,
+        model: "custom-luna",
+      },
       progress_summary: {
         transport: "openai",
         model: "claude-workspace",

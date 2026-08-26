@@ -1351,6 +1351,15 @@ export type MultiremiAssigneeType = "agent" | "member" | "squad";
 
 export type MultiremiIssueKind = "execution" | "intake";
 
+export interface MultiremiIssueAutoTitleMetadata {
+  locked?: boolean;
+  generated_at?: string;
+  model?: string;
+  source?: "auto" | "manual";
+  content_hash?: string;
+  count?: number;
+}
+
 export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_TTL_MS = 72 * 60 * 60 * 1000;
 export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 export const MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
@@ -2563,6 +2572,7 @@ export interface MultiremiSquad {
   name: string;
   description: string;
   instructions: string;
+  avatarUrl: string | null;
   leaderId: string | null;
   creatorId: string | null;
   archivedAt: string | null;
@@ -2585,6 +2595,7 @@ export interface CreateSquadInput {
   name: string;
   description?: string | null;
   instructions?: string | null;
+  avatarUrl?: string | null;
   workspaceId?: string | null;
   leaderId?: string | null;
   creatorId?: string | null;
@@ -2595,6 +2606,7 @@ export interface UpdateSquadInput {
   name?: string;
   description?: string | null;
   instructions?: string | null;
+  avatarUrl?: string | null;
   leaderId?: string | null;
 }
 
@@ -3344,6 +3356,8 @@ export interface MultiremiScmSyncCursor {
   lastStartedAt: string | null;
   lastCompletedAt: string | null;
   lastError: string | null;
+  consecutiveFailures: number;
+  suspendedUntil: string | null;
   leaseOwner: string | null;
   leaseUntil: string | null;
   leaseToken: string | null;
@@ -3360,6 +3374,8 @@ export interface UpsertScmSyncCursorInput {
   lastStartedAt?: string | null;
   lastCompletedAt?: string | null;
   lastError?: string | null;
+  consecutiveFailures?: number;
+  suspendedUntil?: string | null;
 }
 
 export interface ClaimScmSyncStreamInput {

@@ -22,10 +22,20 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
-  it("advertises task parity for workspace operations but not platform, billing, or destructive runtime commands", () => {
+  it("advertises task parity for platform operations while keeping control-plane administration denied", () => {
     const registry = registryFor(specs);
     const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
-    for (const id of ["runtime.list", "runtime.update", "autopilot.list", "autopilot.update", "platform.feedback.create"]) {
+    for (const id of [
+      "runtime.list",
+      "runtime.update",
+      "autopilot.list",
+      "autopilot.update",
+      "platform.feedback.create",
+      "platform.status",
+      "platform.operation.list",
+      "platform.operation.create",
+      "platform.operation.cancel",
+    ]) {
       expect(inventory.get(id)?.auth, id).toContain("task");
     }
     for (const id of [
@@ -34,8 +44,6 @@ describe("operations CLI contracts", () => {
       "runtime.release.start",
       "runtime.cloud.status",
       "billing.balance",
-      "platform.status",
-      "platform.operation.list",
       "platform.settings.update",
       "daemon.retire",
       "lark.install.begin",

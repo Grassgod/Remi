@@ -2493,16 +2493,39 @@ runMigrations(this.db);
     return this.issues.linkAttachmentsToChatMessage(chatSessionId, chatMessageId, attachmentIds);
   }
 
-  listIssueMetadata(issueId: string): Record<string, string | number | boolean> {
+  listIssueMetadata(issueId: string): MultiremiIssue["metadata"] {
     return this.issues.listIssueMetadata(issueId);
   }
 
-  setIssueMetadataKey(issueId: string, key: string, value: unknown): Record<string, string | number | boolean> {
+  setIssueMetadataKey(issueId: string, key: string, value: unknown): MultiremiIssue["metadata"] {
     return this.issues.setIssueMetadataKey(issueId, key, value);
   }
 
-  deleteIssueMetadataKey(issueId: string, key: string): Record<string, string | number | boolean> {
+  deleteIssueMetadataKey(issueId: string, key: string): MultiremiIssue["metadata"] {
     return this.issues.deleteIssueMetadataKey(issueId, key);
+  }
+
+  setIssueAutoTitleMetadata(
+    issueId: string,
+    value: import("@multiremi/contracts/types.js").MultiremiIssueAutoTitleMetadata,
+  ): MultiremiIssue {
+    return this.issues.setIssueAutoTitleMetadata(issueId, value);
+  }
+
+  getIssueAutoTitleMetadata(
+    issueId: string,
+  ): import("@multiremi/contracts/types.js").MultiremiIssueAutoTitleMetadata {
+    return this.issues.getIssueAutoTitleMetadata(issueId);
+  }
+
+  appendIssueActivity(issueId: string, input: {
+    actorType: string;
+    actorId?: string | null;
+    type: string;
+    body?: string | null;
+    data?: unknown | null;
+  }): void {
+    this.issues.appendIssueActivity(issueId, input);
   }
 
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {

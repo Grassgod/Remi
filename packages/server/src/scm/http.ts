@@ -4,6 +4,8 @@ export class ScmHttpError extends Error {
     readonly status: number,
     readonly retryAfterSeconds: number | null,
     readonly responseBody: string,
+    readonly url: string,
+    readonly method: string,
   ) {
     super(message);
   }
@@ -31,13 +33,22 @@ export async function scmRequestJson<T>(
       response.status,
       Number.isFinite(retryAfter) ? retryAfter : null,
       text.slice(0, 2_000),
+      url,
+      String(init.method ?? "GET").toUpperCase(),
     );
   }
   let data: T;
   try {
     data = (text ? JSON.parse(text) : null) as T;
   } catch {
-    throw new ScmHttpError("SCM provider returned invalid JSON", response.status, null, text.slice(0, 2_000));
+    throw new ScmHttpError(
+      "SCM provider returned invalid JSON",
+      response.status,
+      null,
+      text.slice(0, 2_000),
+      url,
+      String(init.method ?? "GET").toUpperCase(),
+    );
   }
   return { data, headers: response.headers, status: response.status };
 }
@@ -62,4 +73,3 @@ export function hasNextLink(value: string | null): boolean {
   if (!value) return false;
   return value.split(",").some((part) => /;\s*rel="next"\s*$/u.test(part.trim()));
 }
-

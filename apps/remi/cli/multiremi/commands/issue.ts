@@ -157,6 +157,17 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     printJson(await multiremiApiRequest("POST", `/api/issues/${encodeURIComponent(issueId)}/rerun`, body, options));
     return;
   }
+  if (action === "retitle") {
+    const issueId = positional[1]?.trim();
+    if (!issueId) throw new Error("usage: remi issue retitle <issue> [--dry-run]");
+    printJson(await multiremiApiRequest(
+      "POST",
+      `/api/multiremi/issues/${encodeURIComponent(issueId)}/retitle`,
+      { apply: !Boolean(options["dry-run"] ?? options.dryRun) },
+      options,
+    ));
+    return;
+  }
   if (action === "cancel-task") {
     const taskId = positional[1]?.trim();
     if (!taskId) throw new Error("usage: multiremi issue cancel-task <task-id>");
@@ -177,7 +188,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     printIssueSearch(await multiremiApiRequest("GET", `/api/issues/search?${params.toString()}`, undefined, options), options);
     return;
   }
-  throw new Error("usage: multiremi issue list|get|create|update|assign|status|delete|search|runs|run-messages|rerun|cancel-task|task|comment|session|archive|subscriber|metadata ...");
+  throw new Error("usage: multiremi issue list|get|create|update|assign|status|delete|search|runs|run-messages|rerun|retitle|cancel-task|task|comment|session|archive|subscriber|metadata ...");
 }
 
 /**

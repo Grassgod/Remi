@@ -19,6 +19,7 @@ import { type StoreContext, toInboxItem, toIssueComment } from "@multiremi/store
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
+import { INBOX_LEDGER_TYPES } from "@multiremi/contracts";
 import type {
   AssignIssueInput,
   AssignIssueResult,
@@ -39,6 +40,7 @@ import type {
   MultiremiCommentReaction,
   MultiremiInboxItem,
   MultiremiIssue,
+  MultiremiIssueAutoTitleMetadata,
   MultiremiIssueActivity,
   MultiremiIssueAssigneeGroup,
   MultiremiIssueChildProgress,
@@ -510,6 +512,17 @@ export class IssuesRepo {
       id,
     ]);
     this.ctx.db.run("UPDATE multiremi_autopilot_runs SET issue_id = NULL WHERE issue_id = ?", [id]);
+    // Detach ledger rows first so the delete below only sweeps the actionable
+    // notifications left behind. An empty registry would render `IN ()`, which
+    // Postgres rejects — skipping the update then means "no ledger to keep".
+    if (INBOX_LEDGER_TYPES.length > 0) {
+      const inboxLedgerPlaceholders = INBOX_LEDGER_TYPES.map(() => "?").join(", ");
+      this.ctx.db.run(
+        `UPDATE multiremi_inbox_items SET issue_id = NULL WHERE issue_id = ? AND type IN (${inboxLedgerPlaceholders})`,
+        [id, ...INBOX_LEDGER_TYPES],
+      );
+    }
+    this.ctx.db.run("DELETE FROM multiremi_inbox_items WHERE issue_id = ?", [id]);
     // PostgreSQL intentionally does not rely on FK cascades and SQLite tests
     // may run with them disabled. Remove the machine-local checkout record
     // and archive control-plane rows explicitly so deleting an Issue cannot
@@ -1225,6 +1238,7 @@ export class IssuesRepo {
         issueId: id,
         memberId: assigneeId,
         type: "issue_assigned",
+        severity: "info",
         title: `${current.key} assigned to you`,
         body: current.title,
         actorType: "system",
@@ -1395,7 +1409,6 @@ export class IssuesRepo {
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
     this.notifySubscribedMembers(
       issue,
-      "comment_created",
       "New comment",
       body,
       authorType,
@@ -2274,11 +2287,14 @@ export class IssuesRepo {
 
   setIssueMetadataKey(issueId: string, key: string, value: unknown): Record<string, string | number | boolean> {
     validateIssueMetadataKey(key);
+    validatePublicIssueMetadataKey(key);
     const normalized = validateIssueMetadataValue(value);
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
-    const metadata = { ...issue.metadata };
-    if (!(key in metadata) && Object.keys(metadata).length >= MAX_ISSUE_METADATA_KEYS) {
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    const metadata = parseJson<Record<string, unknown>>(row?.metadata, {});
+    const publicMetadata = parseIssueMetadata(metadata);
+    if (!(key in publicMetadata) && Object.keys(publicMetadata).length >= MAX_ISSUE_METADATA_KEYS) {
       throw new Error(`metadata cannot exceed ${MAX_ISSUE_METADATA_KEYS} keys`);
     }
     metadata[key] = normalized;
@@ -2298,11 +2314,51 @@ export class IssuesRepo {
     return this.listIssueMetadata(issueId);
   }
 
+  setIssueAutoTitleMetadata(
+    issueId: string,
+    value: MultiremiIssueAutoTitleMetadata,
+  ): MultiremiIssue {
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    if (!row) throw new Error(`Issue not found: ${issueId}`);
+    const metadata: Record<string, unknown> = {
+      ...parseJson<Record<string, unknown>>(row.metadata, {}),
+      auto_title: { ...value },
+    };
+    validateIssueMetadataSize(metadata);
+    this.ctx.db.run(
+      "UPDATE multiremi_issues SET metadata = ? WHERE id = ?",
+      [toJson(metadata), issueId],
+    );
+    return this.getIssue(issueId)!;
+  }
+
+  getIssueAutoTitleMetadata(issueId: string): MultiremiIssueAutoTitleMetadata {
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    if (!row) throw new Error(`Issue not found: ${issueId}`);
+    const raw = parseJson<Record<string, unknown>>(row.metadata, {}).auto_title;
+    return raw && typeof raw === "object" && !Array.isArray(raw)
+      ? sanitizeAutoTitleMetadata(raw as Record<string, unknown>)
+      : {};
+  }
+
+  appendIssueActivity(issueId: string, input: {
+    actorType: string;
+    actorId?: string | null;
+    type: string;
+    body?: string | null;
+    data?: unknown | null;
+  }): void {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    this.ctx.appendIssueActivity(issueId, input);
+  }
+
   deleteIssueMetadataKey(issueId: string, key: string): Record<string, string | number | boolean> {
     validateIssueMetadataKey(key);
+    validatePublicIssueMetadataKey(key);
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
-    const metadata = { ...issue.metadata };
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    const metadata = parseJson<Record<string, unknown>>(row?.metadata, {});
     delete metadata[key];
     const now = nowIso();
     this.ctx.db.run(
@@ -2469,7 +2525,6 @@ export class IssuesRepo {
 
   private notifySubscribedMembers(
     issue: MultiremiIssue,
-    type: string,
     title: string,
     body: string | null,
     actorType: string,
@@ -2486,12 +2541,13 @@ export class IssuesRepo {
       this.ctx.createInboxItem({
         issueId: issue.id,
         memberId: subscriber.userId,
-        type,
+        type: "comment_created",
         title: `${issue.key}: ${title}`,
         body,
         actorType,
         actorId,
         details,
+        issueStatus: issue.status,
       });
     }
   }
@@ -2953,6 +3009,10 @@ function validateIssueMetadataKey(key: string): void {
   }
 }
 
+function validatePublicIssueMetadataKey(key: string): void {
+  if (key === "auto_title") throw new Error("auto_title is reserved for system metadata");
+}
+
 function validateIssueMetadataValue(value: unknown): string | number | boolean {
   if (!isIssueMetadataPrimitive(value)) {
     if (value === null) throw new Error("value cannot be null");
@@ -2968,7 +3028,7 @@ function isIssueMetadataPrimitive(value: unknown): value is string | number | bo
   return typeof value === "string" || typeof value === "boolean" || typeof value === "number";
 }
 
-function validateIssueMetadataSize(metadata: Record<string, string | number | boolean>): void {
+function validateIssueMetadataSize(metadata: Record<string, unknown>): void {
   if (Buffer.byteLength(toJson(metadata), "utf8") > 8 * 1024) {
     throw new Error("metadata exceeds the 8KB size limit");
   }
@@ -3265,6 +3325,18 @@ function parseIssueMetadata(value: unknown): Record<string, string | number | bo
     }
   }
   return metadata;
+}
+
+function sanitizeAutoTitleMetadata(raw: Record<string, unknown>): MultiremiIssueAutoTitleMetadata {
+  const source = raw.source === "auto" || raw.source === "manual" ? raw.source : undefined;
+  return {
+    ...(raw.locked === true ? { locked: true } : {}),
+    ...(typeof raw.generated_at === "string" ? { generated_at: raw.generated_at } : {}),
+    ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+    ...(source ? { source } : {}),
+    ...(typeof raw.content_hash === "string" ? { content_hash: raw.content_hash } : {}),
+    ...(typeof raw.count === "number" && Number.isFinite(raw.count) ? { count: raw.count } : {}),
+  };
 }
 
 function toIssueActivity(row: Row): MultiremiIssueActivity {

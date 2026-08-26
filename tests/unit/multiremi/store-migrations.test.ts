@@ -85,6 +85,9 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
       "trigger_id", "event_id", "issue_session_id", "repository_id", "dedupe_key",
     ]));
+    expect(columnNames(database, "multiremi_scm_sync_cursors")).toEqual(expect.arrayContaining([
+      "consecutive_failures", "suspended_until",
+    ]));
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining([
       "issue_kind", "source_issue_id", "lifecycle_state", "completed_at", "archived_at",
     ]));
@@ -686,6 +689,77 @@ describe("store migrations", () => {
     ).get()).toEqual({ assignment_origin: "explicit" });
   });
 
+  it("resets only Codebase change-request cursors while preserving completed baselines", () => {
+    const database = freshDb();
+    migrate(database);
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260825_codebase_change_request_cursor_reset"],
+    );
+    const timestamp = "2026-08-25T00:00:00.000Z";
+    for (const [id, provider, baseUrl, apiBaseUrl] of [
+      ["scm_codebase_reset", "codebase", "https://code.byted.org", "https://codebase-api.byted.org/v2/"],
+      ["scm_github_keep", "github", "https://github.com", "https://api.github.com"],
+    ]) {
+      database.run(
+        `INSERT INTO multiremi_scm_connections (
+          id, name, provider, base_url, api_base_url, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, id, provider, baseUrl, apiBaseUrl, timestamp, timestamp],
+      );
+    }
+    const insertCursor = database.prepare(
+      `INSERT INTO multiremi_scm_sync_cursors (
+        connection_id, repository_id, stream, cursor, watermark,
+        baseline_completed_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const row of [
+      ["scm_codebase_reset", "repo_codebase", "change_requests"],
+      ["scm_codebase_reset", "repo_codebase", "comments"],
+      ["scm_codebase_reset", "repo_codebase", "reviews"],
+      ["scm_github_keep", "repo_github", "change_requests"],
+    ]) {
+      insertCursor.run(...row, JSON.stringify({ page: 9 }), timestamp, timestamp, timestamp);
+    }
+
+    migrate(database);
+
+    expect(database.query(
+      `SELECT connection_id, stream, cursor, watermark, baseline_completed_at
+       FROM multiremi_scm_sync_cursors ORDER BY connection_id, stream`,
+    ).all()).toEqual([
+      {
+        connection_id: "scm_codebase_reset",
+        stream: "change_requests",
+        cursor: null,
+        watermark: null,
+        baseline_completed_at: timestamp,
+      },
+      {
+        connection_id: "scm_codebase_reset",
+        stream: "comments",
+        cursor: JSON.stringify({ page: 9 }),
+        watermark: timestamp,
+        baseline_completed_at: timestamp,
+      },
+      {
+        connection_id: "scm_codebase_reset",
+        stream: "reviews",
+        cursor: JSON.stringify({ page: 9 }),
+        watermark: timestamp,
+        baseline_completed_at: timestamp,
+      },
+      {
+        connection_id: "scm_github_keep",
+        stream: "change_requests",
+        cursor: JSON.stringify({ page: 9 }),
+        watermark: timestamp,
+        baseline_completed_at: timestamp,
+      },
+    ]);
+  });
+
   it("adds system-event run columns before creating their unique index", () => {
     const database = freshDb();
     database.exec(`
@@ -994,6 +1068,38 @@ describe("store migrations", () => {
     expect(row?.recipient_id).toBe("mem_1");
     expect(row?.severity).toBe("info");
     expect(tableNames(database)).not.toContain("multiremi_inbox_items_legacy");
+  });
+
+  it("adds squad avatars to a legacy squads table without dropping rows", () => {
+    const database = freshDb();
+    database.run(`
+      CREATE TABLE multiremi_squads (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        instructions TEXT NOT NULL DEFAULT '',
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        leader_id TEXT,
+        creator_id TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    database.run(
+      "INSERT INTO multiremi_squads (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      ["sqd_legacy", "Legacy squad", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+    );
+
+    migrate(database);
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_squads")).toContain("avatar_url");
+    const row = database.query("SELECT name, avatar_url FROM multiremi_squads WHERE id = ?").get("sqd_legacy") as
+      | { name?: string; avatar_url?: string | null }
+      | null;
+    expect(row?.name).toBe("Legacy squad");
+    expect(row?.avatar_url).toBeNull();
   });
 
   it("repairs duplicate squad leader roles from the squad leader id", () => {

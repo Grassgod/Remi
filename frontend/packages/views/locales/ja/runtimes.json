@@ -293,6 +293,7 @@
     "step2_hint": "接続設定を書き込み、その後デーモンをバックグラウンドで実行し続けます。",
     "credential_loading": "安全な接続認証情報を作成しています...",
     "credential_error": "接続認証情報を作成できませんでした。",
+    "credential_error_detail": "理由：{{reason}}",
     "credential_retry": "再試行",
     "live_listening": "あなたのコンピュータを待っています",
     "live_listening_hint": "デーモンが起動するとすぐに検出します — 通常は 1 分以内です。",

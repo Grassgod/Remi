@@ -419,9 +419,56 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
+  getStreamedText?: (chatId: string) => string;
   setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
   setElicitationHandler?: (handler: (params: ElicitationCreateParams) => Promise<ElicitationResult>) => void;
 };
+
+export interface ElicitationContext {
+  text: string;
+  truncated?: boolean;
+}
+
+export interface ElicitationContextSlice {
+  offset: number;
+  context?: ElicitationContext;
+}
+
+const MAX_ELICITATION_CONTEXT_CHARACTERS = 4_000;
+
+function comparableText(value: string): string {
+  return value.replace(/\s/g, "");
+}
+
+/** Consume only assistant prose emitted since the previous elicitation. */
+export function sliceElicitationContext(
+  streamedText: string,
+  offset: number,
+  message: string,
+  questionTexts: string[],
+): ElicitationContextSlice {
+  const safeOffset = offset >= 0 && offset <= streamedText.length ? offset : 0;
+  const text = streamedText.slice(safeOffset).trim();
+  const result: ElicitationContextSlice = { offset: streamedText.length };
+  if (!text) return result;
+
+  const comparable = comparableText(text);
+  if ([message, ...questionTexts].some((candidate) => comparableText(candidate) === comparable)) {
+    return result;
+  }
+
+  const characters = Array.from(text);
+  if (characters.length > MAX_ELICITATION_CONTEXT_CHARACTERS) {
+    return {
+      ...result,
+      context: {
+        text: characters.slice(-MAX_ELICITATION_CONTEXT_CHARACTERS).join(""),
+        truncated: true,
+      },
+    };
+  }
+  return { ...result, context: { text } };
+}
 
 export type MultiremiDaemonProviderFactory = (options: AcpProviderOptions) => MultiremiTaskProvider;
 export type MultiremiDaemonUpdateRunner = (targetVersion: string) => string | Promise<string>;
@@ -2305,7 +2352,8 @@ export class MultiremiDaemon {
     task: MultiremiTaskWithAgent,
     signal: AbortSignal,
     nextSeq: () => number,
-  ): void {
+  ): () => void {
+    let elicitationContextOffset = 0;
     if (this.options.approvalMode !== "ask") {
       provider.setPermissionHandler?.((params) => {
         const allow = params.options.find((o) => o.kind === "allow_always")
@@ -2355,9 +2403,26 @@ export class MultiremiDaemon {
       try {
         const questions = elicitationToQuestions(params);
         if (!questions?.length) return { action: "cancel" };
+        let context: ElicitationContext | undefined;
+        const streamedText = provider.getStreamedText?.(task.id);
+        if (typeof streamedText === "string") {
+          const sliced = sliceElicitationContext(
+            streamedText,
+            elicitationContextOffset,
+            params.message,
+            questions.map(({ question }) => question.question),
+          );
+          elicitationContextOffset = sliced.offset;
+          context = sliced.context;
+        }
         const request = await this.client.createTaskHumanRequest(task.id, {
           kind: "question",
-          payload: { session_id: params.sessionId, message: params.message, questions },
+          payload: {
+            session_id: params.sessionId,
+            message: params.message,
+            questions,
+            ...(context ? { context } : {}),
+          },
         });
         await this.reportHumanRequestMessage(task.id, nextSeq(), "question_request", params.message || "Agent asked a question", {
           request_id: request.id,
@@ -2379,6 +2444,10 @@ export class MultiremiDaemon {
         return { action: "cancel" };
       }
     });
+
+    return () => {
+      elicitationContextOffset = 0;
+    };
   }
 
   /**
@@ -2548,7 +2617,7 @@ export class MultiremiDaemon {
     let output = "";
     let seq = 1;
     const nextSeq = () => seq++;
-    this.attachHumanInputHandlers(provider, task, signal, nextSeq);
+    const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, nextSeq);
     let finalSessionId: string | null = task.sessionId;
     let usage: TaskUsageEntry[] = [];
     const toMessages = createEventMapper(createAdapter(config.agentType));
@@ -2638,6 +2707,7 @@ export class MultiremiDaemon {
         steerFeed.setInterrupt(() => turnAbort.abort());
         let turnError: unknown = null;
         try {
+          resetElicitationContextOffset();
           for await (const event of session.run(prompt)) {
             // One event may yield several messages (e.g. a completed tool_call →
             // tool_use + tool_result). Each gets its own seq so none collides.

@@ -803,7 +803,7 @@ export class AutopilotsRepo {
     options: MultiremiAutopilotFailureThresholdOptions,
   ): void {
     const { autopilot } = candidate;
-    const recipients = this.resolveAutopilotPausedRecipients(autopilot);
+    const recipients = this.ctx.resolveAutopilotNotificationRecipients(autopilot);
     if (!recipients.length) return;
     const failPct = Math.round(candidate.failRatio * 1000) / 10;
     const lookbackMs = normalizeFailureMonitorLookbackMs(options.lookbackMs);
@@ -841,17 +841,6 @@ export class AutopilotsRepo {
         emitEvent: true,
       });
     }
-  }
-
-  private resolveAutopilotPausedRecipients(autopilot: MultiremiAutopilot): string[] {
-    if (autopilot.createdByType === "member") {
-      const member = this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId, autopilot.createdById);
-      return member ? [member.id] : [];
-    }
-    const agent = this.ctx.agents().getAgent(autopilot.createdById);
-    if (!agent?.ownerId) return [];
-    const owner = this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId, agent.ownerId);
-    return owner ? [owner.id] : [];
   }
 
   private assertScmEventConfigScope(
@@ -1113,25 +1102,26 @@ export class AutopilotsRepo {
     const autopilot = this.getAutopilot(run.autopilotId);
     if (!autopilot) return false;
     const sourceRevision = autopilotRunSourceRevision(run);
+    const predicates: string[] = [];
+    const params = [autopilot.workspaceId, run.repositoryId];
+    if (run.taskId) {
+      predicates.push("doc.source_task_id = ?");
+      params.push(run.taskId);
+    }
+    if (sourceRevision) {
+      predicates.push("(doc.source_revision = ? OR revision.source_revision = ?)");
+      params.push(sourceRevision, sourceRevision);
+    }
+    if (predicates.length === 0) return false;
+
     const row = this.ctx.db.query(
       `SELECT 1 AS published
        FROM multiremi_repository_wiki_docs doc
        LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id
        WHERE doc.workspace_id = ? AND doc.repository_id = ?
-         AND (
-           (? IS NOT NULL AND doc.source_task_id = ?)
-           OR (? IS NOT NULL AND (doc.source_revision = ? OR revision.source_revision = ?))
-         )
+         AND (${predicates.join(" OR ")})
        LIMIT 1`,
-    ).get(
-      autopilot.workspaceId,
-      run.repositoryId,
-      run.taskId,
-      run.taskId,
-      sourceRevision,
-      sourceRevision,
-      sourceRevision,
-    ) as { published: number } | null;
+    ).get(...params) as { published: number } | null;
     return row != null;
   }
 

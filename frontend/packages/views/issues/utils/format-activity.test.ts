@@ -57,6 +57,14 @@ describe("formatActivity", () => {
     ).toBe('activity.priority_changed {"from":"?","to":"priority.high"}');
   });
 
+  it("formats Luna title rename audit activities", () => {
+    expect(
+      formatActivity(activity("title_renamed", {
+        details: { from: "Remi", to: "实现 Issue 自动命名" },
+      }), t),
+    ).toBe('activity.title_renamed {"from":"Remi","to":"实现 Issue 自动命名"}');
+  });
+
   it("detects a self-assign", () => {
     expect(
       formatActivity(

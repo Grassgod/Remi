@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { CODEBASE_SCM_CAPABILITIES, GITHUB_SCM_CAPABILITIES } from "@multiremi/scm/capabilities.js";
 import { CodebaseScmProviderAdapter } from "@multiremi/scm/codebase.js";
 import { GitHubScmProviderAdapter } from "@multiremi/scm/github.js";
+import { ScmHttpError } from "@multiremi/scm/http.js";
 import { deriveCanonicalCandidates } from "@multiremi/scm/reconcile.js";
-import type { ScmPollContext } from "@multiremi/scm/types.js";
+import { ScmStreamUnavailableError, type ScmPollContext } from "@multiremi/scm/types.js";
 import { scmBinding, scmConnection } from "./scm-test-helpers.js";
 
 const originalFetch = globalThis.fetch;
@@ -63,6 +64,111 @@ describe("SCM provider adapters", () => {
     expect(requests[0]?.url).toContain("per_page=100");
     expect(requests[0]?.authorization).toBe("Bearer token");
     expect(heartbeats).toBe(2);
+  });
+
+  it("classifies unavailable GitHub pull-request and Actions endpoints", async () => {
+    const cases = [
+      { stream: "change_requests" as const, status: 404, path: "/repos/acme/widgets/pulls" },
+      { stream: "reviews" as const, status: 410, path: "/repos/acme/widgets/pulls" },
+      { stream: "pipelines" as const, status: 404, path: "/repos/acme/widgets/actions/runs" },
+    ];
+    const adapter = new GitHubScmProviderAdapter();
+
+    for (const entry of cases) {
+      globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({ message: "disabled" }), {
+        status: entry.status,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+      const error = await capturedError(adapter.poll(context(entry.stream)));
+      expect(error).toBeInstanceOf(ScmStreamUnavailableError);
+      expect(error).toMatchObject({
+        provider: "GitHub",
+        stream: entry.stream,
+        status: entry.status,
+        url: entry.path,
+      });
+    }
+  });
+
+  it("keeps a GitHub repository 404 as a hard error but classifies a missing default branch", async () => {
+    const adapter = new GitHubScmProviderAdapter();
+    globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({ message: "Not Found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    })) as typeof fetch;
+
+    const repositoryError = await capturedError(adapter.poll(context("default_branch")));
+    expect(repositoryError).toBeInstanceOf(ScmHttpError);
+    expect(repositoryError).not.toBeInstanceOf(ScmStreamUnavailableError);
+
+    globalThis.fetch = (async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/repos/acme/widgets") {
+        return new Response(JSON.stringify({ default_branch: "main" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ message: "Gone" }), {
+        status: 410,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const branchError = await capturedError(adapter.poll(context("default_branch")));
+    expect(branchError).toBeInstanceOf(ScmStreamUnavailableError);
+    expect(branchError).toMatchObject({
+      stream: "default_branch",
+      status: 410,
+      url: "/repos/acme/widgets/branches/main",
+      reason: "default branch unavailable",
+    });
+  });
+
+  it("continues GitHub comments when only issue comments are unavailable", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(path);
+      if (path.endsWith("/issues/comments")) {
+        return new Response(JSON.stringify({ message: "Not Found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([{ id: 7, body: "review comment" }]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const page = await new GitHubScmProviderAdapter().poll(context("comments"));
+    expect(requests).toEqual([
+      "/repos/acme/widgets/issues/comments",
+      "/repos/acme/widgets/pulls/comments",
+    ]);
+    expect(page.done).toBe(true);
+    expect(page.observations.map((entry) => entry.externalId)).toEqual(["7"]);
+  });
+
+  it("classifies GitHub comments only when issue and review comments are unavailable", async () => {
+    globalThis.fetch = (async (input) => {
+      const path = new URL(String(input)).pathname;
+      const status = path.endsWith("/issues/comments") ? 404 : 410;
+      return new Response(JSON.stringify({ message: "disabled" }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const error = await capturedError(new GitHubScmProviderAdapter().poll(context("comments")));
+    expect(error).toBeInstanceOf(ScmStreamUnavailableError);
+    expect(error).toMatchObject({
+      stream: "comments",
+      status: 410,
+      url: "/repos/acme/widgets/pulls/comments",
+      reason: "issue and review comments unavailable",
+    });
   });
 
   it("uses one logical identity for GitHub workflow runs from polling and webhooks", async () => {
@@ -228,7 +334,7 @@ describe("SCM provider adapters", () => {
     expect(result.cursor).toEqual({ page: 2 });
   });
 
-  it("calls the Codebase action API with its updated-since cursor", async () => {
+  it("polls Codebase merge requests in updated order without a created-since filter", async () => {
     const requests: Array<{ action: string | null; body: Record<string, unknown>; authorization: string | null }> = [];
     let heartbeats = 0;
     globalThis.fetch = (async (input, init) => {
@@ -284,6 +390,8 @@ describe("SCM provider adapters", () => {
         lastStartedAt: null,
         lastCompletedAt: null,
         lastError: null,
+        consecutiveFailures: 0,
+        suspendedUntil: null,
         leaseOwner: null,
         leaseUntil: null,
         leaseToken: null,
@@ -303,7 +411,9 @@ describe("SCM provider adapters", () => {
     });
     expect(requests[0]?.action).toBe("ListRepoMergeRequests");
     expect(requests[0]?.body.TargetRepoId).toBe("repo-101");
-    expect(requests[0]?.body.Since).toBe("2026-08-21T07:53:00.000Z");
+    expect(requests[0]?.body).not.toHaveProperty("Since");
+    expect(requests[0]?.body.SortBy).toBe("UpdatedAt");
+    expect(requests[0]?.body.SortOrder).toBe("desc");
     expect(requests[0]?.body.Selector).toEqual({
       URL: true,
       ReviewStatus: true,
@@ -313,6 +423,92 @@ describe("SCM provider adapters", () => {
     });
     expect(requests[0]?.authorization).toBe("Bearer token");
     expect(heartbeats).toBe(2);
+  });
+
+  it("filters Codebase merge requests older than the overlap watermark and stops pagination", async () => {
+    globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({
+      ResponseMetadata: { Action: "ListRepoMergeRequests" },
+      Result: {
+        MergeRequests: [{
+          Id: "mr-old",
+          Number: 8,
+          CreatedAt: "2026-08-20T00:00:00.000Z",
+          UpdatedAt: "2026-08-21T07:52:59.000Z",
+        }],
+        TotalCount: 200,
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+    const result = await new CodebaseScmProviderAdapter().poll(codebaseContext(
+      "change_requests",
+      syncCursor("change_requests", { page: 1 }, "2026-08-21T07:55:00.000Z"),
+    ));
+
+    expect(result.observations).toHaveLength(0);
+    expect(result.cursor).toBeNull();
+    expect(result.done).toBe(true);
+  });
+
+  it("observes old Codebase merge requests updated after the overlap watermark", async () => {
+    globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({
+      ResponseMetadata: { Action: "ListRepoMergeRequests" },
+      Result: {
+        MergeRequests: [{
+          Id: "mr-updated",
+          Number: 7,
+          Title: "Merged after creation",
+          Status: "merged",
+          CreatedAt: "2026-08-01T00:00:00.000Z",
+          UpdatedAt: "2026-08-21T07:58:00.000Z",
+          MergedAt: "2026-08-21T07:58:00.000Z",
+        }],
+        TotalCount: 1,
+      },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+
+    const result = await new CodebaseScmProviderAdapter().poll(codebaseContext(
+      "change_requests",
+      syncCursor("change_requests", { page: 1 }, "2026-08-21T07:55:00.000Z"),
+    ));
+
+    expect(result.observations).toHaveLength(1);
+    expect(result.observations[0]?.externalId).toBe("mr-updated");
+    expect(result.observations[0]?.payload.state).toBe("merged");
+  });
+
+  it("filters related Codebase merge requests by update time before polling comments", async () => {
+    const requests: Array<{ action: string | null; body: Record<string, unknown> }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const action = new URL(String(input)).searchParams.get("Action");
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push({ action, body });
+      const result = action === "ListRepoMergeRequests"
+        ? {
+            MergeRequests: [
+              { Id: "mr-new", UpdatedAt: "2026-08-21T07:54:00.000Z" },
+              { Id: "mr-old", UpdatedAt: "2026-08-21T07:52:59.000Z" },
+            ],
+            TotalCount: 200,
+          }
+        : { Threads: [] };
+      return new Response(JSON.stringify({ ResponseMetadata: { Action: action }, Result: result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await new CodebaseScmProviderAdapter().poll(codebaseContext(
+      "comments",
+      syncCursor("comments", { page: 1 }, "2026-08-21T07:55:00.000Z"),
+    ));
+
+    expect(requests[0]?.body).not.toHaveProperty("Since");
+    expect(requests[0]?.body).toMatchObject({ SortBy: "UpdatedAt", SortOrder: "desc" });
+    expect(requests.filter((request) => request.action === "ListThreads")).toEqual([
+      expect.objectContaining({ body: expect.objectContaining({ CommentableId: "mr-new" }) }),
+    ]);
+    expect(result.cursor).toBeNull();
+    expect(result.done).toBe(true);
   });
 
   it("resumes Codebase related-MR and pipeline pages without timestamp cutoffs", async () => {
@@ -350,7 +546,11 @@ describe("SCM provider adapters", () => {
       cursor: syncCursor("comments", { page: 11 }),
     });
     expect(comments.cursor).toEqual({ page: 12 });
-    expect(requests.find((entry) => entry.action === "ListRepoMergeRequests")?.body.PageNumber).toBe(11);
+    expect(requests.find((entry) => entry.action === "ListRepoMergeRequests")?.body).toMatchObject({
+      PageNumber: 11,
+      SortBy: "UpdatedAt",
+      SortOrder: "desc",
+    });
 
     const pipelines = await adapter.poll({
       ...context("pipelines"),
@@ -374,6 +574,25 @@ function context(stream: ScmPollContext["stream"]): ScmPollContext {
   };
 }
 
+function codebaseContext(
+  stream: ScmPollContext["stream"],
+  cursor: ScmPollContext["cursor"] = null,
+): ScmPollContext {
+  return {
+    ...context(stream),
+    connection: scmConnection({
+      provider: "codebase",
+      baseUrl: "https://code.byted.org",
+      apiBaseUrl: "https://codebase-api.byted.org/v2/",
+    }),
+    binding: scmBinding({
+      externalId: "repo-101",
+      repositoryUrl: "https://code.byted.org/acme/widgets.git",
+    }),
+    cursor,
+  };
+}
+
 function syncCursor(
   stream: ScmPollContext["stream"],
   cursor: Record<string, unknown>,
@@ -389,9 +608,20 @@ function syncCursor(
     lastStartedAt: null,
     lastCompletedAt: null,
     lastError: null,
+    consecutiveFailures: 0,
+    suspendedUntil: null,
     leaseOwner: null,
     leaseUntil: null,
     leaseToken: null,
     updatedAt: "2026-08-21T07:55:00.000Z",
   };
+}
+
+async function capturedError(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+    throw new Error("expected promise to reject");
+  } catch (error) {
+    return error;
+  }
 }

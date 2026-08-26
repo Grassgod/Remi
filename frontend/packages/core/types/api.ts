@@ -40,6 +40,20 @@ export interface UpdateIssueRequest {
   attachment_ids?: string[];
 }
 
+export type IssueRetitleReason =
+  | "generated"
+  | "gateway_unconfigured"
+  | "model_failed"
+  | "kept"
+  | "not_eligible";
+
+export interface IssueRetitleResponse {
+  title: string;
+  previous_title: string;
+  applied: boolean;
+  reason: IssueRetitleReason;
+}
+
 export interface ListIssuesParams {
   limit?: number;
   offset?: number;
@@ -209,7 +223,6 @@ export interface CreatePersonalAccessTokenResponse extends PersonalAccessToken {
 export interface ProvisionDaemonCredentialRequest {
   workspace_id: string;
   name?: string;
-  expires_in_days?: number;
 }
 
 export interface ProvisionDaemonCredentialResponse {

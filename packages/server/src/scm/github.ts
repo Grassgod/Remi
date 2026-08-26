@@ -1,8 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { MultiremiScmSyncStream } from "@multiremi/contracts/types.js";
 import { GITHUB_SCM_CAPABILITIES } from "./capabilities.js";
-import { appendQuery, hasNextLink, lowerCaseHeaders, scmRequestJson } from "./http.js";
+import { appendQuery, hasNextLink, lowerCaseHeaders, ScmHttpError, scmRequestJson } from "./http.js";
 import { stableJsonHash } from "./reconcile.js";
+import { ScmStreamUnavailableError } from "./types.js";
 import type {
   ScmEntityObservation,
   ScmPollContext,
@@ -214,7 +215,15 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
     const repo = await this.get<Record<string, unknown>>(context, this.repoPath(context));
     const branch = context.binding.defaultBranch || stringValue(repo.data.default_branch);
     if (!branch) throw new Error("GitHub repository has no default branch");
-    const branchResult = await this.get<Record<string, unknown>>(context, `${this.repoPath(context)}/branches/${encodeURIComponent(branch)}`);
+    let branchResult;
+    try {
+      branchResult = await this.get<Record<string, unknown>>(
+        context,
+        `${this.repoPath(context)}/branches/${encodeURIComponent(branch)}`,
+      );
+    } catch (error) {
+      throwGitHubStreamUnavailable(error, context, "default branch unavailable");
+    }
     const commit = record(branchResult.data.commit);
     const observedAt = context.now.toISOString();
     return {
@@ -236,9 +245,14 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
   private async pollPullRequests(context: ScmPollContext): Promise<ScmPollPage> {
     const page = cursorNumber(context, "page", 1);
     const threshold = overlapWatermark(context.cursor?.watermark);
-    const response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls`), {
-      state: "all", sort: "updated", direction: "desc", per_page: PAGE_SIZE, page,
-    }), true);
+    let response;
+    try {
+      response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls`), {
+        state: "all", sort: "updated", direction: "desc", per_page: PAGE_SIZE, page,
+      }), true);
+    } catch (error) {
+      throwGitHubStreamUnavailable(error, context, "pull requests unavailable");
+    }
     const pulls = arrayRecords(response.data);
     const observations = pulls
       .filter((pull) => !threshold || timestampValue(pull.updated_at) >= threshold)
@@ -256,6 +270,40 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
   private async pollComments(context: ScmPollContext): Promise<ScmPollPage> {
     const kind = cursorString(context, "kind") === "review" ? "review" : "issue";
     const page = cursorNumber(context, "page", 1);
+    const issueUnavailable = cursorBoolean(context, "issueUnavailable");
+    try {
+      return await this.pollCommentKind(context, kind, page, issueUnavailable);
+    } catch (error) {
+      if (!isUnavailableHttpError(error)) throw error;
+      if (kind === "issue") {
+        try {
+          return await this.pollCommentKind(context, "review", 1, true);
+        } catch (reviewError) {
+          throwGitHubStreamUnavailable(
+            reviewError,
+            context,
+            "issue and review comments unavailable",
+          );
+        }
+      }
+      if (issueUnavailable) {
+        throwGitHubStreamUnavailable(error, context, "issue and review comments unavailable");
+      }
+      return {
+        observations: [],
+        cursor: null,
+        watermark: context.now.toISOString(),
+        done: true,
+      };
+    }
+  }
+
+  private async pollCommentKind(
+    context: ScmPollContext,
+    kind: "issue" | "review",
+    page: number,
+    issueUnavailable: boolean,
+  ): Promise<ScmPollPage> {
     const path = kind === "issue" ? "issues/comments" : "pulls/comments";
     const since = overlapWatermarkIso(context.cursor?.watermark);
     const response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/${path}`), {
@@ -270,7 +318,11 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
     const done = kind === "review" && !hasNext;
     return {
       observations,
-      cursor: done ? null : { kind: nextKind, page: hasNext ? page + 1 : 1 },
+      cursor: done ? null : {
+        kind: nextKind,
+        page: hasNext ? page + 1 : 1,
+        ...(issueUnavailable ? { issueUnavailable: true } : {}),
+      },
       watermark: context.now.toISOString(),
       done,
     };
@@ -279,9 +331,14 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
   private async pollReviews(context: ScmPollContext): Promise<ScmPollPage> {
     const page = cursorNumber(context, "page", 1);
     const threshold = overlapWatermark(context.cursor?.watermark);
-    const response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls`), {
-      state: "all", sort: "updated", direction: "desc", per_page: PAGE_SIZE, page,
-    }), true);
+    let response;
+    try {
+      response = await this.get<unknown[]>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/pulls`), {
+        state: "all", sort: "updated", direction: "desc", per_page: PAGE_SIZE, page,
+      }), true);
+    } catch (error) {
+      throwGitHubStreamUnavailable(error, context, "pull requests unavailable");
+    }
     const batch = arrayRecords(response.data);
     const pulls = batch.filter((pull) => !threshold || timestampValue(pull.updated_at) >= threshold);
     const observations: ScmEntityObservation[] = [];
@@ -312,9 +369,14 @@ export class GitHubScmProviderAdapter implements ScmProviderAdapter {
   private async pollPipelines(context: ScmPollContext): Promise<ScmPollPage> {
     const page = cursorNumber(context, "page", 1);
     const threshold = overlapWatermark(context.cursor?.watermark);
-    const response = await this.get<Record<string, unknown>>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/actions/runs`), {
-      per_page: PAGE_SIZE, page,
-    }), true);
+    let response;
+    try {
+      response = await this.get<Record<string, unknown>>(context, appendQuery(this.apiUrl(context, `${this.repoPath(context)}/actions/runs`), {
+        per_page: PAGE_SIZE, page,
+      }), true);
+    } catch (error) {
+      throwGitHubStreamUnavailable(error, context, "GitHub Actions unavailable");
+    }
     const runs = arrayRecords(response.data.workflow_runs);
     const observations = runs
       .filter((run) => !threshold || timestampValue(run.updated_at) >= threshold)
@@ -567,6 +629,37 @@ function cursorNumber(context: ScmPollContext, key: string, fallback: number): n
 
 function cursorString(context: ScmPollContext, key: string): string {
   return stringValue(context.cursor?.cursor?.[key]);
+}
+
+function cursorBoolean(context: ScmPollContext, key: string): boolean {
+  return context.cursor?.cursor?.[key] === true;
+}
+
+function isUnavailableHttpError(error: unknown): error is ScmHttpError {
+  return error instanceof ScmHttpError && (error.status === 404 || error.status === 410);
+}
+
+function throwGitHubStreamUnavailable(
+  error: unknown,
+  context: ScmPollContext,
+  reason: string,
+): never {
+  if (!isUnavailableHttpError(error)) throw error;
+  throw new ScmStreamUnavailableError(
+    "GitHub",
+    context.stream,
+    error.status,
+    requestPath(error.url),
+    reason,
+  );
+}
+
+function requestPath(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
 }
 
 function overlapWatermark(value: string | null | undefined): number | null {

@@ -123,7 +123,6 @@ const TASK_PARITY_DENIED_COMMAND_PREFIXES = [
   "context.auth.",
   "invite.",
   "member.",
-  "platform.operation.",
   "platform.settings.",
   "runtime.cloud.",
   "token.",
@@ -132,8 +131,7 @@ const TASK_PARITY_DENIED_COMMAND_PREFIXES = [
 function taskParityCommandSpec(spec: CommandSpec): CommandSpec {
   const humanAllowed = spec.auth?.includes("human") === true;
   const denied = TASK_PARITY_DENIED_COMMAND_IDS.has(spec.id)
-    || TASK_PARITY_DENIED_COMMAND_PREFIXES.some((prefix) => spec.id.startsWith(prefix))
-    || spec.id === "platform.status";
+    || TASK_PARITY_DENIED_COMMAND_PREFIXES.some((prefix) => spec.id.startsWith(prefix));
   return humanAllowed && !spec.auth?.includes("task") && !denied
     ? { ...spec, auth: [...(spec.auth ?? []), "task"] }
     : spec;

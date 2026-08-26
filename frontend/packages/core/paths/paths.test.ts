@@ -14,6 +14,9 @@ describe("paths.workspace(slug)", () => {
     expect(ws.inboxIssue("abc-123", "session-1")).toBe(
       "/acme/inbox?issue=abc-123&session=session-1",
     );
+    expect(ws.inboxItem("item-123", "session-1")).toBe(
+      "/acme/inbox?item=item-123&session=session-1",
+    );
     expect(ws.workbenchIssue("abc-123", "session-1")).toBe(
       "/acme/workbench?issue=abc-123&session=session-1",
     );
@@ -49,6 +52,9 @@ describe("paths.workspace(slug)", () => {
     );
     expect(ws.inboxIssue("id with space", "session with space")).toBe(
       "/acme/inbox?issue=id%20with%20space&session=session%20with%20space",
+    );
+    expect(ws.inboxItem("item with space", "session with space")).toBe(
+      "/acme/inbox?item=item%20with%20space&session=session%20with%20space",
     );
     expect(ws.workbenchIssue("id with space", "session with space")).toBe(
       "/acme/workbench?issue=id%20with%20space&session=session%20with%20space",

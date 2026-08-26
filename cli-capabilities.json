@@ -1869,6 +1869,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.retitle": {
+      "command": "remi issue retitle",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.retitle",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.cancel": {
       "command": "remi issue cancel-task",
       "aliases": [],
@@ -6452,7 +6469,8 @@
       "command": "remi platform status",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.status",
       "mutation": "read",
@@ -6468,7 +6486,8 @@
       "command": "remi platform operation list",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.list",
       "mutation": "read",
@@ -6551,7 +6570,8 @@
       "command": "remi platform operation create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.create",
       "mutation": "destructive",
@@ -6567,7 +6587,8 @@
       "command": "remi platform operation cancel",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.cancel",
       "mutation": "destructive",
@@ -8978,6 +8999,9 @@
     },
     "POST /api/multiremi/issues/:id/restore": {
       "command": "issue.restore"
+    },
+    "POST /api/multiremi/issues/:id/retitle": {
+      "command": "issue.retitle"
     },
     "POST /api/multiremi/issues/:id/subscribers": {
       "command": "issue.subscriber.add"

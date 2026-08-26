@@ -49,6 +49,7 @@ const SQUAD_FIELDS: readonly CliOptionSpec[] = [
   { name: "name", type: "string", valueName: "name", description: "Squad name" },
   { name: "description", type: "string", valueName: "text", description: "Squad description" },
   { name: "instructions", type: "string", valueName: "text", description: "Squad instructions" },
+  { name: "avatar-url", type: "string", valueName: "url", description: "Squad avatar URL" },
   { name: "leader", type: "string", valueName: "agent-id", description: "Leader agent" },
 ];
 
@@ -482,6 +483,7 @@ function squadBody(invocation: CommandInvocation, creating: boolean): Record<str
     name: stringOption(invocation, "name") ?? undefined,
     description: stringOption(invocation, "description") ?? undefined,
     instructions: stringOption(invocation, "instructions") ?? undefined,
+    avatar_url: stringOption(invocation, "avatar-url") ?? undefined,
     leader_id: stringOption(invocation, "leader") ?? undefined,
     workspace_id: creating ? requiredWorkspace(invocation) : undefined,
   };

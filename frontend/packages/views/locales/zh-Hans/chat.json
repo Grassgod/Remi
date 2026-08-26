@@ -122,6 +122,9 @@
   "human_requests": {
     "permission_title": "需要权限审批",
     "question_title": "Agent 提问",
+    "context_expand": "展开",
+    "context_collapse": "收起",
+    "context_truncated": "较早的上下文已省略",
     "answer_placeholder": "输入回答…",
     "other_answer_placeholder": "其他答案（可选）…",
     "submit": "提交",

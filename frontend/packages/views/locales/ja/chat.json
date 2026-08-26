@@ -122,6 +122,9 @@
   "human_requests": {
     "permission_title": "許可が必要です",
     "question_title": "エージェントからの質問",
+    "context_expand": "展開",
+    "context_collapse": "折りたたむ",
+    "context_truncated": "前のコンテキストは省略されています",
     "answer_placeholder": "回答を入力…",
     "other_answer_placeholder": "その他の回答（任意）…",
     "submit": "送信",

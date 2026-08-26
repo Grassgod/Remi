@@ -1,9 +1,9 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 603,
+    "routeCount": 604,
     "routeCountByPrefix": {
-      "native": 201,
+      "native": 202,
       "compat": 389,
       "root": 13
     },
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 342,
+    "mutationRoutes": 343,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -546,6 +546,7 @@
     "POST /api/multiremi/issues/:id/labels",
     "POST /api/multiremi/issues/:id/reactions",
     "POST /api/multiremi/issues/:id/restore",
+    "POST /api/multiremi/issues/:id/retitle",
     "POST /api/multiremi/issues/:id/subscribers",
     "POST /api/multiremi/issues/batch-delete",
     "POST /api/multiremi/issues/batch-update",
@@ -2995,7 +2996,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600232",
+        "order_id": "local-1767225600233",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -8046,6 +8047,17 @@
             "id": "issue.restore",
             "command": "remi issue restore",
             "capability": "issue.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.retitle",
+            "command": "remi issue retitle",
+            "capability": "issue.retitle",
             "outputs": [
               "table",
               "json",
@@ -17423,6 +17435,7 @@
             "name": "Snapshot Squad",
             "description": "Squad used by the snapshot",
             "instructions": "",
+            "avatarUrl": null,
             "leaderId": "agt_snapshot",
             "creatorId": null,
             "archivedAt": null,
@@ -17446,6 +17459,7 @@
           "name": "Snapshot Squad",
           "description": "Squad used by the snapshot",
           "instructions": "",
+          "avatarUrl": null,
           "leaderId": "agt_snapshot",
           "creatorId": null,
           "archivedAt": null,
@@ -22344,7 +22358,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600233",
+        "id": "local-contact-1767225600234",
         "status": "received",
         "mode": "local",
         "request": {
@@ -22719,6 +22733,7 @@
           "name": "Native squad",
           "description": "",
           "instructions": "",
+          "avatarUrl": null,
           "leaderId": null,
           "creatorId": null,
           "archivedAt": null,
@@ -22740,6 +22755,7 @@
           "name": "Native squad patched",
           "description": "Squad used by the snapshot",
           "instructions": "",
+          "avatarUrl": null,
           "leaderId": "agt_snapshot",
           "creatorId": null,
           "archivedAt": null,
@@ -22802,6 +22818,7 @@
           "name": "Native squad patched",
           "description": "Squad used by the snapshot",
           "instructions": "",
+          "avatarUrl": null,
           "leaderId": null,
           "creatorId": null,
           "archivedAt": "<timestamp>",
@@ -23622,7 +23639,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600240",
+        "session_id": "local-lark-1767225600241",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

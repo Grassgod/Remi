@@ -73,6 +73,38 @@ describe("IssuesRepo", () => {
     expect(() => repo.setIssueMetadataKey(issue.id, "not a key", "x")).toThrow();
     expect(repo.deleteIssueMetadataKey(issue.id, "branch")).toEqual({});
   });
+
+  it("preserves private auto-title state while editing public metadata", () => {
+    const repo = createRepo();
+    const issue = repo.createIssue({ title: "Meta", workspaceId: "local" });
+    repo.setIssueAutoTitleMetadata(issue.id, {
+      locked: true,
+      count: 2,
+      content_hash: "hash-1",
+    });
+
+    expect(repo.setIssueMetadataKey(issue.id, "branch", "issue/MUL-1")).toEqual({
+      branch: "issue/MUL-1",
+    });
+    expect(repo.getIssueAutoTitleMetadata(issue.id)).toMatchObject({
+      locked: true,
+      count: 2,
+      content_hash: "hash-1",
+    });
+    expect(() => repo.setIssueMetadataKey(issue.id, "auto_title", "overwrite")).toThrow(
+      "auto_title is reserved for system metadata",
+    );
+    expect(() => repo.deleteIssueMetadataKey(issue.id, "auto_title")).toThrow(
+      "auto_title is reserved for system metadata",
+    );
+
+    expect(repo.deleteIssueMetadataKey(issue.id, "branch")).toEqual({});
+    expect(repo.getIssueAutoTitleMetadata(issue.id)).toMatchObject({
+      locked: true,
+      count: 2,
+      content_hash: "hash-1",
+    });
+  });
 });
 
 // The two reaction triples share one implementation configured by ISSUE_REACTIONS /

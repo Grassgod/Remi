@@ -107,12 +107,21 @@ bun run tests/manual/test-permission-ui.ts      # 等
 
 | workflow | 触发 | 跑什么 |
 |---|---|---|
-| `.github/workflows/release-build-check.yml` | PR + push to `main`(按 `apps/**`/`packages/**`/`frontend/**`/`scripts/**`/`bin/**` 等路径过滤) | `bun run build:multiremi` + `bun run typecheck:frontend` + `bun run test:frontend` |
+| `.github/workflows/release-build-check.yml` | PR + push to `main`(按 `apps/**`/`packages/**`/`frontend/**`/`scripts/**`/`bin/**`/`tests/**` 等路径过滤) | `build:multiremi` + `cli:capabilities:check` + `bun test tests/arch/` + **全量 `bun test`** + `typecheck:frontend` + `test:frontend` + 两个容器镜像构建;另有 `session-archive-platform` job 在 ubuntu/macOS 上跑 `tests/unit/daemon/session-archive.test.ts` |
 | `.github/workflows/release.yml` | push tag `v*` | `bun run build:multiremi` → 上传 tar.gz + `scripts/install-remi.sh` 到 GitHub Release(release notes 由 `generate_release_notes` 自动生成) |
 
-- **前端 Vitest + typecheck 已经在 CI 上跑**(release-build-check)。
-- **后端 `bun test` 仍不在 CI 上**,需本地手动执行 —— 补 CI 时可以直接加进 release-build-check。
-- **e2e / 冒烟 harness 也不在 CI 上**:需要真实 provider/浏览器/Postgres,要么配 secrets,要么用 mock provider。
+- **前端 Vitest + typecheck 在 CI 上跑**(release-build-check)。
+- **后端全量 `bun test` 在 CI 上跑**(MUL-129)。此前这一步是**手写的 ~20 个文件列表**,列表外的文件在 CI 里从不执行——`tests/unit/multiremi/multiremi-api-auth.test.ts` 就因此自 `5e8ee09f` 起在 `main` 上稳定失败而门禁全绿。同时 `paths` 过滤器**不含 `tests/**`**,纯测试改动的 PR 根本不触发该 workflow。两个洞现已一起补上。
+- **e2e / 冒烟 harness 仍不在 CI 上**:需要真实 provider/浏览器/Postgres,要么配 secrets,要么用 mock provider。这些文件命名为 `*.ts`(无 `.test`),因此不会被 `bun test` 发现——这正是"全量跑"安全的前提。
+
+### 本地跑 `bun test` 的两个环境陷阱
+
+CI runner 是干净环境,本地不是。本地跑出来的失败先排除这两项再当成真 bug:
+
+| 陷阱 | 症状 | 排除方式 |
+|---|---|---|
+| **`MULTIREMI_*` 环境变量注入** | 在 Multiremi 任务内跑测试时,daemon 会注入 `MULTIREMI_TOKEN`/`MULTIREMI_SERVER_URL` 等十几个变量,测试读到真实控制面配置 → 大面积失败(实测 164 条) | 清掉再跑:`env $(env \| grep -o '^MULTIREMI_[A-Z_]*' \| sed 's/^/-u /' \| tr '\n' ' ') bun test` |
+| **全局 `core.hooksPath`** | `multiremi-repo-cache.test.ts` 的 prepare-commit-msg 钩子用例失败(2 条),因为测试新建的临时仓库继承了全局钩子目录 | 确认:`git config --global --get core.hooksPath`;临时排除:`GIT_CONFIG_GLOBAL=/dev/null bun test ./tests/unit/multiremi/multiremi-repo-cache.test.ts` |
 
 ---
 

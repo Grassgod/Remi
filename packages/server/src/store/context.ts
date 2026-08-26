@@ -12,6 +12,7 @@ import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
+import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import type {
   AddSessionParticipantInput,
   CreateIssueCommentInput,
@@ -743,7 +744,11 @@ export class StoreContext {
     actorId?: string | null;
     details?: unknown | null;
     emitEvent?: boolean;
+    issueStatus?: string | null;
   }): MultiremiInboxItem | null {
+    const routing = INBOX_ROUTING[input.type];
+    const route = inboxRouteFor(input.type, { issueStatus: input.issueStatus, actorType: input.actorType });
+    if (route === "workbench_only" || route === "activity_only") return null;
     const issueId = cleanOptionalString(input.issueId);
     const issue = issueId ? this.host.getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
@@ -768,7 +773,7 @@ export class StoreContext {
         member.id,
         recipientType,
         member.id,
-        input.severity ?? "info",
+        input.severity ?? routing?.severity ?? "info",
         input.actorType ?? "system",
         input.actorId ?? null,
         input.type,
@@ -818,6 +823,17 @@ export class StoreContext {
     return this.host.listWorkspaceMembers(workspaceId).find((member) =>
       member.id === idOrUserId || member.id === `mem_${workspaceId}_${idOrUserId}`
     ) ?? null;
+  }
+
+  resolveAutopilotNotificationRecipients(autopilot: MultiremiAutopilot): string[] {
+    if (autopilot.createdByType === "member") {
+      const member = this.resolveWorkspaceMemberForNotification(autopilot.workspaceId, autopilot.createdById);
+      return member ? [member.id] : [];
+    }
+    const agent = this.agents().getAgent(autopilot.createdById);
+    if (!agent?.ownerId) return [];
+    const owner = this.resolveWorkspaceMemberForNotification(autopilot.workspaceId, agent.ownerId);
+    return owner ? [owner.id] : [];
   }
 
   isNotificationMuted(workspaceId: string, memberId: string, type: string): boolean {
@@ -882,7 +898,12 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
   if (type === "comment_created" || type === "comment_mention") return "comments";
   if (type === "status_changed") return "status_changes";
   if (type.startsWith("agent_")) return "agent_activity";
-  if (type.startsWith("system_") || type === "autopilot_paused") return "system_notifications";
+  if (
+    type.startsWith("system_")
+    || type === "autopilot_paused"
+    || type === "autopilot_run_completed"
+    || type === "autopilot_run_failed"
+  ) return "system_notifications";
   return "updates";
 }
 

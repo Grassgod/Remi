@@ -8,6 +8,7 @@ import enInbox from "../../locales/en/inbox.json";
 const TEST_RESOURCES = { en: { common: enCommon, inbox: enInbox } };
 
 const listInbox = vi.hoisted(() => vi.fn());
+const markItemsRead = vi.hoisted(() => vi.fn());
 const navigationState = vi.hoisted(() => ({
   searchParams: new URLSearchParams(),
 }));
@@ -21,6 +22,8 @@ vi.mock("@multiremi/core/paths", () => ({
     inbox: () => "/test/inbox",
     inboxIssue: (issueId: string, sessionId?: string) =>
       `/test/inbox?issue=${issueId}${sessionId ? `&session=${sessionId}` : ""}`,
+    inboxItem: (itemId: string, sessionId?: string) =>
+      `/test/inbox?item=${itemId}${sessionId ? `&session=${sessionId}` : ""}`,
     issueDetail: (id: string) => `/test/issues/${id}`,
     issueSession: (id: string, sessionId: string) =>
       `/test/issues/${id}?session=${sessionId}`,
@@ -39,12 +42,12 @@ vi.mock("@multiremi/core/issues/stores/draft-store", () => ({
   }),
 }));
 
-vi.mock("@multiremi/core/inbox/queries", () => ({
+vi.mock("@multiremi/core/inbox/queries", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multiremi/core/inbox/queries")>()),
   inboxListOptions: (wsId: string) => ({
     queryKey: ["inbox", wsId],
     queryFn: listInbox,
   }),
-  deduplicateInboxItems: (items: unknown[]) => items,
   useInboxUnreadCount: () => 0,
 }));
 
@@ -57,6 +60,7 @@ vi.mock("@multiremi/core/inbox/mutations", () => {
     useArchiveAllInbox: noopMutation,
     useArchiveAllReadInbox: noopMutation,
     useArchiveCompletedInbox: noopMutation,
+    useMarkInboxItemsRead: () => ({ mutate: markItemsRead, isPending: false }),
   };
 });
 
@@ -168,6 +172,140 @@ describe("InboxPage", () => {
     expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
   });
 
+  it("groups notifications by date and filters by source", async () => {
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    listInbox.mockResolvedValue([
+      {
+        id: "automation-today",
+        type: "autopilot_run_completed",
+        issue_id: null,
+        title: "Daily summary completed",
+        read: false,
+        archived: false,
+        created_at: now.toISOString(),
+      },
+      {
+        id: "assignment-yesterday",
+        type: "issue_assigned",
+        issue_id: "issue-2",
+        title: "Assigned",
+        read: false,
+        archived: false,
+        created_at: yesterday.toISOString(),
+      },
+    ]);
+    renderInbox();
+
+    expect(await screen.findByRole("heading", { name: "Today" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Yesterday" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Automation" }));
+    expect(screen.getByText("automation-today")).toBeInTheDocument();
+    expect(screen.queryByText("assignment-yesterday")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mentions" }));
+    expect(screen.getByText("No notifications match this filter")).toBeInTheDocument();
+  });
+
+  it("renders same-issue ledger history independently from newer action rows", async () => {
+    listInbox.mockResolvedValue([
+      {
+        id: "mention-latest",
+        type: "comment_mention",
+        issue_id: "issue-1",
+        title: "Mention",
+        severity: "info",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:04:00.000Z",
+      },
+      {
+        id: "assignment-hidden",
+        type: "issue_assigned",
+        issue_id: "issue-1",
+        title: "Assignment",
+        severity: "info",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:03:00.000Z",
+      },
+      {
+        id: "run-failed",
+        type: "autopilot_run_failed",
+        issue_id: "issue-1",
+        title: "Run failed",
+        severity: "attention",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:02:00.000Z",
+      },
+      {
+        id: "run-completed",
+        type: "autopilot_run_completed",
+        issue_id: "issue-1",
+        title: "Run completed",
+        severity: "info",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:01:00.000Z",
+      },
+    ]);
+    renderInbox();
+
+    expect(await screen.findByText("mention-latest")).toBeInTheDocument();
+    expect(screen.queryByText("assignment-hidden")).not.toBeInTheDocument();
+    expect(screen.getByText("run-failed")).toBeInTheDocument();
+    expect(screen.getByText("run-completed")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("run-failed"));
+    expect(replace).toHaveBeenLastCalledWith("/test/inbox?item=run-failed");
+    fireEvent.click(screen.getByRole("button", { name: "Select Review session" }));
+    expect(replace).toHaveBeenLastCalledWith(
+      "/test/inbox?item=run-failed&session=session-review",
+    );
+    fireEvent.click(screen.getByText("mention-latest"));
+    expect(replace).toHaveBeenLastCalledWith("/test/inbox?issue=issue-1");
+  });
+
+  it("links an issue-less notification by inbox id instead of claiming it is an issue", async () => {
+    listInbox.mockResolvedValue([
+      {
+        id: "legacy-failure",
+        type: "quick_create_failed",
+        issue_id: null,
+        title: "legacy-failure",
+        severity: "attention",
+        read: false,
+        archived: false,
+        created_at: "2026-08-25T10:00:00.000Z",
+      },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByText("legacy-failure"));
+
+    expect(replace).toHaveBeenLastCalledWith("/test/inbox?item=legacy-failure");
+    expect(
+      replace.mock.calls.some(([path]) => String(path).startsWith("/test/issues/")),
+    ).toBe(false);
+  });
+
+  it("marks the unread rows in a date group as read", async () => {
+    const now = new Date().toISOString();
+    listInbox.mockResolvedValue([
+      { id: "today-1", type: "comment_mention", issue_id: null, title: "One", read: false, archived: false, created_at: now },
+      { id: "today-2", type: "issue_assigned", issue_id: null, title: "Two", read: false, archived: false, created_at: now },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mark group as read" }));
+    expect(markItemsRead).toHaveBeenCalledWith(
+      ["today-1", "today-2"],
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
+  });
+
   it("opens issue notifications in place and keeps Session routing under inbox", async () => {
     listInbox.mockResolvedValue([
       {
@@ -251,5 +389,49 @@ describe("InboxPage", () => {
         "/test/issues/issue-missing?session=session-main",
       );
     });
+  });
+
+  it("keeps an unavailable ledger item link in the inbox instead of treating it as an issue", async () => {
+    navigationState.searchParams = new URLSearchParams("item=inbox-missing");
+    listInbox.mockResolvedValue([]);
+
+    renderInbox();
+
+    expect(
+      await screen.findByText("This notification is no longer available"),
+    ).toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith("/test/inbox");
+    expect(
+      replace.mock.calls.some(([path]) => String(path).startsWith("/test/issues/")),
+    ).toBe(false);
+  });
+
+  it("renders detached ledger history without an issue detail or broken navigation", async () => {
+    navigationState.searchParams = new URLSearchParams("item=run-detached");
+    listInbox.mockResolvedValue([{
+      id: "run-detached",
+      workspace_id: "ws-1",
+      recipient_type: "member",
+      recipient_id: "member-1",
+      actor_type: "system",
+      actor_id: null,
+      type: "autopilot_run_failed",
+      severity: "attention",
+      issue_id: null,
+      issue_status: null,
+      title: "Nightly cleanup failed",
+      body: "Failed after 12s · scheduled · disk full",
+      details: { issue_id: "issue-deleted" },
+      read: true,
+      archived: false,
+      created_at: "2026-08-25T10:00:00.000Z",
+    }]);
+
+    renderInbox();
+
+    expect(await screen.findByText("Nightly cleanup failed")).toBeInTheDocument();
+    expect(screen.getByText("Failed after 12s · scheduled · disk full")).toBeInTheDocument();
+    expect(screen.queryByTestId("issue-detail")).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
   });
 });

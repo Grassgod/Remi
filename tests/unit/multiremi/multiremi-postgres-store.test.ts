@@ -179,6 +179,40 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
   });
 
+  it("checks repository Wiki publication without untyped nullable parameters", () => {
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const autopilot = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+
+    const taskRun = store.runAutopilot(autopilot.id, {
+      source: "api",
+      repositoryId: "repo_publication_task",
+      dedupeKey: "repo_publication_task:bootstrap_repository:head",
+    });
+    expect(store.isRepositoryWikiRunPublished(taskRun.id)).toBe(false);
+    store.createRepositoryWikiDoc("local", "repo_publication_task", {
+      path: "task.md",
+      title: "Task publication",
+      sourceTaskId: taskRun.taskId,
+    });
+    expect(store.isRepositoryWikiRunPublished(taskRun.id)).toBe(true);
+
+    store.createRepositoryWikiDoc("local", "repo_publication_revision", {
+      path: "revision.md",
+      title: "Revision publication",
+      sourceRevision: "abc123",
+    });
+    const revisionRun = store.runAutopilot(autopilot.id, {
+      source: "scm_event",
+      repositoryId: "repo_publication_revision",
+      dedupeKey: "repo_publication_revision:incremental_update:abc123",
+    });
+    expect(store.isRepositoryWikiRunPublished(revisionRun.id)).toBe(true);
+  });
+
   // Each test provisions its own workspace so shared state (issue numbering,
   // list results) stays isolated without per-test databases.
   let wsCounter = 0;
@@ -704,6 +738,17 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         source_branch: "feature/pg",
         target_branch: "main",
       },
+    }).applied).toBe(true);
+
+    expect(store.advanceScmEntitySnapshot({
+      connectionId: connection.id,
+      repositoryId,
+      entityType: "change_request",
+      externalId: "without-number",
+      revisionAt: "2026-08-21T10:01:00.000Z",
+      revision: "v1",
+      contentHash: "without-number-v1",
+      payload: { title: "Projection without a numeric identifier", state: "open" },
     }).applied).toBe(true);
 
     const projected = store.listScmChangeRequestsForIssue(issue.id)!;

@@ -50,6 +50,7 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
       name?: string;
       description?: string | null;
       instructions?: string | null;
+      avatar_url?: string | null;
       workspace_id?: string | null;
       leader_id?: string | null;
       creator_id?: string | null;
@@ -71,6 +72,7 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
         name,
         description: body.description,
         instructions: body.instructions,
+        avatarUrl: cleanString(body.avatar_url) ?? null,
         workspaceId,
         leaderId,
         creatorId: cleanString(body.creator_id) ?? compatibilityUserId(c),
@@ -145,10 +147,12 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
       name?: string;
       description?: string | null;
       instructions?: string | null;
+      avatar_url?: string | null;
       leader_id?: string | null;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const leaderId = body.leader_id === undefined ? undefined : cleanString(body.leader_id) ?? null;
+    const avatarUrl = body.avatar_url === undefined ? undefined : cleanString(body.avatar_url) ?? null;
     if (leaderId) {
       const leader = store.getAgent(leaderId);
       if (!leader || leader.workspaceId !== existing.workspaceId) return c.json({ error: "leader must be a valid agent in this workspace" }, 400);
@@ -158,6 +162,7 @@ export function registerSquadRoutes(app: Hono, deps: RouterDeps): void {
         name: body.name,
         description: body.description,
         instructions: body.instructions,
+        avatarUrl,
         leaderId,
       });
       return c.json(squadCompatibilityResponse(store, squad));

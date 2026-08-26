@@ -290,6 +290,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^(?:PUT|PATCH) \/api\/(?:multiremi\/)?issues\/:id$/, "issue.update"],
     [/^DELETE \/api\/(?:multiremi\/)?issues\/:id$/, "issue.delete"],
     [/^POST \/api\/(?:multiremi\/)?issues\/:id\/restore$/, "issue.restore"],
+    [/^POST \/api\/multiremi\/issues\/:id\/retitle$/, "issue.retitle"],
     [/^POST \/api\/multiremi\/issues\/:id\/assign$/, "issue.assign"],
     [/^GET \/api\/issues\/:id\/(?:generated-issues|children)$/, "issue.children"],
     [/^GET \/api\/multiremi\/issues\/:id\/children$/, "issue.children"],

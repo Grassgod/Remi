@@ -229,6 +229,9 @@ export function issueSearchErrorResponse(c: Context, err: unknown): Response | n
 
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
+  if (err.message === "auto_title is reserved for system metadata") {
+    return c.json({ error: err.message }, 400);
+  }
   if (err.message.startsWith("Issue not found:")) return c.json({ error: "issue not found" }, 404);
   if (err.message.startsWith("Parent issue not found:")) return c.json({ error: "parent issue not found in this workspace" }, 400);
   if (err.message === "Parent issue belongs to another workspace") return c.json({ error: "parent issue not found in this workspace" }, 400);
