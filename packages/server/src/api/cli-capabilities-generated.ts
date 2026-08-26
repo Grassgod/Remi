@@ -4472,7 +4472,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.status": {
       "command": "remi platform status",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.status",
       "output": [
@@ -4484,7 +4485,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.operation.list": {
       "command": "remi platform operation list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.list",
       "output": [
