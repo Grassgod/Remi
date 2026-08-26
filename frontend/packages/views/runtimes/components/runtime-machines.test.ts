@@ -5,6 +5,7 @@ import {
   buildRuntimeMachines,
   filterRuntimeMachines,
   runtimeMachineCounts,
+  selectMachineUpdateRuntime,
   splitRuntimeName,
 } from "./runtime-machines";
 
@@ -63,7 +64,49 @@ describe("runtime machine grouping", () => {
       onlineCount: 2,
       issueCount: 0,
       providerNames: ["claude", "codex"],
+      cliVersions: ["0.3.0"],
+      cliManagedByDesktop: false,
+      cliUpdateRuntimeId: "rt-claude",
     });
+  });
+
+  it("keeps reported CLI versions visible while providers reconcile", () => {
+    const [machine] = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-claude",
+          provider: "claude",
+          metadata: { cli_version: "0.3.0" },
+        }),
+        makeRuntime({
+          id: "rt-codex",
+          provider: "codex",
+          metadata: { cli_version: "0.3.1" },
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machine).toMatchObject({
+      cliVersion: null,
+      cliVersions: ["0.3.0", "0.3.1"],
+    });
+  });
+
+  it("treats the whole machine as Desktop-managed when any provider reports Desktop", () => {
+    const [machine] = buildRuntimeMachines(
+      [
+        makeRuntime({ id: "rt-claude", provider: "claude" }),
+        makeRuntime({
+          id: "rt-codex",
+          provider: "codex",
+          metadata: { cli_version: "0.3.0", launched_by: "desktop" },
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machine?.cliManagedByDesktop).toBe(true);
   });
 
   it("counts machines with any offline runtime as issues", () => {
@@ -363,6 +406,42 @@ describe("runtime machine grouping", () => {
 
     expect(machines).toHaveLength(1);
     expect(machines[0]?.runtimes).toHaveLength(1);
+  });
+});
+
+describe("selectMachineUpdateRuntime", () => {
+  it("chooses the first stable online provider representative", () => {
+    const selected = selectMachineUpdateRuntime(
+      [
+        makeRuntime({ id: "rt-codex", provider: "codex" }),
+        makeRuntime({ id: "rt-claude", provider: "claude" }),
+      ],
+      NOW,
+    );
+
+    expect(selected?.id).toBe("rt-claude");
+  });
+
+  it("returns null when every provider is offline", () => {
+    const selected = selectMachineUpdateRuntime(
+      [
+        makeRuntime({
+          id: "rt-claude",
+          provider: "claude",
+          status: "offline",
+          last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+        }),
+        makeRuntime({
+          id: "rt-codex",
+          provider: "codex",
+          status: "offline",
+          last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+        }),
+      ],
+      NOW,
+    );
+
+    expect(selected).toBeNull();
   });
 });
 

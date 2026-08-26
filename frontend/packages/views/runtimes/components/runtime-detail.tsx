@@ -48,6 +48,7 @@ import { formatLastSeen, isSelfHealingRuntime } from "../utils";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
+import { runtimeMachineId } from "./runtime-machines";
 import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { RetireDaemonDialog } from "./retire-daemon-dialog";
@@ -66,17 +67,6 @@ function getMetaString(
 
 function getCliVersion(metadata: Record<string, unknown>): string | null {
   return getMetaString(metadata, "cli_version");
-}
-
-function getLaunchedBy(metadata: Record<string, unknown>): string | null {
-  if (
-    metadata &&
-    typeof metadata.launched_by === "string" &&
-    metadata.launched_by
-  ) {
-    return metadata.launched_by;
-  }
-  return null;
 }
 
 function shortDaemonId(id: string | null): string | null {
@@ -135,9 +125,6 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
     runtime.runtime_mode === "local"
       ? getMetaString(runtime.metadata, "acp_version")
       : null;
-  const launchedBy =
-    runtime.runtime_mode === "local" ? getLaunchedBy(runtime.metadata) : null;
-
   const user = useAuthStore((s) => s.user);
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
@@ -251,7 +238,6 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
                 cliVersion={cliVersion}
                 agentVersion={agentVersion}
                 acpVersion={acpVersion}
-                launchedBy={launchedBy}
                 canDelete={!!canDelete}
                 onDelete={() => setDeleteOpen(true)}
               />
@@ -619,7 +605,6 @@ function DiagnosticsCard({
   cliVersion,
   agentVersion,
   acpVersion,
-  launchedBy,
   canDelete,
   onDelete,
 }: {
@@ -627,11 +612,11 @@ function DiagnosticsCard({
   cliVersion: string | null;
   agentVersion: string | null;
   acpVersion: string | null;
-  launchedBy: string | null;
   canDelete: boolean;
   onDelete: () => void;
 }) {
   const { t } = useT("runtimes");
+  const paths = useWorkspacePaths();
   const isLocal = runtime.runtime_mode === "local";
   const selfHealing = isSelfHealingRuntime(runtime);
   // canDelete here doubles as the "can edit runtime" predicate — it already
@@ -658,13 +643,26 @@ function DiagnosticsCard({
             <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
               {t(($) => $.detail.diagnostics_cli)}
             </div>
+            <div className="mb-2 flex min-w-0 items-center gap-2 text-xs">
+              <span className="shrink-0 font-mono text-foreground">
+                {cliVersion ?? t(($) => $.update.version_unknown)}
+              </span>
+              <span className="min-w-0 truncate text-muted-foreground">
+                {t(($) => $.detail.diagnostics_cli_shared)}
+              </span>
+              <AppLink
+                href={paths.runtimeMachine(runtimeMachineId(runtime))}
+                className="ml-auto inline-flex shrink-0 items-center gap-1 text-foreground underline-offset-4 hover:underline"
+              >
+                {t(($) => $.detail.diagnostics_cli_view_machine)}
+                <ChevronRight className="h-3 w-3" />
+              </AppLink>
+            </div>
             <UpdateSection
               runtimeId={runtime.id}
-              currentVersion={cliVersion}
               agentVersion={agentVersion}
               acpVersion={acpVersion}
               isOnline={runtime.status === "online"}
-              launchedBy={launchedBy}
             />
           </div>
         )}

@@ -155,6 +155,10 @@ import {
   TaskProgressSummarizer,
   type ProgressRunOutcome,
 } from "./progress-summarizer.js";
+import {
+  MultiremiCliUpdateCoordinator,
+  type MultiremiCliUpdatePauseResult,
+} from "./cli-update-coordinator.js";
 
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
@@ -368,6 +372,8 @@ export interface MultiremiDaemonOptions {
   supervisorReady?: () => boolean;
   /** Updates the shared provider readiness barrier. */
   onReadyChange?: (ready: boolean) => void;
+  /** Shared machine-level gate for the CLI binary used by co-resident providers. */
+  cliUpdateCoordinator?: MultiremiCliUpdateCoordinator;
   /** Full path of the durable report-outbox database (tests use ":memory:"). */
   outboxPath?: string;
   /** Injectable retry schedule for outbox delivery tests. */
@@ -502,7 +508,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -534,6 +540,7 @@ export class MultiremiDaemon {
   private startedAt = new Date();
   private ready = false;
   private activeTaskCount = 0;
+  private pendingClaimCount = 0;
   private inflight = new Set<Promise<void>>();
   private activeTaskAborts = new Set<AbortController>();
   private claimsPaused = false;
@@ -567,6 +574,7 @@ export class MultiremiDaemon {
   private readonly workspaceRootFence: (() => void) | null;
   private readonly supervisorReady: () => boolean;
   private readonly onReadyChange: (ready: boolean) => void;
+  private readonly cliUpdateCoordinator: MultiremiCliUpdateCoordinator | null;
   private workspaceOwnershipLost = false;
   private terminalAuthorityCleanup: Promise<void> | null = null;
   private terminalAuthorityCleanupRetryWake: (() => void) | null = null;
@@ -612,6 +620,7 @@ export class MultiremiDaemon {
     this.workspaceRootFence = options.workspaceRootFence ?? null;
     this.supervisorReady = options.supervisorReady ?? (() => this.ready);
     this.onReadyChange = options.onReadyChange ?? (() => {});
+    this.cliUpdateCoordinator = options.cliUpdateCoordinator ?? null;
     this.options = {
       token: options.token ?? process.env.MULTIREMI_TOKEN ?? null,
       runtimeId,
@@ -655,6 +664,14 @@ export class MultiremiDaemon {
     this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
     this.onRestartRequested = options.onRestartRequested ?? null;
+    this.cliUpdateCoordinator?.register({
+      provider: this.options.provider,
+      activeTaskCount: () => this.activeTaskCount,
+      pendingClaimCount: () => this.pendingClaimCount,
+      claimsPaused: () => this.claimsPaused,
+      pauseClaims: () => { this.claimsPaused = true; },
+      releaseClaims: () => this.releaseLocalUpdateClaimPause(),
+    });
     this.agentPluginProviderPreflight = options.agentPluginProviderPreflight
       ?? ((provider, signal) => preflightAgentPluginProvider(provider, {}, signal));
     const cleanupRetryDelays = (options.terminalAuthorityCleanupRetryDelaysMs ?? [])
@@ -790,7 +807,7 @@ export class MultiremiDaemon {
           if (this.options.once) {
             // One-shot mode (tests, single runs) stays strictly serial:
             // claim one task, run it to completion, return.
-            const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
+            const task = await this.claimTask(this.options.runtimeId!);
             if (!task) return;
             await this.handleTask(task);
             return;
@@ -808,7 +825,7 @@ export class MultiremiDaemon {
             && !this.serverDrainActive
             && this.supervisorReady()
           ) {
-            const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
+            const task = await this.claimTask(this.options.runtimeId!);
             if (!task) break;
             const run = this.handleTask(task).catch((err) => {
               // handleTask routes task failures to failTask itself; this guards
@@ -1069,10 +1086,11 @@ export class MultiremiDaemon {
       });
       return;
     }
-    if (!this.tryPauseClaimsForUpdate()) {
+    const claimPause = this.tryPauseClaimsForUpdate(scope);
+    if (!claimPause.ok) {
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, {
         status: "failed",
-        error: "daemon is busy; retry update when idle",
+        error: claimPause.error,
       });
       return;
     }
@@ -1089,7 +1107,7 @@ export class MultiremiDaemon {
       });
       this.requestRestartAfterUpdate();
     } catch (err) {
-      this.releaseUpdateClaimPause();
+      this.releaseUpdateClaimPause(scope);
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, {
         status: "failed",
         error: err instanceof Error ? err.message : String(err),
@@ -1876,13 +1894,35 @@ export class MultiremiDaemon {
     return this.outbox?.stats() ?? null;
   }
 
-  private tryPauseClaimsForUpdate(): boolean {
-    if (this.claimsPaused || this.activeTaskCount > 0) return false;
+  private tryPauseClaimsForUpdate(scope: MultiremiRuntimeUpdateScope): MultiremiCliUpdatePauseResult {
+    if (scope === "cli" && this.cliUpdateCoordinator) {
+      return this.cliUpdateCoordinator.tryPauseClaims();
+    }
+    if (this.claimsPaused || this.activeTaskCount > 0) {
+      return { ok: false, error: "daemon is busy; retry update when idle" };
+    }
     this.claimsPaused = true;
-    return true;
+    return { ok: true };
   }
 
-  private releaseUpdateClaimPause(): void {
+  private async claimTask(runtimeId: string): Promise<MultiremiTaskWithAgent | null> {
+    this.pendingClaimCount++;
+    try {
+      return await this.client.claimTask(runtimeId) as MultiremiTaskWithAgent | null;
+    } finally {
+      this.pendingClaimCount--;
+    }
+  }
+
+  private releaseUpdateClaimPause(scope: MultiremiRuntimeUpdateScope): void {
+    if (scope === "cli" && this.cliUpdateCoordinator) {
+      this.cliUpdateCoordinator.releaseClaims();
+      return;
+    }
+    this.releaseLocalUpdateClaimPause();
+  }
+
+  private releaseLocalUpdateClaimPause(): void {
     if (!this.restartRequestedFlag) this.claimsPaused = false;
   }
 

@@ -17,6 +17,7 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
+import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
 import { setLogLevel } from "@shared/logger.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
@@ -379,6 +380,9 @@ export function instantiateCoResidentWorkerDaemons(
   // Claude and Codex are separate daemon instances but their provider
   // lifecycle and GC must cross the same archive-and-delete barrier.
   const issueWorkspaceLifecycleLocker = new IssueWorkspaceLifecycleLocker();
+  const cliUpdateCoordinator = options.length > 1
+    ? new MultiremiCliUpdateCoordinator()
+    : null;
   const readyProviders = new Set<number>();
   const gcLeaderIndex = options.findIndex((daemonOptions) => daemonOptions.gcEnabled !== false);
   return options.map((daemonOptions, index) => {
@@ -387,6 +391,7 @@ export function instantiateCoResidentWorkerDaemons(
     return new MultiremiDaemon({
       ...daemonOptions,
       issueWorkspaceLifecycleLocker,
+      ...(cliUpdateCoordinator ? { cliUpdateCoordinator } : {}),
       // Provider lanes share one Issue workspace tree. A single lane owns its
       // periodic GC so Claude and Codex cannot duplicate the same archive and
       // repository maintenance pass inside one Bun process.
