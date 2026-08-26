@@ -63,12 +63,13 @@ export type TaskTokenHardDenyCategory =
  * Task credentials inherit their owner's normal authority inside the bound
  * workspace, including access to business configuration such as environment
  * values and SCM settings. Credential-minting/reveal surfaces, identity and
- * workspace lifecycle, billing, and machine/platform mutations remain
- * unavailable. Read-only platform status is allowed so operational agents can
- * verify releases without gaining deployment control. This is an intentional
- * usability/security tradeoff: untrusted task input can exercise the owner's
- * workspace authority, but cannot mint a
- * new access capability or assume a daemon identity.
+ * workspace lifecycle, billing, and machine identity mutations remain
+ * unavailable. Operational agents may inspect platform status and manage the
+ * platform operation lifecycle, but cannot change updater settings or call the
+ * updater's machine-facing API. This is an intentional usability/security
+ * tradeoff: untrusted task input can exercise the owner's workspace and
+ * deployment authority, but cannot mint a new access capability or assume a
+ * daemon identity.
  */
 export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCategory | null {
   const url = new URL(request.url);
@@ -100,11 +101,10 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     return "workspace_lifecycle";
   }
   if (path === "/api/cloud-billing" || path.startsWith("/api/cloud-billing/")) return "billing";
-  const taskReadablePlatformRequest = method === "GET" && (
-    path === "/api/multiremi/platform/status"
+  const taskAllowedPlatformRequest = (method === "GET" && path === "/api/multiremi/platform/status")
     || path === "/api/multiremi/platform/operations"
-  );
-  if ((!taskReadablePlatformRequest
+    || path.startsWith("/api/multiremi/platform/operations/");
+  if ((!taskAllowedPlatformRequest
       && (path === "/api/multiremi/platform" || path.startsWith("/api/multiremi/platform/")))
     || path === "/api/platform-updater" || path.startsWith("/api/platform-updater/")
     || path === "/api/cloud-runtime" || path.startsWith("/api/cloud-runtime/")

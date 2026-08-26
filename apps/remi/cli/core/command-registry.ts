@@ -98,8 +98,6 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
   "lark.daemon.install",
   "lark.daemon.status",
   "platform.local.update",
-  "platform.operation.cancel",
-  "platform.operation.create",
   "runtime.archive-agents-and-delete",
   "runtime.create",
   "runtime.delete",

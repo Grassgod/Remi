@@ -24,7 +24,7 @@ describe("operations CLI authorization boundaries", () => {
     expect((await app.request("/api/cloud-billing/balance", { headers })).status).toBe(403);
   });
 
-  it("gives task credentials workspace and platform-read parity while keeping control-plane mutations denied", async () => {
+  it("lets task credentials manage platform operations while keeping control-plane administration denied", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Task actor", provider: "codex", workspaceId: "local" });
@@ -84,11 +84,27 @@ describe("operations CLI authorization boundaries", () => {
     })).status).toBe(403);
     expect((await app.request("/api/multiremi/platform/status", { headers })).status).toBe(200);
     expect((await app.request("/api/multiremi/platform/operations", { headers })).status).toBe(200);
+    const createOperation = await app.request("/api/multiremi/platform/operations", {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "check_updates" }),
+    });
+    expect(createOperation.status).toBe(202);
+    const createdOperation = (await createOperation.json() as { operation: { id: string } }).operation;
+    const cancelOperation = await app.request(`/api/multiremi/platform/operations/${createdOperation.id}/cancel`, {
+      method: "POST",
+      headers,
+    });
+    expect(cancelOperation.status).toBe(200);
+    expect((await cancelOperation.json()).operation).toMatchObject({
+      id: createdOperation.id,
+      status: "cancelled",
+    });
 
     for (const [method, path, body] of [
       ["GET", "/api/cloud-runtime", undefined],
       ["GET", "/api/cloud-billing/balance", undefined],
-      ["POST", "/api/multiremi/platform/operations", { kind: "check_updates" }],
+      ["PATCH", "/api/multiremi/platform/settings", { autoUpdateStable: true }],
       ["GET", "/api/lark/binding/redeem", undefined],
       ["POST", "/api/workspaces/local/lark/install/begin", {}],
       ["DELETE", "/api/workspaces/local/lark/installations/lin_1", undefined],

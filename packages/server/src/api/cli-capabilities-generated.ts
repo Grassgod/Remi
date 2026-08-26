@@ -4549,7 +4549,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.operation.create": {
       "command": "remi platform operation create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.create",
       "output": [
@@ -4561,7 +4562,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.operation.cancel": {
       "command": "remi platform operation cancel",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.cancel",
       "output": [
