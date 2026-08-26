@@ -5958,8 +5958,7 @@
       "command": "remi feishu source add",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "feishu.source.add",
       "mutation": "write",
@@ -5975,8 +5974,7 @@
       "command": "remi feishu source update",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "feishu.source.update",
       "mutation": "write",

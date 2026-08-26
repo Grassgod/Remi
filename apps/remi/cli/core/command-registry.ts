@@ -95,6 +95,8 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
   "feishu.messages.create-issue",
   "feishu.proposals.approve",
   "feishu.proposals.reject",
+  "feishu.source.add",
+  "feishu.source.update",
   "lark.install.begin",
   "lark.installation.delete",
   "lark.binding.redeem",

@@ -27,6 +27,29 @@ describe("CLI capabilities manifest", () => {
     expect(generatedRuntime).toEqual(cliRuntimeCapabilities(manifest));
   });
 
+  it("declares Feishu human approvals separately from task-operable message workflows", () => {
+    const humanOnly = [
+      "feishu.source.add",
+      "feishu.source.update",
+      "feishu.messages.create-issue",
+      "feishu.proposals.approve",
+      "feishu.proposals.reject",
+    ];
+    const taskOperable = [
+      "feishu.source.list",
+      "feishu.source.get",
+      "feishu.source.status",
+      "feishu.messages.list",
+      "feishu.messages.resolve",
+      "feishu.messages.notify",
+      "feishu.messages.draft-reply",
+      "feishu.messages.propose-issue",
+    ];
+
+    for (const id of humanOnly) expect(manifest.commands[id]?.auth, id).toEqual(["human"]);
+    for (const id of taskOperable) expect(manifest.commands[id]?.auth, id).toEqual(["human", "task"]);
+  });
+
   it("generates discoverable help for every visible Registry command and its direct children", () => {
     const inventory = cliCommandInventory();
     for (const entry of inventory.filter((candidate) => !candidate.hidden)) {

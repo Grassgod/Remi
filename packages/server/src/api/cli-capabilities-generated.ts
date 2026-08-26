@@ -4199,8 +4199,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "feishu.source.add": {
       "command": "remi feishu source add",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "feishu.source.add",
       "output": [
@@ -4212,8 +4211,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "feishu.source.update": {
       "command": "remi feishu source update",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "feishu.source.update",
       "output": [
