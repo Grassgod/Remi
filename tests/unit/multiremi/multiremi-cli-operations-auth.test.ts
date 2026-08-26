@@ -24,7 +24,7 @@ describe("operations CLI authorization boundaries", () => {
     expect((await app.request("/api/cloud-billing/balance", { headers })).status).toBe(403);
   });
 
-  it("gives task credentials workspace operations parity but keeps platform and daemon identities hard-denied", async () => {
+  it("gives task credentials workspace and platform-read parity while keeping control-plane mutations denied", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Task actor", provider: "codex", workspaceId: "local" });
@@ -82,11 +82,13 @@ describe("operations CLI authorization boundaries", () => {
       method: "POST",
       headers,
     })).status).toBe(403);
+    expect((await app.request("/api/multiremi/platform/status", { headers })).status).toBe(200);
+    expect((await app.request("/api/multiremi/platform/operations", { headers })).status).toBe(200);
 
     for (const [method, path, body] of [
       ["GET", "/api/cloud-runtime", undefined],
       ["GET", "/api/cloud-billing/balance", undefined],
-      ["GET", "/api/multiremi/platform/status", undefined],
+      ["POST", "/api/multiremi/platform/operations", { kind: "check_updates" }],
       ["GET", "/api/lark/binding/redeem", undefined],
       ["POST", "/api/workspaces/local/lark/install/begin", {}],
       ["DELETE", "/api/workspaces/local/lark/installations/lin_1", undefined],

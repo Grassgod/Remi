@@ -63,9 +63,11 @@ export type TaskTokenHardDenyCategory =
  * Task credentials inherit their owner's normal authority inside the bound
  * workspace, including access to business configuration such as environment
  * values and SCM settings. Credential-minting/reveal surfaces, identity and
- * workspace lifecycle, billing, and machine/platform control planes remain
- * unavailable. This is an intentional usability/security tradeoff: untrusted
- * task input can exercise the owner's workspace authority, but cannot mint a
+ * workspace lifecycle, billing, and machine/platform mutations remain
+ * unavailable. Read-only platform status is allowed so operational agents can
+ * verify releases without gaining deployment control. This is an intentional
+ * usability/security tradeoff: untrusted task input can exercise the owner's
+ * workspace authority, but cannot mint a
  * new access capability or assume a daemon identity.
  */
 export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCategory | null {
@@ -98,7 +100,12 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     return "workspace_lifecycle";
   }
   if (path === "/api/cloud-billing" || path.startsWith("/api/cloud-billing/")) return "billing";
-  if (path === "/api/multiremi/platform" || path.startsWith("/api/multiremi/platform/")
+  const taskReadablePlatformRequest = method === "GET" && (
+    path === "/api/multiremi/platform/status"
+    || path === "/api/multiremi/platform/operations"
+  );
+  if ((!taskReadablePlatformRequest
+      && (path === "/api/multiremi/platform" || path.startsWith("/api/multiremi/platform/")))
     || path === "/api/platform-updater" || path.startsWith("/api/platform-updater/")
     || path === "/api/cloud-runtime" || path.startsWith("/api/cloud-runtime/")
     || path === "/api/multiremi/install/daemon"
