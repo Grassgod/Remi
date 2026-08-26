@@ -199,6 +199,27 @@ describe("transcript step card — Bash command", () => {
     expect(screen.queryByText(MISSING_COMMAND_LABEL)).not.toBeInTheDocument();
   });
 
+  it("calls an abandoned Bash step neither running nor recorded by an older version", () => {
+    // The task is over, so a step still marked pending was abandoned: its input
+    // can no longer arrive, but this version did record it. The unfinished badge
+    // carries the state on its own.
+    renderTranscript(
+      [{
+        seq: 1,
+        type: "tool_use",
+        tool: "Bash",
+        toolCallId: "call-1",
+        status: "pending",
+        meta: { title: "Terminal" },
+      }],
+      { task: { status: "completed" }, isLive: false },
+    );
+
+    expect(screen.getByText("Not finished")).toBeInTheDocument();
+    expect(screen.queryByText("Running…")).not.toBeInTheDocument();
+    expect(screen.queryByText(MISSING_COMMAND_LABEL)).not.toBeInTheDocument();
+  });
+
   it("leaves other tools untouched", () => {
     renderTranscript([
       { seq: 1, type: "tool_use", tool: "Read", toolCallId: "call-1", input: { file_path: "/a/b/c/d.ts" } },

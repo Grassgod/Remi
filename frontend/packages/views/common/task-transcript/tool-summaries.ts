@@ -163,8 +163,9 @@ function collabStateSummary(input: Record<string, unknown>): string {
 
 /**
  * Terminal Bash steps recorded before v0.2.20 can carry no command — the daemon
- * dropped it, leaving the input null or a `{terminal_id}`-only placeholder. A
- * running step can still receive its input, so only terminal gaps are legacy.
+ * dropped it, leaving the input null or a `{terminal_id}`-only placeholder. Only
+ * a terminal gap is legacy: a step still marked running either has its input on
+ * the way, or was abandoned by this version — neither is old data.
  */
 export function isBashCommandMissing(
   name?: string,
