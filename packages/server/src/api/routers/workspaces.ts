@@ -408,7 +408,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     }
     const run = store.runAutopilot(autopilotId, {
       source: "api",
-      prompt: "Bootstrap or refresh the target repository LLM Wiki from its checked-out default branch. Use the code-to-wiki plugin for analysis, preserve durable repository facts, resolve the checked-out HEAD revision, and publish changes with remi wiki push --source-revision <sha>.",
+      prompt: "Bootstrap or refresh the target repository LLM Wiki from its checked-out default branch. Use the code-to-wiki plugin for analysis, preserve durable repository facts, resolve the checked-out HEAD revision, run remi wiki status, and publish changes with remi wiki push. Report the published HEAD SHA in the result.",
       payload: { atlas_repository_id: repositoryId, atlas_mode: "bootstrap_repository" },
       repositoryId,
       dedupeKey: repositoryWikiBuildDedupeKey(repositoryId, "bootstrap_repository", null),
