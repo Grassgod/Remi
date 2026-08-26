@@ -313,6 +313,7 @@
     "step2_hint": "연결 설정을 저장한 뒤 데몬을 백그라운드에서 계속 실행합니다.",
     "credential_loading": "안전한 연결 자격 증명을 만드는 중...",
     "credential_error": "연결 자격 증명을 만들 수 없습니다.",
+    "credential_error_detail": "이유: {{reason}}",
     "credential_retry": "다시 시도",
     "live_listening": "컴퓨터를 기다리는 중",
     "live_listening_hint": "데몬이 시작되면 바로 감지합니다. 보통 1분 이내입니다.",
