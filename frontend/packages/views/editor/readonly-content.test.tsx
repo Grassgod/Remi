@@ -320,10 +320,34 @@ describe("ReadonlyContent density variant", () => {
     expect(compactCss).toContain(`${scoped} h1 {`);
     expect(compactCss).toContain(`${scoped} code {`);
 
-    const headingSizes = [...compactCss.matchAll(/h[1-6][^{]*\{[^}]*font-size:\s*([\d.]+)em/g)]
-      .map((match) => Number(match[1]));
+    // Every heading level must render at exactly body size. The host card's
+    // own title is text-xs, so even a 1.15em h1 (13.8px vs 12px) reproduces
+    // the inversion this variant exists to remove — "close to body size" is
+    // not good enough, it has to be body size.
+    const headingRules = compactCss
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("}")
+      .flatMap((chunk) => {
+        const [selector, body] = chunk.split("{");
+        if (selector === undefined || body === undefined) return [];
+        const isHeading = selector
+          .split(",")
+          .some((one) => /\bh[1-6]$/.test(one.trim()));
+        return isHeading ? [body] : [];
+      });
+    expect(headingRules.length).toBeGreaterThan(0);
+
+    const declared = (property: string) =>
+      headingRules
+        .flatMap((body) => [...body.matchAll(new RegExp(`${property}:\\s*([^;]+);`, "g"))])
+        .map((match) => (match[1] ?? "").trim());
+
+    const headingSizes = declared("font-size");
     expect(headingSizes.length).toBeGreaterThan(0);
-    expect(Math.max(...headingSizes)).toBeLessThanOrEqual(1.2);
+    expect(headingSizes.every((size) => size === "1em")).toBe(true);
+
+    // Hierarchy therefore has to come from weight, not scale.
+    expect(new Set(declared("font-weight")).size).toBeGreaterThanOrEqual(2);
 
     const inlineCodeRule = compactCss.slice(compactCss.indexOf(`${scoped} code {`));
     expect(inlineCodeRule.slice(0, inlineCodeRule.indexOf("}"))).toContain(

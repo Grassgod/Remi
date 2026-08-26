@@ -11,8 +11,10 @@
  * Rules here:
  *   - Sizes are `em`, not `rem`, so the whole block scales with whatever base
  *     font-size the host card sets. The base default below is 12px (text-xs).
- *   - Headings converge toward body size and separate by WEIGHT and COLOR,
- *     not scale — h1 1.15em / h2 1.05em / h3+ 1em.
+ *   - Every heading level renders at body size (1em). Hierarchy is carried by
+ *     WEIGHT and COLOR alone. Even a 1.15em h1 measures 13.8px against a 12px
+ *     card title, which is the same inversion this variant exists to remove,
+ *     so no level is allowed to scale up at all.
  *   - Inline code drops to body size with a hairline-free tint, and long
  *     unbreakable tokens (git remotes, hostnames) wrap instead of pushing the
  *     card wider.
@@ -38,34 +40,36 @@
 .rich-text-editor.rich-text-editor--compact h4,
 .rich-text-editor.rich-text-editor--compact h5,
 .rich-text-editor.rich-text-editor--compact h6 {
-  margin-top: 0.85em;
+  font-size: 1em;
   margin-bottom: 0.3em;
-  line-height: 1.4;
+  line-height: 1.5;
   letter-spacing: 0;
   color: var(--foreground);
 }
 
+/* Top margin is the second hierarchy signal: a top-level section gets more
+   air above it than a sub-section, which reads as structure without scale. */
 .rich-text-editor.rich-text-editor--compact h1 {
-  font-size: 1.15em;
-  font-weight: 600;
+  font-weight: 700;
+  margin-top: 1em;
 }
 
 .rich-text-editor.rich-text-editor--compact h2 {
-  font-size: 1.05em;
   font-weight: 600;
+  margin-top: 0.85em;
 }
 
-.rich-text-editor.rich-text-editor--compact h3,
+.rich-text-editor.rich-text-editor--compact h3 {
+  font-weight: 600;
+  margin-top: 0.7em;
+  color: var(--muted-foreground);
+}
+
 .rich-text-editor.rich-text-editor--compact h4,
 .rich-text-editor.rich-text-editor--compact h5,
 .rich-text-editor.rich-text-editor--compact h6 {
-  font-size: 1em;
-  font-weight: 600;
-}
-
-.rich-text-editor.rich-text-editor--compact h4,
-.rich-text-editor.rich-text-editor--compact h5,
-.rich-text-editor.rich-text-editor--compact h6 {
+  font-weight: 500;
+  margin-top: 0.7em;
   color: var(--muted-foreground);
 }
 
