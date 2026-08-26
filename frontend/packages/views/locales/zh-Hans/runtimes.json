@@ -293,6 +293,7 @@
     "step2_hint": "会写入连接配置并在后台保持守护进程运行。",
     "credential_loading": "正在创建安全连接凭证...",
     "credential_error": "无法创建连接凭证。",
+    "credential_error_detail": "原因：{{reason}}",
     "credential_retry": "重试",
     "live_listening": "等待你的电脑上线",
     "live_listening_hint": "守护进程一启动就会被识别，通常不到一分钟。",
