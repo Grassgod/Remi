@@ -57,6 +57,9 @@ describe("Issue session archive", () => {
     writeFileSync(join(home, "auth.json"), "DO_NOT_ARCHIVE");
     writeFileSync(join(home, "config.toml"), "secret = 'DO_NOT_ARCHIVE'");
     writeFileSync(join(home, "settings.json"), "{\"token\":\"DO_NOT_ARCHIVE\"}");
+    const claudeCredentials = join(root, "claude-credentials.json");
+    writeFileSync(claudeCredentials, "CLAUDE_CREDENTIALS_MUST_NOT_BE_ARCHIVED");
+    symlinkSync(claudeCredentials, join(home, ".credentials.json"));
     writeFileSync(join(dirname(home), "meta.json"), "{\"provider\":\"codex\"}\n");
 
     const first = await prepareIssueSessionArchive(root);
@@ -71,6 +74,9 @@ describe("Issue session archive", () => {
     expect(files.get("sessions/ises_1/agt_1/1/meta.json")?.toString()).toContain("codex");
     expect([...files.keys()].some((path) => /auth\.json|config\.toml|settings\.json/.test(path))).toBe(false);
     expect(gunzipSync(readFileSync(first.archivePath)).toString()).not.toContain("DO_NOT_ARCHIVE");
+    expect(gunzipSync(readFileSync(first.archivePath)).toString()).not.toContain(
+      "CLAUDE_CREDENTIALS_MUST_NOT_BE_ARCHIVED",
+    );
   });
 
   supportedPlatformIt("refuses unexpected symlinks", async () => {
