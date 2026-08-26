@@ -33,11 +33,14 @@ function makeItem(
 }
 
 describe("onInboxIssueDeleted", () => {
-  it("removes all inbox items referencing the deleted issue", () => {
+  it("detaches ledger history and removes actions for the deleted issue", () => {
     const qc = new QueryClient();
     const items = [
-      makeItem("i1", "issue-a"),
-      makeItem("i2", "issue-a"),
+      makeItem("i1", "issue-a", {
+        type: "autopilot_run_failed",
+        issue_status: "done",
+      }),
+      makeItem("i2", "issue-a", { type: "comment_mention" }),
       makeItem("i3", "issue-b"),
       makeItem("i4", null),
     ];
@@ -46,7 +49,11 @@ describe("onInboxIssueDeleted", () => {
     onInboxIssueDeleted(qc, wsId, "issue-a");
 
     const after = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-    expect(after?.map((i) => i.id)).toEqual(["i3", "i4"]);
+    expect(after?.map((i) => i.id)).toEqual(["i1", "i3", "i4"]);
+    expect(after?.find((i) => i.id === "i1")).toMatchObject({
+      issue_id: null,
+      issue_status: null,
+    });
   });
 
   it("is a no-op when the inbox cache is empty", () => {

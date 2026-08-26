@@ -661,3 +661,86 @@ describe("RuntimesEndpoints SSH mesh", () => {
     ).rejects.toBeInstanceOf(ApiContractError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// MUL-123 — end-to-end wire check for total-only token history.
+//
+// `listUsageDaily` / `listUsageByAgent` have always carried `totalTokens`, but
+// the runtime compatibility mappers in
+// `packages/server/src/api/wire/runtimes.ts` dropped it on the way out, so the
+// runtime usage page saw no `total_tokens` at all and every consumer of it was
+// dormant. The bodies below are byte-for-byte what those mappers now emit for a
+// pre-0.2.49 row (context total present, all four splits at zero).
+// ---------------------------------------------------------------------------
+describe("RuntimesEndpoints usage — total-only token history (MUL-123)", () => {
+  const TOTAL_ONLY_DAILY_ROW = {
+    runtime_id: "rt_total_only",
+    date: "2026-08-26",
+    provider: "claude",
+    model: "claude-sonnet-5",
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: 26_179_959,
+  };
+
+  it("preserves total_tokens from the runtime usage wire body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse([TOTAL_ONLY_DAILY_ROW])),
+    );
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    const rows = await endpoints.getRuntimeUsage("rt_total_only", { days: 30 });
+    expect(rows).toHaveLength(1);
+    // Without this the Tokens KPI reads 0 over a 26M-token window.
+    expect(rows[0]?.total_tokens).toBe(26_179_959);
+    expect(rows[0]?.input_tokens).toBe(0);
+  });
+
+  it("still parses a body from a server that does not emit total_tokens yet", async () => {
+    // `total_tokens` stays OPTIONAL on the schema on purpose: `getRuntimeUsage`
+    // uses `parseStrictResponse`, so making it required would fail closed
+    // against every server older than this change.
+    const { total_tokens: _omitted, ...legacyRow } = TOTAL_ONLY_DAILY_ROW;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse([legacyRow])),
+    );
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    const rows = await endpoints.getRuntimeUsage("rt_total_only");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.total_tokens).toBeUndefined();
+  });
+
+  it("keeps total_tokens on the by-agent wire body through the loose schema", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse([{
+          agent_id: "agent-1",
+          model: "claude-sonnet-5",
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          total_tokens: 26_179_959,
+          task_count: 3,
+        }]),
+      ),
+    );
+    const endpoints = new RuntimesEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+
+    const rows = await endpoints.getRuntimeUsageByAgent("rt_total_only");
+    expect(rows[0]).toMatchObject({ agent_id: "agent-1", task_count: 3 });
+    expect((rows[0] as { total_tokens?: number }).total_tokens).toBe(26_179_959);
+  });
+});

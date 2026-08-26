@@ -196,6 +196,31 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.organizer.get": {
+      "command": "remi workspace organizer get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.organizer.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.organizer.update": {
+      "command": "remi workspace organizer update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.organizer.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.ssh-mesh.get": {
       "command": "remi workspace ssh-mesh get",
       "auth": [
@@ -2536,6 +2561,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "task.redispatch": {
+      "command": "remi task redispatch",
+      "auth": [
+        "task"
+      ],
+      "capability": "task.redispatch",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "task.steer": {
       "command": "remi task steer",
       "auth": [
@@ -2569,6 +2606,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "task.message.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "task.inspect": {
+      "command": "remi task inspect",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.inspect",
       "output": [
         "table",
         "json",
@@ -2660,6 +2710,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "agent.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.supervisor.set": {
+      "command": "remi agent supervisor set",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.supervisor.set",
       "output": [
         "table",
         "json",
@@ -4371,6 +4433,80 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "notification.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.channel.list": {
+      "command": "remi notification channel list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.channel.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.channel.create": {
+      "command": "remi notification channel create",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.channel.update": {
+      "command": "remi notification channel update",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.channel.delete": {
+      "command": "remi notification channel delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.delivery.list": {
+      "command": "remi notification delivery list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.delivery.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "notification.delivery.retry": {
+      "command": "remi notification delivery retry",
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.delivery.retry",
       "output": [
         "table",
         "json",

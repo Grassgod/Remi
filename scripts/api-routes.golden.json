@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 608,
+    "routeCount": 621,
     "routeCountByPrefix": {
-      "native": 196,
-      "compat": 399,
+      "native": 204,
+      "compat": 404,
       "root": 13
     },
-    "getRoutes": 263,
-    "getRoutesWithBody": 260,
+    "getRoutes": 268,
+    "getRoutesWithBody": 265,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 345,
+    "mutationRoutes": 353,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -95,6 +95,7 @@
     "DELETE /api/multiremi/issues/:id/subscribers/:memberId",
     "DELETE /api/multiremi/labels/:id",
     "DELETE /api/multiremi/members/:id",
+    "DELETE /api/multiremi/notification-channels/:id",
     "DELETE /api/multiremi/pins/:itemType/:itemId",
     "DELETE /api/multiremi/projects/:id",
     "DELETE /api/multiremi/projects/:id/resources/:resourceId",
@@ -270,6 +271,8 @@
     "GET /api/multiremi/members",
     "GET /api/multiremi/members/:id",
     "GET /api/multiremi/models",
+    "GET /api/multiremi/notification-channels",
+    "GET /api/multiremi/notification-deliveries",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
     "GET /api/multiremi/platform/operations",
@@ -301,6 +304,7 @@
     "GET /api/multiremi/tasks",
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
+    "GET /api/multiremi/tasks/:id/inspection",
     "GET /api/multiremi/tasks/:id/messages",
     "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
@@ -347,6 +351,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
@@ -359,6 +364,7 @@
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/organizer",
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
@@ -400,6 +406,7 @@
     "PATCH /api/multiremi/issues/:id",
     "PATCH /api/multiremi/labels/:id",
     "PATCH /api/multiremi/members/:id",
+    "PATCH /api/multiremi/notification-channels/:id",
     "PATCH /api/multiremi/platform/settings",
     "PATCH /api/multiremi/projects/:id",
     "PATCH /api/multiremi/projects/:id/resources/:resourceId",
@@ -557,6 +564,8 @@
     "POST /api/multiremi/issues/quick-create",
     "POST /api/multiremi/labels",
     "POST /api/multiremi/members",
+    "POST /api/multiremi/notification-channels",
+    "POST /api/multiremi/notification-deliveries/:id/retry",
     "POST /api/multiremi/pins",
     "POST /api/multiremi/platform/operations",
     "POST /api/multiremi/platform/operations/:id/cancel",
@@ -577,6 +586,7 @@
     "POST /api/multiremi/tasks",
     "POST /api/multiremi/tasks/:id/cancel",
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/multiremi/tasks/:id/redispatch",
     "POST /api/multiremi/tasks/:id/steer",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
@@ -606,6 +616,7 @@
     "POST /api/squads/:id/members",
     "POST /api/tasks/:id/cancel",
     "POST /api/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/tasks/:id/redispatch",
     "POST /api/tasks/:id/steer",
     "POST /api/tokens",
     "POST /api/tokens/current/renew",
@@ -636,6 +647,7 @@
     "PUT /api/agents/:id",
     "PUT /api/agents/:id/env",
     "PUT /api/agents/:id/skills",
+    "PUT /api/agents/:id/supervisor",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
@@ -664,6 +676,7 @@
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/issue-archive",
+    "PUT /api/workspaces/:id/organizer",
     "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
@@ -872,6 +885,8 @@
     "GET /api/multiremi/members",
     "GET /api/multiremi/members/:id",
     "GET /api/multiremi/models",
+    "GET /api/multiremi/notification-channels",
+    "GET /api/multiremi/notification-deliveries",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
     "GET /api/multiremi/platform/operations",
@@ -903,6 +918,7 @@
     "GET /api/multiremi/tasks",
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
+    "GET /api/multiremi/tasks/:id/inspection",
     "GET /api/multiremi/tasks/:id/messages",
     "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
@@ -949,6 +965,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
@@ -961,6 +978,7 @@
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/organizer",
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
@@ -1239,6 +1257,7 @@
         "max_concurrent_tasks": 3,
         "model": "",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1273,6 +1292,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1364,6 +1384,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1404,6 +1425,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1445,6 +1467,7 @@
           "max_concurrent_tasks": 6,
           "model": "",
           "thinking_level": "",
+          "supervisor": false,
           "owner_id": "local",
           "skills": [],
           "created_at": "<timestamp>",
@@ -1488,6 +1511,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1553,6 +1577,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1624,6 +1649,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1662,6 +1688,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1735,6 +1762,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -5807,6 +5835,7 @@
           "max_concurrent_tasks": 6,
           "model": "claude-sonnet-4",
           "thinking_level": "",
+          "supervisor": false,
           "owner_id": "local",
           "skills": [
             {
@@ -5848,6 +5877,7 @@
         "max_concurrent_tasks": 6,
         "model": "claude-sonnet-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -6820,6 +6850,17 @@
             "id": "agent.skill.set",
             "command": "remi agent skill set",
             "capability": "agent.skill.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.supervisor.set",
+            "command": "remi agent supervisor set",
+            "capability": "agent.supervisor.set",
             "outputs": [
               "table",
               "json",
@@ -8577,6 +8618,72 @@
             "allowed": true
           },
           {
+            "id": "notification.channel.create",
+            "command": "remi notification channel create",
+            "capability": "notification.channel.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.channel.delete",
+            "command": "remi notification channel delete",
+            "capability": "notification.channel.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.channel.list",
+            "command": "remi notification channel list",
+            "capability": "notification.channel.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.channel.update",
+            "command": "remi notification channel update",
+            "capability": "notification.channel.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.delivery.list",
+            "command": "remi notification delivery list",
+            "capability": "notification.delivery.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.delivery.retry",
+            "command": "remi notification delivery retry",
+            "capability": "notification.delivery.retry",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "notification.get",
             "command": "remi notification get",
             "capability": "notification.get",
@@ -10216,6 +10323,17 @@
             "allowed": true
           },
           {
+            "id": "task.inspect",
+            "command": "remi task inspect",
+            "capability": "task.inspect",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "task.list",
             "command": "remi task list",
             "capability": "task.list",
@@ -10258,6 +10376,17 @@
               "jsonl"
             ],
             "allowed": true
+          },
+          {
+            "id": "task.redispatch",
+            "command": "remi task redispatch",
+            "capability": "task.redispatch",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": false
           },
           {
             "id": "task.request.list",
@@ -10670,6 +10799,28 @@
             "id": "workspace.list",
             "command": "remi workspace list",
             "capability": "workspace.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.organizer.get",
+            "command": "remi workspace organizer get",
+            "capability": "workspace.organizer.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.organizer.update",
+            "command": "remi workspace organizer update",
+            "capability": "workspace.organizer.update",
             "outputs": [
               "table",
               "json",
@@ -13995,6 +14146,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -14061,6 +14213,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -16865,6 +17018,26 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/notification-channels",
+      "route": "GET /api/multiremi/notification-channels",
+      "path": "/api/multiremi/notification-channels",
+      "status": 200,
+      "body": {
+        "channels": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/notification-deliveries",
+      "route": "GET /api/multiremi/notification-deliveries",
+      "path": "/api/multiremi/notification-deliveries",
+      "status": 200,
+      "body": {
+        "deliveries": [],
+        "total": 0
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/notification-preferences",
       "route": "GET /api/multiremi/notification-preferences",
       "path": "/api/multiremi/notification-preferences",
@@ -17945,6 +18118,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -18078,6 +18252,74 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/tasks/:id/inspection",
+      "route": "GET /api/multiremi/tasks/:id/inspection",
+      "path": "/api/multiremi/tasks/tsk_snapshot/inspection",
+      "status": 200,
+      "body": {
+        "inspection": {
+          "id": "tsk_snapshot",
+          "status": "completed",
+          "agent_id": "agt_snapshot",
+          "issue_id": "iss_snapshot",
+          "runtime_id": "rt_snapshot",
+          "progress_summary": "Waiting for permission approval",
+          "progress_step": 1,
+          "progress_total": 2,
+          "failure_reason": null,
+          "wait_reason": null,
+          "created_at": "<timestamp>",
+          "started_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "completed_at": "<timestamp>",
+          "dispatched_at": "<timestamp>",
+          "failed_at": null,
+          "cancelled_at": null,
+          "last_message": {
+            "seq": 1,
+            "created_at": "<timestamp>"
+          },
+          "message_type_histogram": [
+            {
+              "type": "assistant",
+              "tool": null,
+              "count": 1
+            }
+          ],
+          "human_requests": {
+            "counts": {
+              "pending": 1,
+              "responded": 0,
+              "timeout": 0,
+              "cancelled": 0
+            },
+            "latest": {
+              "kind": "permission",
+              "status": "pending",
+              "created_at": "<timestamp>",
+              "responded_at": null
+            }
+          },
+          "runtime": {
+            "id": "rt_snapshot",
+            "status": "online",
+            "online": true,
+            "last_heartbeat_at": "<timestamp>"
+          },
+          "agent": {
+            "id": "agt_snapshot",
+            "name": "Snapshot Agent",
+            "supervisor": false
+          },
+          "issue": {
+            "id": "iss_snapshot",
+            "key": "MUL-1",
+            "status": "todo"
+          }
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/tasks/:id/messages",
       "route": "GET /api/multiremi/tasks/:id/messages",
       "path": "/api/multiremi/tasks/tsk_snapshot/messages",
@@ -18127,6 +18369,7 @@
             "name": "Snapshot token",
             "type": "pat",
             "purpose": "personal",
+            "scopes": [],
             "tokenPrefix": "mul_00000000",
             "lastUsedAt": null,
             "expiresAt": null,
@@ -18758,7 +19001,8 @@
           "input_tokens": 10,
           "output_tokens": 5,
           "cache_read_tokens": 0,
-          "cache_write_tokens": 0
+          "cache_write_tokens": 0,
+          "total_tokens": 0
         }
       ]
     },
@@ -18775,6 +19019,7 @@
           "output_tokens": 5,
           "cache_read_tokens": 0,
           "cache_write_tokens": 0,
+          "total_tokens": 0,
           "task_count": 1
         }
       ]
@@ -19118,6 +19363,74 @@
       }
     },
     {
+      "key": "get-sweep GET /api/tasks/:id/inspection",
+      "route": "GET /api/tasks/:id/inspection",
+      "path": "/api/tasks/tsk_snapshot/inspection",
+      "status": 200,
+      "body": {
+        "inspection": {
+          "id": "tsk_snapshot",
+          "status": "completed",
+          "agent_id": "agt_snapshot",
+          "issue_id": "iss_snapshot",
+          "runtime_id": "rt_snapshot",
+          "progress_summary": "Waiting for permission approval",
+          "progress_step": 1,
+          "progress_total": 2,
+          "failure_reason": null,
+          "wait_reason": null,
+          "created_at": "<timestamp>",
+          "started_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "completed_at": "<timestamp>",
+          "dispatched_at": "<timestamp>",
+          "failed_at": null,
+          "cancelled_at": null,
+          "last_message": {
+            "seq": 1,
+            "created_at": "<timestamp>"
+          },
+          "message_type_histogram": [
+            {
+              "type": "assistant",
+              "tool": null,
+              "count": 1
+            }
+          ],
+          "human_requests": {
+            "counts": {
+              "pending": 1,
+              "responded": 0,
+              "timeout": 0,
+              "cancelled": 0
+            },
+            "latest": {
+              "kind": "permission",
+              "status": "pending",
+              "created_at": "<timestamp>",
+              "responded_at": null
+            }
+          },
+          "runtime": {
+            "id": "rt_snapshot",
+            "status": "online",
+            "online": true,
+            "last_heartbeat_at": "<timestamp>"
+          },
+          "agent": {
+            "id": "agt_snapshot",
+            "name": "Snapshot Agent",
+            "supervisor": false
+          },
+          "issue": {
+            "id": "iss_snapshot",
+            "key": "MUL-1",
+            "status": "todo"
+          }
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/tasks/:id/steer",
       "route": "GET /api/tasks/:id/steer",
       "path": "/api/tasks/tsk_snapshot/steer",
@@ -19383,6 +19696,16 @@
           "avatar_url": null
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/organizer",
+      "route": "GET /api/workspaces/:id/organizer",
+      "path": "/api/workspaces/local/organizer",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "mode": "report_only"
+      }
     },
     {
       "key": "get-sweep GET /api/workspaces/:id/prompt-template",
@@ -22402,6 +22725,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -22471,6 +22795,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -23558,6 +23883,7 @@
         "name": "Renewed local token",
         "type": "pat",
         "purpose": "personal",
+        "scopes": [],
         "tokenPrefix": "mul_00000000",
         "lastUsedAt": null,
         "expiresAt": "<timestamp>",
@@ -23591,6 +23917,7 @@
           "name": "native token",
           "type": "pat",
           "purpose": "personal",
+          "scopes": [],
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,
@@ -23616,6 +23943,7 @@
           "name": "Snapshot token",
           "type": "pat",
           "purpose": "personal",
+          "scopes": [],
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,

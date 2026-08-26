@@ -99,6 +99,16 @@ export class AgentsSkillsRepo {
     return transaction();
   }
 
+  setAgentSupervisor(id: string, supervisor: boolean): MultiremiAgent {
+    const current = this.getAgent(id);
+    if (!current) throw new Error(`Agent not found: ${id}`);
+    this.ctx.db.run(
+      "UPDATE multiremi_agents SET supervisor = ?, updated_at = ? WHERE id = ?",
+      [supervisor ? 1 : 0, nowIso(), id],
+    );
+    return this.getAgent(id)!;
+  }
+
   private updateAgentWithinPluginLock(id: string, input: UpdateAgentInput): MultiremiAgent {
     const current = this.getAgent(id);
     if (!current) throw new Error(`Agent not found: ${id}`);
@@ -773,6 +783,7 @@ export function toAgent(row: Row): MultiremiAgent {
     customArgs: parseJson(row.custom_args, []),
     mcpConfig: row.mcp_config == null ? null : parseJson(row.mcp_config, null),
     thinkingLevel: nullableString(row.thinking_level),
+    supervisor: Number(row.supervisor ?? 0) === 1,
     archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

@@ -13,12 +13,22 @@ import {
   useInboxUnreadCount,
 } from "@multiremi/core/inbox/queries";
 import {
+  filterInboxItemsBySource,
+  groupInboxItemsByDate,
+  inboxItemSelectionKey,
+  inboxItemSelectionKind,
+  type InboxDateGroup,
+  type InboxItemSelectionKind,
+  type InboxSourceFilter,
+} from "@multiremi/core/inbox";
+import {
   useMarkInboxRead,
   useArchiveInbox,
   useMarkAllInboxRead,
   useArchiveAllInbox,
   useArchiveAllReadInbox,
   useArchiveCompletedInbox,
+  useMarkInboxItemsRead,
 } from "@multiremi/core/inbox/mutations";
 
 import { IssueDetail } from "../../issues/components";
@@ -87,15 +97,30 @@ export function InboxPage() {
   const { t: tCommon } = useT("common");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
+  const urlItem = searchParams.get("item") ?? "";
   const urlSession = searchParams.get("session") ?? "";
+  const urlSelectionKey = urlItem || urlIssue;
+  const urlSelectionKind: InboxItemSelectionKind = urlItem ? "item" : "issue";
   const wsPaths = useWorkspacePaths();
 
-  const [selectedKey, setSelectedKeyState] = useState(() => urlIssue);
+  const [selectedKey, setSelectedKeyState] = useState(() => urlSelectionKey);
+  const [selectedKind, setSelectedKind] = useState<InboxItemSelectionKind>(
+    () => urlSelectionKind,
+  );
+  const [unavailableItem, setUnavailableItem] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<InboxSourceFilter>("all");
+  const unavailableRedirectRef = useRef(false);
 
   // Sync from URL when searchParams change (e.g. navigation)
   useEffect(() => {
-    setSelectedKeyState(urlIssue);
-  }, [urlIssue]);
+    setSelectedKeyState(urlSelectionKey);
+    setSelectedKind(urlSelectionKind);
+    if (unavailableRedirectRef.current && !urlSelectionKey) {
+      unavailableRedirectRef.current = false;
+    } else {
+      setUnavailableItem(false);
+    }
+  }, [urlSelectionKey, urlSelectionKind]);
 
   const wsId = useWorkspaceId();
   const {
@@ -105,8 +130,13 @@ export function InboxPage() {
     refetch: refetchInbox,
   } = useQuery(inboxListOptions(wsId));
   const items = useMemo(() => deduplicateInboxItems(rawItems), [rawItems]);
+  const filteredItems = useMemo(
+    () => filterInboxItemsBySource(items, sourceFilter),
+    [items, sourceFilter],
+  );
+  const itemGroups = useMemo(() => groupInboxItemsByDate(filteredItems), [filteredItems]);
 
-  const selected = items.find((i) => (i.issue_id ?? i.id) === selectedKey) ?? null;
+  const selected = items.find((item) => inboxItemSelectionKey(item) === selectedKey) ?? null;
 
   // Track the last key we actually resolved against the inbox list. Lets the
   // fallback effect distinguish "shared-link to a notification not in our
@@ -118,26 +148,36 @@ export function InboxPage() {
   }, [selected, selectedKey]);
 
   const setSelectedKey = useCallback(
-    (key: string, sessionId?: string) => {
+    (key: string, sessionId?: string, kind: InboxItemSelectionKind = "issue") => {
       setSelectedKeyState(key);
-      replace(key ? wsPaths.inboxIssue(key, sessionId) : wsPaths.inbox());
+      setSelectedKind(kind);
+      setUnavailableItem(false);
+      replace(
+        key
+          ? kind === "item"
+            ? wsPaths.inboxItem(key, sessionId)
+            : wsPaths.inboxIssue(key, sessionId)
+          : wsPaths.inbox(),
+      );
     },
     [replace, wsPaths],
   );
 
   const handleIssueSessionChange = useCallback(
     (sessionId: string) => {
-      if (selectedKey) replace(wsPaths.inboxIssue(selectedKey, sessionId));
+      if (!selectedKey) return;
+      replace(
+        selectedKind === "item"
+          ? wsPaths.inboxItem(selectedKey, sessionId)
+          : wsPaths.inboxIssue(selectedKey, sessionId),
+      );
     },
-    [replace, selectedKey, wsPaths],
+    [replace, selectedKey, selectedKind, wsPaths],
   );
 
-  // Shared inbox links (?issue=<id>) may point to notifications not in this
-  // user's inbox (archived, or never received). Fall back to the issue page
-  // so the URL still resolves to something meaningful. But if the key was
-  // previously resolvable (e.g. the issue was just deleted in another tab
-  // and `onInboxIssueDeleted` pruned the cache), the issue detail would 404
-  // too — clear the selection and stay on /inbox instead.
+  // Existing ?issue= links fall back to the issue page when their notification
+  // is unavailable. A ledger ?item= link cannot safely do that because its key
+  // is an inbox-row id, so keep the user in the inbox and show an explicit state.
   useEffect(() => {
     if (loading) return;
     // A failed list request says nothing about whether the key is in this
@@ -150,6 +190,13 @@ export function InboxPage() {
       setSelectedKey("");
       return;
     }
+    if (selectedKind === "item") {
+      setSelectedKeyState("");
+      setUnavailableItem(true);
+      unavailableRedirectRef.current = true;
+      replace(wsPaths.inbox());
+      return;
+    }
     replace(
       urlIssue === selectedKey && urlSession
         ? wsPaths.issueSession(selectedKey, urlSession)
@@ -160,6 +207,7 @@ export function InboxPage() {
     loadFailed,
     selectedKey,
     selected,
+    selectedKind,
     replace,
     wsPaths,
     setSelectedKey,
@@ -180,6 +228,7 @@ export function InboxPage() {
   const archiveAllMutation = useArchiveAllInbox();
   const archiveAllReadMutation = useArchiveAllReadInbox();
   const archiveCompletedMutation = useArchiveCompletedInbox();
+  const markGroupReadMutation = useMarkInboxItemsRead();
   const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
 
@@ -206,8 +255,9 @@ export function InboxPage() {
 
   const handleSelect = (item: InboxItem) => {
     setSelectedKey(
-      item.issue_id ?? item.id,
+      inboxItemSelectionKey(item),
       item.details?.issue_session_id ?? undefined,
+      inboxItemSelectionKind(item),
     );
   };
 
@@ -215,15 +265,16 @@ export function InboxPage() {
     const idx = items.findIndex((i) => i.id === id);
     const archived = idx >= 0 ? items[idx] : null;
     const wasSelected =
-      !!archived && (archived.issue_id ?? archived.id) === selectedKey;
+      !!archived && inboxItemSelectionKey(archived) === selectedKey;
     if (wasSelected) {
       // List is sorted newest-first; prefer the next (older) item, fall back
       // to the previous (newer) one when archiving at the bottom, and only
       // clear the selection when nothing else is left.
       const next = items[idx + 1] ?? items[idx - 1] ?? null;
       setSelectedKey(
-        next ? (next.issue_id ?? next.id) : "",
+        next ? inboxItemSelectionKey(next) : "",
         next?.details?.issue_session_id ?? undefined,
+        next ? inboxItemSelectionKind(next) : "issue",
       );
     }
     archiveMutation.mutate(id, {
@@ -248,6 +299,19 @@ export function InboxPage() {
     });
   };
 
+  const handleMarkGroupRead = (groupItems: InboxItem[]) => {
+    const unreadIds = groupItems.filter((item) => !item.read).map((item) => item.id);
+    if (!unreadIds.length) return;
+    markGroupReadMutation.mutate(unreadIds, {
+      onError: (err) =>
+        toast.error(
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.errors.mark_group_read_failed),
+        ),
+    });
+  };
+
   const handleArchiveAll = () => {
     setSelectedKey("");
     archiveAllMutation.mutate(undefined, {
@@ -261,7 +325,7 @@ export function InboxPage() {
   };
 
   const handleArchiveAllRead = () => {
-    const readKeys = items.filter((i) => i.read).map((i) => i.issue_id ?? i.id);
+    const readKeys = items.filter((item) => item.read).map(inboxItemSelectionKey);
     if (readKeys.includes(selectedKey)) setSelectedKey("");
     archiveAllReadMutation.mutate(undefined, {
       onError: (err) =>
@@ -286,6 +350,19 @@ export function InboxPage() {
   };
 
   // -- Shared sub-components --------------------------------------------------
+
+  const sourceFilters: Array<{ key: InboxSourceFilter; label: string }> = [
+    { key: "all", label: t(($) => $.filters.all) },
+    { key: "automation", label: t(($) => $.filters.automation) },
+    { key: "mentions", label: t(($) => $.filters.mentions) },
+    { key: "assignments", label: t(($) => $.filters.assignments) },
+  ];
+  const groupLabels: Record<InboxDateGroup, string> = {
+    today: t(($) => $.groups.today),
+    yesterday: t(($) => $.groups.yesterday),
+    this_week: t(($) => $.groups.this_week),
+    earlier: t(($) => $.groups.earlier),
+  };
 
   const listHeader = (
     <PageHeader className="justify-between">
@@ -341,23 +418,80 @@ export function InboxPage() {
     </div>
   ) : (
     <div>
-      {items.map((item) => (
-        <InboxListItem
-          key={item.id}
-          item={item}
-          isSelected={(item.issue_id ?? item.id) === selectedKey}
-          onClick={() => handleSelect(item)}
-          onArchive={() => handleArchive(item.id)}
-        />
-      ))}
+      <div className="overflow-x-auto border-b px-3 py-2">
+        <div
+          role="group"
+          aria-label={t(($) => $.filters.label)}
+          className="flex min-w-max items-center gap-1"
+        >
+          {sourceFilters.map((filter) => (
+            <Button
+              key={filter.key}
+              type="button"
+              size="xs"
+              variant={sourceFilter === filter.key ? "secondary" : "ghost"}
+              aria-pressed={sourceFilter === filter.key}
+              className="rounded-md"
+              onClick={() => setSourceFilter(filter.key)}
+            >
+              {filter.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+      {filteredItems.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+          <Inbox className="mb-3 h-8 w-8 text-muted-foreground/50" />
+          <p className="text-sm">{t(($) => $.list.filtered_empty)}</p>
+        </div>
+      ) : itemGroups.map((group) => {
+        const hasUnread = group.items.some((item) => !item.read);
+        return (
+          <section key={group.key} aria-labelledby={`inbox-group-${group.key}`}>
+            <div className="flex h-8 items-center justify-between border-b bg-muted/30 px-4">
+              <h2
+                id={`inbox-group-${group.key}`}
+                className="text-xs font-medium text-muted-foreground"
+              >
+                {groupLabels[group.key]}
+              </h2>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={!hasUnread || markGroupReadMutation.isPending}
+                onClick={() => handleMarkGroupRead(group.items)}
+                className="text-muted-foreground"
+              >
+                <CheckCheck />
+                {t(($) => $.list.mark_group_read)}
+              </Button>
+            </div>
+            {group.items.map((item) => (
+              <InboxListItem
+                key={item.id}
+                item={item}
+                isSelected={inboxItemSelectionKey(item) === selectedKey}
+                onClick={() => handleSelect(item)}
+                onArchive={() => handleArchive(item.id)}
+              />
+            ))}
+          </section>
+        );
+      })}
     </div>
   );
 
-  const detailContent = selected?.issue_id ? (
+  const detailContent = unavailableItem ? (
+    <div className="flex h-full flex-col items-center justify-center px-6 text-center text-muted-foreground">
+      <AlertCircle className="mb-3 h-10 w-10 text-muted-foreground/30" />
+      <p className="text-sm">{t(($) => $.detail.item_unavailable)}</p>
+    </div>
+  ) : selected?.issue_id ? (
     // Key by issue_id (not inbox-item id): a new comment/reaction generates a
-    // new inbox notification for the same issue, and the dedup helper picks the
-    // newest one — keying on its id would remount IssueDetail on every event,
-    // wiping the comment composer draft and resetting scroll position.
+    // new inbox notification for the same issue. Keying on the notification id
+    // would remount IssueDetail on every event, wiping the comment composer
+    // draft and resetting scroll position.
     <ErrorBoundary resetKeys={[selected.issue_id]}>
       <IssueDetail
         key={selected.issue_id}
@@ -366,17 +500,15 @@ export function InboxPage() {
         layoutId="multimira_inbox_issue_detail_layout"
         highlightCommentId={selected.details?.comment_id ?? undefined}
         initialIssueSessionId={
-          urlIssue === selected.issue_id && urlSession
+          urlSelectionKey === inboxItemSelectionKey(selected) && urlSession
             ? urlSession
             : selected.details?.issue_session_id ?? undefined
         }
         onIssueSessionChange={handleIssueSessionChange}
         onDelete={() => {
-          // Issue deletion CASCADE-deletes the inbox item server-side, and the
-          // issue:deleted WS event prunes it from the inbox cache. Just clear
-          // the selection — calling archive here would 404 on a row that no
-          // longer exists.
-          setSelectedKey("");
+          // Ledger rows survive with issue_id cleared and switch to the
+          // self-contained detail below. Action rows are deleted server-side.
+          if (inboxItemSelectionKind(selected) === "issue") setSelectedKey("");
         }}
         onDone={() => {
           handleArchive(selected.id);
@@ -462,7 +594,7 @@ export function InboxPage() {
     }
 
     // Mobile: show detail full-screen when an item is selected
-    if (selected) {
+    if (selected || unavailableItem) {
       return (
         <div className="flex flex-1 flex-col min-h-0">
           <div className="flex h-12 shrink-0 items-center border-b px-2">

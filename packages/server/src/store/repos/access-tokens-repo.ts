@@ -1,7 +1,7 @@
 // Access-token minting/verification, extracted verbatim from MultiremiStore (delegated).
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
-import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js";
+import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import type {
   CreateAccessTokenInput,
   MultiremiAccessToken,
@@ -37,6 +37,7 @@ export class AccessTokensRepo {
   async createAccessToken(
     input: CreateAccessTokenInput,
     beforeInsert?: () => void,
+    scopes: string[] = [],
   ): Promise<MultiremiCreatedAccessToken> {
     const name = input.name?.trim();
     if (!name) throw new Error("Token name is required");
@@ -60,9 +61,9 @@ export class AccessTokensRepo {
       beforeInsert?.();
       this.db.run(
         `INSERT INTO multiremi_access_tokens (
-          id, workspace_id, daemon_id, task_id, agent_id, user_id, name, type, purpose, token_hash, token_prefix, expires_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, workspaceId, daemonId, taskId, agentId, userId, name, type, purpose, hash, token.slice(0, 12), expiresAt, now],
+          id, workspace_id, daemon_id, task_id, agent_id, user_id, name, type, purpose, scopes, token_hash, token_prefix, expires_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, workspaceId, daemonId, taskId, agentId, userId, name, type, purpose, toJson(scopes), hash, token.slice(0, 12), expiresAt, now],
       );
       return {
         ...this.getAccessToken(id)!,
@@ -75,6 +76,7 @@ export class AccessTokensRepo {
   async createTaskAccessToken(
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,
+    scopes: string[] = [],
   ): Promise<MultiremiCreatedAccessToken> {
     return this.createAccessToken({
       workspaceId: task.workspaceId,
@@ -85,7 +87,7 @@ export class AccessTokensRepo {
       type: "task",
       purpose: "task",
       expiresInDays: 1,
-    });
+    }, undefined, scopes);
   }
 
   listAccessTokens(workspaceId?: string | null): MultiremiAccessToken[] {
@@ -260,6 +262,7 @@ function toAccessToken(row: Row): MultiremiAccessToken {
       String(row.purpose ?? "personal"),
       normalizeAccessTokenType(String(row.type ?? "pat")),
     ),
+    scopes: parseJson<string[]>(row.scopes, []),
     tokenPrefix: String(row.token_prefix ?? ""),
     lastUsedAt: nullableString(row.last_used_at),
     expiresAt: nullableString(row.expires_at),

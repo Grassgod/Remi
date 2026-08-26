@@ -19,6 +19,7 @@ import { type StoreContext, toInboxItem, toIssueComment } from "@multiremi/store
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
+import { INBOX_LEDGER_TYPES } from "@multiremi/contracts";
 import type {
   AssignIssueInput,
   AssignIssueResult,
@@ -511,6 +512,17 @@ export class IssuesRepo {
       id,
     ]);
     this.ctx.db.run("UPDATE multiremi_autopilot_runs SET issue_id = NULL WHERE issue_id = ?", [id]);
+    // Detach ledger rows first so the delete below only sweeps the actionable
+    // notifications left behind. An empty registry would render `IN ()`, which
+    // Postgres rejects — skipping the update then means "no ledger to keep".
+    if (INBOX_LEDGER_TYPES.length > 0) {
+      const inboxLedgerPlaceholders = INBOX_LEDGER_TYPES.map(() => "?").join(", ");
+      this.ctx.db.run(
+        `UPDATE multiremi_inbox_items SET issue_id = NULL WHERE issue_id = ? AND type IN (${inboxLedgerPlaceholders})`,
+        [id, ...INBOX_LEDGER_TYPES],
+      );
+    }
+    this.ctx.db.run("DELETE FROM multiremi_inbox_items WHERE issue_id = ?", [id]);
     // PostgreSQL intentionally does not rely on FK cascades and SQLite tests
     // may run with them disabled. Remove the machine-local checkout record
     // and archive control-plane rows explicitly so deleting an Issue cannot
@@ -1226,6 +1238,7 @@ export class IssuesRepo {
         issueId: id,
         memberId: assigneeId,
         type: "issue_assigned",
+        severity: "info",
         title: `${current.key} assigned to you`,
         body: current.title,
         actorType: "system",
@@ -1396,7 +1409,6 @@ export class IssuesRepo {
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
     this.notifySubscribedMembers(
       issue,
-      "comment_created",
       "New comment",
       body,
       authorType,
@@ -2511,9 +2523,37 @@ export class IssuesRepo {
     }
   }
 
+  /**
+   * Disclose a supervisor's cross-task disposal to the patrol issue's subscribers.
+   * The audit comment itself is agent-authored, and agent comments only route to
+   * the inbox while the issue is workbench-visible (INBOX_ROUTING R2) — so the
+   * disclosure gets its own ledger type rather than riding on `comment_created`.
+   */
+  notifyOrganizerAction(
+    issue: MultiremiIssue,
+    body: string,
+    actorType: string,
+    actorId: string | null,
+    details: unknown | null = null,
+  ): void {
+    for (const subscriber of this.listIssueSubscribers(issue.id)) {
+      if (subscriber.userType !== "member") continue;
+      this.ctx.createInboxItem({
+        issueId: issue.id,
+        memberId: subscriber.userId,
+        type: "organizer_action",
+        title: `${issue.key}: Organizer action`,
+        body,
+        actorType,
+        actorId,
+        details,
+        issueStatus: issue.status,
+      });
+    }
+  }
+
   private notifySubscribedMembers(
     issue: MultiremiIssue,
-    type: string,
     title: string,
     body: string | null,
     actorType: string,
@@ -2530,12 +2570,13 @@ export class IssuesRepo {
       this.ctx.createInboxItem({
         issueId: issue.id,
         memberId: subscriber.userId,
-        type,
+        type: "comment_created",
         title: `${issue.key}: ${title}`,
         body,
         actorType,
         actorId,
         details,
+        issueStatus: issue.status,
       });
     }
   }

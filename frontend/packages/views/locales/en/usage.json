@@ -9,7 +9,7 @@
   "kpi": {
     "cost_label": "Cost · {{days}}D",
     "tokens_label": "Tokens · {{days}}D",
-    "tokens_hint": "Input {{input}} · Output {{output}}",
+    "tokens_hint": "Input {{input}} · Output {{output}} · Cache read {{cacheRead}} · Cache write {{cacheWrite}}",
     "run_time_label": "Run time · {{days}}D",
     "run_time_hint": "Across {{tasks}} tasks",
     "tasks_label": "Tasks · {{days}}D",
@@ -17,7 +17,9 @@
     "unavailable_hint": "Failed to load — value unavailable, not zero",
     "not_collected": "{{tasks}} tasks ran, but no token usage was recorded",
     "no_tasks": "No tasks in this window",
-    "cost_unpriced": "No pricing for the models used — cost unavailable"
+    "cost_unpriced": "No pricing for the models used — cost unavailable",
+    "cost_total_only": "Only total tokens were recorded — cost unavailable",
+    "total_only_notice": "{{tokens}} historical tokens have totals only, without input/output splits, and are excluded from cost totals."
   },
   "dim": {
     "label": "Dimension",
@@ -37,7 +39,9 @@
     "no_tasks": "No tasks in this window.",
     "load_failed": "This series failed to load — values are unavailable, not zero.",
     "not_collected": "Tasks ran in this window, but no token usage was recorded.",
-    "cost_unpriced": "Tokens recorded, but the models used have no pricing — cost can't be derived."
+    "cost_unpriced": "Tokens recorded, but the models used have no pricing — cost can't be derived.",
+    "cost_total_only": "Only total tokens were recorded, without input/output splits — cost can't be derived.",
+    "total_only_legend": "Total only"
   },
   "weekly": {
     "title_cost": "Weekly cost",
@@ -55,7 +59,8 @@
     "header_time": "Time",
     "header_tasks": "Tasks",
     "no_data": "No agent activity in this window.",
-    "load_failed": "Leaderboard data failed to load — values are unavailable, not zero."
+    "load_failed": "Leaderboard data failed to load — values are unavailable, not zero.",
+    "total_only_tooltip": "{{tokens}} has totals only, without input/output splits, and is excluded from cost."
   },
   "empty": {
     "title": "No usage yet",

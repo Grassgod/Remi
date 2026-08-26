@@ -136,6 +136,47 @@ describe("resolveProgressSummaryConfig", () => {
     });
   });
 
+  it("builds OpenAI config from a Codex relay fragment and provider key", async () => {
+    const resolved = await resolveTaskProgressSummaryConfig(
+      { OPENAI_API_KEY: "provider-key" },
+      {},
+      async () => {
+        throw new Error("auth fallback should not be read");
+      },
+      undefined,
+      {
+        engine: "codex",
+        fragment: [
+          'model_provider = "OpenAI"',
+          "[model_providers.OpenAI]",
+          'base_url = "https://codex-relay.example/v1/"',
+          'wire_api = "responses"',
+          "requires_openai_auth = true",
+        ].join("\n"),
+      },
+    );
+
+    expect(resolved.openAi).toEqual({
+      baseUrl: "https://codex-relay.example/v1",
+      model: "gpt-5.6-luna",
+      apiKey: "provider-key",
+    });
+  });
+
+  it("places the relay URL between the dedicated override and Anthropic fallback", () => {
+    const defaults = {
+      providerEnv: {
+        OPENAI_API_KEY: "provider-key",
+        ANTHROPIC_BASE_URL: "https://anthropic-fallback.example",
+      },
+      relayBaseUrl: "https://relay.example/v1",
+    };
+    expect(resolveProgressSummaryConfig({}, defaults).openAi?.baseUrl).toBe("https://relay.example/v1");
+    expect(resolveProgressSummaryConfig({
+      MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL: "https://dedicated.example/v1",
+    }, defaults).openAi?.baseUrl).toBe("https://dedicated.example/v1");
+  });
+
   it("falls back to $HOME/.codex/auth.json when no OpenAI env key exists", async () => {
     const home = await mkdtemp(join(tmpdir(), "multiremi-progress-home-"));
     try {

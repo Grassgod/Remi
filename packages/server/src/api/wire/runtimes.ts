@@ -307,6 +307,7 @@ export function runtimeUsageDailyCompatibilityResponse(row: {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  totalTokens: number;
 }): Record<string, unknown> {
   return {
     runtime_id: row.runtimeId ?? null,
@@ -317,6 +318,11 @@ export function runtimeUsageDailyCompatibilityResponse(row: {
     output_tokens: row.outputTokens,
     cache_read_tokens: row.cacheReadTokens,
     cache_write_tokens: row.cacheWriteTokens,
+    // Pre-0.2.49 daemons only reported the context-occupancy total; keep it on
+    // the wire so historical rows (splits all zero) remain distinguishable
+    // from genuinely empty days. Mirrors `dashboardUsageDailyWire`, which reads
+    // the same `listUsageDaily` rollup.
+    total_tokens: row.totalTokens,
   };
 }
 
@@ -333,6 +339,7 @@ export function runtimeUsageByAgentCompatibilityResponse(row: {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  totalTokens: number;
   taskCount: number;
 }): Record<string, unknown> {
   return {
@@ -342,6 +349,9 @@ export function runtimeUsageByAgentCompatibilityResponse(row: {
     output_tokens: row.outputTokens,
     cache_read_tokens: row.cacheReadTokens,
     cache_write_tokens: row.cacheWriteTokens,
+    // Same pre-0.2.49 total-only history as the daily rollup; see
+    // `runtimeUsageDailyCompatibilityResponse` and `dashboardUsageByAgentWire`.
+    total_tokens: row.totalTokens,
     task_count: row.taskCount,
   };
 }

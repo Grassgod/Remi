@@ -14,6 +14,9 @@ describe("paths.workspace(slug)", () => {
     expect(ws.inboxIssue("abc-123", "session-1")).toBe(
       "/acme/inbox?issue=abc-123&session=session-1",
     );
+    expect(ws.inboxItem("item-123", "session-1")).toBe(
+      "/acme/inbox?item=item-123&session=session-1",
+    );
     expect(ws.workbenchIssue("abc-123", "session-1")).toBe(
       "/acme/workbench?issue=abc-123&session=session-1",
     );
@@ -32,6 +35,9 @@ describe("paths.workspace(slug)", () => {
     expect(ws.inbox()).toBe("/acme/inbox");
     expect(ws.myIssues()).toBe("/acme/my-issues");
     expect(ws.runtimes()).toBe("/acme/runtimes");
+    expect(ws.runtimeMachine("local:daemon-1")).toBe(
+      "/acme/runtimes?machine=local%3Adaemon-1",
+    );
     expect(ws.plugins()).toBe("/acme/plugins");
     expect(ws.pluginDetail("plugin_123")).toBe("/acme/plugins/plugin_123");
     expect(ws.skills()).toBe("/acme/skills");
@@ -50,11 +56,17 @@ describe("paths.workspace(slug)", () => {
     expect(ws.inboxIssue("id with space", "session with space")).toBe(
       "/acme/inbox?issue=id%20with%20space&session=session%20with%20space",
     );
+    expect(ws.inboxItem("item with space", "session with space")).toBe(
+      "/acme/inbox?item=item%20with%20space&session=session%20with%20space",
+    );
     expect(ws.workbenchIssue("id with space", "session with space")).toBe(
       "/acme/workbench?issue=id%20with%20space&session=session%20with%20space",
     );
     expect(ws.pluginDetail("plugin with space")).toBe(
       "/acme/plugins/plugin%20with%20space",
+    );
+    expect(ws.runtimeMachine("machine with space")).toBe(
+      "/acme/runtimes?machine=machine%20with%20space",
     );
   });
 

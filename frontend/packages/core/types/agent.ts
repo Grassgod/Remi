@@ -520,6 +520,10 @@ export interface RuntimeUsage {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  /** Context tokens consumed, from daemons that reported no input/output
+   *  split (older servers omit it). Counts toward token volume but can
+   *  never be priced — see `getTotalOnlyTokens` in views/runtimes/utils. */
+  total_tokens?: number;
 }
 
 export interface RuntimeHourlyActivity {
@@ -582,6 +586,7 @@ export interface DashboardUsageDaily {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  total_tokens: number;
   task_count: number;
 }
 
@@ -595,6 +600,7 @@ export interface DashboardUsageByAgent {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  total_tokens: number;
   task_count: number;
 }
 

@@ -82,6 +82,84 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(activityTypes.at(-1)).toBe("comment_created");
   });
 
+  it("records completed and failed run outcomes for member creators and agent owners", () => {
+    const store = createStore();
+    const creator = store.createWorkspaceMember({ id: "mem_run_creator", name: "Run Creator" });
+    const owner = store.createWorkspaceMember({ id: "mem_run_owner", name: "Agent Owner" });
+    const runtime = store.registerRuntime({
+      name: "Run notification runtime",
+      provider: "codex",
+      ownerId: owner.id,
+    });
+    const agent = store.createAgent({
+      name: "Run notification agent",
+      provider: "codex",
+      runtimeId: runtime.id,
+      ownerId: owner.id,
+    });
+    const completedAutopilot = store.createAutopilot({
+      title: "Daily summary",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "member",
+      createdById: creator.id,
+    });
+    const failedAutopilot = store.createAutopilot({
+      title: "Dependency audit",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "agent",
+      createdById: agent.id,
+    });
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    store.onWorkspaceEvent((event) => events.push(event));
+
+    const completedRun = store.runAutopilot(completedAutopilot.id, { source: "schedule" });
+    expect(store.claimTask(runtime.id)?.id).toBe(completedRun.taskId!);
+    store.startTask(completedRun.taskId!);
+    store.completeTask(completedRun.taskId!, { output: "Published 12 project updates.\nNo blockers." });
+
+    const failedRun = store.runAutopilot(failedAutopilot.id, { source: "api" });
+    expect(store.claimTask(runtime.id)?.id).toBe(failedRun.taskId!);
+    store.startTask(failedRun.taskId!);
+    store.failTask(failedRun.taskId!, { error: "Dependency service unavailable", failureReason: "agent_error" });
+
+    const completed = store.listInboxItems(creator.id).find((item) => item.type === "autopilot_run_completed")!;
+    expect(completed.memberId).toBe(creator.id);
+    expect(completed.severity).toBe("info");
+    expect(completed.title).toBe("Daily summary completed");
+    expect(completed.body).toContain("Trigger: schedule");
+    expect(completed.body).toContain("Published 12 project updates. No blockers.");
+    expect(completed.details).toMatchObject({
+      autopilot_id: completedAutopilot.id,
+      autopilot_title: "Daily summary",
+      run_id: completedRun.id,
+      task_id: completedRun.taskId,
+      trigger: "schedule",
+      duration_seconds: expect.any(Number),
+      issue_id: null,
+    });
+
+    const failed = store.listInboxItems(owner.id).find((item) => item.type === "autopilot_run_failed")!;
+    expect(failed.memberId).toBe(owner.id);
+    expect(failed.severity).toBe("attention");
+    expect(failed.title).toBe("Dependency audit failed");
+    expect(failed.body).toContain("Trigger: api");
+    expect(failed.body).toContain("Dependency service unavailable");
+    expect(failed.details).toMatchObject({
+      autopilot_id: failedAutopilot.id,
+      autopilot_title: "Dependency audit",
+      run_id: failedRun.id,
+      task_id: failedRun.taskId,
+      trigger: "api",
+      duration_seconds: expect.any(Number),
+      issue_id: null,
+    });
+
+    const inboxEvents = events.filter((event) => event.type === "inbox:new");
+    expect(inboxEvents).toHaveLength(2);
+  });
+
   it("includes autopilot run ids in daemon task payloads", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Autopilot Claude", provider: "claude" });

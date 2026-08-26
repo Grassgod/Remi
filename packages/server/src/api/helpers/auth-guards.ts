@@ -55,6 +55,7 @@ export type TaskTokenHardDenyCategory =
   | "access_credentials"
   | "workspace_identity"
   | "workspace_lifecycle"
+  | "privilege_configuration"
   | "billing"
   | "platform_maintenance"
   | "daemon_identity";
@@ -99,6 +100,10 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     || (/^\/api\/workspaces\/[^/]+$/.test(path) && method === "DELETE")
     || (/^\/api\/workspaces\/[^/]+\/leave$/.test(path) && method === "POST")) {
     return "workspace_lifecycle";
+  }
+  if ((/^\/api\/agents\/[^/]+\/supervisor$/.test(path) && method === "PUT")
+    || (/^\/api\/workspaces\/[^/]+\/organizer$/.test(path) && method === "PUT")) {
+    return "privilege_configuration";
   }
   if (path === "/api/cloud-billing" || path.startsWith("/api/cloud-billing/")) return "billing";
   const taskAllowedPlatformRequest = (method === "GET" && path === "/api/multiremi/platform/status")
@@ -429,6 +434,18 @@ export function requireWorkspaceAdmin(c: Context, store: MultiremiStore, workspa
   const role = currentWorkspaceRoleStrict(c, store, workspaceId);
   if (role === "owner" || role === "admin") return null;
   return c.json({ error: "insufficient permissions" }, 403);
+}
+
+/** Sensitive privilege configuration must never be delegated to an agent task. */
+export function requireHumanWorkspaceAdmin(c: Context, store: MultiremiStore, workspaceId: string): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type === "task" || token?.type === "daemon") {
+    return c.json({
+      error: "this endpoint requires a human workspace administrator",
+      code: "human_admin_required",
+    }, 403);
+  }
+  return requireWorkspaceAdmin(c, store, workspaceId);
 }
 
 export function loadCurrentWorkspaceMember(

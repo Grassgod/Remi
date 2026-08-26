@@ -35,6 +35,7 @@ export function agentCompatibilityResponse(store: MultiremiStore, agent: Multire
     max_concurrent_tasks: agent.maxConcurrentTasks,
     model: agent.model ?? "",
     thinking_level: agent.thinkingLevel ?? "",
+    supervisor: agent.supervisor === true,
     owner_id: agent.ownerId,
     skills: store.listAgentSkills(agent.id, { includeFiles: false }).map(agentSkillCompatibilitySummary),
     created_at: agent.createdAt,

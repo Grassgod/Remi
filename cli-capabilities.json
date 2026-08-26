@@ -301,6 +301,39 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.organizer.get": {
+      "command": "remi workspace organizer get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.organizer.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.organizer.update": {
+      "command": "remi workspace organizer update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.organizer.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.ssh-mesh.get": {
       "command": "remi workspace ssh-mesh get",
       "aliases": [],
@@ -3552,6 +3585,22 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "task.redispatch": {
+      "command": "remi task redispatch",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "task.redispatch",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "task.steer": {
       "command": "remi task steer",
       "aliases": [],
@@ -3596,6 +3645,23 @@
         "task"
       ],
       "capability": "task.message.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "task.inspect": {
+      "command": "remi task inspect",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.inspect",
       "mutation": "read",
       "output": [
         "table",
@@ -3733,6 +3799,22 @@
         "task"
       ],
       "capability": "agent.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "agent.supervisor.set": {
+      "command": "remi agent supervisor set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.supervisor.set",
       "mutation": "write",
       "output": [
         "table",
@@ -6200,6 +6282,104 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "notification.channel.list": {
+      "command": "remi notification channel list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.channel.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.channel.create": {
+      "command": "remi notification channel create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.channel.update": {
+      "command": "remi notification channel update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.channel.delete": {
+      "command": "remi notification channel delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.delivery.list": {
+      "command": "remi notification delivery list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.delivery.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.delivery.retry": {
+      "command": "remi notification delivery retry",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.delivery.retry",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "pin.group": {
       "command": "remi pin",
       "aliases": [],
@@ -7551,6 +7731,9 @@
     "DELETE /api/multiremi/members/:id": {
       "command": "member.delete"
     },
+    "DELETE /api/multiremi/notification-channels/:id": {
+      "command": "notification.channel.delete"
+    },
     "DELETE /api/multiremi/pins/:itemType/:itemId": {
       "command": "pin.delete"
     },
@@ -8112,6 +8295,12 @@
     "GET /api/multiremi/models": {
       "command": "runtime.model.catalog"
     },
+    "GET /api/multiremi/notification-channels": {
+      "command": "notification.channel.list"
+    },
+    "GET /api/multiremi/notification-deliveries": {
+      "command": "notification.delivery.list"
+    },
     "GET /api/multiremi/notification-preferences": {
       "command": "notification.get"
     },
@@ -8204,6 +8393,9 @@
     },
     "GET /api/multiremi/tasks/:id/human-requests": {
       "command": "task.request.list"
+    },
+    "GET /api/multiremi/tasks/:id/inspection": {
+      "command": "task.inspect"
     },
     "GET /api/multiremi/tasks/:id/messages": {
       "command": "task.message.list"
@@ -8345,6 +8537,9 @@
     "GET /api/tasks/:id/human-requests": {
       "command": "task.request.list"
     },
+    "GET /api/tasks/:id/inspection": {
+      "command": "task.inspect"
+    },
     "GET /api/tasks/:id/steer": {
       "command": "task.steer.list"
     },
@@ -8380,6 +8575,9 @@
     },
     "GET /api/workspaces/:id/members": {
       "command": "member.list"
+    },
+    "GET /api/workspaces/:id/organizer": {
+      "command": "workspace.organizer.get"
     },
     "GET /api/workspaces/:id/prompt-template": {
       "command": "workspace.prompt.template"
@@ -8507,6 +8705,9 @@
     },
     "PATCH /api/multiremi/members/:id": {
       "command": "member.update"
+    },
+    "PATCH /api/multiremi/notification-channels/:id": {
+      "command": "notification.channel.update"
     },
     "PATCH /api/multiremi/platform/settings": {
       "command": "platform.settings.update"
@@ -9057,6 +9258,12 @@
     "POST /api/multiremi/members": {
       "command": "member.create"
     },
+    "POST /api/multiremi/notification-channels": {
+      "command": "notification.channel.create"
+    },
+    "POST /api/multiremi/notification-deliveries/:id/retry": {
+      "command": "notification.delivery.retry"
+    },
     "POST /api/multiremi/pins": {
       "command": "pin.create"
     },
@@ -9118,6 +9325,9 @@
     },
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond": {
       "command": "task.request.respond"
+    },
+    "POST /api/multiremi/tasks/:id/redispatch": {
+      "command": "task.redispatch"
     },
     "POST /api/multiremi/tasks/:id/steer": {
       "command": "task.steer"
@@ -9218,6 +9428,9 @@
     "POST /api/tasks/:id/human-requests/:requestId/respond": {
       "command": "task.request.respond"
     },
+    "POST /api/tasks/:id/redispatch": {
+      "command": "task.redispatch"
+    },
     "POST /api/tasks/:id/steer": {
       "command": "task.steer"
     },
@@ -9316,6 +9529,9 @@
     "PUT /api/agents/:id/skills": {
       "command": "agent.skill.set"
     },
+    "PUT /api/agents/:id/supervisor": {
+      "command": "agent.supervisor.set"
+    },
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret": {
       "command": "autopilot.trigger.set-secret"
     },
@@ -9403,6 +9619,9 @@
     },
     "PUT /api/workspaces/:id/issue-archive": {
       "command": "workspace.issue-archive.update"
+    },
+    "PUT /api/workspaces/:id/organizer": {
+      "command": "workspace.organizer.update"
     },
     "PUT /api/workspaces/:id/prompts": {
       "command": "workspace.prompt.update"

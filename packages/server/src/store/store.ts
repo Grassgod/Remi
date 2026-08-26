@@ -4,6 +4,17 @@ import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
+import {
+  NotificationChannelsRepo,
+  type CreateNotificationChannelInput,
+  type NotificationVisibilityScope,
+  type NotificationDeliveryContext,
+  type UpdateNotificationChannelInput,
+} from "@multiremi/store/repos/notification-channels-repo.js";
+import {
+  OutboundNotificationDispatcher,
+  type NotificationSenderRegistry,
+} from "@multiremi/notifications/outbound-dispatcher.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
 import { PlatformOperationsRepo } from "@multiremi/store/repos/platform-operations-repo.js";
 import { PlatformMaintenanceRepo } from "@multiremi/store/repos/platform-maintenance-repo.js";
@@ -57,6 +68,7 @@ import {
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
+import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
 import {
   AutopilotsRepo,
   type MultiremiAutopilotFailureThresholdCandidate,
@@ -190,6 +202,11 @@ import type {
   MultiremiLabel,
   MultiremiNotificationPreferences,
   MultiremiNotificationPreferenceResponse,
+  MultiremiNotificationChannel,
+  MultiremiNotificationDelivery,
+  MultiremiNotificationDeliveryStatus,
+  MultiremiOrganizerAction,
+  MultiremiOrganizerActionKind,
   MultiremiPinnedItem,
   MultiremiIssueReaction,
   MultiremiIssueSubscriber,
@@ -336,6 +353,8 @@ export class MultiremiStore {
   private feedback: FeedbackRepo;
   private accessTokens: AccessTokensRepo;
   private issueShares: IssueSharesRepo;
+  private notificationChannels: NotificationChannelsRepo;
+  private notificationDispatcher: OutboundNotificationDispatcher;
   private cloudNodes: CloudRuntimeNodesRepo;
   private platformOperations: PlatformOperationsRepo;
   private platformMaintenance: PlatformMaintenanceRepo;
@@ -360,12 +379,31 @@ export class MultiremiStore {
   private autopilots: AutopilotsRepo;
   private tasks: TasksRepo;
 
-  constructor(db?: SqlDatabase) {
+  constructor(db?: SqlDatabase, options: {
+    notificationSenders?: NotificationSenderRegistry;
+    notificationMaxAttempts?: number;
+    notificationRetryBaseDelayMs?: number;
+    notificationSweepIntervalMs?: number;
+    notificationLeaseMs?: number;
+    notificationSendTimeoutMs?: number;
+    publicUrl?: string | null;
+  } = {}) {
     this.db = db ?? openMultiremiDatabase();
     this.ctx = new StoreContext(this.db, () => this);
     this.feedback = new FeedbackRepo(this.db);
     this.accessTokens = new AccessTokensRepo(this.db);
     this.issueShares = new IssueSharesRepo(this.db);
+    this.notificationChannels = new NotificationChannelsRepo(this.ctx);
+    this.notificationDispatcher = new OutboundNotificationDispatcher({
+      store: this,
+      senders: options.notificationSenders,
+      maxAttempts: options.notificationMaxAttempts,
+      retryBaseDelayMs: options.notificationRetryBaseDelayMs,
+      sweepIntervalMs: options.notificationSweepIntervalMs,
+      leaseMs: options.notificationLeaseMs,
+      sendTimeoutMs: options.notificationSendTimeoutMs,
+      publicUrl: options.publicUrl,
+    });
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
     this.platformOperations = new PlatformOperationsRepo(this.db);
     this.platformMaintenance = new PlatformMaintenanceRepo(this.db);
@@ -632,6 +670,18 @@ runMigrations(this.db);
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
     return this.agents.updateAgent(id, input);
+  }
+
+  setAgentSupervisor(id: string, supervisor: boolean): MultiremiAgent {
+    return this.db.transaction(() => {
+      const current = this.agents.getAgent(id);
+      if (!current) throw new Error(`Agent not found: ${id}`);
+      const agent = this.agents.setAgentSupervisor(id, supervisor);
+      if (current.supervisor !== agent.supervisor) {
+        for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
+      }
+      return agent;
+    })();
   }
 
   archiveAgent(id: string): MultiremiAgent {
@@ -1177,6 +1227,123 @@ runMigrations(this.db);
     return this.workspaces.updateNotificationPreferences(input);
   }
 
+  getNotificationChannel(id: string): MultiremiNotificationChannel | null {
+    return this.notificationChannels.getChannel(id);
+  }
+
+  listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
+    return this.notificationChannels.listChannels(workspaceId);
+  }
+
+  listNotificationChannelsInScope(
+    workspaceId: string,
+    scope: NotificationVisibilityScope,
+  ): MultiremiNotificationChannel[] {
+    return this.notificationChannels.listChannelsInScope(workspaceId, scope);
+  }
+
+  createNotificationChannel(input: CreateNotificationChannelInput): MultiremiNotificationChannel {
+    return this.notificationChannels.createChannel(input);
+  }
+
+  updateNotificationChannel(
+    id: string,
+    input: UpdateNotificationChannelInput,
+  ): MultiremiNotificationChannel | null {
+    return this.notificationChannels.updateChannel(id, input);
+  }
+
+  deleteNotificationChannel(id: string): boolean {
+    return this.notificationChannels.deleteChannel(id);
+  }
+
+  matchNotificationRoutes(
+    workspaceId: string,
+    memberId: string,
+    inboxType: string,
+    severity: string,
+  ): MultiremiNotificationChannel[] {
+    return this.notificationChannels.matchRoutes(workspaceId, memberId, inboxType, severity);
+  }
+
+  recordPendingNotificationDelivery(
+    item: MultiremiInboxItem,
+    channel: MultiremiNotificationChannel,
+  ): MultiremiNotificationDelivery {
+    return this.notificationChannels.recordPending(item, channel);
+  }
+
+  getNotificationDelivery(id: string): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.getDelivery(id);
+  }
+
+  getNotificationDeliveryContext(id: string): NotificationDeliveryContext | null {
+    return this.notificationChannels.getDeliveryContext(id);
+  }
+
+  listNotificationDeliveries(input: {
+    workspaceId: string;
+    status?: MultiremiNotificationDeliveryStatus | null;
+    limit?: number;
+    scope?: NotificationVisibilityScope;
+  }): MultiremiNotificationDelivery[] {
+    return this.notificationChannels.listDeliveries(input);
+  }
+
+  listPendingNotificationDeliveries(now: string, limit?: number): MultiremiNotificationDelivery[] {
+    return this.notificationChannels.listPendingDeliveries(now, limit);
+  }
+
+  claimNotificationDeliveryAttempt(
+    id: string,
+    expectedAttempts: number,
+    expectedClaimSeq: number,
+    maxAttempts: number,
+    claimedAt: string,
+    leasedUntil: string,
+  ): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.claimAttempt(
+      id,
+      expectedAttempts,
+      expectedClaimSeq,
+      maxAttempts,
+      claimedAt,
+      leasedUntil,
+    );
+  }
+
+  markNotificationDeliverySent(id: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markSent(id, expectedClaimSeq);
+  }
+
+  markNotificationDeliveryFailed(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markFailed(id, error, expectedClaimSeq);
+  }
+
+  recordNotificationDeliveryError(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.recordRetryableError(id, error, expectedClaimSeq);
+  }
+
+  resetNotificationDeliveryForRetry(id: string, retryAt: string): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.resetForRetry(id, retryAt);
+  }
+
+  dispatchNotificationDelivery(id: string): Promise<void> {
+    return this.notificationDispatcher.dispatch(id);
+  }
+
+  retryNotificationDelivery(id: string): MultiremiNotificationDelivery | null {
+    return this.notificationDispatcher.retry(id);
+  }
+
+  startNotificationDeliverySweeper(): void {
+    this.notificationDispatcher.start();
+  }
+
+  stopNotificationDeliverySweeper(): void {
+    this.notificationDispatcher.stop();
+  }
+
   createFeedback(input: CreateFeedbackInput): MultiremiFeedback {
     return this.feedback.createFeedback(input);
   }
@@ -1387,7 +1554,9 @@ runMigrations(this.db);
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,
   ): Promise<MultiremiCreatedAccessToken> {
-    return this.accessTokens.createTaskAccessToken(task, userId);
+    const agent = this.getAgent(task.agentId);
+    const scopes = agent?.supervisor ? ["organizer:supervisor"] : [];
+    return this.accessTokens.createTaskAccessToken(task, userId, scopes);
   }
 
   listAccessTokens(workspaceId?: string | null): MultiremiAccessToken[] {
@@ -3121,6 +3290,124 @@ runMigrations(this.db);
 
   consumeTaskSteerMessages(taskId: string, steerIds: string[]): MultiremiTaskSteerMessage[] {
     return this.tasks.consumeTaskSteerMessages(taskId, steerIds);
+  }
+
+  listOrganizerActionsForTask(taskId: string): MultiremiOrganizerAction[] {
+    return this.tasks.listOrganizerActionsForTask(taskId);
+  }
+
+  performOrganizerAction(input: {
+    supervisorTaskId: string;
+    supervisorAgentId: string;
+    targetTaskId: string;
+    action: MultiremiOrganizerActionKind;
+    reason: string;
+    content?: string | null;
+  }): {
+    task: MultiremiTask;
+    replacementTask: MultiremiTask | null;
+    message: MultiremiTaskSteerMessage | null;
+    audit: MultiremiOrganizerAction;
+    comment: MultiremiIssueComment;
+  } {
+    let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    const result = this.db.transaction(() => {
+      const supervisorTask = this.getTask(input.supervisorTaskId);
+      const supervisorAgent = this.getAgent(input.supervisorAgentId);
+      if (
+        !supervisorTask
+        || !supervisorAgent?.supervisor
+        || supervisorTask.agentId !== supervisorAgent.id
+        || supervisorTask.workspaceId !== supervisorAgent.workspaceId
+      ) {
+        throw new OrganizerActionError("organizer_supervisor_required", "a current supervisor task is required");
+      }
+      const target = this.getTask(input.targetTaskId);
+      if (!target || target.workspaceId !== supervisorTask.workspaceId) {
+        throw new OrganizerActionError("organizer_target_forbidden", "target task is outside the supervisor workspace");
+      }
+      if (target.id === supervisorTask.id) {
+        throw new OrganizerActionError("organizer_self_action_forbidden", "a supervisor cannot act on its own task");
+      }
+      const targetAgent = this.getAgent(target.agentId);
+      if (targetAgent?.supervisor) {
+        throw new OrganizerActionError("organizer_supervisor_target_forbidden", "a supervisor cannot act on another supervisor task");
+      }
+      const workspace = this.getWorkspace(supervisorTask.workspaceId);
+      if (readOrganizerMode(workspace) !== "act") {
+        throw new OrganizerActionError(
+          "organizer_report_only",
+          "cross-task actions are disabled while organizer.mode is report_only",
+        );
+      }
+      const reportIssue = supervisorTask.issueId ? this.getIssue(supervisorTask.issueId) : null;
+      if (!reportIssue || reportIssue.workspaceId !== supervisorTask.workspaceId) {
+        throw new OrganizerActionError(
+          "organizer_report_issue_required",
+          "the supervisor task must belong to a patrol issue so the action can be disclosed",
+          409,
+        );
+      }
+      const reason = input.reason.trim();
+      if (!reason) throw new OrganizerActionError("organizer_reason_required", "reason is required", 400);
+      if (reason.length > 2_000) throw new OrganizerActionError("organizer_reason_too_long", "reason must be at most 2000 characters", 400);
+
+      let task = target;
+      let replacementTask: MultiremiTask | null = null;
+      let message: MultiremiTaskSteerMessage | null = null;
+      if (input.action === "cancel") {
+        task = this.tasks.cancelTask(target.id);
+      } else if (input.action === "redispatch") {
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id);
+        task = redispatchResult.cancelled;
+        replacementTask = redispatchResult.replacement;
+      } else {
+        const content = String(input.content ?? "").trim();
+        if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
+        message = this.tasks.createTaskSteerMessage({
+          taskId: target.id,
+          kind: input.action,
+          content,
+          authorType: "agent",
+          authorId: supervisorAgent.id,
+        });
+      }
+      const audit = this.tasks.recordOrganizerAction({
+        workspaceId: target.workspaceId,
+        supervisorTaskId: supervisorTask.id,
+        supervisorAgentId: supervisorAgent.id,
+        targetTaskId: target.id,
+        targetIssueId: target.issueId,
+        replacementTaskId: replacementTask?.id ?? null,
+        reportIssueId: reportIssue.id,
+        action: input.action,
+        reason,
+      });
+      const comment = this.issues.createIssueComment(reportIssue.id, {
+        authorType: "agent",
+        authorId: supervisorAgent.id,
+        taskId: supervisorTask.id,
+        body: [
+          `Organizer action: ${input.action}`,
+          `Target task: ${target.id}`,
+          ...(target.issueId ? [`Target issue: ${target.issueId}`] : []),
+          ...(replacementTask ? [`Replacement task: ${replacementTask.id}`] : []),
+          `Criterion: ${reason}`,
+          `Audit record: ${audit.id}`,
+        ].join("\n"),
+      });
+      this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
+        organizer_action_id: audit.id,
+        action: input.action,
+        target_task_id: target.id,
+        target_issue_id: target.issueId,
+        replacement_task_id: replacementTask?.id ?? null,
+        comment_id: comment.id,
+      });
+      return { task, replacementTask, message, audit, comment };
+    })();
+    if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+    return result;
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {

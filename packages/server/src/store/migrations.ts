@@ -42,6 +42,7 @@ export function runMigrations(db: SqlDatabase): void {
       custom_args TEXT NOT NULL DEFAULT '[]',
       mcp_config TEXT,
       thinking_level TEXT,
+      supervisor INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -577,6 +578,7 @@ export function runMigrations(db: SqlDatabase): void {
       name TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'pat',
       purpose TEXT NOT NULL DEFAULT 'personal',
+      scopes TEXT NOT NULL DEFAULT '[]',
       token_hash TEXT NOT NULL UNIQUE,
       token_prefix TEXT NOT NULL,
       last_used_at TEXT,
@@ -587,6 +589,25 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_workspace ON multiremi_access_tokens(workspace_id, type);
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_hash ON multiremi_access_tokens(token_hash);
+
+    CREATE TABLE IF NOT EXISTS multiremi_organizer_actions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      supervisor_task_id TEXT NOT NULL,
+      supervisor_agent_id TEXT NOT NULL,
+      target_task_id TEXT NOT NULL,
+      target_issue_id TEXT,
+      replacement_task_id TEXT,
+      report_issue_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_target
+      ON multiremi_organizer_actions(target_task_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_supervisor
+      ON multiremi_organizer_actions(supervisor_task_id, created_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_issue_shares (
       id TEXT PRIMARY KEY,
@@ -860,6 +881,47 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_member ON multiremi_inbox_items(member_id, archived, read, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_notification_channels (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      member_id TEXT,
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      target TEXT NOT NULL,
+      event_types TEXT NOT NULL,
+      min_severity TEXT NOT NULL DEFAULT 'info',
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_channels_workspace
+      ON multiremi_notification_channels(workspace_id, enabled, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_notification_deliveries (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      inbox_item_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      channel_kind TEXT NOT NULL,
+      target_label TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      claim_seq INTEGER NOT NULL DEFAULT 0,
+      leased_until TEXT,
+      last_error TEXT,
+      last_attempt_at TEXT,
+      delivered_at TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(inbox_item_id) REFERENCES multiremi_inbox_items(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_deliveries_workspace_status
+      ON multiremi_notification_deliveries(workspace_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_deliveries_inbox
+      ON multiremi_notification_deliveries(inbox_item_id);
 
     CREATE TABLE IF NOT EXISTS multiremi_issue_labels (
       id TEXT PRIMARY KEY,
@@ -1804,6 +1866,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_agents", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_agents", "runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_agents", "max_concurrent_tasks INTEGER NOT NULL DEFAULT 6");
+  addColumnIfMissing(db, "multiremi_agents", "supervisor INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_squads", "avatar_url TEXT");
   addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");
   addColumnIfMissing(
@@ -1840,6 +1903,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "agent_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "user_id TEXT NOT NULL DEFAULT 'local'");
+  addColumnIfMissing(db, "multiremi_access_tokens", "scopes TEXT NOT NULL DEFAULT '[]'");
   const accessTokenPurposeAdded = addColumnIfMissing(
     db,
     "multiremi_access_tokens",
@@ -1933,6 +1997,18 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");
   addColumnIfMissing(db, "multiremi_inbox_items", "details TEXT");
+  addColumnIfMissing(db, "multiremi_notification_deliveries", "claim_seq INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_notification_deliveries", "leased_until TEXT");
+  // NULL member_id = workspace-level channel (admin managed); non-NULL = a single
+  // member's personal channel. Existing rows stay NULL, so channels created before
+  // this column keep their workspace-wide routing.
+  addColumnIfMissing(db, "multiremi_notification_channels", "member_id TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_deliveries_pending
+      ON multiremi_notification_deliveries(status, leased_until, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_channels_member
+      ON multiremi_notification_channels(workspace_id, member_id, enabled);
+  `);
   ensureInboxGenericSchema(db);
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");

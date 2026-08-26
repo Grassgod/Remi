@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
+import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -418,7 +419,9 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       bob.id,
       carol.id,
     ].sort());
-    expect(store.listInboxItems(bob.id).filter((item) => item.type === "comment_mention")).toHaveLength(1);
+    const mentions = store.listInboxItems(bob.id).filter((item) => item.type === "comment_mention");
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0]?.severity).toBe(INBOX_ROUTING.comment_mention?.severity);
     expect(store.listInboxItems(bob.id).filter((item) => item.type === "comment_created")).toHaveLength(0);
     expect(store.listInboxItems(alice.id).some((item) => item.type === "comment_mention")).toBe(true);
 
@@ -426,6 +429,31 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.markInboxItemRead(item.id).read).toBe(true);
     expect(store.archiveInboxItem(item.id).archived).toBe(true);
     expect(store.listInboxItems(bob.id).some((inboxItem) => inboxItem.id === item.id)).toBe(false);
+  });
+
+  it("routes comment notifications by workbench visibility and human authorship", () => {
+    const store = createStore();
+    const subscriber = store.createWorkspaceMember({ name: "Subscriber" });
+    const commenter = store.createWorkspaceMember({ name: "Commenter" });
+    const agent = store.createAgent({ name: "Comment agent", provider: "codex" });
+    const cases = [
+      { title: "Visible member", status: "in_progress" as const, authorType: "member", authorId: commenter.id },
+      { title: "Visible agent", status: "blocked" as const, authorType: "agent", authorId: agent.id },
+      { title: "Hidden member", status: "backlog" as const, authorType: "member", authorId: commenter.id },
+      { title: "Hidden agent", status: "done" as const, authorType: "agent", authorId: agent.id },
+    ];
+
+    for (const input of cases) {
+      const issue = store.createIssue({ title: input.title, status: input.status, createdBy: subscriber.id });
+      store.createIssueComment(issue.id, {
+        authorType: input.authorType,
+        authorId: input.authorId,
+        body: `${input.title} progress`,
+      });
+    }
+
+    const notifications = store.listInboxItems(subscriber.id).filter((item) => item.type === "comment_created");
+    expect(notifications.map((item) => item.body)).toEqual(["Hidden member progress"]);
   });
 
   it("honors notification preferences when creating inbox items", () => {
@@ -440,6 +468,42 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
 
     expect(store.getNotificationPreferences().preferences.assignments).toBe("muted");
     expect(store.listInboxItems(bob.id).filter((item) => item.type === "issue_assigned")).toHaveLength(0);
+  });
+
+  it("preserves ledger history and removes action notifications when deleting an issue", () => {
+    const store = createStore();
+    const member = store.createWorkspaceMember({ name: "Ledger owner" });
+    const issue = store.createIssue({ title: "Delete with history" });
+    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
+    const action = store.listInboxItems(member.id).find((item) => item.type === "issue_assigned")!;
+    const details = JSON.stringify({ issue_id: issue.id, run_id: "run-delete" });
+    db!.run(
+      `INSERT INTO multiremi_inbox_items (
+        id, workspace_id, issue_id, member_id, recipient_type, recipient_id,
+        severity, actor_type, actor_id, type, title, body, details, read, archived, created_at
+      ) SELECT ?, workspace_id, issue_id, member_id, recipient_type, recipient_id,
+        'attention', 'system', NULL, 'autopilot_run_failed', 'Run failed',
+        'Failed after 12s', ?, 0, 0, ?
+      FROM multiremi_inbox_items WHERE id = ?`,
+      ["inb-ledger-delete", details, "2026-08-25T10:00:00.000Z", action.id],
+    );
+
+    expect(store.deleteIssue(issue.id)).toBe(true);
+
+    const rows = db!.query(
+      "SELECT id, issue_id, type, details FROM multiremi_inbox_items WHERE member_id = ? ORDER BY id",
+    ).all(member.id) as Array<{ id: string; issue_id: string | null; type: string; details: string | null }>;
+    expect(rows).toEqual([{
+      id: "inb-ledger-delete",
+      issue_id: null,
+      type: "autopilot_run_failed",
+      details,
+    }]);
+    expect(store.listInboxItems(member.id)[0]).toMatchObject({
+      id: "inb-ledger-delete",
+      issueId: null,
+      details: { issue_id: issue.id, run_id: "run-delete" },
+    });
   });
 
   it("tracks comment threads, reactions, and attachments", () => {

@@ -74,6 +74,7 @@ vi.mock("@multiremi/core/agents", () => ({
 vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
     runtimes: () => "/runtimes",
+    runtimeMachine: (id: string) => `/runtimes?machine=${encodeURIComponent(id)}`,
     agentDetail: () => "/agents",
   }),
 }));
@@ -100,7 +101,14 @@ vi.mock("@multiremi/core/runtimes/mutations", () => ({
 // Stubbing ProviderLogo / UsageSection / UpdateSection avoids dragging in
 // chart libs and additional query keys we don't care about here.
 vi.mock("./provider-logo", () => ({ ProviderLogo: () => null }));
-vi.mock("./update-section", () => ({ UpdateSection: () => null }));
+vi.mock("./update-section", () => ({
+  UpdateSection: () => (
+    <div>
+      <button type="button">Update Agent</button>
+      <button type="button">Update ACP</button>
+    </div>
+  ),
+}));
 vi.mock("./usage-section", () => ({ UsageSection: () => null }));
 vi.mock("./runtime-plugins-tab", () => ({
   RuntimePluginsTab: () => <div>runtime-plugins-tab</div>,
@@ -112,7 +120,9 @@ vi.mock("../../agents/presence", () => ({
 }));
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
 vi.mock("../../navigation", () => ({
-  AppLink: () => null,
+  AppLink: ({ href, children }: { href: string; children: React.ReactNode }) => (
+    <a href={href}>{children}</a>
+  ),
   useNavigation: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
@@ -187,5 +197,28 @@ describe("RuntimeDetail visibility section", () => {
     expect(screen.getByRole("tabpanel")).toHaveTextContent(
       "runtime-plugins-tab",
     );
+  });
+
+  it("shows machine-shared CLI as read-only and keeps only provider update actions", () => {
+    renderDetail(
+      makeRuntime({
+        daemon_id: "daemon-1",
+        metadata: {
+          cli_version: "0.3.0",
+          agent_version: "1.2.3",
+          acp_version: "2.3.4",
+        },
+      }),
+    );
+
+    expect(screen.getByText("0.3.0")).toBeInTheDocument();
+    expect(screen.getByText("Shared by machine")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View machine" })).toHaveAttribute(
+      "href",
+      "/runtimes?machine=local%3Adaemon-1",
+    );
+    expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update ACP" })).toBeInTheDocument();
   });
 });

@@ -89,6 +89,7 @@ interface RegisteredPath {
 }
 
 const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
+  "agent.supervisor.set",
   "autopilot.trigger.rotate-token",
   "autopilot.trigger.set-secret",
   "daemon.retire",
@@ -97,6 +98,10 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
   "lark.binding.redeem",
   "lark.daemon.install",
   "lark.daemon.status",
+  "notification.channel.create",
+  "notification.channel.delete",
+  "notification.channel.update",
+  "notification.delivery.retry",
   "platform.local.update",
   "runtime.archive-agents-and-delete",
   "runtime.create",
@@ -110,6 +115,7 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
   "workspace.create",
   "workspace.delete",
   "workspace.leave",
+  "workspace.organizer.update",
   "workspace.relay.reveal",
   "workspace.ssh-mesh.rotate",
   "workspace.ssh-mesh.update",

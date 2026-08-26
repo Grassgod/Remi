@@ -24,6 +24,7 @@ import {
   safeRerunIssue,
   setIssueCommentCursorHeaders,
   splitQueryList,
+  supervisorTaskIdentity,
   withIssueCreateRequestContext,
 } from "../helpers.js";
 import {
@@ -88,6 +89,7 @@ import {
   MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS,
 } from "@multiremi/contracts/types.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
+import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 
 // The idempotent generated-issue replay (source_issue_id + same title, 200)
@@ -743,7 +745,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(taskCompatibilityResponse(result.task), 202);
   });
-  app.post("/api/issues/:id/tasks/:taskId/cancel", (c) => {
+  app.post("/api/issues/:id/tasks/:taskId/cancel", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const task = issue ? store.getTaskByRef(c.req.param("taskId"), { issueId: issue.id }) : null;
     if (!issue || !task || task.issueId !== issue.id) return c.json({ error: "task not found" }, 404);
@@ -751,6 +753,31 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
+    const taskToken = currentTaskAccessToken(c);
+    const supervisor = supervisorTaskIdentity(c, store);
+    if (supervisor && task.id === supervisor.task.id) {
+      return c.json({ error: "a supervisor cannot act on its own task", code: "organizer_self_action_forbidden" }, 403);
+    }
+    if (supervisor && taskToken?.taskId && task.id !== taskToken.taskId) {
+      const body = await readJson<{ reason?: string }>(c);
+      try {
+        const result = store.performOrganizerAction({
+          supervisorTaskId: supervisor.task.id,
+          supervisorAgentId: supervisor.agentId,
+          targetTaskId: task.id,
+          action: "cancel",
+          reason: cleanString(body.reason) ?? "",
+        });
+        return c.json({
+          ...taskCompatibilityResponse(result.task),
+          organizer_action: result.audit,
+          comment_id: result.comment.id,
+        });
+      } catch (error) {
+        if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
+        throw error;
+      }
+    }
     return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
   });
   app.post("/api/issues/:id/squad-evaluated", async (c) => {

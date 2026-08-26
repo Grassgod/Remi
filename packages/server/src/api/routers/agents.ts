@@ -16,9 +16,11 @@ import {
   readJson,
   readJsonStrict,
   recordAgentCreatedAnalytics,
+  requireHumanWorkspaceAdmin,
   requestedAgentWorkspaceId,
   resolveAgentRequestProvider,
   runtimeForAgentInput,
+  supervisorTaskIdentity,
   withAgentRequestContext,
   withAgentTemplateRequestContext,
   withAgentUpdateRequestContext,
@@ -26,6 +28,7 @@ import {
 import {
   agentCompatibilityResponse,
   agentEnvResponse,
+  currentTaskAccessToken,
   currentRequestUserId,
   skillCompatibilityErrorResponse,
   skillSummaryCompatibilityResponse,
@@ -248,6 +251,18 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     publishAgentLifecycleEvent(c, store, "agent:status", agent);
     return c.json(agentCompatibilityResponse(store, agent, c));
   });
+  app.put("/api/agents/:id/supervisor", async (c) => {
+    const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const denied = requireHumanWorkspaceAdmin(c, store, loaded.agent.workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ enabled?: boolean }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400);
+    const agent = store.setAgentSupervisor(loaded.agent.id, body.enabled);
+    publishAgentLifecycleEvent(c, store, "agent:status", agent);
+    return c.json(agentCompatibilityResponse(store, agent, c));
+  });
   app.post("/api/agents/:id/archive", (c) => {
     const loaded = loadAgentForCurrentManager(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
@@ -265,6 +280,17 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/agents/:id/cancel-tasks", (c) => {
     const loaded = loadAgentForCurrentManager(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const taskToken = currentTaskAccessToken(c);
+    const supervisor = supervisorTaskIdentity(c, store);
+    if (taskToken?.taskId && supervisor) {
+      const selfTarget = loaded.agent.id === supervisor.agentId;
+      return c.json({
+        error: selfTarget
+          ? "a supervisor cannot act on its own tasks"
+          : "supervisor bulk cancellation is forbidden; act on each task with an audit reason",
+        code: selfTarget ? "organizer_self_action_forbidden" : "organizer_bulk_action_forbidden",
+      }, 403);
+    }
     return c.json({ cancelled: store.cancelAgentTasks(loaded.agent.id) });
   });
   app.post("/api/multiremi/agents/from-template", async (c) => {

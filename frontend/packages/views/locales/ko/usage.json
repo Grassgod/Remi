@@ -9,7 +9,7 @@
   "kpi": {
     "cost_label": "비용 · {{days}}일",
     "tokens_label": "토큰 · {{days}}일",
-    "tokens_hint": "입력 {{input}} · 출력 {{output}}",
+    "tokens_hint": "입력 {{input}} · 출력 {{output}} · 캐시 읽기 {{cacheRead}} · 캐시 쓰기 {{cacheWrite}}",
     "run_time_label": "실행 시간 · {{days}}일",
     "run_time_hint": "작업 {{tasks}}개 기준",
     "tasks_label": "작업 · {{days}}일",
@@ -17,7 +17,9 @@
     "unavailable_hint": "불러오지 못해 값을 표시할 수 없습니다(0이 아닙니다)",
     "not_collected": "{{tasks}}개 작업이 실행되었지만 토큰 사용량이 기록되지 않았습니다",
     "no_tasks": "기간 내 작업 없음",
-    "cost_unpriced": "사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다"
+    "cost_unpriced": "사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다",
+    "cost_total_only": "토큰 총량만 기록되어 비용을 계산할 수 없습니다",
+    "total_only_notice": "과거 토큰 {{tokens}}개는 총량만 있고 입력/출력 구분이 없어 비용 합계에서 제외됩니다."
   },
   "dim": {
     "label": "단위",
@@ -37,7 +39,9 @@
     "no_tasks": "선택한 기간에 작업이 없습니다.",
     "load_failed": "이 데이터를 불러오지 못했습니다. 값은 0이 아니라 사용할 수 없는 상태입니다.",
     "not_collected": "기간 내 작업이 실행되었지만 토큰 사용량이 기록되지 않았습니다.",
-    "cost_unpriced": "토큰은 기록되었지만 사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다."
+    "cost_unpriced": "토큰은 기록되었지만 사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다.",
+    "cost_total_only": "토큰 총량만 기록되고 입력/출력 구분이 없어 비용을 계산할 수 없습니다.",
+    "total_only_legend": "총량만"
   },
   "weekly": {
     "title_cost": "주별 비용",
@@ -55,7 +59,8 @@
     "header_time": "시간",
     "header_tasks": "작업",
     "no_data": "이 기간에는 에이전트 활동이 없습니다.",
-    "load_failed": "리더보드 데이터를 불러오지 못했습니다. 값은 0이 아니라 사용할 수 없는 상태입니다."
+    "load_failed": "리더보드 데이터를 불러오지 못했습니다. 값은 0이 아니라 사용할 수 없는 상태입니다.",
+    "total_only_tooltip": "이 중 {{tokens}}개는 총량만 있고 입력/출력 구분이 없어 비용에서 제외됩니다."
   },
   "empty": {
     "title": "아직 사용량이 없습니다",

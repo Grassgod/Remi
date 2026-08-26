@@ -9,7 +9,7 @@
   "kpi": {
     "cost_label": "费用 · {{days}}天",
     "tokens_label": "Token · {{days}}天",
-    "tokens_hint": "输入 {{input}} · 输出 {{output}}",
+    "tokens_hint": "输入 {{input}} · 输出 {{output}} · 缓存读取 {{cacheRead}} · 缓存写入 {{cacheWrite}}",
     "run_time_label": "运行时长 · {{days}}天",
     "run_time_hint": "共 {{tasks}} 个任务",
     "tasks_label": "任务数 · {{days}}天",
@@ -17,7 +17,9 @@
     "unavailable_hint": "加载失败 · 数值不可用，并非 0",
     "not_collected": "区间内有 {{tasks}} 个任务，但未采集到 token 用量",
     "no_tasks": "区间内没有任务",
-    "cost_unpriced": "所用模型缺少定价，费用不可用"
+    "cost_unpriced": "所用模型缺少定价，费用不可用",
+    "cost_total_only": "仅记录了 token 总量，费用不可用",
+    "total_only_notice": "有 {{tokens}} 个历史 token 仅记录了总量，没有输入/输出拆分，未计入费用统计。"
   },
   "dim": {
     "label": "维度",
@@ -37,7 +39,9 @@
     "no_tasks": "所选时间范围内没有任务。",
     "load_failed": "该数据加载失败——数值不可用，并非 0。",
     "not_collected": "区间内有任务运行，但未采集到 token 用量。",
-    "cost_unpriced": "已记录 token，但所用模型缺少定价，无法折算费用。"
+    "cost_unpriced": "已记录 token，但所用模型缺少定价，无法折算费用。",
+    "cost_total_only": "仅记录了 token 总量，没有输入/输出拆分，无法折算费用。",
+    "total_only_legend": "仅总量"
   },
   "weekly": {
     "title_cost": "每周费用",
@@ -55,7 +59,8 @@
     "header_time": "运行时长",
     "header_tasks": "任务数",
     "no_data": "所选时间范围内暂无智能体活动。",
-    "load_failed": "排行榜数据加载失败——数值不可用，并非 0。"
+    "load_failed": "排行榜数据加载失败——数值不可用，并非 0。",
+    "total_only_tooltip": "其中 {{tokens}} 仅记录了总量，没有输入/输出拆分，未计入费用。"
   },
   "empty": {
     "title": "暂无消耗数据",

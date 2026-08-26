@@ -85,6 +85,7 @@ export interface MultiremiAgent {
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  supervisor?: boolean;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1380,6 +1381,35 @@ export interface MultiremiTaskMessage {
   createdAt: string;
 }
 
+export type MultiremiOrganizerActionKind = "steer" | "force_answer" | "cancel" | "redispatch";
+
+export interface MultiremiOrganizerAction {
+  id: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
+  createdAt: string;
+}
+
+export interface CreateOrganizerActionInput {
+  id?: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId?: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
+}
+
 export interface TaskUsageEntry {
   provider: string;
   model: string;
@@ -2199,6 +2229,42 @@ export interface MultiremiInboxItem {
   createdAt: string;
   created_at?: string;
   issue: MultiremiIssue | null;
+}
+
+export type MultiremiNotificationChannelKind = "inapp" | "feishu_group";
+export type MultiremiNotificationDeliveryStatus = "pending" | "sent" | "failed";
+
+export interface MultiremiNotificationChannel {
+  id: string;
+  workspaceId: string;
+  /** null = workspace-level channel (admin managed); otherwise the owning member id. */
+  memberId: string | null;
+  kind: MultiremiNotificationChannelKind;
+  name: string;
+  enabled: boolean;
+  target: { chatId: string };
+  eventTypes: string[];
+  minSeverity: string;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiNotificationDelivery {
+  id: string;
+  workspaceId: string;
+  inboxItemId: string;
+  channelId: string;
+  channelKind: MultiremiNotificationChannelKind;
+  targetLabel: string;
+  status: MultiremiNotificationDeliveryStatus;
+  attempts: number;
+  claimSeq: number;
+  leasedUntil: string | null;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+  deliveredAt: string | null;
+  createdAt: string;
 }
 
 export interface MultiremiIssueReaction {
@@ -3048,6 +3114,7 @@ export interface MultiremiAccessToken {
   name: string;
   type: MultiremiAccessTokenType;
   purpose: MultiremiAccessTokenPurpose;
+  scopes?: string[];
   tokenPrefix: string;
   lastUsedAt: string | null;
   expiresAt: string | null;

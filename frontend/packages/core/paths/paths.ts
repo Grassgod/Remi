@@ -25,6 +25,8 @@ function workspaceScoped(slug: string) {
       `${ws}/issues/${encode(id)}?session=${encode(sessionId)}`,
     inboxIssue: (id: string, sessionId?: string) =>
       `${ws}/inbox?issue=${encode(id)}${sessionId ? `&session=${encode(sessionId)}` : ""}`,
+    inboxItem: (id: string, sessionId?: string) =>
+      `${ws}/inbox?item=${encode(id)}${sessionId ? `&session=${encode(sessionId)}` : ""}`,
     workbenchIssue: (id: string, sessionId?: string) =>
       `${ws}/workbench?issue=${encode(id)}${sessionId ? `&session=${encode(sessionId)}` : ""}`,
     projects: () => `${ws}/projects`,
@@ -48,6 +50,7 @@ function workspaceScoped(slug: string) {
     myIssues: () => `${ws}/my-issues`,
     workbench: () => `${ws}/workbench`,
     runtimes: () => `${ws}/runtimes`,
+    runtimeMachine: (id: string) => `${ws}/runtimes?machine=${encode(id)}`,
     runtimeDetail: (id: string) => `${ws}/runtimes/${encode(id)}`,
     plugins: () => `${ws}/plugins`,
     pluginDetail: (id: string) => `${ws}/plugins/${encode(id)}`,

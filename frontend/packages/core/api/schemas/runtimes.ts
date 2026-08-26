@@ -210,6 +210,12 @@ const RuntimeUsageSchema = z.object({
   output_tokens: z.number(),
   cache_read_tokens: z.number(),
   cache_write_tokens: z.number(),
+  // Context-occupancy total from pre-0.2.49 daemons, which reported no
+  // input/output split. OPTIONAL on purpose: these endpoints parse with
+  // `parseStrictResponse`, so requiring it would hard-fail every server
+  // that doesn't emit it yet. Absent → the row contributes no total-only
+  // tokens, which is the honest reading of "we weren't told".
+  total_tokens: z.number().optional(),
 }).loose();
 
 export const RuntimeUsageListSchema = z.array(RuntimeUsageSchema);

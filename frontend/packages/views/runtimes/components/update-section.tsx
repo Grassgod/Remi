@@ -6,8 +6,22 @@ import {
   XCircle,
   ArrowUpCircle,
   Check,
+  MonitorCog,
 } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@multiremi/ui/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multiremi/ui/components/ui/tooltip";
 import { api } from "@multiremi/core/api";
 import type { RuntimeUpdateStatus } from "@multiremi/core/types";
 import { useT } from "../../i18n";
@@ -80,58 +94,78 @@ function useUpdateFlow(
   const [error, setError] = useState("");
   const [output, setOutput] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const runIdRef = useRef(0);
 
-  const cleanup = useCallback(() => {
+  const clearTimers = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    timeoutsRef.current.forEach(clearTimeout);
+    timeoutsRef.current = [];
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
+  // Invalidates the in-flight run on top of clearing live timers. A run still
+  // awaiting initiate() owns no timer yet, so clearing alone cannot stop it
+  // from installing an interval after this component unmounts (or after a
+  // newer run supersedes it) — the generation check below is what does.
+  const cancel = useCallback(() => {
+    runIdRef.current += 1;
+    clearTimers();
+  }, [clearTimers]);
+
+  useEffect(() => cancel, [cancel]);
+
+  const schedule = useCallback((fn: () => void, ms: number) => {
+    timeoutsRef.current.push(setTimeout(fn, ms));
+  }, []);
 
   const run = useCallback(
     async (initiate: () => Promise<{ id: string }>) => {
-      cleanup();
+      cancel();
+      const runId = runIdRef.current;
+      const stale = () => runIdRef.current !== runId;
       setStatus("pending");
       setError("");
       setOutput("");
       try {
         const update = await initiate();
+        if (stale()) return;
         pollRef.current = setInterval(async () => {
           try {
             const result = await api.getUpdateResult(runtimeId, update.id);
+            if (stale()) return;
             setStatus(result.status as RuntimeUpdateStatus);
             if (result.status === "completed") {
               setOutput(result.output ?? completedFallback);
-              cleanup();
+              clearTimers();
               // The daemon restarts + re-registers after the update, so the new
               // version lands a few seconds later. Refetch the runtime now and
               // again over the next ~20s to catch it without a manual reload.
               onRefresh();
-              [5000, 12000, 20000].forEach((ms) =>
-                setTimeout(onRefresh, ms),
-              );
+              [5000, 12000, 20000].forEach((ms) => schedule(onRefresh, ms));
               // Clear the completed pill after the row has had a chance to
               // refresh to the new version.
-              setTimeout(() => setStatus(null), 6000);
+              schedule(() => setStatus(null), 6000);
             } else if (
               result.status === "failed" ||
               result.status === "timeout"
             ) {
               setError(result.error ?? t(($) => $.update.unknown_error));
-              cleanup();
+              clearTimers();
             }
           } catch {
             // ignore poll errors
           }
         }, 2000);
       } catch {
+        if (stale()) return;
         setStatus("failed");
         setError(t(($) => $.update.initiate_failed));
       }
     },
-    [runtimeId, completedFallback, cleanup, t, onRefresh],
+    [runtimeId, completedFallback, cancel, clearTimers, schedule, t, onRefresh],
   );
 
   const active = status === "pending" || status === "running";
@@ -214,31 +248,19 @@ function UpdateRow({
 
 interface UpdateSectionProps {
   runtimeId: string;
-  currentVersion: string | null;
   agentVersion: string | null;
   acpVersion: string | null;
   isOnline: boolean;
-  /**
-   * Non-null when the daemon process was spawned by a managed launcher
-   * (e.g. "desktop" for the Electron app). In that case the CLI binary
-   * is shipped and upgraded by the launcher itself, so in-app self-update
-   * is disabled — upgrading would be clobbered on the next launch anyway.
-   */
-  launchedBy?: string | null;
 }
 
 export function UpdateSection({
   runtimeId,
-  currentVersion,
   agentVersion,
   acpVersion,
   isOnline,
-  launchedBy,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const qc = useQueryClient();
-  const isManaged = launchedBy === "desktop";
-  const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
   // Refetch the runtime list (which feeds this detail view) so the version
   // number refreshes once the daemon re-registers after an update.
@@ -246,59 +268,11 @@ export function UpdateSection({
     void qc.invalidateQueries({ queryKey: ["runtimes"] });
   }, [qc]);
 
-  const cliFlow = useUpdateFlow(runtimeId, "CLI updated", refresh);
   const agentFlow = useUpdateFlow(runtimeId, "Agent updated", refresh);
   const acpFlow = useUpdateFlow(runtimeId, "ACP bridge updated", refresh);
 
-  // Fetch latest CLI version on mount (only the CLI row gates its button on it).
-  useEffect(() => {
-    fetchLatestVersion().then(setLatestVersion);
-  }, []);
-
-  const hasCliUpdate =
-    !!currentVersion &&
-    !!latestVersion &&
-    !isManaged &&
-    isNewer(latestVersion, currentVersion);
-
-  const cliHint = isManaged ? (
-    <span
-      className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-      title={t(($) => $.update.managed_by_desktop_title)}
-    >
-      {t(($) => $.update.managed_by_desktop)}
-    </span>
-  ) : hasCliUpdate && !cliFlow.status ? (
-    <>
-      <span className="text-xs text-muted-foreground">→</span>
-      <span className="text-xs font-mono text-info">{latestVersion}</span>
-      <span className="text-xs text-muted-foreground">
-        {t(($) => $.update.available)}
-      </span>
-    </>
-  ) : currentVersion && latestVersion && !cliFlow.status ? (
-    <span className="inline-flex items-center gap-1 text-xs text-success">
-      <Check className="h-3 w-3" />
-      {t(($) => $.update.latest)}
-    </span>
-  ) : null;
-
   return (
     <div className="space-y-2.5">
-      <UpdateRow
-        label={t(($) => $.update.cli_version_label)}
-        version={currentVersion}
-        hint={cliHint}
-        showAction={hasCliUpdate && isOnline && !cliFlow.status}
-        actionLabel={t(($) => $.update.action)}
-        onAction={() =>
-          latestVersion &&
-          cliFlow.run(() => api.initiateUpdate(runtimeId, latestVersion))
-        }
-        flow={cliFlow}
-        retryLabel={t(($) => $.update.retry)}
-      />
-
       <UpdateRow
         label={t(($) => $.update.agent_label)}
         version={agentVersion}
@@ -325,5 +299,179 @@ export function UpdateSection({
         retryLabel={t(($) => $.update.retry)}
       />
     </div>
+  );
+}
+
+interface MachineCliUpdateProps {
+  runtimeId: string | null;
+  currentVersion: string | null;
+  cliVersions: string[];
+  managedByDesktop: boolean;
+}
+
+export function MachineCliUpdate({
+  runtimeId,
+  currentVersion,
+  cliVersions,
+  managedByDesktop,
+}: MachineCliUpdateProps) {
+  const { t } = useT("runtimes");
+  const qc = useQueryClient();
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const refresh = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["runtimes"] });
+  }, [qc]);
+  const flow = useUpdateFlow(runtimeId ?? "", "CLI updated", refresh);
+  const reconciling = !currentVersion && cliVersions.length > 1;
+
+  useEffect(() => {
+    if (!currentVersion || reconciling) return;
+    void fetchLatestVersion().then(setLatestVersion);
+  }, [currentVersion, reconciling]);
+
+  const hasUpdate =
+    !!currentVersion &&
+    !!latestVersion &&
+    isNewer(latestVersion, currentVersion);
+  const runUpdate = () => {
+    if (!runtimeId || !latestVersion) return;
+    void flow.run(() => api.initiateUpdate(runtimeId, latestVersion));
+  };
+  const config = flow.status ? statusConfig[flow.status] : null;
+  const StatusIcon = config?.icon;
+
+  // min-w rather than a fixed w: the slot keeps a stable floor so the machine
+  // header doesn't jitter as the state changes, but it may still grow for
+  // longer version strings. A hard width clipped the Update button off the
+  // right edge at ordinary versions (0.2.49 -> 0.2.50).
+  return (
+    <span
+      data-testid="machine-cli-update"
+      className="inline-flex h-6 min-w-48 max-w-full items-center gap-1.5 overflow-hidden rounded-md border bg-background px-1.5 align-middle"
+    >
+      <span className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">
+        CLI
+      </span>
+      {reconciling ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="min-w-0 truncate text-xs text-warning">
+                {t(($) => $.update.versions_reconciling)}
+              </span>
+            }
+          />
+          <TooltipContent className="max-w-sm break-words">
+            {t(($) => $.update.versions_reconciling_title, {
+              versions: cliVersions.join(", "),
+            })}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        <span className="min-w-0 truncate font-mono text-xs text-foreground">
+          {currentVersion ?? t(($) => $.update.version_unknown)}
+        </span>
+      )}
+
+      {managedByDesktop ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="inline-flex min-w-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled
+                  className="h-5 min-w-0 gap-1 px-1.5"
+                >
+                  <MonitorCog className="h-3 w-3 shrink-0" />
+                  <span className="truncate">
+                    {t(($) => $.update.managed_by_desktop)}
+                  </span>
+                </Button>
+              </span>
+            }
+          />
+          <TooltipContent className="max-w-sm">
+            {t(($) => $.update.managed_by_desktop_title)}
+          </TooltipContent>
+        </Tooltip>
+      ) : flow.status === "failed" || flow.status === "timeout" ? (
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className={`h-5 min-w-0 gap-1 px-1.5 ${config?.color ?? ""}`}
+              >
+                {StatusIcon && <StatusIcon className="h-3 w-3 shrink-0" />}
+                <span className="truncate">
+                  {t(($) => $.update.status[flow.status!])}
+                </span>
+              </Button>
+            }
+          />
+          <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)]">
+            <PopoverHeader>
+              <PopoverTitle>{t(($) => $.update.failure_details)}</PopoverTitle>
+              <PopoverDescription className="break-words text-destructive">
+                {flow.error}
+              </PopoverDescription>
+            </PopoverHeader>
+            {flow.status === "failed" && (
+              <Button type="button" variant="outline" size="xs" onClick={runUpdate}>
+                {t(($) => $.update.retry)}
+              </Button>
+            )}
+          </PopoverContent>
+        </Popover>
+      ) : config && StatusIcon && flow.status ? (
+        <span className={`inline-flex min-w-0 items-center gap-1 text-xs ${config.color}`}>
+          <StatusIcon className={`h-3 w-3 shrink-0 ${flow.active ? "animate-spin" : ""}`} />
+          <span className="truncate">
+            {t(($) => $.update.status[flow.status as RuntimeUpdateStatus])}
+          </span>
+        </span>
+      ) : hasUpdate ? (
+        <>
+          <span className="shrink-0 text-xs text-muted-foreground">→</span>
+          <span className="min-w-0 truncate font-mono text-xs text-info">
+            {latestVersion}
+          </span>
+          {/* The action never yields space: if anything has to give, the
+              version strings above truncate instead of the button. */}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="inline-flex shrink-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    className="h-5 min-w-0 gap-1 px-1.5"
+                    onClick={runUpdate}
+                    disabled={!runtimeId}
+                  >
+                    <ArrowUpCircle className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{t(($) => $.update.action)}</span>
+                  </Button>
+                </span>
+              }
+            />
+            {!runtimeId && (
+              <TooltipContent>{t(($) => $.update.machine_offline_title)}</TooltipContent>
+            )}
+          </Tooltip>
+        </>
+      ) : currentVersion && latestVersion ? (
+        <span className="inline-flex min-w-0 items-center gap-1 text-xs text-success">
+          <Check className="h-3 w-3 shrink-0" />
+          <span className="truncate">{t(($) => $.update.latest)}</span>
+        </span>
+      ) : null}
+    </span>
   );
 }
