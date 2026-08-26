@@ -297,6 +297,8 @@ export function parseExpectedActiveAgentIds(c: Context, value: unknown): string[
 }
 
 export function withAgentRequestContext(c: Context, store: MultiremiStore, input: CreateAgentInput): CreateAgentInput | Response {
+  const issuePolicy = agentIssueProposalPolicyInput(c, input);
+  if (issuePolicy instanceof Response) return issuePolicy;
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -338,6 +340,7 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     thinking_level: thinkingLevel || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
+    ...issuePolicy,
   };
 }
 
@@ -347,7 +350,10 @@ export function withAgentUpdateRequestContext(
   current: MultiremiAgent,
   input: UpdateAgentInput,
 ): UpdateAgentInput | Response {
+  const issuePolicy = agentIssueProposalPolicyInput(c, input);
+  if (issuePolicy instanceof Response) return issuePolicy;
   const next: UpdateAgentInput = { ...input };
+  Object.assign(next, issuePolicy);
   if (hasRequestField(input, "custom_env", "customEnv", "env")) {
     return c.json({
       error: "custom_env is no longer accepted on this endpoint; use PUT /api/agents/{id}/env (or `multiremi agent env set`)",
@@ -472,6 +478,27 @@ export function withAgentUpdateRequestContext(
     next.max_concurrent_tasks = maxConcurrentTasks;
   }
   return next;
+}
+
+function agentIssueProposalPolicyInput(
+  c: Context,
+  input: CreateAgentInput | UpdateAgentInput,
+): Pick<CreateAgentInput, "issueCreationRequiresProposal" | "issue_creation_requires_proposal"> | Response {
+  if (!hasRequestField(input, "issueCreationRequiresProposal", "issue_creation_requires_proposal")) return {};
+  if (currentAccessToken(c)?.type === "task") {
+    return c.json({
+      error: "only a human can change an agent's Issue proposal policy",
+      code: "human_agent_policy_required",
+    }, 403);
+  }
+  const value = input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal;
+  if (typeof value !== "boolean") {
+    return c.json({ error: "issue_creation_requires_proposal must be a boolean" }, 400);
+  }
+  return {
+    issueCreationRequiresProposal: value,
+    issue_creation_requires_proposal: value,
+  };
 }
 
 export function withAgentTemplateRequestContext(

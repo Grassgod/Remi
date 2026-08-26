@@ -404,7 +404,11 @@ describe("Feishu message ingestion", () => {
       message("om_proposal_reject", "oc_proposals", "2026-08-26T08:02:00.000Z", "reject"),
       message("om_proposal_muted", "oc_proposals", "2026-08-26T08:03:00.000Z", "muted"),
     ]);
-    const agent = store.createAgent({ name: "Proposal watcher", provider: "codex" });
+    const agent = store.createAgent({
+      name: "Proposal watcher",
+      provider: "codex",
+      issueCreationRequiresProposal: true,
+    });
     const task = store.createTask({ agentId: agent.id, prompt: "propose issues" });
     const credential = await store.createTaskAccessToken(task, "local");
     const taskHeaders = { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" };
@@ -417,6 +421,13 @@ describe("Feishu message ingestion", () => {
     );
     expect(directCreate.status).toBe(403);
     expect(await directCreate.json()).toMatchObject({ code: "human_approval_required" });
+    const generalCreate = await app.request("/api/issues", {
+      method: "POST",
+      headers: taskHeaders,
+      body: JSON.stringify({ title: "Bypass through the general Issue API" }),
+    });
+    expect(generalCreate.status).toBe(403);
+    expect(await generalCreate.json()).toMatchObject({ code: "issue_creation_requires_proposal" });
     const forgedProposal = await app.request(
       "/api/workspaces/local/feishu/messages/om_proposal_approve/resolve",
       {
@@ -467,7 +478,7 @@ describe("Feishu message ingestion", () => {
     expect(store.getFeishuMessage("om_proposal_approve")?.processedAt).toBeString();
     expect(store.getFeishuMessage("om_proposal_approve")?.retryCount).toBe(0);
     expect(store.getFeishuSourceStatus(source.id).pendingIssueProposalCount).toBe(1);
-    expect(store.reconcileUnprocessedFeishuMessages(source.id, new Date("2026-08-26T10:00:00.000Z"))).toMatchObject({
+    expect(store.reconcileUnprocessedFeishuMessages(source.id, new Date("2030-08-26T10:00:00.000Z"))).toMatchObject({
       retried: 2,
       dismissed: 0,
     });

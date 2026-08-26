@@ -8,6 +8,7 @@ const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
 const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_delivery_v3";
 const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4";
+const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_policy";
 const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
@@ -45,6 +46,7 @@ export function runMigrations(db: SqlDatabase): void {
       custom_args TEXT NOT NULL DEFAULT '[]',
       mcp_config TEXT,
       thinking_level TEXT,
+      issue_creation_requires_proposal INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -1824,6 +1826,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_agents", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_agents", "runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_agents", "max_concurrent_tasks INTEGER NOT NULL DEFAULT 6");
+  runMigrationOnce(db, AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_agents", "issue_creation_requires_proposal INTEGER NOT NULL DEFAULT 0");
+  });
   addColumnIfMissing(db, "multiremi_squads", "avatar_url TEXT");
   addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");
   addColumnIfMissing(

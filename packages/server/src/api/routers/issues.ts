@@ -3,6 +3,7 @@ import {
   assigneeFrequencyQuery,
   canCurrentUserAccessAgent,
   denyCurrentUserWorkspaceAccess,
+  denyRestrictedTaskIssueCreation,
   isActiveTaskStatus,
   isJsonApiError,
   issueCommentCreateInput,
@@ -502,6 +503,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.post("/api/multiremi/issues", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJson<CreateIssueWithTaskInput>(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
@@ -529,6 +532,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ issue, task }, 201);
   });
   app.post("/api/issues", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
@@ -595,6 +600,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.post("/api/multiremi/issues/quick-create", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
@@ -608,6 +615,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }, 202);
   });
   app.post("/api/issues/quick-create", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
     const input = issueQuickCreateCompatibilityInput(body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");

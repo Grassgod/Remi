@@ -1239,6 +1239,7 @@
         "max_concurrent_tasks": 3,
         "model": "",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1273,6 +1274,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1364,6 +1366,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1404,6 +1407,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1445,6 +1449,7 @@
           "max_concurrent_tasks": 6,
           "model": "",
           "thinking_level": "",
+          "issue_creation_requires_proposal": false,
           "owner_id": "local",
           "skills": [],
           "created_at": "<timestamp>",
@@ -1488,6 +1493,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1553,6 +1560,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1624,6 +1633,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1662,6 +1673,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1735,6 +1748,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -3005,7 +3020,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600236",
+        "order_id": "local-1767225600237",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -5789,6 +5804,7 @@
           "max_concurrent_tasks": 6,
           "model": "claude-sonnet-4",
           "thinking_level": "",
+          "issue_creation_requires_proposal": false,
           "owner_id": "local",
           "skills": [
             {
@@ -5830,6 +5846,7 @@
         "max_concurrent_tasks": 6,
         "model": "claude-sonnet-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "owner_id": "local",
         "skills": [
           {
@@ -14043,6 +14060,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -14109,6 +14128,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -17993,6 +18014,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -22324,6 +22347,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -22393,6 +22418,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -22462,7 +22489,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600237",
+        "id": "local-contact-1767225600238",
         "status": "received",
         "mode": "local",
         "request": {
@@ -23743,7 +23770,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600244",
+        "session_id": "local-lark-1767225600245",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

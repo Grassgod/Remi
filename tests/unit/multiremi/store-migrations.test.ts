@@ -75,6 +75,7 @@ describe("store migrations", () => {
     expect(tables).not.toContain("multiremi_github_settings");
     expect(tables).not.toContain("multiremi_github_pull_requests");
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
+    expect(columnNames(database, "multiremi_agents")).toContain("issue_creation_requires_proposal");
     expect(columnNames(database, "multiremi_feishu_message_outcomes")).toEqual(expect.arrayContaining([
       "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
     ]));
@@ -257,6 +258,31 @@ describe("store migrations", () => {
     migrate(database);
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_feishu_issue_proposals_v4'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("adds the agent Issue proposal policy with an unrestricted legacy default", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_agents DROP COLUMN issue_creation_requires_proposal;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy';
+      INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at)
+      VALUES ('agt_policy_legacy', 'Legacy agent', 'codex',
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT issue_creation_requires_proposal FROM multiremi_agents WHERE id = 'agt_policy_legacy'",
+    ).get()).toEqual({ issue_creation_requires_proposal: 0 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy'",
     ).get()).toEqual({ count: 1 });
   });
 

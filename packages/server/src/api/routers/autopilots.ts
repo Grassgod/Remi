@@ -2,6 +2,7 @@ import type { Context, Hono } from "hono";
 import {
   boundedQueryInt,
   denyCurrentUserWorkspaceAccess,
+  denyRestrictedTaskIssueCreation,
   headersToRecord,
   isJsonApiError,
   parseJsonBody,
@@ -85,6 +86,14 @@ function reservedAtlasAutopilotTitle(c: Context, title: unknown): Response | nul
   }, 409);
 }
 
+function denyRestrictedTaskCreateIssueAutopilot(
+  c: Context,
+  store: RouterDeps["store"],
+  executionMode: unknown,
+): Response | null {
+  return executionMode === "create_issue" ? denyRestrictedTaskIssueCreation(c, store) : null;
+}
+
 export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   const { store, scheduler } = deps;
 
@@ -112,6 +121,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (secretDenied) return secretDenied;
     const input = autopilotCreateCompatibilityInput(c, body);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, input.executionMode ?? input.execution_mode);
+    if (issueDenied) return issueDenied;
     const reserved = reservedAtlasAutopilotTitle(c, input.title);
     if (reserved) return reserved;
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
@@ -131,6 +142,12 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const secretDenied = taskTokenSecretCreationDenied(c, body.triggerKind ?? body.trigger_kind);
     if (secretDenied) return secretDenied;
     const input = autopilotCreateInput(c, body);
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(
+      c,
+      store,
+      input.executionMode ?? input.execution_mode ?? "create_issue",
+    );
+    if (issueDenied) return issueDenied;
     const reserved = reservedAtlasAutopilotTitle(c, input.title);
     if (reserved) return reserved;
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
@@ -160,6 +177,12 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const body = await readJson<UpdateAutopilotInput>(c);
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(
+      c,
+      store,
+      body.executionMode ?? loaded.autopilot.executionMode,
+    );
+    if (issueDenied) return issueDenied;
     const reserved = reservedAtlasAutopilotTitle(c, body.title);
     if (reserved) return reserved;
     try {
@@ -198,12 +221,16 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/autopilots/:id/deliveries/:deliveryId/replay", (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
     return c.json({ ...webhookDeliveryResponse(result) }, 201);
   });
   app.post("/api/multiremi/autopilots/:id/run", async (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const body = await readJson<RunAutopilotInput>(c);
     try {
       return c.json({ run: store.runAutopilot(c.req.param("id"), publicRunAutopilotInput(body)) }, 201);
@@ -214,6 +241,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/autopilots/:id/run-scheduled", (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const run = scheduler?.trigger(c.req.param("id")) ?? store.runAutopilot(c.req.param("id"), { source: "schedule" });
     return c.json({ run }, 201);
   });
@@ -227,6 +256,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/autopilots/:id/trigger", async (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const body = await readJson<RunAutopilotInput>(c);
     try {
       const input = publicRunAutopilotInput(body);
@@ -240,6 +271,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/autopilots/:id/webhook", async (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const rawBody = await c.req.raw.text();
     let body: RunAutopilotInput & { payload?: unknown };
     try {
@@ -279,6 +312,12 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = autopilotUpdateCompatibilityInput(body);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(
+      c,
+      store,
+      input.executionMode ?? loaded.autopilot.executionMode,
+    );
+    if (issueDenied) return issueDenied;
     const reserved = reservedAtlasAutopilotTitle(c, input.title);
     if (reserved) return reserved;
     try {
@@ -306,6 +345,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/autopilots/:id/trigger", async (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const body = await readJsonStrictAllowEmpty<RunAutopilotInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const { autopilot } = loaded;
@@ -356,12 +397,16 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/autopilots/:id/deliveries/:deliveryId/replay", (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
     return c.json(webhookDeliveryResponse(result), 201);
   });
   app.post("/api/autopilots/:id/triggers", async (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const body = await readJsonStrict<CreateAutopilotTriggerInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const secretDenied = taskTokenSecretCreationDenied(c, body.kind);
@@ -382,6 +427,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.patch("/api/autopilots/:id/triggers/:triggerId", async (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const body = await readJsonStrict<UpdateAutopilotTriggerInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const current = store.getAutopilotTrigger(c.req.param("triggerId"));
@@ -411,6 +458,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/autopilots/:id/triggers/:triggerId/rotate-webhook-token", (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const current = store.getAutopilotTrigger(c.req.param("triggerId"));
     if (!current || current.autopilotId !== c.req.param("id")) return c.json({ error: "trigger not found" }, 404);
     if (current.kind !== "webhook") return c.json({ error: "trigger is not a webhook trigger" }, 400);
@@ -423,6 +472,8 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
   app.put("/api/autopilots/:id/triggers/:triggerId/signing-secret", async (c) => {
     const loaded = loadAutopilotForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
+    const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
+    if (issueDenied) return issueDenied;
     const body = await readJsonStrict<{ signing_secret?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const current = store.getAutopilotTrigger(c.req.param("triggerId"));

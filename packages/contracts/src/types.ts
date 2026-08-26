@@ -85,6 +85,8 @@ export interface MultiremiAgent {
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  issueCreationRequiresProposal: boolean;
+  issue_creation_requires_proposal?: boolean;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -122,6 +124,8 @@ export interface CreateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  issueCreationRequiresProposal?: boolean;
+  issue_creation_requires_proposal?: boolean;
 }
 
 export interface UpdateAgentInput {
@@ -154,6 +158,8 @@ export interface UpdateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  issueCreationRequiresProposal?: boolean;
+  issue_creation_requires_proposal?: boolean;
 }
 
 export interface CreateAgentFromTemplateInput {

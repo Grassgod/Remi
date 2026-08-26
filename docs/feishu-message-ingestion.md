@@ -74,6 +74,12 @@ recreate the sidecar whenever it replaces the API container.
   `issue_proposed` outcome. Only a human workspace admin can approve or reject
   it; approval creates the Issue and `issue_created` outcome atomically and
   idempotently, while rejection records `dismissed/proposal_rejected`.
+- Configure the Feishu watcher agent with
+  `remi agent update <agent> --issue-creation-requires-proposal`. This
+  human-managed, default-off policy blocks that task identity from every direct
+  and Autopilot-mediated Issue creation path while leaving ordinary collaboration
+  agents unchanged. The caller-specific CLI capability response also marks
+  `issue.create` and `issue.quick-create` unavailable for the restricted agent.
 - The direct `create-issue` command is human-only. Task tokens cannot approve,
   reject, or bypass the proposal flow.
 - Source status exposes the most recent successful ingestion, last sanitized
