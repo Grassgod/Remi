@@ -55,6 +55,11 @@ describe("Multiremi task failure classification", () => {
   it("classifies poisoned output, invalid requests, and Codex resume-unsafe timeouts", () => {
     expect(classifyPoisonedOutput("I reached the iteration limit and could not continue.")).toBe(TaskFailureReason.IterationLimit);
     expect(classifyPoisonedOutput("Put your final update inside the content string. Keep it concise.")).toBe(TaskFailureReason.AgentFallbackMessage);
+    expect(classifyPoisonedOutput("Compacting...")).toBe(TaskFailureReason.AgentFallbackMessage);
+    expect(classifyPoisonedOutput("\n\nCompacting completed.")).toBe(TaskFailureReason.AgentFallbackMessage);
+    expect(classifyPoisonedOutput("Compacting...\n\nCompacting failed: context window unavailable"))
+      .toBe(TaskFailureReason.AgentFallbackMessage);
+    expect(classifyPoisonedOutput("The final answer mentions Compacting... as diagnostic context.")).toBeNull();
     expect(classifyPoisonedOutput("Fixed the bug and added tests.")).toBeNull();
     expect(classifyPoisonedOutput("Fixed it. ".repeat(60) + "I reached the iteration limit earlier.")).toBeNull();
 

@@ -54,6 +54,34 @@ const CLAUDE_BASH_COMPLETED = {
 };
 
 describe("daemon task-message mapper", () => {
+  it("classifies only standalone claude compaction status chunks", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    const statuses = [
+      "Compacting...",
+      "\n\nCompacting completed.",
+      "\n\nCompacting failed.",
+      "\n\nCompacting failed: context window unavailable",
+    ];
+
+    for (const text of statuses) {
+      expect(map(event({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
+      }))).toEqual([{ type: "compaction", content: text, meta: undefined }]);
+    }
+
+    const prose = "The logs say Compacting... but this sentence is the answer.";
+    expect(map(event({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: prose },
+    }))).toEqual([{ type: "text", content: prose, meta: undefined }]);
+
+    expect(map(event({
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Compacting..." },
+    }))).toEqual([{ type: "thinking", content: "Compacting...", meta: undefined }]);
+  });
+
   it("keeps the claude terminal placeholder out of the tool_use and lands the real command on the result", () => {
     const map = createEventMapper(createAdapter("claude"));
 

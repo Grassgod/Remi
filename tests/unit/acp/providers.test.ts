@@ -161,6 +161,38 @@ describe("AcpProvider", () => {
     expect(provider.getStreamedText("chat-1")).toBe("Decision context");
   });
 
+  it("keeps claude compaction statuses out of the final response text", async () => {
+    const provider = new AcpProvider({ agentType: "claude" });
+    const client = {
+      _options: { onSessionUpdate: (_notification: unknown) => {} },
+      prompt: async () => {
+        for (const text of ["Final answer.", "Compacting...", "\n\nCompacting completed."]) {
+          client._options.onSessionUpdate({
+            sessionId: "session-1",
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+          });
+        }
+        return { stopReason: "end_turn" };
+      },
+      cancel: async () => {},
+    };
+    const entry = {
+      client,
+      acpSessionId: "session-1",
+      lastUsed: Date.now(),
+      promptState: { text: "" },
+    };
+    (provider as any)._ensureSession = async () => entry;
+
+    const streamed: unknown[] = [];
+    for await (const update of provider.sendStream("answer", { chatId: "chat-1" })) {
+      streamed.push(update);
+    }
+
+    expect(streamed).toHaveLength(3);
+    expect(provider.getLastResponse()?.text).toBe("Final answer.");
+  });
+
   it("routes permission requests to the handler for the ACP session's chat", async () => {
     const provider = new AcpProvider({ agentType: "claude" });
     provider.setPermissionHandler(async () => ({ outcome: "selected", optionId: "global" }));

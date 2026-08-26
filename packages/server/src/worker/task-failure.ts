@@ -1,3 +1,5 @@
+import { isCompactionOutput } from "@shared/contracts/compaction.js";
+
 const providerHttp5xxRe = /(^|[^0-9])5[0-9][0-9]([^0-9]|$)/;
 
 const codexSemanticInactivityMarker = "codex semantic inactivity timeout";
@@ -149,6 +151,7 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
 export function classifyPoisonedOutput(output: string): TaskFailureReasonValue | null {
   const trimmed = String(output ?? "").trim();
   if (!trimmed || trimmed.length > poisonedOutputMaxLen) return null;
+  if (isCompactionOutput(trimmed)) return TaskFailureReason.AgentFallbackMessage;
   const lower = trimmed.toLowerCase();
   if (lower.includes("i reached the iteration limit")) return TaskFailureReason.IterationLimit;
   if (lower.includes("put your final update inside the content string")) return TaskFailureReason.AgentFallbackMessage;

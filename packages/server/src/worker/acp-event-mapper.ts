@@ -4,6 +4,7 @@
 // and re-exports `createEventMapper` for existing importers).
 import type { AgentAdapter } from "@acp/index.js";
 import type { ProviderEvent } from "@shared/contracts/provider-types.js";
+import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import type { TaskMessageInput, TaskUsageEntry } from "@multiremi/contracts/types.js";
 
 interface ToolCallState {
@@ -103,7 +104,11 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
       // from; the frontend nests it under that step.
       const parent = metaParentToolUseId(raw);
       return [{
-        type: su === "agent_thought_chunk" ? "thinking" : "text",
+        type: su === "agent_thought_chunk"
+          ? "thinking"
+          : isCompactionChunk(content)
+            ? "compaction"
+            : "text",
         content,
         meta: parent ? { parent_tool_call_id: parent } : undefined,
       }];
