@@ -223,7 +223,6 @@ export interface CreatePersonalAccessTokenResponse extends PersonalAccessToken {
 export interface ProvisionDaemonCredentialRequest {
   workspace_id: string;
   name?: string;
-  expires_in_days?: number;
 }
 
 export interface ProvisionDaemonCredentialResponse {

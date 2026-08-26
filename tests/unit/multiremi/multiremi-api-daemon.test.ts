@@ -179,10 +179,6 @@ describe("Multiremi API — daemon endpoints", () => {
         body: { daemon_id: "daemon-invalid-expiry", expires_in_days: "90" },
       },
       {
-        daemonId: "daemon-disallowed-expiry",
-        body: { daemon_id: "daemon-disallowed-expiry", expires_in_days: 90 },
-      },
-      {
         daemonId: "daemon-invalid-token-name",
         body: { daemon_id: "daemon-invalid-token-name", token_name: "  " },
       },
@@ -211,6 +207,25 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(await malformed.json()).toEqual({ error: "invalid request body" });
     expect(store.listAccessTokens("local")).toHaveLength(0);
     expect(store.listDaemonInventory("local")).toHaveLength(0);
+
+    const legacyExpiry = await app.request("/api/multiremi/install/daemon", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        daemon_id: "daemon-compatible-expiry",
+        expires_in_days: 90,
+      }),
+    });
+    const legacyExpiryBody = await legacyExpiry.json();
+    expect(legacyExpiry.status).toBe(201);
+    expect(legacyExpiryBody.token).toStartWith("mdt_");
+    expect(legacyExpiryBody.tokenId).toStartWith("dtk_");
+    expect(store.getAccessToken(legacyExpiryBody.tokenId)).toMatchObject({
+      id: legacyExpiryBody.tokenId,
+      type: "daemon",
+      tokenPrefix: expect.stringMatching(/^mdt_/),
+      expiresAt: null,
+    });
   });
 
   it("does not let a workspace member choose a daemon identity", async () => {

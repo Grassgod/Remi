@@ -43,6 +43,28 @@ function normalizeCommandURL(url: string | undefined) {
   return url?.trim().replace(/\/+$/, "") ?? "";
 }
 
+function credentialErrorReason(error: unknown): string | null {
+  const body =
+    error && typeof error === "object" && "body" in error
+      ? (error as { body?: unknown }).body
+      : null;
+  const bodyRecord = body && typeof body === "object"
+    ? body as Record<string, unknown>
+    : null;
+  const message = [
+    bodyRecord?.message,
+    bodyRecord?.error,
+    error instanceof Error ? error.message : null,
+  ].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? null;
+  const code = typeof bodyRecord?.code === "string" && bodyRecord.code.trim()
+    ? bodyRecord.code.trim()
+    : null;
+
+  if (!message) return code;
+  if (!code || message.includes(code)) return message;
+  return `${message} (${code})`;
+}
+
 function daemonCommands(
   serverUrl: string | undefined,
   workspaceId: string | undefined,
@@ -226,6 +248,7 @@ function InstructionsStep({
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [daemonId, setDaemonId] = useState<string | null>(null);
   const [credentialStatus, setCredentialStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [credentialError, setCredentialError] = useState<string | null>(null);
   const [credentialAttempt, setCredentialAttempt] = useState(0);
   const [browserOrigin, setBrowserOrigin] = useState("");
   useEffect(() => {
@@ -233,11 +256,13 @@ function InstructionsStep({
   }, []);
   useEffect(() => {
     if (!wsId) {
+      setCredentialError(null);
       setCredentialStatus("error");
       return;
     }
     let cancelled = false;
     setCredentialStatus("loading");
+    setCredentialError(null);
     setSetupToken(null);
     setDaemonId(null);
     onProvisionedDaemonId(null);
@@ -245,7 +270,6 @@ function InstructionsStep({
       .provisionDaemonCredential({
         workspace_id: wsId,
         name: `Remi daemon ${new Date().toISOString().slice(0, 10)}`,
-        expires_in_days: 365,
       })
       .then((result) => {
         if (cancelled) return;
@@ -258,8 +282,10 @@ function InstructionsStep({
         onProvisionedDaemonId(result.daemonId);
         setCredentialStatus("ready");
       })
-      .catch(() => {
-        if (!cancelled) setCredentialStatus("error");
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setCredentialError(credentialErrorReason(error));
+        setCredentialStatus("error");
       })
       .finally(() => {
         void qc.invalidateQueries({
@@ -321,9 +347,20 @@ function InstructionsStep({
               className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
               role="alert"
             >
-              <span className="flex min-w-0 items-center gap-2 text-xs text-destructive">
-                <AlertCircle className="size-4 shrink-0" aria-hidden />
-                {t(($) => $.connect.credential_error)}
+              <span className="flex min-w-0 items-start gap-2 text-xs text-destructive">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                <span className="min-w-0">
+                  <span className="block">
+                    {t(($) => $.connect.credential_error)}
+                  </span>
+                  {credentialError && (
+                    <span className="mt-0.5 block break-words text-[11px] leading-4 text-destructive/80">
+                      {t(($) => $.connect.credential_error_detail, {
+                        reason: credentialError,
+                      })}
+                    </span>
+                  )}
+                </span>
               </span>
               <Button
                 type="button"
