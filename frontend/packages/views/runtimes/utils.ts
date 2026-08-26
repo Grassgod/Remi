@@ -418,6 +418,7 @@ export interface DailyTokenData {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  totalOnly: number;
 }
 
 export interface DailyCostData {
@@ -460,6 +461,7 @@ export interface WeeklyTokenData {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  totalOnly: number;
 }
 
 export interface WeeklyCostStackData {
@@ -488,7 +490,29 @@ export type DailyAggregable = Pick<
   | "output_tokens"
   | "cache_read_tokens"
   | "cache_write_tokens"
-> & { provider?: string };
+> & { provider?: string; total_tokens?: number };
+
+type TokenAggregable = Pick<
+  RuntimeUsage,
+  "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens"
+> & { total_tokens?: number };
+
+export function getSplitTokens(usage: TokenAggregable): number {
+  return (
+    usage.input_tokens +
+    usage.output_tokens +
+    usage.cache_read_tokens +
+    usage.cache_write_tokens
+  );
+}
+
+// Older usage rows reported only a context-total value. It is a valid token
+// count, but it cannot be assigned to an input/output/cache dimension and
+// therefore cannot be priced.
+export function getTotalOnlyTokens(usage: TokenAggregable): number {
+  if (getSplitTokens(usage) !== 0) return 0;
+  return Math.max(0, usage.total_tokens ?? 0);
+}
 
 // Anchor to local midnight so the formatted label matches the bucket the
 // server picked (which is already in workspace time). Pasting the raw date as
@@ -520,11 +544,13 @@ export function aggregateByDate(usage: readonly DailyAggregable[]): {
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      totalOnly: 0,
     };
     existing.input += u.input_tokens;
     existing.output += u.output_tokens;
     existing.cacheRead += u.cache_read_tokens;
     existing.cacheWrite += u.cache_write_tokens;
+    existing.totalOnly += getTotalOnlyTokens(u);
     dateMap.set(u.date, existing);
 
     const dayCost = (costMap.get(u.date) ?? 0) + estimateCost(u);
@@ -543,8 +569,7 @@ export function aggregateByDate(usage: readonly DailyAggregable[]): {
 
     const modelName = u.model || u.provider || "";
     const m = modelMap.get(modelName) ?? { tokens: 0, cost: 0 };
-    m.tokens +=
-      u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_write_tokens;
+    m.tokens += getSplitTokens(u) + getTotalOnlyTokens(u);
     m.cost += estimateCost(u);
     modelMap.set(modelName, m);
   }
@@ -610,7 +635,7 @@ type WeeklyAggregable = Pick<
   | "output_tokens"
   | "cache_read_tokens"
   | "cache_write_tokens"
->;
+> & { total_tokens?: number };
 
 export function aggregateByWeek(
   usage: readonly WeeklyAggregable[],
@@ -639,6 +664,7 @@ export function aggregateByWeek(
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      totalOnly: 0,
     });
     stackMap.set(wkStart, { input: 0, output: 0, cacheWrite: 0 });
   }
@@ -652,6 +678,7 @@ export function aggregateByWeek(
     tokens.output += u.output_tokens;
     tokens.cacheRead += u.cache_read_tokens;
     tokens.cacheWrite += u.cache_write_tokens;
+    tokens.totalOnly += getTotalOnlyTokens(u);
 
     const breakdown = estimateCostBreakdown(u);
     const stack = stackMap.get(wkStart);

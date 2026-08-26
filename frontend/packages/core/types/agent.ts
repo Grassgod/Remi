@@ -582,6 +582,7 @@ export interface DashboardUsageDaily {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  total_tokens: number;
   task_count: number;
 }
 
@@ -595,6 +596,7 @@ export interface DashboardUsageByAgent {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  total_tokens: number;
   task_count: number;
 }
 

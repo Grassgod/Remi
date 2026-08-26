@@ -9,6 +9,8 @@ import {
   estimateCost,
   formatDateLabel,
   formatShortDate,
+  getSplitTokens,
+  getTotalOnlyTokens,
   isModelPriced,
   todayIso,
   weekStartIso,
@@ -36,6 +38,7 @@ export interface DashboardTokenTotals {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  totalOnly: number;
   cost: number;
   taskCount: number;
 }
@@ -52,10 +55,19 @@ export function computeDailyTotals(usage: DashboardUsageDaily[]): DashboardToken
       output: acc.output + u.output_tokens,
       cacheRead: acc.cacheRead + u.cache_read_tokens,
       cacheWrite: acc.cacheWrite + u.cache_write_tokens,
+      totalOnly: acc.totalOnly + getTotalOnlyTokens(u),
       cost: acc.cost + estimateCost(u),
       taskCount: acc.taskCount + u.task_count,
     }),
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, taskCount: 0 },
+    {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalOnly: 0,
+      cost: 0,
+      taskCount: 0,
+    },
   );
 }
 
@@ -67,6 +79,9 @@ export interface AgentCostRow {
   /** Tokens whose model didn't resolve to a price — they contribute $0 to
    *  `cost`, so a non-zero value here means `cost` under-reports. */
   unpricedTokens: number;
+  /** Tokens reported without input/output/cache splits. These count toward
+   *  usage but cannot contribute to `cost`. */
+  totalOnlyTokens: number;
 }
 
 // Fold per-(agent, model) rows into one row per agent. Cost is the sum
@@ -81,12 +96,15 @@ export function aggregateAgentTokens(rows: DashboardUsageByAgent[]): AgentCostRo
       cost: 0,
       taskCount: 0,
       unpricedTokens: 0,
+      totalOnlyTokens: 0,
     };
-    const rowTokens =
-      r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    const splitTokens = getSplitTokens(r);
+    const totalOnlyTokens = getTotalOnlyTokens(r);
+    const rowTokens = splitTokens + totalOnlyTokens;
     entry.tokens += rowTokens;
     entry.cost += estimateCost(r);
-    if (!isModelPriced(r.model)) entry.unpricedTokens += rowTokens;
+    if (!isModelPriced(r.model)) entry.unpricedTokens += splitTokens;
+    entry.totalOnlyTokens += totalOnlyTokens;
     entry.taskCount += r.task_count;
     map.set(r.agent_id, entry);
   }
@@ -114,6 +132,8 @@ export interface AgentDashboardRow {
    *  (MUL-93): `tokens: 0` here is "not collected", not a measured zero,
    *  so the UI renders "—" for the token column instead of 0. */
   tokensUnavailable: boolean;
+  /** Portion of `tokens` that has no input/output/cache split. */
+  totalOnlyTokens: number;
 }
 
 // Merge per-agent token totals with per-agent run-time totals into one
@@ -142,9 +162,13 @@ export function mergeAgentDashboardRows(
       seconds: rt?.total_seconds ?? 0,
       taskCount: rt ? rt.task_count : r.taskCount,
       // Tokens recorded but every model unpriced → $0.00 would be fabricated.
-      costUnavailable: r.tokens > 0 && r.cost === 0 && r.unpricedTokens > 0,
+      costUnavailable:
+        r.tokens > 0 &&
+        r.cost === 0 &&
+        (r.unpricedTokens > 0 || r.totalOnlyTokens === r.tokens),
       hasRunTime: rt !== undefined,
       tokensUnavailable: false,
+      totalOnlyTokens: r.totalOnlyTokens,
     });
   }
   // Agents with run-time rows but zero token rows still belong on the list
@@ -163,6 +187,7 @@ export function mergeAgentDashboardRows(
       costUnavailable: r.task_count > 0,
       hasRunTime: true,
       tokensUnavailable: r.task_count > 0,
+      totalOnlyTokens: 0,
     });
   }
   return Array.from(merged.values()).toSorted((a, b) => {
