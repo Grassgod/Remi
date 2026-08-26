@@ -51,6 +51,8 @@ export type RunAutopilotStoreInput = RunAutopilotInput & {
   repository_id?: string | null;
   dedupeKey?: string | null;
   dedupe_key?: string | null;
+  sourceTaskId?: string | null;
+  source_task_id?: string | null;
 };
 
 /** Run row as persisted by this store, including repository Wiki build scoping. */
@@ -955,6 +957,7 @@ export class AutopilotsRepo {
     const triggerIssueId = cleanOptionalString(input.triggerIssueId ?? input.trigger_issue_id) ?? null;
     const repositoryId = cleanOptionalString(input.repositoryId ?? input.repository_id) ?? null;
     const dedupeKey = cleanOptionalString(input.dedupeKey ?? input.dedupe_key) ?? null;
+    const sourceTaskId = cleanOptionalString(input.sourceTaskId ?? input.source_task_id) ?? null;
     if ((triggerId == null) !== (eventId == null)) throw new Error("trigger_id and event_id must be provided together");
     if (source === "system_event" && (!triggerId || !eventId)) {
       throw new Error("system_event runs require trigger_id and event_id");
@@ -1027,15 +1030,16 @@ export class AutopilotsRepo {
           : null;
       const inserted = this.ctx.db.run(
         `INSERT OR IGNORE INTO multiremi_autopilot_runs (
-          id, autopilot_id, source, status, issue_id, task_id, trigger_id, event_id,
+          id, autopilot_id, source, status, issue_id, task_id, source_task_id, trigger_id, event_id,
           issue_session_id, repository_id, dedupe_key, triggered_at, completed_at,
           failure_reason, payload, result, created_at
-        ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)`,
         [
           runId,
           autopilotId,
           source,
           skippedReason ? "skipped" : "running",
+          sourceTaskId,
           triggerId,
           eventId,
           repositoryId,
@@ -1114,6 +1118,7 @@ export class AutopilotsRepo {
         assignmentAuthorType: "system",
         assignmentAuthorId: autopilot.id,
         assignmentSourceEventId: eventId,
+        parentTaskId: sourceTaskId,
       });
       taskToNotify = task;
       issueSessionId = task.issueSessionId ?? issueSessionId;
@@ -1228,6 +1233,7 @@ export class AutopilotsRepo {
     signatureStatus?: MultiremiWebhookSignatureStatus | string | null;
     replayedFromDeliveryId?: string | null;
     triggerId?: string | null;
+    sourceTaskId?: string | null;
   } = {}): MultiremiWebhookDeliveryResult {
     const autopilot = this.getAutopilot(autopilotId);
     if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
@@ -1330,6 +1336,7 @@ export class AutopilotsRepo {
         prompt: input.prompt ?? null,
         payload: envelope,
         source: "webhook",
+        sourceTaskId: input.sourceTaskId,
       });
       if (trigger) {
         this.ctx.db.run("UPDATE multiremi_autopilot_triggers SET last_fired_at = ?, updated_at = ? WHERE id = ?", [now, now, trigger.id]);
@@ -1356,7 +1363,11 @@ export class AutopilotsRepo {
     }
   }
 
-  replayWebhookDelivery(autopilotId: string, deliveryId: string): MultiremiWebhookDeliveryResult {
+  replayWebhookDelivery(
+    autopilotId: string,
+    deliveryId: string,
+    options: { sourceTaskId?: string | null } = {},
+  ): MultiremiWebhookDeliveryResult {
     const delivery = this.getWebhookDelivery(deliveryId);
     if (!delivery || delivery.autopilotId !== autopilotId) throw new Error(`Webhook delivery not found: ${deliveryId}`);
     if (delivery.status === "rejected" || delivery.signatureStatus === "invalid" || delivery.signatureStatus === "missing") {
@@ -1370,6 +1381,7 @@ export class AutopilotsRepo {
       provider: delivery.provider,
       signatureStatus: "not_required",
       replayedFromDeliveryId: delivery.id,
+      sourceTaskId: options.sourceTaskId,
     });
   }
 

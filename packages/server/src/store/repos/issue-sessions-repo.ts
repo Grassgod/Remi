@@ -334,6 +334,7 @@ export class IssueSessionsRepo {
       assignmentAuthorType: input.createdByType ?? input.created_by_type ?? "system",
       assignmentAuthorId: input.createdById ?? input.created_by_id ?? null,
       assignmentSourceEventId: input.sourceEventId ?? input.source_event_id ?? null,
+      parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
     });
   }
 

@@ -564,7 +564,11 @@ export class AgentsSkillsRepo {
 
   ensureDefaultAgent(
     provider = "claude",
-    options: { workspaceId?: string | null; ownerId?: string | null } = {},
+    options: {
+      workspaceId?: string | null;
+      ownerId?: string | null;
+      issueCreationRequiresProposal?: boolean;
+    } = {},
   ): MultiremiAgent {
     const workspaceId = cleanOptionalString(options.workspaceId) ?? "local";
     const ownerId = cleanOptionalString(options.ownerId) ?? "local";
@@ -594,6 +598,7 @@ export class AgentsSkillsRepo {
       provider,
       workspaceId,
       ownerId,
+      issueCreationRequiresProposal: options.issueCreationRequiresProposal ?? false,
       instructions: "You are an autonomous coding agent. Complete the task and report the result clearly.",
     });
   }

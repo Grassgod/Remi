@@ -33,6 +33,31 @@ describe("agent Issue proposal policy", () => {
     });
     expect(ordinary.status).toBe(201);
     expect((await ordinary.json()).title).toBe("Delegated child remains supported");
+
+    const delegated = await fixture.app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: fixture.ordinaryHeaders,
+      body: JSON.stringify({ agentId: fixture.worker.id, prompt: "ordinary delegation" }),
+    });
+    expect(delegated.status).toBe(201);
+    const delegatedTask = (await delegated.json() as { task: { id: string } }).task;
+    expect(fixture.store.getTask(delegatedTask.id)).toMatchObject({
+      parentTaskId: fixture.ordinaryTask.id,
+      issueCreationRestricted: false,
+    });
+    const delegatedCredential = await fixture.store.createTaskAccessToken(
+      fixture.store.getTask(delegatedTask.id)!,
+      "local",
+    );
+    const delegatedIssue = await fixture.app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${delegatedCredential.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title: "Ordinary delegated child" }),
+    });
+    expect(delegatedIssue.status).toBe(201);
   });
 
   it("makes the policy human-managed and projects caller-specific CLI capabilities", async () => {
@@ -119,6 +144,125 @@ describe("agent Issue proposal policy", () => {
     expect(runOnly.status).toBe(201);
     expect((await runOnly.json()).run.issueId).toBeNull();
   });
+
+  it("carries the restriction through task, Session, squad, and run-only Autopilot delegation", async () => {
+    const fixture = await policyFixture();
+
+    const generic = await fixture.app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: fixture.restrictedHeaders,
+      body: JSON.stringify({ agentId: fixture.worker.id, prompt: "generic delegated work" }),
+    });
+    expect(generic.status).toBe(201);
+    const genericTaskId = (await generic.json() as { task: { id: string } }).task.id;
+    await expectRestrictedTaskCannotCreateIssue(fixture, genericTaskId, "generic delegation");
+
+    const sessionId = fixture.restrictedTask.issueSessionId!;
+    const session = await fixture.app.request(
+      `/api/issues/${fixture.current.id}/sessions/${sessionId}/tasks`,
+      {
+        method: "POST",
+        headers: fixture.restrictedHeaders,
+        body: JSON.stringify({ agent_id: fixture.worker.id, prompt: "Session delegated work" }),
+      },
+    );
+    expect(session.status).toBe(201);
+    const sessionTaskId = (await session.json() as { id: string }).id;
+    await expectRestrictedTaskCannotCreateIssue(fixture, sessionTaskId, "Session delegation");
+
+    const squad = fixture.store.createSquad({
+      name: "Policy delegation squad",
+      leaderId: fixture.restricted.id,
+      memberIds: [fixture.worker.id],
+    });
+    const squadIssue = fixture.store.createIssue({
+      title: "Squad policy work",
+      workspaceId: "local",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    const squadSource = fixture.store.createTask({
+      agentId: fixture.restricted.id,
+      issueId: squadIssue.id,
+      prompt: "lead squad work",
+    });
+    const squadCredential = await fixture.store.createTaskAccessToken(squadSource, "local");
+    const squadComment = await fixture.app.request(`/api/issues/${squadIssue.id}/comments`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${squadCredential.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        body: `Please help [@${fixture.worker.name}](mention://agent/${fixture.worker.id})`,
+      }),
+    });
+    expect(squadComment.status).toBe(201);
+    const squadTask = fixture.store.listTasksForIssue(squadIssue.id)
+      .find((task) => task.parentTaskId === squadSource.id && task.agentId === fixture.worker.id);
+    expect(squadTask).toBeDefined();
+    await expectRestrictedTaskCannotCreateIssue(fixture, squadTask!.id, "squad mention delegation");
+
+    const runOnlyAutopilot = fixture.store.createAutopilot({
+      title: "Delegated run-only autopilot",
+      assigneeId: fixture.worker.id,
+      executionMode: "run_only",
+      triggerKind: "api",
+    });
+    const autopilot = await fixture.app.request(`/api/multiremi/autopilots/${runOnlyAutopilot.id}/run`, {
+      method: "POST",
+      headers: fixture.restrictedHeaders,
+      body: "{}",
+    });
+    expect(autopilot.status).toBe(201);
+    const autopilotRun = (await autopilot.json() as { run: { id: string; taskId: string } }).run;
+    expect((fixture.store as any).db.query(
+      "SELECT source_task_id FROM multiremi_autopilot_runs WHERE id = ?",
+    ).get(autopilotRun.id)).toEqual({ source_task_id: fixture.restrictedTask.id });
+    const autopilotTaskId = autopilotRun.taskId;
+    await expectRestrictedTaskCannotCreateIssue(fixture, autopilotTaskId, "run-only Autopilot delegation");
+  });
+
+  it("forces every task-accessible Agent creation path to inherit the restriction", async () => {
+    const fixture = await policyFixture();
+    const cases = [
+      ["compat", "/api/agents", { name: "Inherited compat agent", provider: "codex" }],
+      ["native", "/api/multiremi/agents", { name: "Inherited native agent", provider: "codex" }],
+      ["compat template", "/api/agents/from-template", {
+        name: "Inherited compat template agent",
+        template_slug: "commit-message",
+        provider: "codex",
+      }],
+      ["native template", "/api/multiremi/agents/from-template", {
+        name: "Inherited native template agent",
+        templateSlug: "commit-message",
+        provider: "codex",
+      }],
+      ["default", "/api/multiremi/agents/default", { provider: "claude" }],
+    ] as const;
+
+    for (const [label, path, body] of cases) {
+      const response = await fixture.app.request(path, {
+        method: "POST",
+        headers: fixture.restrictedHeaders,
+        body: JSON.stringify(body),
+      });
+      expect([200, 201], `${label}: ${await response.clone().text()}`).toContain(response.status);
+      const payload = await response.json() as Record<string, any>;
+      const rawAgent = payload.agent ?? payload;
+      const agentId = String(rawAgent.id);
+      expect(fixture.store.getAgent(agentId)?.issueCreationRequiresProposal, label).toBe(true);
+
+      const delegated = await fixture.app.request("/api/multiremi/tasks", {
+        method: "POST",
+        headers: fixture.restrictedHeaders,
+        body: JSON.stringify({ agentId, prompt: `${label} delegated work` }),
+      });
+      expect(delegated.status, label).toBe(201);
+      const taskId = (await delegated.json() as { task: { id: string } }).task.id;
+      await expectRestrictedTaskCannotCreateIssue(fixture, taskId, `${label} Agent delegation`);
+    }
+  });
 });
 
 async function policyFixture() {
@@ -144,6 +288,8 @@ async function policyFixture() {
     ordinary,
     worker,
     current,
+    restrictedTask,
+    ordinaryTask,
     restrictedHeaders: {
       Authorization: `Bearer ${restrictedCredential.token}`,
       "Content-Type": "application/json",
@@ -154,6 +300,31 @@ async function policyFixture() {
     },
     humanHeaders: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
   };
+}
+
+async function expectRestrictedTaskCannotCreateIssue(
+  fixture: Awaited<ReturnType<typeof policyFixture>>,
+  taskId: string,
+  label: string,
+): Promise<void> {
+  const task = fixture.store.getTask(taskId)!;
+  expect(task, label).toMatchObject({
+    parentTaskId: expect.any(String),
+    issueCreationRestricted: true,
+  });
+  const credential = await fixture.store.createTaskAccessToken(task, "local");
+  const before = fixture.store.listIssues({ workspaceId: "local" }).length;
+  const response = await fixture.app.request("/api/issues", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${credential.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ title: `${label} bypass` }),
+  });
+  expect(response.status, label).toBe(403);
+  expect(await response.json(), label).toMatchObject({ code: "issue_creation_requires_proposal" });
+  expect(fixture.store.listIssues({ workspaceId: "local" }), label).toHaveLength(before);
 }
 
 async function capabilityMap(

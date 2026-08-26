@@ -22,6 +22,7 @@ import {
   withAgentRequestContext,
   withAgentTemplateRequestContext,
   withAgentUpdateRequestContext,
+  currentTaskIssueCreationRestricted,
 } from "../helpers.js";
 import {
   agentCompatibilityResponse,
@@ -81,6 +82,7 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     const agent = store.ensureDefaultAgent(provider, {
       workspaceId,
       ownerId: actingUserId,
+      issueCreationRequiresProposal: currentTaskIssueCreationRestricted(c, store),
     });
     if (!before) {
       recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {

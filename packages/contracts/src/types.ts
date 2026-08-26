@@ -185,6 +185,8 @@ export interface CreateAgentFromTemplateInput {
   workspace_id?: string | null;
   ownerId?: string | null;
   owner_id?: string | null;
+  issueCreationRequiresProposal?: boolean;
+  issue_creation_requires_proposal?: boolean;
 }
 
 export interface CreateAgentFromTemplateResult {
@@ -1169,6 +1171,10 @@ export interface MultiremiTask {
   attempt: number;
   maxAttempts: number;
   parentTaskId: string | null;
+  /** Immutable capability attenuation snapshot. Once true, every descendant
+   * task must also require a human-approved proposal before creating Issues. */
+  issueCreationRestricted: boolean;
+  issue_creation_restricted?: boolean;
   /** Stable identity shared by a delegated task, its infrastructure retries,
    *  and any tasks that return control to the delegating agent. */
   delegationId: string | null;
@@ -1313,6 +1319,10 @@ export interface CreateTaskInput {
   maxAttempts?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /** Server-derived capability snapshot. Public task creation must not trust
+   * this value; TasksRepo derives it from parent lineage and the target Agent. */
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
   /** Server-internal delegation lineage. Public task creation strips it. */
   delegationId?: string | null;
   delegation_id?: string | null;
@@ -1752,6 +1762,9 @@ export interface UpdateIssueInput {
   acceptance_criteria?: unknown[];
   contextRefs?: unknown[];
   context_refs?: unknown[];
+  /** Server-internal creator lineage for assignment/status-triggered tasks. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface BatchUpdateIssuesInput {
@@ -1803,6 +1816,9 @@ export interface AssignIssueInput {
   actor_type?: string | null;
   actorId?: string | null;
   actor_id?: string | null;
+  /** Server-internal creator lineage. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface AssignIssueResult {
@@ -2031,6 +2047,9 @@ export interface CreateSessionTaskInput {
   sourceEventId?: string | null;
   source_event_id?: string | null;
   priority?: number;
+  /** Server-internal creator lineage. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface PublishSessionResultInput {
@@ -3357,6 +3376,9 @@ export interface SendChatMessageInput {
   content?: string | null;
   attachmentIds?: string[];
   attachment_ids?: string[];
+  /** Server-internal creator lineage. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface SendChatMessageResult {

@@ -33,7 +33,24 @@ export function restrictedTaskIssueCreationAgent(c: Context, store: MultiremiSto
   const token = currentTaskAccessToken(c);
   if (!token?.agentId) return null;
   const agent = store.getAgent(token.agentId);
-  return agent?.issueCreationRequiresProposal ? agent : null;
+  const task = token.taskId ? store.getTask(token.taskId) : null;
+  if (!task?.issueCreationRestricted && !agent?.issueCreationRequiresProposal) return null;
+  return agent;
+}
+
+export function currentTaskIssueCreationRestricted(c: Context, store: MultiremiStore): boolean {
+  const token = currentTaskAccessToken(c);
+  if (!token?.agentId) return false;
+  return Boolean(
+    (token.taskId ? store.getTask(token.taskId)?.issueCreationRestricted : false)
+    || store.getAgent(token.agentId)?.issueCreationRequiresProposal,
+  );
+}
+
+/** Trusted parent lineage for server-created descendants. Request bodies must
+ * never supply this value directly. */
+export function currentTaskParentId(c: Context): string | null {
+  return currentTaskAccessToken(c)?.taskId ?? null;
 }
 
 export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStore): Response | null {

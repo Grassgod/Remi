@@ -3,6 +3,7 @@ import {
   boundedQueryInt,
   denyCurrentUserWorkspaceAccess,
   denyRestrictedTaskIssueCreation,
+  currentTaskParentId,
   headersToRecord,
   isJsonApiError,
   parseJsonBody,
@@ -223,7 +224,9 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
     if (issueDenied) return issueDenied;
-    const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
+    const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"), {
+      sourceTaskId: currentTaskParentId(c),
+    });
     return c.json({ ...webhookDeliveryResponse(result) }, 201);
   });
   app.post("/api/multiremi/autopilots/:id/run", async (c) => {
@@ -233,7 +236,12 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (issueDenied) return issueDenied;
     const body = await readJson<RunAutopilotInput>(c);
     try {
-      return c.json({ run: store.runAutopilot(c.req.param("id"), publicRunAutopilotInput(body)) }, 201);
+      return c.json({
+        run: store.runAutopilot(c.req.param("id"), {
+          ...publicRunAutopilotInput(body),
+          sourceTaskId: currentTaskParentId(c),
+        }),
+      }, 201);
     } catch (error) {
       return autopilotCompatibilityErrorResponse(c, error);
     }
@@ -243,7 +251,10 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
     if (issueDenied) return issueDenied;
-    const run = scheduler?.trigger(c.req.param("id")) ?? store.runAutopilot(c.req.param("id"), { source: "schedule" });
+    const sourceTaskId = currentTaskParentId(c);
+    const run = sourceTaskId
+      ? store.runAutopilot(c.req.param("id"), { source: "schedule", sourceTaskId })
+      : scheduler?.trigger(c.req.param("id")) ?? store.runAutopilot(c.req.param("id"), { source: "schedule" });
     return c.json({ run }, 201);
   });
   app.get("/api/multiremi/scheduler", (c) => {
@@ -262,7 +273,11 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     try {
       const input = publicRunAutopilotInput(body);
       return c.json({
-        run: store.runAutopilot(c.req.param("id"), { ...input, source: input.source ?? "api" }),
+        run: store.runAutopilot(c.req.param("id"), {
+          ...input,
+          source: input.source ?? "api",
+          sourceTaskId: currentTaskParentId(c),
+        }),
       }, 201);
     } catch (error) {
       return autopilotCompatibilityErrorResponse(c, error);
@@ -290,6 +305,7 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
       headers,
       provider,
       signatureStatus,
+      sourceTaskId: currentTaskParentId(c),
     });
     const statusCode = result.status === "rejected" ? 401 : result.status === "accepted" ? 201 : result.status === "failed" ? 500 : 200;
     return c.json(webhookDeliveryResponse(result), statusCode);
@@ -353,7 +369,11 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (autopilot.status !== "active") return c.json({ error: "autopilot is not active" }, 400);
     try {
       const input = publicRunAutopilotInput(body);
-      return c.json(autopilotRunCompatibilityResponse(store.runAutopilot(autopilot.id, { ...input, source: input.source ?? "manual" })));
+      return c.json(autopilotRunCompatibilityResponse(store.runAutopilot(autopilot.id, {
+        ...input,
+        source: input.source ?? "manual",
+        sourceTaskId: currentTaskParentId(c),
+      })));
     } catch (error) {
       return autopilotCompatibilityErrorResponse(c, error);
     }
@@ -399,7 +419,9 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, loaded.autopilot.executionMode);
     if (issueDenied) return issueDenied;
-    const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
+    const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"), {
+      sourceTaskId: currentTaskParentId(c),
+    });
     return c.json(webhookDeliveryResponse(result), 201);
   });
   app.post("/api/autopilots/:id/triggers", async (c) => {

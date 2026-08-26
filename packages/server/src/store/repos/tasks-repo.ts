@@ -189,6 +189,16 @@ export class TasksRepo {
     const triggerCommentId = cleanOptionalString(input.triggerCommentId ?? input.trigger_comment_id);
     const triggerComment = triggerCommentId ? this.ctx.getRawIssueComment(triggerCommentId) : null;
     if (triggerCommentId && !triggerComment) throw new Error(`Comment not found: ${triggerCommentId}`);
+    const requestedParentTaskId = cleanOptionalString(input.parentTaskId ?? input.parent_task_id);
+    const parentTaskId = requestedParentTaskId ?? triggerComment?.taskId ?? null;
+    const parentTask = parentTaskId ? this.getTask(parentTaskId) : null;
+    if (parentTaskId && !parentTask) throw new Error(`Parent task not found: ${parentTaskId}`);
+    if (parentTask && parentTask.workspaceId !== agent.workspaceId) {
+      throw new Error("Parent task belongs to another workspace");
+    }
+    const issueCreationRestricted = Boolean(
+      parentTask?.issueCreationRestricted || agent.issueCreationRequiresProposal,
+    );
     const issueId = input.issueId ?? triggerComment?.issueId ?? null;
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
@@ -295,11 +305,11 @@ export class TasksRepo {
       `INSERT INTO multiremi_tasks (
         id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
-        attempt, max_attempts, parent_task_id, delegation_id, delegated_by_agent_id,
+        attempt, max_attempts, parent_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
         assignment_event_id, assignment_source_event_id,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         taskKind,
@@ -322,7 +332,8 @@ export class TasksRepo {
         input.prompt,
         attempt,
         maxAttempts,
-        cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        parentTaskId,
+        issueCreationRestricted ? 1 : 0,
         delegationId,
         delegatedByAgentId,
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
@@ -386,7 +397,7 @@ export class TasksRepo {
             assignee_agent_id: agent.id,
             source_event_id: input.assignmentSourceEventId ?? input.assignment_source_event_id ?? null,
             attempt,
-            parent_task_id: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+            parent_task_id: parentTaskId,
             ...(delegationId ? {
               delegation_id: delegationId,
               delegated_by_agent_id: delegatedByAgentId,
@@ -400,7 +411,6 @@ export class TasksRepo {
       }
     }
     const task = this.getTask(id)!;
-    const parentTaskId = cleanOptionalString(input.parentTaskId ?? input.parent_task_id);
     if (task.issueId && !parentTaskId && !this.hasInFlightTaskForIssue(task.issueId)) {
       this.syncIssueStatusFromTaskWithinTransaction(task, "todo");
     }
@@ -1974,6 +1984,7 @@ export class TasksRepo {
       }),
       delegationId: source.delegationId,
       delegatedByAgentId: delegator.id,
+      parentTaskId: source.id,
       assignmentAuthorType: "system",
       assignmentAuthorId: null,
     });
@@ -2674,6 +2685,8 @@ function toTask(row: Row): MultiremiTask {
     attempt: Number(row.attempt ?? 1),
     maxAttempts: Number(row.max_attempts ?? 3),
     parentTaskId: nullableString(row.parent_task_id),
+    issueCreationRestricted: Boolean(row.issue_creation_restricted),
+    issue_creation_restricted: Boolean(row.issue_creation_restricted),
     delegationId: nullableString(row.delegation_id),
     delegation_id: nullableString(row.delegation_id),
     delegatedByAgentId: nullableString(row.delegated_by_agent_id),

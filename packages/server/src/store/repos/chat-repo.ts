@@ -226,6 +226,7 @@ export class ChatRepo {
       prompt: body,
       sessionId: session.sessionId,
       workDir: session.workDir,
+      parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
     });
     this.ctx.db.run(
       `INSERT INTO multiremi_chat_messages (id, chat_session_id, task_id, role, body, created_at)

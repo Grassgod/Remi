@@ -82,6 +82,8 @@ describe("store migrations", () => {
       "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
     ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
+    expect(columnNames(database, "multiremi_tasks")).toContain("issue_creation_restricted");
+    expect(columnNames(database, "multiremi_autopilot_runs")).toContain("source_task_id");
     expect(columnNames(database, "multiremi_autopilots")).toEqual(expect.arrayContaining([
       "session_policy", "workspace_policy",
     ]));
@@ -318,6 +320,40 @@ describe("store migrations", () => {
     migrate(database);
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("adds the task Issue proposal snapshot with an unrestricted legacy default", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_tasks DROP COLUMN issue_creation_restricted;
+      ALTER TABLE multiremi_autopilot_runs DROP COLUMN source_task_id;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_task_issue_proposal_policy';
+      INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at)
+      VALUES ('agt_task_policy_legacy', 'Legacy task agent', 'codex',
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z');
+      INSERT INTO multiremi_tasks (
+        id, task_kind, agent_id, workspace_id, status, priority, prompt,
+        attempt, max_attempts, plugin_snapshot, created_at, updated_at
+      ) VALUES (
+        'tsk_policy_legacy', 'direct', 'agt_task_policy_legacy', 'local', 'queued', 0, 'legacy task',
+        1, 3, '[]', '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT issue_creation_restricted FROM multiremi_tasks WHERE id = 'tsk_policy_legacy'",
+    ).get()).toEqual({ issue_creation_restricted: 0 });
+    expect(columnNames(database, "multiremi_autopilot_runs")).toContain("source_task_id");
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_task_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_task_issue_proposal_policy'",
     ).get()).toEqual({ count: 1 });
   });
 

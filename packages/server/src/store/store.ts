@@ -894,7 +894,11 @@ runMigrations(this.db);
 
   ensureDefaultAgent(
     provider = "claude",
-    options: { workspaceId?: string | null; ownerId?: string | null } = {},
+    options: {
+      workspaceId?: string | null;
+      ownerId?: string | null;
+      issueCreationRequiresProposal?: boolean;
+    } = {},
   ): MultiremiAgent {
     return this.agents.ensureDefaultAgent(provider, options);
   }
@@ -3154,12 +3158,17 @@ runMigrations(this.db);
     signatureStatus?: MultiremiWebhookSignatureStatus | string | null;
     replayedFromDeliveryId?: string | null;
     triggerId?: string | null;
+    sourceTaskId?: string | null;
   } = {}): MultiremiWebhookDeliveryResult {
     return this.autopilots.handleAutopilotWebhook(autopilotId, input);
   }
 
-  replayWebhookDelivery(autopilotId: string, deliveryId: string): MultiremiWebhookDeliveryResult {
-    return this.autopilots.replayWebhookDelivery(autopilotId, deliveryId);
+  replayWebhookDelivery(
+    autopilotId: string,
+    deliveryId: string,
+    options: { sourceTaskId?: string | null } = {},
+  ): MultiremiWebhookDeliveryResult {
+    return this.autopilots.replayWebhookDelivery(autopilotId, deliveryId, options);
   }
 
   handleAutopilotWebhookByToken(token: string, input: {

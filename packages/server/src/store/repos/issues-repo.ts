@@ -951,7 +951,11 @@ export class IssuesRepo {
     });
     if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
     if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
-    this.notifyParentOfChildDone(previous!, updated);
+    this.notifyParentOfChildDone(
+      previous!,
+      updated,
+      cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+    );
     return updated;
   }
 
@@ -1026,7 +1030,11 @@ export class IssuesRepo {
       : resolveIssueArchiveSettings(null).sweepIntervalMs;
   }
 
-  private notifyParentOfChildDone(previous: MultiremiIssue, issue: MultiremiIssue): void {
+  private notifyParentOfChildDone(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+  ): void {
     if (!issue.parentIssueId) return;
     if (previous.status === "done" || issue.status !== "done") return;
     const parent = this.getIssue(issue.parentIssueId);
@@ -1045,7 +1053,7 @@ export class IssuesRepo {
       childIssueId: issue.id,
       child_issue_id: issue.id,
     });
-    this.triggerParentAssigneeForChildDone(parent, issue, comment);
+    this.triggerParentAssigneeForChildDone(parent, issue, comment, parentTaskId);
   }
 
   private parentAssigneeMentionPrefix(parent: MultiremiIssue): string {
@@ -1110,12 +1118,17 @@ export class IssuesRepo {
     return comment;
   }
 
-  private triggerParentAssigneeForChildDone(parent: MultiremiIssue, child: MultiremiIssue, systemComment: MultiremiIssueComment): void {
+  private triggerParentAssigneeForChildDone(
+    parent: MultiremiIssue,
+    child: MultiremiIssue,
+    systemComment: MultiremiIssueComment,
+    parentTaskId: string | null,
+  ): void {
     if (!parent.assigneeType || !parent.assigneeId) return;
     if (parent.assigneeType === "agent") {
       const agent = this.ctx.agents().getAgent(parent.assigneeId);
       if (!agent || agent.archivedAt || agent.workspaceId !== parent.workspaceId) return;
-      this.enqueueChildDoneParentTask(parent, agent, systemComment, parent.assigneeType, parent.assigneeId);
+      this.enqueueChildDoneParentTask(parent, agent, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId);
       return;
     }
     if (parent.assigneeType !== "squad") return;
@@ -1125,7 +1138,7 @@ export class IssuesRepo {
     if (this.effectiveChildAgentOwner(child) === squad.leaderId) return;
     const leader = this.ctx.agents().getAgent(squad.leaderId);
     if (!leader || leader.archivedAt || leader.workspaceId !== parent.workspaceId) return;
-    this.enqueueChildDoneParentTask(parent, leader, systemComment, parent.assigneeType, parent.assigneeId);
+    this.enqueueChildDoneParentTask(parent, leader, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId);
   }
 
   private enqueueChildDoneParentTask(
@@ -1134,6 +1147,7 @@ export class IssuesRepo {
     systemComment: MultiremiIssueComment,
     assigneeType: MultiremiAssigneeType,
     assigneeId: string,
+    parentTaskId: string | null,
   ): void {
     if (this.hasActiveTaskForIssueAndAgent(parent.id, agent.id)) return;
     const task = this.ctx.tasks().createTask({
@@ -1142,6 +1156,7 @@ export class IssuesRepo {
       triggerCommentId: systemComment.id,
       workspaceId: parent.workspaceId,
       prompt: childDoneParentTaskPrompt(systemComment),
+      parentTaskId,
     });
     this.ctx.appendIssueActivity(parent.id, {
       actorType: "system",
@@ -1230,6 +1245,7 @@ export class IssuesRepo {
         issueId: id,
         workspaceId: current.workspaceId,
         prompt: input.prompt?.trim() || current.title,
+        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
       });
     }
     if (assigneeType === "member") {
