@@ -27,7 +27,6 @@ describe("TokensEndpoints daemon credential provisioning", () => {
     await expect(endpoints.provisionDaemonCredential({
       workspace_id: "ws/one",
       name: "Build machine",
-      expires_in_days: 365,
     })).resolves.toEqual({
       token: "mdt_daemoncredential",
       tokenId: "dtk_daemoncredential",
@@ -37,15 +36,15 @@ describe("TokensEndpoints daemon credential provisioning", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://api.example.test/api/multiremi/install/daemon",
     );
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-      method: "POST",
-      body: JSON.stringify({
-        workspace_id: "ws/one",
-        token_name: "Build machine",
-        expires_in_days: 365,
-        create_token: true,
-      }),
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request).toMatchObject({ method: "POST" });
+    const requestBody = JSON.parse(String(request.body));
+    expect(requestBody).toEqual({
+      workspace_id: "ws/one",
+      token_name: "Build machine",
+      create_token: true,
     });
+    expect(requestBody).not.toHaveProperty("expires_in_days");
   });
 
   it.each([

@@ -107,7 +107,6 @@ describe("ConnectRemoteDialog", () => {
     expect(provisionDaemonCredential).toHaveBeenCalledWith({
       workspace_id: "ws-test",
       name: expect.stringMatching(/^Remi daemon \d{4}-\d{2}-\d{2}$/),
-      expires_in_days: 365,
     });
   });
 
@@ -155,6 +154,25 @@ describe("ConnectRemoteDialog", () => {
         queryKey: runtimeKeys.daemonInventory("ws-test"),
       }),
     );
+  });
+
+  it("shows the server error message and code under the credential error", async () => {
+    provisionDaemonCredential.mockRejectedValueOnce(
+      Object.assign(new Error("API error: 409 Conflict"), {
+        body: {
+          message: "Daemon credential creation is disabled",
+          code: "daemon_credential_disabled",
+        },
+      }),
+    );
+    const { baseElement } = renderDialog();
+
+    await waitFor(() =>
+      expect(baseElement).toHaveTextContent(
+        "Reason: Daemon credential creation is disabled (daemon_credential_disabled)",
+      ),
+    );
+    expect(baseElement).not.toHaveTextContent("API error: 409 Conflict");
   });
 
   it("refreshes daemon inventory after provisioning succeeds", async () => {
