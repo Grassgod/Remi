@@ -13,6 +13,7 @@ import enRuntimes from "../../locales/en/runtimes.json";
 const fixture = vi.hoisted(() => ({
   runtimes: [] as AgentRuntime[],
   daemons: [] as DaemonInventoryEntry[],
+  searchParams: new URLSearchParams(),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -54,6 +55,14 @@ vi.mock("@multiremi/core/runtimes/hooks", () => ({
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({
   useIsMobile: () => true,
 }));
+vi.mock("../../navigation", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../navigation")>("../../navigation");
+  return {
+    ...actual,
+    useNavigation: () => ({ searchParams: fixture.searchParams }),
+  };
+});
 vi.mock("react-resizable-panels", () => ({
   Group: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -119,6 +128,7 @@ function renderPage(props: RuntimesPageProps = {}) {
 describe("RuntimesPage mobile machine actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fixture.searchParams = new URLSearchParams();
     fixture.runtimes = [makeRuntime()];
     fixture.daemons = [
       {
@@ -206,5 +216,30 @@ describe("RuntimesPage mobile machine actions", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent(
       "retiring daemon-token-only-123456789",
     );
+  });
+
+  it("selects the machine requested by a runtime detail deep link", async () => {
+    fixture.runtimes = [
+      makeRuntime({
+        id: "runtime-1",
+        daemon_id: "daemon-1",
+        name: "Claude (first-host)",
+        device_info: "first-host",
+      }),
+      makeRuntime({
+        id: "runtime-2",
+        daemon_id: "daemon-2",
+        name: "Codex (target-host)",
+        device_info: "target-host",
+        provider: "codex",
+      }),
+    ];
+    fixture.searchParams = new URLSearchParams("machine=local%3Adaemon-2");
+
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "target-host" }),
+    ).toBeInTheDocument();
   });
 });
