@@ -71,7 +71,8 @@ import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multiremi/core/p
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { inboxKeys, deduplicateInboxItems } from "@multiremi/core/inbox/queries";
+import { inboxKeys } from "@multiremi/core/inbox/queries";
+import { countAttentionUnreadInboxItems } from "@multiremi/core/inbox";
 import { api, ApiError } from "@multiremi/core/api";
 import { useModalStore } from "@multiremi/core/modals";
 import { useConfigStore } from "@multiremi/core/config";
@@ -374,8 +375,8 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
     queryFn: () => api.listInbox(),
     enabled: !!wsId,
   });
-  const unreadCount = React.useMemo(
-    () => deduplicateInboxItems(inboxItems).filter((i) => !i.read).length,
+  const inboxAttentionCount = React.useMemo(
+    () => countAttentionUnreadInboxItems(inboxItems),
     [inboxItems],
   );
   const hasRuntimeUpdates = useMyRuntimesNeedUpdate(wsId);
@@ -652,9 +653,9 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       >
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "inbox" && unreadCount > 0 && (
-                          <span className="ml-auto text-xs">
-                            {unreadCount > 99 ? "99+" : unreadCount}
+                        {item.key === "inbox" && inboxAttentionCount > 0 && (
+                          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            {inboxAttentionCount > 99 ? "99+" : inboxAttentionCount}
                           </span>
                         )}
                         {item.key === "workbench" && workbenchPendingCount > 0 && (
