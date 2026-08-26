@@ -239,6 +239,7 @@ const mockApiObj = vi.hoisted(() => ({
   }),
   listTaskMessages: vi.fn().mockResolvedValue([]),
   listChildIssues: vi.fn().mockResolvedValue({ issues: [] }),
+  listGeneratedIssues: vi.fn().mockResolvedValue({ issues: [] }),
   listIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),
   uploadFile: vi.fn(),
   listIssueReactions: vi.fn().mockResolvedValue([]),
@@ -564,6 +565,7 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssueReactions.mockResolvedValue([]);
     mockApiObj.listIssueSubscribers.mockResolvedValue([]);
     mockApiObj.listChildIssues.mockResolvedValue({ issues: [] });
+    mockApiObj.listGeneratedIssues.mockResolvedValue({ issues: [] });
     mockApiObj.listIssues.mockResolvedValue({ issues: [], total: 0 });
     mockApiObj.getActiveTasksForIssue.mockResolvedValue({ tasks: [] });
     mockApiObj.listTasksByIssue.mockResolvedValue([]);
@@ -594,6 +596,71 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("shows the completed-without-output empty state for a done intake", async () => {
+    mockApiObj.getIssue.mockResolvedValue({
+      ...mockIssue,
+      issue_kind: "intake",
+      status: "done",
+    });
+
+    renderIssueDetail();
+
+    expect(await screen.findByText(
+      "Triage is complete. No execution issues were created.",
+    )).toBeInTheDocument();
+    expect(screen.queryByText(
+      "The agent is still triaging this request.",
+    )).not.toBeInTheDocument();
+  });
+
+  it("keeps the triaging empty state for an in-progress intake", async () => {
+    mockApiObj.getIssue.mockResolvedValue({
+      ...mockIssue,
+      issue_kind: "intake",
+      status: "in_progress",
+    });
+
+    renderIssueDetail();
+
+    expect(await screen.findByText(
+      "The agent is still triaging this request.",
+    )).toBeInTheDocument();
+    expect(screen.queryByText(
+      "Triage is complete. No execution issues were created.",
+    )).not.toBeInTheDocument();
+  });
+
+  it("shows the generated issue count and linked issue", async () => {
+    const generatedIssue: Issue = {
+      ...mockIssue,
+      id: "issue-2",
+      number: 2,
+      identifier: "TES-2",
+      title: "Implement the execution step",
+      issue_kind: "execution",
+      source_issue_id: mockIssue.id,
+    };
+    mockApiObj.getIssue.mockResolvedValue({
+      ...mockIssue,
+      issue_kind: "intake",
+      status: "done",
+    });
+    mockApiObj.listGeneratedIssues.mockResolvedValue({
+      issues: [generatedIssue],
+    });
+
+    renderIssueDetail();
+
+    expect(await screen.findByText("Generated issues · 1")).toBeInTheDocument();
+    const generatedIssueLink = screen.getByRole("link", {
+      name: /TES-2Implement the execution step/,
+    });
+    expect(generatedIssueLink).toHaveAttribute("href", "/test/issues/issue-2");
+    expect(screen.queryByText(
+      "Triage is complete. No execution issues were created.",
+    )).not.toBeInTheDocument();
   });
 
   it("renames an issue with Luna and offers an undo action", async () => {

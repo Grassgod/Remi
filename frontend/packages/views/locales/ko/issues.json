@@ -204,6 +204,7 @@
     "section_generated_issues": "생성된 issue · {{count}}",
     "section_source_intake": "에이전트로 생성됨",
     "generated_issues_empty": "에이전트가 이 요청을 분류하고 있습니다.",
+    "generated_issues_empty_terminal": "분류가 완료되었지만 실행 issue가 생성되지 않았습니다.",
     "workspace_status_label": "상태",
     "workspace_mode": "모드",
     "workspace_read_only_snapshot": "읽기 전용 프로젝트 스냅샷",
