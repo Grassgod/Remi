@@ -200,4 +200,46 @@ describe("RuntimesPage machine switching isolates the CLI update flow", () => {
       expect.anything(),
     );
   });
+
+  it("drops an update whose initiate resolves after the machine was switched away", async () => {
+    vi.useFakeTimers();
+    let resolveInitiate: (update: { id: string }) => void = () => {};
+    apiMocks.initiateUpdate.mockImplementation(
+      () =>
+        new Promise<{ id: string }>((resolve) => {
+          resolveInitiate = resolve;
+        }),
+    );
+
+    renderPage();
+    await act(async () => Promise.resolve());
+
+    // Machine A: start an update and leave initiate() in flight. No poll
+    // interval exists yet, so unmount cleanup has nothing to clear.
+    await selectMachine("host-a");
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    await act(async () => Promise.resolve());
+    expect(apiMocks.initiateUpdate).toHaveBeenCalledWith("runtime-a", "0.3.1");
+
+    await selectMachine("host-b");
+    const timersBeforeResolve = vi.getTimerCount();
+
+    // A's request lands after its control is gone: it must not install a poll.
+    await act(async () => {
+      resolveInitiate({ id: "update-1" });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(apiMocks.getUpdateResult).not.toHaveBeenCalled();
+    expect(apiMocks.initiateUpdate).toHaveBeenCalledTimes(1);
+    expect(apiMocks.initiateUpdate).not.toHaveBeenCalledWith(
+      "runtime-b",
+      expect.anything(),
+    );
+    // No orphaned timer outlives the discarded run.
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(timersBeforeResolve);
+  });
 });

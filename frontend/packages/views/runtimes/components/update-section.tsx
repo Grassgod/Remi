@@ -94,58 +94,78 @@ function useUpdateFlow(
   const [error, setError] = useState("");
   const [output, setOutput] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const runIdRef = useRef(0);
 
-  const cleanup = useCallback(() => {
+  const clearTimers = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    timeoutsRef.current.forEach(clearTimeout);
+    timeoutsRef.current = [];
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
+  // Invalidates the in-flight run on top of clearing live timers. A run still
+  // awaiting initiate() owns no timer yet, so clearing alone cannot stop it
+  // from installing an interval after this component unmounts (or after a
+  // newer run supersedes it) — the generation check below is what does.
+  const cancel = useCallback(() => {
+    runIdRef.current += 1;
+    clearTimers();
+  }, [clearTimers]);
+
+  useEffect(() => cancel, [cancel]);
+
+  const schedule = useCallback((fn: () => void, ms: number) => {
+    timeoutsRef.current.push(setTimeout(fn, ms));
+  }, []);
 
   const run = useCallback(
     async (initiate: () => Promise<{ id: string }>) => {
-      cleanup();
+      cancel();
+      const runId = runIdRef.current;
+      const stale = () => runIdRef.current !== runId;
       setStatus("pending");
       setError("");
       setOutput("");
       try {
         const update = await initiate();
+        if (stale()) return;
         pollRef.current = setInterval(async () => {
           try {
             const result = await api.getUpdateResult(runtimeId, update.id);
+            if (stale()) return;
             setStatus(result.status as RuntimeUpdateStatus);
             if (result.status === "completed") {
               setOutput(result.output ?? completedFallback);
-              cleanup();
+              clearTimers();
               // The daemon restarts + re-registers after the update, so the new
               // version lands a few seconds later. Refetch the runtime now and
               // again over the next ~20s to catch it without a manual reload.
               onRefresh();
-              [5000, 12000, 20000].forEach((ms) =>
-                setTimeout(onRefresh, ms),
-              );
+              [5000, 12000, 20000].forEach((ms) => schedule(onRefresh, ms));
               // Clear the completed pill after the row has had a chance to
               // refresh to the new version.
-              setTimeout(() => setStatus(null), 6000);
+              schedule(() => setStatus(null), 6000);
             } else if (
               result.status === "failed" ||
               result.status === "timeout"
             ) {
               setError(result.error ?? t(($) => $.update.unknown_error));
-              cleanup();
+              clearTimers();
             }
           } catch {
             // ignore poll errors
           }
         }, 2000);
       } catch {
+        if (stale()) return;
         setStatus("failed");
         setError(t(($) => $.update.initiate_failed));
       }
     },
-    [runtimeId, completedFallback, cleanup, t, onRefresh],
+    [runtimeId, completedFallback, cancel, clearTimers, schedule, t, onRefresh],
   );
 
   const active = status === "pending" || status === "running";
