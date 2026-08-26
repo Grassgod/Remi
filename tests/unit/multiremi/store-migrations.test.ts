@@ -83,6 +83,9 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
       "trigger_id", "event_id", "issue_session_id", "repository_id", "dedupe_key",
     ]));
+    expect(columnNames(database, "multiremi_scm_sync_cursors")).toEqual(expect.arrayContaining([
+      "consecutive_failures", "suspended_until",
+    ]));
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining([
       "issue_kind", "source_issue_id", "lifecycle_state", "completed_at", "archived_at",
     ]));

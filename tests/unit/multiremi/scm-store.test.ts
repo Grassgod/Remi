@@ -622,13 +622,20 @@ describe("SCM connection and canonical event store", () => {
       leaseToken: "stale-token",
       watermark: "2026-08-21T00:00:20.000Z",
     })).toBeNull();
-    expect(store.updateClaimedScmSyncCursor({
+    const updated = store.updateClaimedScmSyncCursor({
       connectionId: connection.id,
       repositoryId: "repo_widgets",
       stream: "change_requests",
       leaseToken: first!.leaseToken!,
       watermark: "2026-08-21T00:00:20.000Z",
-    })?.watermark).toBe("2026-08-21T00:00:20.000Z");
+      consecutiveFailures: 3,
+      suspendedUntil: "2026-08-21T06:00:00.000Z",
+    });
+    expect(updated).toMatchObject({
+      watermark: "2026-08-21T00:00:20.000Z",
+      consecutiveFailures: 3,
+      suspendedUntil: "2026-08-21T06:00:00.000Z",
+    });
     expect(store.releaseScmSyncStream({
       connectionId: connection.id,
       repositoryId: "repo_widgets",

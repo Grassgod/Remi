@@ -1247,6 +1247,8 @@ export function runMigrations(db: SqlDatabase): void {
       last_started_at TEXT,
       last_completed_at TEXT,
       last_error TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      suspended_until TEXT,
       lease_owner TEXT,
       lease_until TEXT,
       lease_token TEXT,
@@ -1865,6 +1867,12 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_owner TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_until TEXT");
   addColumnIfMissing(db, "multiremi_scm_sync_cursors", "lease_token TEXT");
+  addColumnIfMissing(
+    db,
+    "multiremi_scm_sync_cursors",
+    "consecutive_failures INTEGER NOT NULL DEFAULT 0",
+  );
+  addColumnIfMissing(db, "multiremi_scm_sync_cursors", "suspended_until TEXT");
   addColumnIfMissing(
     db,
     "multiremi_scm_connections",
