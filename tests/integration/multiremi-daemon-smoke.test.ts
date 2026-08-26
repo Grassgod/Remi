@@ -769,6 +769,65 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("keeps a real answer when compaction status arrives at the turn tail", async () => {
+    const { store, taskId, issueId } = await runCompactionFinalizeCase({
+      id: "answer-tail",
+      chunks: [
+        "Implemented the fix and verified it.",
+        "Compacting...",
+        "\n\nCompacting completed.",
+      ],
+      lastText: "Implemented the fix and verified it.",
+    });
+
+    expect(store.getTask(taskId)).toMatchObject({
+      status: "completed",
+      result: "Implemented the fix and verified it.",
+    });
+    expect(store.listIssueComments(issueId).map((comment) => comment.body)).toEqual([
+      "Implemented the fix and verified it.",
+    ]);
+    expect(store.listTaskMessages(taskId).map((message) => message.type)).toEqual([
+      "text",
+      "compaction",
+      "compaction",
+    ]);
+  });
+
+  it("fails a compaction-only run after the provider filters its fallback text", async () => {
+    const { store, taskId, issueId } = await runCompactionFinalizeCase({
+      id: "compaction-only",
+      chunks: ["Compacting...", "\n\nCompacting completed."],
+      lastText: "",
+    });
+
+    expect(store.getTask(taskId)).toMatchObject({
+      status: "failed",
+      error: "Agent returned empty output after compaction.",
+      failureReason: "agent_error.empty_or_unparseable_output",
+    });
+    expect(store.listIssueComments(issueId)).toEqual([]);
+    expect(store.listTaskMessages(taskId).map((message) => message.type)).toEqual([
+      "compaction",
+      "compaction",
+    ]);
+  });
+
+  it("preserves the existing placeholder for empty output without compaction", async () => {
+    const { store, taskId, issueId } = await runCompactionFinalizeCase({
+      id: "ordinary-empty",
+      chunks: [],
+      lastText: "",
+    });
+
+    expect(store.getTask(taskId)).toMatchObject({
+      status: "completed",
+      result: "Task completed.",
+    });
+    expect(store.listIssueComments(issueId)).toEqual([]);
+    expect(store.listTaskMessages(taskId)).toEqual([]);
+  });
+
   it("reconciles, materializes and cleans a direct task Agent Plugin runtime", async () => {
     const { store, workDir: root } = daemonTestBed("multiremi-daemon-plugin-");
     const userRepo = join(root, "user-repo");
@@ -3013,6 +3072,74 @@ function daemonTestBed(tmpPrefix: string): { store: MultiremiStore; workDir: str
   db = new Database(":memory:");
   workDir = mkdtempSync(join(tmpdir(), tmpPrefix));
   return { store: new MultiremiStore(db), workDir };
+}
+
+async function runCompactionFinalizeCase(spec: {
+  id: string;
+  chunks: string[];
+  lastText: string;
+}): Promise<{ store: MultiremiStore; taskId: string; issueId: string }> {
+  const { store, workDir: root } = daemonTestBed(`multiremi-daemon-${spec.id}-`);
+  const agent = store.createAgent({
+    name: `Claude ${spec.id}`,
+    provider: "claude",
+    cwd: root,
+  });
+  const issue = store.createIssue({ title: `Compaction finalize ${spec.id}`, workspaceId: "local" });
+  const task = store.createTask({
+    agentId: agent.id,
+    issueId: issue.id,
+    prompt: "Finish the task",
+  });
+  const daemonToken = await store.createAccessToken({
+    name: `Compaction finalize ${spec.id} daemon`,
+    type: "daemon",
+    workspaceId: "local",
+  });
+  const server = startMultiremiServer({
+    store,
+    scheduler: null,
+    authToken: `root-${spec.id}-secret`,
+    hostname: "127.0.0.1",
+    port: 0,
+  });
+  const providerFactory: MultiremiDaemonProviderFactory = () => ({
+    async *sendStream() {
+      for (const text of spec.chunks) {
+        yield {
+          sessionUpdate: "agent_message_chunk",
+          content: [{ type: "text", text }],
+        } as any;
+      }
+    },
+    getLastResponse: () => ({
+      text: spec.lastText,
+      sessionId: `sess-${spec.id}`,
+      requestId: `req-${spec.id}`,
+    }),
+  });
+
+  try {
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      daemonId: `daemon-${spec.id}`,
+      runtimeName: `compaction-${spec.id}-runtime`,
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      daemonPort: 0,
+      gcEnabled: false,
+      workspacesRoot: join(root, "workspaces"),
+      repoCacheRoot: join(root, ".repo-cache"),
+      providerFactory,
+    });
+    await daemon.start();
+  } finally {
+    server.stop(true);
+  }
+
+  return { store, taskId: task.id, issueId: issue.id };
 }
 
 async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Promise<void> {
