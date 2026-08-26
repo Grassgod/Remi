@@ -14,6 +14,7 @@ import {
 } from "./event-format";
 import {
   formatToolInputSummary,
+  formatRunningToolSummary,
   isBashCommandMissing,
   isCollabInput,
   isSubagentActivityInput,
@@ -47,8 +48,9 @@ export const TranscriptStepRow = ({
   const autoExpanded = useRef(false);
   const Icon = toolIcon(step.tool, step.input);
   const summary = formatToolInputSummary(step.tool ?? "", step.input);
-  const commandMissing = isBashCommandMissing(step.tool, step.input);
   const running = isStepRunning(step.status);
+  const runningSummary = running && !summary ? formatRunningToolSummary(step.tool, step.meta) : "";
+  const commandMissing = isBashCommandMissing(step.tool, step.input, running);
   // Codex sometimes abandons a call and re-issues it under a new id; the orphan
   // never gets a terminal frame. Once the task is done it cannot still be
   // running, so show it as unfinished rather than spinning forever.
@@ -130,7 +132,9 @@ export const TranscriptStepRow = ({
                   {t(($) => $.transcript.command_not_recorded)}
                 </span>
               ) : (
-                <span className="truncate font-mono">{summary}</span>
+                <span className="truncate font-mono">
+                  {summary || runningSummary || (running ? t(($) => $.transcript.tool_running) : "")}
+                </span>
               )}
             </div>
           </CollapsibleTrigger>

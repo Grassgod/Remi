@@ -54,7 +54,7 @@ const CLAUDE_BASH_COMPLETED = {
 };
 
 describe("daemon task-message mapper", () => {
-  it("keeps the claude terminal placeholder out of the tool_use and lands the real command on the result", () => {
+  it("publishes late claude input while the call is running without repeating it on the result", () => {
     const map = createEventMapper(createAdapter("claude"));
 
     const initial = map(event(CLAUDE_BASH_INITIAL));
@@ -69,9 +69,22 @@ describe("daemon task-message mapper", () => {
     expect(use.input).toBeUndefined();
     expect(use.meta).toMatchObject({ title: "Terminal", kind: "execute", terminal_id: "term_42" });
 
-    // The refining update carries the args but no output and no terminal
-    // status, so it emits nothing on its own.
-    expect(map(event(CLAUDE_BASH_REFINE))).toEqual([]);
+    // The refining update carries the real args before the call finishes, so a
+    // second tool_use refreshes the live step under the same call id.
+    const refined = map(event(CLAUDE_BASH_REFINE));
+    expect(refined).toHaveLength(1);
+    expect(refined[0]).toMatchObject({
+      type: "tool_use",
+      toolCallId: use.toolCallId,
+      status: "pending",
+      tool: "Bash",
+      input: {
+        command: "echo hello_from_acp_test",
+        description: "Echo test string",
+        terminal_id: "term_42",
+      },
+      meta: { title: "echo hello_from_acp_test", kind: "execute" },
+    });
     // The toolResponse-only frame carries neither output nor status either.
     expect(map(event(CLAUDE_BASH_TOOL_RESPONSE))).toEqual([]);
 
@@ -82,12 +95,9 @@ describe("daemon task-message mapper", () => {
     expect(result.toolCallId).toBe(use.toolCallId);
     expect(result.status).toBe("completed");
     expect(result.output).toBe(JSON.stringify("hello_from_acp_test"));
-    // The merged input reaches the UI through the result (the use had none).
-    expect(result.input).toMatchObject({
-      command: "echo hello_from_acp_test",
-      description: "Echo test string",
-      terminal_id: "term_42",
-    });
+    // The running refresh already published this exact input, so the terminal
+    // frame does not repeat it.
+    expect(result.input).toBeUndefined();
     expect(typeof result.meta?.duration_ms).toBe("number");
 
     // Fingerprint idempotency: a repeat of the same terminal frame stays silent.
@@ -129,16 +139,18 @@ describe("daemon task-message mapper", () => {
 
     map(event(CLAUDE_BASH_INITIAL));
     map(event({ ...CLAUDE_BASH_REFINE, rawInput: { command: "echo first", description: "first" } }));
-    map(event({ ...CLAUDE_BASH_REFINE, rawInput: { command: "echo second" } }));
+    const refined = map(event({ ...CLAUDE_BASH_REFINE, rawInput: { command: "echo second" } }));
     const finished = map(event(CLAUDE_BASH_COMPLETED));
 
+    expect(refined).toHaveLength(1);
     expect(finished).toHaveLength(1);
     // Last writer wins per key; keys no later event mentions survive.
-    expect(finished[0]?.input).toMatchObject({
+    expect(refined[0]?.input).toMatchObject({
       command: "echo second",
       description: "first",
       terminal_id: "term_42",
     });
+    expect(finished[0]?.input).toBeUndefined();
   });
 });
 
