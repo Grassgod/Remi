@@ -358,3 +358,196 @@ describe("UsageSection — Cost-by block honesty (MUL-93)", () => {
     expect(screen.getByText("—")).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// MUL-123 — total-only token history.
+//
+// Rows recorded before the MUL-92 daemon upgrade carry a context-occupancy
+// `total_tokens` with all four splits at zero. They are REAL usage (so they
+// count toward the Tokens KPI) but carry no billable dimension (so they can
+// never reach a dollar figure). The KPI row used to ignore them entirely,
+// rendering "Tokens 0" beside a token chart that stacked the same 26.2M —
+// and a fabricated "$0.00" cost for a priced model (MUL-93).
+// ---------------------------------------------------------------------------
+
+describe("UsageSection — total-only token history (MUL-123)", () => {
+  // The production repro: one claude-fable-5 row (a PRICED model, so the
+  // unpriced-model path cannot explain anything here), splits all zero.
+  const TOTAL_ONLY_ROW = {
+    runtime_id: "r-1",
+    date: TODAY,
+    provider: "anthropic",
+    model: "claude-fable-5",
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: 26_179_959,
+  };
+
+  it("counts total-only tokens in the Tokens KPI instead of showing 0", () => {
+    usageState.current = { data: [TOTAL_ONLY_ROW] };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // The headline number matches what the token chart stacks.
+    expect(screen.getByText("26.2M")).toBeTruthy();
+    expect(screen.queryByText("0")).toBeNull();
+  });
+
+  it("explains the total composition in the Tokens hint", () => {
+    usageState.current = { data: [TOTAL_ONLY_ROW] };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // "in 0 · out 0" alone left the user reconciling 0 against 26.2M.
+    expect(screen.getByText(/26\.2M total only/)).toBeTruthy();
+  });
+
+  it("renders — not $0.00 for cost when every token is total-only", () => {
+    usageState.current = { data: [TOTAL_ONLY_ROW] };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // claude-fable-5 IS priced, so this is not the unpriced-model state —
+    // there is simply no billable dimension to price (MUL-93).
+    expect(screen.queryByText("$0.00")).toBeNull();
+    expect(
+      screen.getByText(/Only total tokens were recorded — cost unavailable/),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/No pricing for the models used — cost unavailable/),
+    ).toBeNull();
+  });
+
+  it("renders — for cache savings rather than asserting an unmeasured 0% hit", () => {
+    usageState.current = { data: [TOTAL_ONLY_ROW] };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // Cache semantics still describe split data only — but with no split
+    // data at all, "$0.00 · 0% hit · 0 reads" would claim a cache miss that
+    // was never measured. Cost + cache savings are both "—".
+    expect(screen.getAllByText("—").length).toBe(2);
+    expect(
+      screen.getByText(
+        /Only total tokens were recorded — savings can't be calculated/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/0% hit/)).toBeNull();
+  });
+
+  it("keeps a real cost figure in a mixed window and names the total-only remainder", () => {
+    usageState.current = {
+      data: [
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          input_tokens: 1_000_000,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: "claude-fable-5",
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          total_tokens: 500_000,
+        },
+      ],
+    };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // Tokens count BOTH rows: 1M split + 500K total-only.
+    expect(screen.getByText("1.5M")).toBeTruthy();
+    // Cost prices the split row only and stays a real figure — total-only
+    // tokens never participate in cost, they just don't erase it either.
+    expect(screen.getByText("$3.00")).toBeTruthy();
+    expect(
+      screen.queryByText(/Only total tokens were recorded — cost unavailable/),
+    ).toBeNull();
+    // The hint reconciles the headline: 1M in, 500K unpriceable.
+    expect(screen.getByText(/500K total only/)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MUL-123 — the pricing CTA is a dead end for total-only rows: saving a
+// custom rate for the model changes nothing, because there is no
+// input/output/cache quantity to multiply it by. The notice must therefore
+// filter per ROW, not per model.
+// ---------------------------------------------------------------------------
+
+describe("UsageSection — pricing notice excludes total-only rows (MUL-123)", () => {
+  const UNPRICED_MODEL = "totally-unknown-model-xyz";
+
+  it("hides the notice when the unpriced model only has total-only rows", () => {
+    usageState.current = {
+      data: [
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: UNPRICED_MODEL,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          total_tokens: 9_000_000,
+        },
+      ],
+    };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // No CTA, and the model is not named as "fixable by adding a price".
+    expect(
+      screen.queryByRole("button", { name: "Set custom prices" }),
+    ).toBeNull();
+    expect(screen.queryByText(/has no maintained price/)).toBeNull();
+    // The tokens are still counted — the row is not being hidden, only the
+    // CTA that cannot help it.
+    expect(screen.getByText("9M")).toBeTruthy();
+  });
+
+  it("still shows the notice when the same model has both split and total-only rows", () => {
+    usageState.current = {
+      data: [
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: UNPRICED_MODEL,
+          input_tokens: 4_000,
+          output_tokens: 1_000,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+        {
+          runtime_id: "r-1",
+          date: TODAY,
+          provider: "anthropic",
+          model: UNPRICED_MODEL,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          total_tokens: 9_000_000,
+        },
+      ],
+    };
+    render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
+
+    // Filtering per MODEL would wrongly drop this model entirely; per ROW
+    // keeps it, because its 5K split tokens DO become priceable.
+    expect(
+      screen.getByRole("button", { name: "Set custom prices" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/has no maintained price/)).toBeTruthy();
+    // Named in the banner (and again in the chart-area copy, which lists
+    // unmapped models independently).
+    expect(screen.getAllByText(UNPRICED_MODEL).length).toBeGreaterThanOrEqual(1);
+  });
+});

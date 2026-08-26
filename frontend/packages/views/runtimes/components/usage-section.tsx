@@ -23,6 +23,8 @@ import {
   aggregateCostByAgent,
   aggregateCostByModel,
   collectUnmappedModels,
+  getSplitTokens,
+  getTotalOnlyTokens,
   hasUnpricedCacheReads,
   hasUnpricedTokens,
   pctChange,
@@ -176,8 +178,14 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
   const totals = computeTotals(filtered);
   const prevTotals = computeTotals(prevFiltered);
 
-  const tokensTotal =
+  // Split tokens are the priceable dimension; total-only tokens are real
+  // usage the daemon recorded before MUL-92 without an input/output/cache
+  // breakdown. The Tokens KPI reports BOTH (the user wants the true volume,
+  // and the token chart already stacks a total-only segment), while every
+  // dollar figure below derives from split tokens alone.
+  const splitTokensTotal =
     totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
+  const tokensTotal = splitTokensTotal + totals.totalOnly;
   const cacheableTokens = totals.input + totals.cacheRead;
   const cacheHitRate =
     cacheableTokens > 0 ? Math.round((totals.cacheRead / cacheableTokens) * 100) : 0;
@@ -191,10 +199,27 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
   // metric's dimension: a zero-token unpriced row, or an unpriced model
   // with no cache reads, must not poison a real $0.00 from priced
   // free-tier models.
-  const costUnavailable =
+  const costUnpriced =
     tokensTotal > 0 && totals.cost === 0 && hasUnpricedTokens(filtered);
+  // Every recorded token lacks a billable dimension. The model may well be
+  // priced (claude-fable-5 is), so `hasUnpricedTokens` says nothing here —
+  // yet $0.00 next to millions of tokens is still a fabricated figure.
+  // Mirrors the dashboard's `costTotalOnly`.
+  const costTotalOnly = tokensTotal > 0 && totals.totalOnly === tokensTotal;
+  const costUnavailable = costUnpriced || costTotalOnly;
+  // Cache-savings semantics are unchanged — they only ever describe split
+  // data. But with no split tokens at all there is nothing to describe, so
+  // "$0.00 · 0% hit · 0 reads" would assert a cache miss we never measured.
+  const cacheTotalOnly = tokensTotal > 0 && splitTokensTotal === 0;
   const cacheSavingsUnavailable =
-    totals.cacheSavings === 0 && hasUnpricedCacheReads(filtered);
+    cacheTotalOnly ||
+    (totals.cacheSavings === 0 && hasUnpricedCacheReads(filtered));
+
+  // The pricing CTA can only help rows with billable splits: a total-only
+  // row stays unpriceable even after the user saves a custom model rate.
+  // Filter per ROW, not per model — a model with both split and total-only
+  // rows still belongs in the notice. Matches the dashboard.
+  const splitFiltered = filtered.filter((row) => getSplitTokens(row) > 0);
 
   return (
     <div className="space-y-5">
@@ -238,16 +263,19 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
           (some priced + some unpriced models in the same window) still has
           a visible entry point into the manual-pricing dialog — otherwise
           the chart would render normally and the unmapped tokens would silently
-          contribute $0 to totals. */}
-      <UnmappedPricingNotice usage={filtered} />
+          contribute $0 to totals. Total-only rows are excluded: the dialog's
+          CTA cannot make them priceable. */}
+      <UnmappedPricingNotice usage={splitFiltered} />
 
       <div className="grid grid-cols-3 divide-x rounded-lg border bg-card">
         <KpiCard
           label={t(($) => $.usage.kpi_cost_label, { days })}
           value={costUnavailable ? "—" : fmtMoney(totals.cost)}
           hint={
-            costUnavailable ? (
+            costUnpriced ? (
               <span>{t(($) => $.usage.kpi_cost_unpriced)}</span>
+            ) : costTotalOnly ? (
+              <span>{t(($) => $.usage.kpi_cost_total_only)}</span>
             ) : costDelta == null ? undefined : (
               <span
                 className={
@@ -271,7 +299,9 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
           value={cacheSavingsUnavailable ? "—" : fmtMoney(totals.cacheSavings)}
           accent={totals.cacheSavings > 0 ? "success" : "default"}
           hint={
-            cacheSavingsUnavailable ? (
+            cacheTotalOnly ? (
+              <span>{t(($) => $.usage.kpi_cache_total_only)}</span>
+            ) : cacheSavingsUnavailable ? (
               <span>{t(($) => $.usage.kpi_cache_unpriced)}</span>
             ) : (
               <span>
@@ -286,12 +316,26 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
         <KpiCard
           label={t(($) => $.usage.kpi_tokens_label, { days })}
           value={formatTokens(tokensTotal)}
+          // The hint must ACCOUNT for the headline number. Listing only
+          // in/out left users reconciling "Tokens 26.2M" against "in 0 ·
+          // out 0", which is exactly the "the numbers don't add up"
+          // complaint in MUL-123. Cache read + write are folded into one
+          // segment to keep three tiles readable; the total-only remainder
+          // gets named explicitly whenever it exists.
           hint={
             <span>
-              {t(($) => $.usage.kpi_tokens_hint, {
-                input: formatTokens(totals.input),
-                output: formatTokens(totals.output),
-              })}
+              {totals.totalOnly > 0
+                ? t(($) => $.usage.kpi_tokens_hint_total_only, {
+                    input: formatTokens(totals.input),
+                    output: formatTokens(totals.output),
+                    cache: formatTokens(totals.cacheRead + totals.cacheWrite),
+                    totalOnly: formatTokens(totals.totalOnly),
+                  })
+                : t(($) => $.usage.kpi_tokens_hint, {
+                    input: formatTokens(totals.input),
+                    output: formatTokens(totals.output),
+                    cache: formatTokens(totals.cacheRead + totals.cacheWrite),
+                  })}
             </span>
           }
         />
@@ -961,6 +1005,10 @@ interface UsageTotals {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Tokens from rows that reported a context total with no input/output/
+   *  cache split. They are real usage and count toward the Tokens KPI, but
+   *  they can never be priced — `cost` and `cacheSavings` ignore them. */
+  totalOnly: number;
   cost: number;
   cacheSavings: number;
 }
@@ -972,9 +1020,18 @@ function computeTotals(rows: RuntimeUsage[]): UsageTotals {
       output: acc.output + u.output_tokens,
       cacheRead: acc.cacheRead + u.cache_read_tokens,
       cacheWrite: acc.cacheWrite + u.cache_write_tokens,
+      totalOnly: acc.totalOnly + getTotalOnlyTokens(u),
       cost: acc.cost + estimateCost(u),
       cacheSavings: acc.cacheSavings + estimateCacheSavings(u),
     }),
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, cacheSavings: 0 },
+    {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalOnly: 0,
+      cost: 0,
+      cacheSavings: 0,
+    },
   );
 }

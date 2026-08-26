@@ -425,7 +425,8 @@
     "kpi_cache_label": "캐시 절감 · {{days}}일",
     "kpi_cache_hint": "적중률 {{pct}}% · 읽기 {{reads}}",
     "kpi_tokens_label": "토큰 · {{days}}일",
-    "kpi_tokens_hint": "입력 {{input}} · 출력 {{output}}",
+    "kpi_tokens_hint": "입력 {{input}} · 출력 {{output}} · 캐시 {{cache}}",
+    "kpi_tokens_hint_total_only": "입력 {{input}} · 출력 {{output}} · 캐시 {{cache}} · 총량만 {{totalOnly}}",
     "when_title": "런타임 비용 발생 시점",
     "when_tab_daily": "일별",
     "when_tab_weekly": "주별",
@@ -476,9 +477,11 @@
     "table_cache_w": "캐시 W",
     "no_data": "아직 사용량 데이터가 없습니다",
     "kpi_cost_unpriced": "사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다",
+    "kpi_cost_total_only": "토큰 총량만 기록되어 비용을 계산할 수 없습니다",
     "error_title": "사용량 데이터를 불러올 수 없음",
     "error_body": "사용량 데이터를 불러오지 못했습니다. 사용량이 0이라는 뜻이 아닙니다.",
     "retry": "다시 시도",
-    "kpi_cache_unpriced": "사용한 모델의 가격 정보가 없어 절감액을 계산할 수 없습니다"
+    "kpi_cache_unpriced": "사용한 모델의 가격 정보가 없어 절감액을 계산할 수 없습니다",
+    "kpi_cache_total_only": "토큰 총량만 기록되어 절감액을 계산할 수 없습니다"
   }
 }

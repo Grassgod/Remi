@@ -425,7 +425,8 @@
     "kpi_cache_label": "Cache savings · {{days}}D",
     "kpi_cache_hint": "{{pct}}% hit · {{reads}} reads",
     "kpi_tokens_label": "Tokens · {{days}}D",
-    "kpi_tokens_hint": "in {{input}} · out {{output}}",
+    "kpi_tokens_hint": "in {{input}} · out {{output}} · cache {{cache}}",
+    "kpi_tokens_hint_total_only": "in {{input}} · out {{output}} · cache {{cache}} · {{totalOnly}} total only",
     "when_title": "When this runtime spent",
     "when_tab_daily": "Daily",
     "when_tab_weekly": "Weekly",
@@ -476,9 +477,11 @@
     "table_cache_w": "Cache W",
     "no_data": "No usage data yet",
     "kpi_cost_unpriced": "No pricing for the models used — cost unavailable",
+    "kpi_cost_total_only": "Only total tokens were recorded — cost unavailable",
     "error_title": "Usage data unavailable",
     "error_body": "Usage data failed to load. This does not mean usage is zero.",
     "retry": "Retry",
-    "kpi_cache_unpriced": "No pricing for the models used — savings can't be calculated"
+    "kpi_cache_unpriced": "No pricing for the models used — savings can't be calculated",
+    "kpi_cache_total_only": "Only total tokens were recorded — savings can't be calculated"
   }
 }

@@ -405,7 +405,8 @@
     "kpi_cache_label": "缓存节省 · {{days}} 天",
     "kpi_cache_hint": "命中率 {{pct}}% · 读取 {{reads}}",
     "kpi_tokens_label": "Token · {{days}} 天",
-    "kpi_tokens_hint": "输入 {{input}} · 输出 {{output}}",
+    "kpi_tokens_hint": "输入 {{input}} · 输出 {{output}} · 缓存 {{cache}}",
+    "kpi_tokens_hint_total_only": "输入 {{input}} · 输出 {{output}} · 缓存 {{cache}} · 仅总量 {{totalOnly}}",
     "when_title": "这个运行时在何时消耗",
     "when_tab_daily": "按天",
     "when_tab_weekly": "按周",
@@ -453,9 +454,11 @@
     "table_cache_w": "缓存写",
     "no_data": "还没有使用数据",
     "kpi_cost_unpriced": "所用模型缺少定价，费用不可用",
+    "kpi_cost_total_only": "仅记录了 token 总量，费用不可用",
     "error_title": "用量数据不可用",
     "error_body": "用量数据加载失败，这不代表用量为 0。",
     "retry": "重试",
-    "kpi_cache_unpriced": "所用模型缺少定价，无法计算节省金额"
+    "kpi_cache_unpriced": "所用模型缺少定价，无法计算节省金额",
+    "kpi_cache_total_only": "仅记录了 token 总量，无法计算节省金额"
   }
 }
