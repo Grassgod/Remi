@@ -1317,6 +1317,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.retitle": {
+      "command": "remi issue retitle",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.retitle",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.cancel": {
       "command": "remi issue cancel-task",
       "auth": [
@@ -4638,7 +4651,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.status": {
       "command": "remi platform status",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.status",
       "output": [
@@ -4650,7 +4664,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.operation.list": {
       "command": "remi platform operation list",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.list",
       "output": [
@@ -4713,7 +4728,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.operation.create": {
       "command": "remi platform operation create",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.create",
       "output": [
@@ -4725,7 +4741,8 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "platform.operation.cancel": {
       "command": "remi platform operation cancel",
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.cancel",
       "output": [

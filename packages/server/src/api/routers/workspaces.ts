@@ -74,6 +74,7 @@ import {
 import type { RouterDeps } from "./deps.js";
 import { createAgentFromTemplate, getAgentTemplate } from "../agent-templates.js";
 import { sanitizeWorkspaceProgressSummarySettings } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
+import { sanitizeIssueAutoTitleSettings } from "@multiremi/issue-title/settings.js";
 import {
   autopilotRunSourceRevision,
   repositoryWikiBuildDedupeKey,
@@ -975,7 +976,7 @@ function sanitizeWorkspaceSettingsInput<T extends Partial<CreateWorkspaceInput>>
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) return body;
   return {
     ...body,
-    settings: sanitizeWorkspaceProgressSummarySettings(settings),
+    settings: sanitizeIssueAutoTitleSettings(sanitizeWorkspaceProgressSummarySettings(settings)),
   };
 }
 

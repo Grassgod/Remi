@@ -1,9 +1,9 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 610,
+    "routeCount": 611,
     "routeCountByPrefix": {
-      "native": 195,
+      "native": 196,
       "compat": 402,
       "root": 13
     },
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 347,
+    "mutationRoutes": 348,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -547,6 +547,7 @@
     "POST /api/multiremi/issues/:id/labels",
     "POST /api/multiremi/issues/:id/reactions",
     "POST /api/multiremi/issues/:id/restore",
+    "POST /api/multiremi/issues/:id/retitle",
     "POST /api/multiremi/issues/:id/subscribers",
     "POST /api/multiremi/issues/batch-delete",
     "POST /api/multiremi/issues/batch-update",
@@ -8198,6 +8199,17 @@
             "id": "issue.restore",
             "command": "remi issue restore",
             "capability": "issue.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.retitle",
+            "command": "remi issue retitle",
+            "capability": "issue.retitle",
             "outputs": [
               "table",
               "json",

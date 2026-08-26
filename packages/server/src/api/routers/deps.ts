@@ -8,6 +8,7 @@ import type { RepositoryWikiServiceContract } from "@multiremi/repository-wiki/s
 import type { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { ScmConnectionVerifier } from "@multiremi/scm/verification.js";
 import type { FeishuSidecarEndpointRegistry } from "@multiremi/feishu-ingest/endpoints.js";
+import type { retitleIssue } from "@multiremi/issue-title/service.js";
 
 /**
  * The values `createMultiremiApp` closes over. Domain routers receive them
@@ -29,4 +30,5 @@ export interface RouterDeps {
   sessionArchives: SessionArchiveService;
   verifyScmConnection: ScmConnectionVerifier;
   feishuSidecarEndpoints: FeishuSidecarEndpointRegistry;
+  issueRetitle: typeof retitleIssue;
 }

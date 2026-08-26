@@ -1351,6 +1351,15 @@ export type MultiremiAssigneeType = "agent" | "member" | "squad";
 
 export type MultiremiIssueKind = "execution" | "intake";
 
+export interface MultiremiIssueAutoTitleMetadata {
+  locked?: boolean;
+  generated_at?: string;
+  model?: string;
+  source?: "auto" | "manual";
+  content_hash?: string;
+  count?: number;
+}
+
 export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_TTL_MS = 72 * 60 * 60 * 1000;
 export const MULTIREMI_ISSUE_ARCHIVE_DEFAULT_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 export const MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;

@@ -31,6 +31,7 @@ import {
   cleanString,
   commentCompatibilityResponse,
   currentTaskAccessToken,
+  currentAccessToken,
   issueBatchDeleteCompatibilityInput,
   issueBatchUpdateCompatibilityInput,
   issueCommentListErrorResponse,
@@ -128,6 +129,16 @@ function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIs
 
 export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const { store, sessionArchives } = deps;
+
+  const lockAutoTitleAfterHumanEdit = (c: Context, issue: MultiremiIssue, input: UpdateIssueInput): void => {
+    if (!Object.prototype.hasOwnProperty.call(input, "title")) return;
+    const token = currentAccessToken(c);
+    if (token?.type === "task" || token?.type === "daemon") return;
+    store.setIssueAutoTitleMetadata(issue.id, {
+      ...store.getIssueAutoTitleMetadata(issue.id),
+      locked: true,
+    });
+  };
 
   const issueDeleteAccess = (c: Context, workspaceId: string): Response | null =>
     denyCurrentUserWorkspaceAccess(c, store, workspaceId)
@@ -862,6 +873,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
     const updated = store.updateIssue(issue.id, body);
+    lockAutoTitleAfterHumanEdit(c, updated, body);
     return c.json({ issue: maybeDispatchOnIssueUpdate(store, issue, updated, body) });
   });
   const updateIssueCompatibilityRoute = async (c: Context) => {
@@ -874,6 +886,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const input = issueUpdateCompatibilityInput(body);
     try {
       const updated = store.updateIssue(issue.id, input);
+      lockAutoTitleAfterHumanEdit(c, updated, input);
       const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
       const response = issueCompatibilityResponse(dispatched);
       publishIssueUpdated(c, store, issue, dispatched, input, response);
@@ -886,6 +899,29 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   };
   app.patch("/api/issues/:id", updateIssueCompatibilityRoute);
   app.put("/api/issues/:id", updateIssueCompatibilityRoute);
+  app.post("/api/multiremi/issues/:id/retitle", async (c) => {
+    const issue = issueFromParam(store, c);
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ apply?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (body.apply !== undefined && typeof body.apply !== "boolean") {
+      return c.json({ error: "apply must be a boolean" }, 400);
+    }
+    const result = await deps.issueRetitle(store, issue.id, {
+      source: "manual",
+      apply: body.apply !== false,
+    });
+    const response = {
+      title: result.title,
+      previous_title: result.previousTitle,
+      applied: result.applied,
+      reason: result.reason,
+    };
+    if (result.reason === "gateway_unconfigured") return c.json(response, 422);
+    return c.json(response);
+  });
   app.post("/api/multiremi/issues/:id/restore", (c) => {
     const previous = issueFromParam(store, c);
     if (!previous) return c.json({ error: "issue not found" }, 404);
@@ -1432,7 +1468,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
-    return c.json({ metadata: store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value) });
+    try {
+      return c.json({ metadata: store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value) });
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.put("/api/issues/:id/metadata/:key", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1440,20 +1482,38 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
-    return c.json(store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value));
+    try {
+      return c.json(store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value));
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.delete("/api/multiremi/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    return c.json({ metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key")) });
+    try {
+      return c.json({ metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key")) });
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.delete("/api/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key")));
+    try {
+      return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key")));
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
 }

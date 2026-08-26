@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Activity, AlertCircle, Eye, EyeOff, Save, Waypoints } from "lucide-react";
+import { Activity, AlertCircle, Eye, EyeOff, Save, Sparkles, Waypoints } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardContent } from "@multiremi/ui/components/ui/card";
 import { Label } from "@multiremi/ui/components/ui/label";
@@ -36,6 +36,11 @@ interface ProgressSummarySettings {
   transport: ProgressSummaryTransport;
   model: string;
   openAiModel: string;
+}
+
+interface IssueAutoTitleSettings {
+  enabled: boolean;
+  model: string;
 }
 
 const ENGINE_PLACEHOLDER: Record<Engine, string> = {
@@ -134,6 +139,7 @@ export function ModelGatewayTab() {
           </Card>
 
           {workspace ? <ProgressSummarySection workspace={workspace} /> : null}
+          {workspace ? <IssueAutoTitleSection workspace={workspace} /> : null}
 
           <EngineSection engine="claude" config={config.claude ?? null} wsId={wsId} />
           <EngineSection engine="codex" config={config.codex ?? null} wsId={wsId} />
@@ -142,6 +148,102 @@ export function ModelGatewayTab() {
         </>
       )}
     </div>
+  );
+}
+
+function IssueAutoTitleSection({ workspace }: { workspace: Workspace }) {
+  const { t } = useT("settings");
+  const qc = useQueryClient();
+  const resolved = readIssueAutoTitleSettings(workspace.settings);
+  const [enabled, setEnabled] = useState(resolved.enabled);
+  const [model, setModel] = useState(resolved.model);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const next = readIssueAutoTitleSettings(workspace.settings);
+    setEnabled(next.enabled);
+    setModel(next.model);
+  }, [workspace.settings]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const updated = await api.updateWorkspace(workspace.id, {
+        settings: {
+          ...(workspace.settings ?? {}),
+          issue_auto_title: {
+            enabled,
+            model: model.trim() || "gpt-5.6-luna",
+          },
+        },
+      });
+      qc.setQueryData(workspaceKeys.list(), (old: Workspace[] | undefined) =>
+        old?.map((candidate) => candidate.id === updated.id ? updated : candidate),
+      );
+      toast.success(t(($) => $.modelGateway.auto_title_saved));
+    } catch (error) {
+      toast.error(error instanceof Error
+        ? error.message
+        : t(($) => $.modelGateway.save_failed));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <Sparkles className="h-4 w-4 text-muted-foreground" />
+          {t(($) => $.modelGateway.auto_title_title)}
+        </h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(($) => $.modelGateway.auto_title_description)}
+        </p>
+      </div>
+      <Card>
+        <CardContent className="space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="issue-auto-title-enabled">
+                {t(($) => $.modelGateway.auto_title_enabled_label)}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.modelGateway.auto_title_enabled_hint)}
+              </p>
+            </div>
+            <Switch
+              id="issue-auto-title-enabled"
+              checked={enabled}
+              onCheckedChange={setEnabled}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="issue-auto-title-model">
+              {t(($) => $.modelGateway.auto_title_model_label)}
+            </Label>
+            <Input
+              id="issue-auto-title-model"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder="gpt-5.6-luna"
+              className="font-mono text-xs"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.modelGateway.auto_title_model_hint)}
+            </p>
+          </div>
+          <div className="flex justify-end pt-1">
+            <Button type="button" size="sm" onClick={save} disabled={saving}>
+              <Save className="h-3.5 w-3.5" />
+              {saving
+                ? t(($) => $.modelGateway.saving)
+                : t(($) => $.modelGateway.auto_title_save)}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
@@ -281,6 +383,21 @@ function readProgressSummarySettings(
     transport,
     model: typeof progress.model === "string" ? progress.model : "",
     openAiModel: typeof progress.openai_model === "string" ? progress.openai_model : "",
+  };
+}
+
+function readIssueAutoTitleSettings(
+  settings: Record<string, unknown> | undefined,
+): IssueAutoTitleSettings {
+  const raw = settings?.issue_auto_title;
+  const autoTitle = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  return {
+    enabled: typeof autoTitle.enabled === "boolean" ? autoTitle.enabled : true,
+    model: typeof autoTitle.model === "string" && autoTitle.model.trim()
+      ? autoTitle.model
+      : "gpt-5.6-luna",
   };
 }
 

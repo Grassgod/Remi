@@ -1593,12 +1593,18 @@ export class ScmRepo {
         ],
       );
     }
+    const lookupPredicates = ["external_id = ?"];
+    const lookupParams: Array<string | number> = [connection.id, binding.repositoryId, externalId];
+    if (number != null) {
+      lookupPredicates.push("number = ?");
+      lookupParams.push(number);
+    }
     const row = this.ctx.db.query(
       `SELECT * FROM multiremi_scm_change_requests
        WHERE connection_id = ? AND repository_id = ?
-         AND (external_id = ? OR (? IS NOT NULL AND number = ?))
+         AND (${lookupPredicates.join(" OR ")})
        ORDER BY updated_at DESC LIMIT 1`,
-    ).get(connection.id, binding.repositoryId, externalId, number, number) as Row | null;
+    ).get(...lookupParams) as Row | null;
     if (!row) throw new Error("SCM change request projection could not be read after upsert");
     const changeRequest = toChangeRequest(row);
     if (this.ctx.workspaces().getWorkspace(connection.workspaceId)?.settings.scm_auto_link_enabled !== false) {
