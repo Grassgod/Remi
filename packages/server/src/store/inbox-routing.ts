@@ -58,6 +58,12 @@ export const INBOX_ROUTING: Record<string, InboxRoutingEntry> = {
     severity: "attention",
     why: "An overdue automated run is a durable inspection result; its producer is implemented separately.",
   },
+  organizer_action: {
+    rule: "R3",
+    route: INBOX_ROUTE_BY_TYPE.organizer_action,
+    severity: "attention",
+    why: "A supervisor disposed of another member's task under delegated authority; the audit trail must reach the owner even though its disclosure comment is agent-authored and therefore never routes on its own.",
+  },
 };
 
 export function inboxRouteFor(

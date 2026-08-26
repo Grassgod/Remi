@@ -903,6 +903,7 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
     || type === "autopilot_paused"
     || type === "autopilot_run_completed"
     || type === "autopilot_run_failed"
+    || type === "organizer_action"
   ) return "system_notifications";
   return "updates";
 }

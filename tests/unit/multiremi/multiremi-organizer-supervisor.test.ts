@@ -348,9 +348,12 @@ describe("Organizer supervisor privilege layer", () => {
     expect(comment.body).toContain("Organizer action: force_answer");
     expect(comment.body).toContain("Criterion: No semantic progress for 20 minutes");
     expect(comment.body).toContain(steeredBody.organizer_action.id);
-    expect(fixture.store.listInboxItems(fixture.owner.id).some((item) =>
-      item.type === "comment_created" && item.issueId === fixture.patrolIssue.id
-    )).toBe(true);
+    const disclosure = fixture.store.listInboxItems(fixture.owner.id).find((item) =>
+      item.type === "organizer_action" && item.issueId === fixture.patrolIssue.id
+    );
+    expect(disclosure).toBeDefined();
+    expect(disclosure!.severity).toBe("attention");
+    expect(disclosure!.body).toContain(steeredBody.organizer_action.id);
 
     const cancelIssue = fixture.store.createIssue({ title: "Cancel target", workspaceId: "local" });
     const cancelTask = fixture.store.createTask({

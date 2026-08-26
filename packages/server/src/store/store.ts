@@ -3314,6 +3314,14 @@ runMigrations(this.db);
           `Audit record: ${audit.id}`,
         ].join("\n"),
       });
+      this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
+        organizer_action_id: audit.id,
+        action: input.action,
+        target_task_id: target.id,
+        target_issue_id: target.issueId,
+        replacement_task_id: replacementTask?.id ?? null,
+        comment_id: comment.id,
+      });
       return { task, replacementTask, message, audit, comment };
     })();
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);

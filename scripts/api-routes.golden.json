@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 604,
+    "routeCount": 611,
     "routeCountByPrefix": {
-      "native": 202,
-      "compat": 389,
+      "native": 204,
+      "compat": 394,
       "root": 13
     },
-    "getRoutes": 261,
-    "getRoutesWithBody": 258,
+    "getRoutes": 264,
+    "getRoutesWithBody": 261,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 343,
+    "mutationRoutes": 347,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -303,6 +303,7 @@
     "GET /api/multiremi/tasks",
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
+    "GET /api/multiremi/tasks/:id/inspection",
     "GET /api/multiremi/tasks/:id/messages",
     "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
@@ -348,6 +349,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
@@ -360,6 +362,7 @@
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/organizer",
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
@@ -575,6 +578,7 @@
     "POST /api/multiremi/tasks",
     "POST /api/multiremi/tasks/:id/cancel",
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/multiremi/tasks/:id/redispatch",
     "POST /api/multiremi/tasks/:id/steer",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
@@ -603,6 +607,7 @@
     "POST /api/squads/:id/members",
     "POST /api/tasks/:id/cancel",
     "POST /api/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/tasks/:id/redispatch",
     "POST /api/tasks/:id/steer",
     "POST /api/tokens",
     "POST /api/tokens/current/renew",
@@ -632,6 +637,7 @@
     "PUT /api/agents/:id",
     "PUT /api/agents/:id/env",
     "PUT /api/agents/:id/skills",
+    "PUT /api/agents/:id/supervisor",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
@@ -660,6 +666,7 @@
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/issue-archive",
+    "PUT /api/workspaces/:id/organizer",
     "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
@@ -901,6 +908,7 @@
     "GET /api/multiremi/tasks",
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
+    "GET /api/multiremi/tasks/:id/inspection",
     "GET /api/multiremi/tasks/:id/messages",
     "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
@@ -946,6 +954,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
@@ -958,6 +967,7 @@
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/organizer",
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
@@ -1230,6 +1240,7 @@
         "max_concurrent_tasks": 3,
         "model": "",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1264,6 +1275,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1355,6 +1367,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1395,6 +1408,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1436,6 +1450,7 @@
           "max_concurrent_tasks": 6,
           "model": "",
           "thinking_level": "",
+          "supervisor": false,
           "owner_id": "local",
           "skills": [],
           "created_at": "<timestamp>",
@@ -1479,6 +1494,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1544,6 +1560,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1615,6 +1632,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1653,6 +1671,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1726,6 +1745,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -5780,6 +5800,7 @@
           "max_concurrent_tasks": 6,
           "model": "claude-sonnet-4",
           "thinking_level": "",
+          "supervisor": false,
           "owner_id": "local",
           "skills": [
             {
@@ -5821,6 +5842,7 @@
         "max_concurrent_tasks": 6,
         "model": "claude-sonnet-4",
         "thinking_level": "",
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -6793,6 +6815,17 @@
             "id": "agent.skill.set",
             "command": "remi agent skill set",
             "capability": "agent.skill.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.supervisor.set",
+            "command": "remi agent supervisor set",
+            "capability": "agent.supervisor.set",
             "outputs": [
               "table",
               "json",
@@ -10244,6 +10277,17 @@
             "allowed": true
           },
           {
+            "id": "task.inspect",
+            "command": "remi task inspect",
+            "capability": "task.inspect",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "task.list",
             "command": "remi task list",
             "capability": "task.list",
@@ -10286,6 +10330,17 @@
               "jsonl"
             ],
             "allowed": true
+          },
+          {
+            "id": "task.redispatch",
+            "command": "remi task redispatch",
+            "capability": "task.redispatch",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": false
           },
           {
             "id": "task.request.list",
@@ -10698,6 +10753,28 @@
             "id": "workspace.list",
             "command": "remi workspace list",
             "capability": "workspace.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.organizer.get",
+            "command": "remi workspace organizer get",
+            "capability": "workspace.organizer.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.organizer.update",
+            "command": "remi workspace organizer update",
+            "capability": "workspace.organizer.update",
             "outputs": [
               "table",
               "json",
@@ -13957,6 +14034,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -14023,6 +14101,7 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -17927,6 +18006,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -18060,6 +18140,74 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/tasks/:id/inspection",
+      "route": "GET /api/multiremi/tasks/:id/inspection",
+      "path": "/api/multiremi/tasks/tsk_snapshot/inspection",
+      "status": 200,
+      "body": {
+        "inspection": {
+          "id": "tsk_snapshot",
+          "status": "completed",
+          "agent_id": "agt_snapshot",
+          "issue_id": "iss_snapshot",
+          "runtime_id": "rt_snapshot",
+          "progress_summary": "Waiting for permission approval",
+          "progress_step": 1,
+          "progress_total": 2,
+          "failure_reason": null,
+          "wait_reason": null,
+          "created_at": "<timestamp>",
+          "started_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "completed_at": "<timestamp>",
+          "dispatched_at": "<timestamp>",
+          "failed_at": null,
+          "cancelled_at": null,
+          "last_message": {
+            "seq": 1,
+            "created_at": "<timestamp>"
+          },
+          "message_type_histogram": [
+            {
+              "type": "assistant",
+              "tool": null,
+              "count": 1
+            }
+          ],
+          "human_requests": {
+            "counts": {
+              "pending": 1,
+              "responded": 0,
+              "timeout": 0,
+              "cancelled": 0
+            },
+            "latest": {
+              "kind": "permission",
+              "status": "pending",
+              "created_at": "<timestamp>",
+              "responded_at": null
+            }
+          },
+          "runtime": {
+            "id": "rt_snapshot",
+            "status": "online",
+            "online": true,
+            "last_heartbeat_at": "<timestamp>"
+          },
+          "agent": {
+            "id": "agt_snapshot",
+            "name": "Snapshot Agent",
+            "supervisor": false
+          },
+          "issue": {
+            "id": "iss_snapshot",
+            "key": "MUL-1",
+            "status": "todo"
+          }
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/tasks/:id/messages",
       "route": "GET /api/multiremi/tasks/:id/messages",
       "path": "/api/multiremi/tasks/tsk_snapshot/messages",
@@ -18109,6 +18257,7 @@
             "name": "Snapshot token",
             "type": "pat",
             "purpose": "personal",
+            "scopes": [],
             "tokenPrefix": "mul_00000000",
             "lastUsedAt": null,
             "expiresAt": null,
@@ -19071,6 +19220,74 @@
       }
     },
     {
+      "key": "get-sweep GET /api/tasks/:id/inspection",
+      "route": "GET /api/tasks/:id/inspection",
+      "path": "/api/tasks/tsk_snapshot/inspection",
+      "status": 200,
+      "body": {
+        "inspection": {
+          "id": "tsk_snapshot",
+          "status": "completed",
+          "agent_id": "agt_snapshot",
+          "issue_id": "iss_snapshot",
+          "runtime_id": "rt_snapshot",
+          "progress_summary": "Waiting for permission approval",
+          "progress_step": 1,
+          "progress_total": 2,
+          "failure_reason": null,
+          "wait_reason": null,
+          "created_at": "<timestamp>",
+          "started_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "completed_at": "<timestamp>",
+          "dispatched_at": "<timestamp>",
+          "failed_at": null,
+          "cancelled_at": null,
+          "last_message": {
+            "seq": 1,
+            "created_at": "<timestamp>"
+          },
+          "message_type_histogram": [
+            {
+              "type": "assistant",
+              "tool": null,
+              "count": 1
+            }
+          ],
+          "human_requests": {
+            "counts": {
+              "pending": 1,
+              "responded": 0,
+              "timeout": 0,
+              "cancelled": 0
+            },
+            "latest": {
+              "kind": "permission",
+              "status": "pending",
+              "created_at": "<timestamp>",
+              "responded_at": null
+            }
+          },
+          "runtime": {
+            "id": "rt_snapshot",
+            "status": "online",
+            "online": true,
+            "last_heartbeat_at": "<timestamp>"
+          },
+          "agent": {
+            "id": "agt_snapshot",
+            "name": "Snapshot Agent",
+            "supervisor": false
+          },
+          "issue": {
+            "id": "iss_snapshot",
+            "key": "MUL-1",
+            "status": "todo"
+          }
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/tasks/:id/steer",
       "route": "GET /api/tasks/:id/steer",
       "path": "/api/tasks/tsk_snapshot/steer",
@@ -19336,6 +19553,16 @@
           "avatar_url": null
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/organizer",
+      "route": "GET /api/workspaces/:id/organizer",
+      "path": "/api/workspaces/local/organizer",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "mode": "report_only"
+      }
     },
     {
       "key": "get-sweep GET /api/workspaces/:id/prompt-template",
@@ -22222,6 +22449,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -22291,6 +22519,7 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -23378,6 +23607,7 @@
         "name": "Renewed local token",
         "type": "pat",
         "purpose": "personal",
+        "scopes": [],
         "tokenPrefix": "mul_00000000",
         "lastUsedAt": null,
         "expiresAt": "<timestamp>",
@@ -23411,6 +23641,7 @@
           "name": "native token",
           "type": "pat",
           "purpose": "personal",
+          "scopes": [],
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,
@@ -23436,6 +23667,7 @@
           "name": "Snapshot token",
           "type": "pat",
           "purpose": "personal",
+          "scopes": [],
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,

@@ -2523,6 +2523,35 @@ export class IssuesRepo {
     }
   }
 
+  /**
+   * Disclose a supervisor's cross-task disposal to the patrol issue's subscribers.
+   * The audit comment itself is agent-authored, and agent comments only route to
+   * the inbox while the issue is workbench-visible (INBOX_ROUTING R2) — so the
+   * disclosure gets its own ledger type rather than riding on `comment_created`.
+   */
+  notifyOrganizerAction(
+    issue: MultiremiIssue,
+    body: string,
+    actorType: string,
+    actorId: string | null,
+    details: unknown | null = null,
+  ): void {
+    for (const subscriber of this.listIssueSubscribers(issue.id)) {
+      if (subscriber.userType !== "member") continue;
+      this.ctx.createInboxItem({
+        issueId: issue.id,
+        memberId: subscriber.userId,
+        type: "organizer_action",
+        title: `${issue.key}: Organizer action`,
+        body,
+        actorType,
+        actorId,
+        details,
+        issueStatus: issue.status,
+      });
+    }
+  }
+
   private notifySubscribedMembers(
     issue: MultiremiIssue,
     title: string,
