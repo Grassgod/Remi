@@ -19,6 +19,7 @@ interface TestDaemonState {
   claimsPaused: boolean;
   cliUpdateCoordinator: MultiremiCliUpdateCoordinator | null;
   client: {
+    claimTask?(runtimeId: string): Promise<unknown>;
     reportRuntimeUpdateResult(
       runtimeId: string,
       requestId: string,
@@ -34,6 +35,7 @@ interface TestDaemonState {
     targetVersion: string,
     scope: MultiremiRuntimeUpdateScope,
   ): Promise<void>;
+  claimTask(runtimeId: string): Promise<unknown>;
 }
 
 describe("co-resident CLI update coordination", () => {
@@ -93,7 +95,13 @@ describe("co-resident CLI update coordination", () => {
     const claudeState = state(claude);
     const codexState = state(codex);
     const reports = captureReports(claudeState);
-    codexState.pendingClaimCount = 1;
+    const pendingClaim = deferred<null>();
+    codexState.client = {
+      claimTask: async () => await pendingClaim.promise,
+      reportRuntimeUpdateResult: async () => {},
+    };
+    const claimRun = codexState.claimTask("rt_codex");
+    await Promise.resolve();
 
     await claudeState.handleRuntimeUpdate("rt_claude", "upd_claiming", "v9.9.9", "cli");
 
@@ -103,6 +111,11 @@ describe("co-resident CLI update coordination", () => {
     }]);
     expect(claudeState.claimsPaused).toBe(false);
     expect(codexState.claimsPaused).toBe(false);
+    expect(codexState.pendingClaimCount).toBe(1);
+
+    pendingClaim.resolve(null);
+    await claimRun;
+    expect(codexState.pendingClaimCount).toBe(0);
   });
 
   it("releases every provider claim pause when a CLI update fails", async () => {
@@ -203,4 +216,13 @@ function captureReports(daemon: TestDaemonState): UpdateReport[] {
     },
   };
   return reports;
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => { resolve = promiseResolve; });
+  return { promise, resolve };
 }
