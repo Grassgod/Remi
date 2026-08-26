@@ -11,6 +11,7 @@ const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
 const mockNavigationReplace = vi.hoisted(() => vi.fn());
+const mockToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -224,6 +225,8 @@ const mockApiObj = vi.hoisted(() => ({
   deleteComment: vi.fn(),
   deleteIssue: vi.fn(),
   updateIssue: vi.fn(),
+  patchIssue: vi.fn(),
+  retitleIssue: vi.fn(),
   listIssueSubscribers: vi.fn().mockResolvedValue([]),
   subscribeToIssue: vi.fn().mockResolvedValue(undefined),
   unsubscribeFromIssue: vi.fn().mockResolvedValue(undefined),
@@ -401,7 +404,7 @@ vi.mock("@multiremi/core/realtime", () => ({
 
 // Mock sonner
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: mockToast,
 }));
 
 // Mock react-resizable-panels (used by @multiremi/ui/components/ui/resizable)
@@ -591,6 +594,46 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("renames an issue with Luna and offers an undo action", async () => {
+    let currentIssue = { ...mockIssue };
+    mockApiObj.getIssue.mockImplementation(() => Promise.resolve(currentIssue));
+    mockApiObj.retitleIssue.mockImplementation(async () => {
+      currentIssue = { ...currentIssue, title: "Add JWT authentication" };
+      return {
+        title: currentIssue.title,
+        previous_title: mockIssue.title,
+        applied: true,
+        reason: "generated",
+      };
+    });
+    mockApiObj.patchIssue.mockImplementation(async (_id: string, updates: { title: string }) => {
+      currentIssue = { ...currentIssue, title: updates.title };
+      return currentIssue;
+    });
+    renderIssueDetail();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Rename with Luna" }));
+
+    await waitFor(() => {
+      expect(mockApiObj.retitleIssue).toHaveBeenCalledWith("issue-1");
+      expect(screen.getByDisplayValue("Add JWT authentication")).toBeInTheDocument();
+    });
+    const successCall = mockToast.success.mock.calls.find(
+      ([message]) => String(message).includes("Renamed:"),
+    );
+    expect(successCall).toBeDefined();
+
+    const options = successCall?.[1] as { action?: { onClick?: () => void } } | undefined;
+    options?.action?.onClick?.();
+
+    await waitFor(() => {
+      expect(mockApiObj.patchIssue).toHaveBeenCalledWith("issue-1", {
+        title: "Implement authentication",
+      });
+      expect(screen.getByDisplayValue("Implement authentication")).toBeInTheDocument();
+    });
   });
 
   it("offers result acceptance in the sidebar after the latest agent task completes", async () => {

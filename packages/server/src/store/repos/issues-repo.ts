@@ -39,6 +39,7 @@ import type {
   MultiremiCommentReaction,
   MultiremiInboxItem,
   MultiremiIssue,
+  MultiremiIssueAutoTitleMetadata,
   MultiremiIssueActivity,
   MultiremiIssueAssigneeGroup,
   MultiremiIssueChildProgress,
@@ -2274,11 +2275,14 @@ export class IssuesRepo {
 
   setIssueMetadataKey(issueId: string, key: string, value: unknown): Record<string, string | number | boolean> {
     validateIssueMetadataKey(key);
+    validatePublicIssueMetadataKey(key);
     const normalized = validateIssueMetadataValue(value);
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
-    const metadata = { ...issue.metadata };
-    if (!(key in metadata) && Object.keys(metadata).length >= MAX_ISSUE_METADATA_KEYS) {
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    const metadata = parseJson<Record<string, unknown>>(row?.metadata, {});
+    const publicMetadata = parseIssueMetadata(metadata);
+    if (!(key in publicMetadata) && Object.keys(publicMetadata).length >= MAX_ISSUE_METADATA_KEYS) {
       throw new Error(`metadata cannot exceed ${MAX_ISSUE_METADATA_KEYS} keys`);
     }
     metadata[key] = normalized;
@@ -2298,11 +2302,51 @@ export class IssuesRepo {
     return this.listIssueMetadata(issueId);
   }
 
+  setIssueAutoTitleMetadata(
+    issueId: string,
+    value: MultiremiIssueAutoTitleMetadata,
+  ): MultiremiIssue {
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    if (!row) throw new Error(`Issue not found: ${issueId}`);
+    const metadata: Record<string, unknown> = {
+      ...parseJson<Record<string, unknown>>(row.metadata, {}),
+      auto_title: { ...value },
+    };
+    validateIssueMetadataSize(metadata);
+    this.ctx.db.run(
+      "UPDATE multiremi_issues SET metadata = ? WHERE id = ?",
+      [toJson(metadata), issueId],
+    );
+    return this.getIssue(issueId)!;
+  }
+
+  getIssueAutoTitleMetadata(issueId: string): MultiremiIssueAutoTitleMetadata {
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    if (!row) throw new Error(`Issue not found: ${issueId}`);
+    const raw = parseJson<Record<string, unknown>>(row.metadata, {}).auto_title;
+    return raw && typeof raw === "object" && !Array.isArray(raw)
+      ? sanitizeAutoTitleMetadata(raw as Record<string, unknown>)
+      : {};
+  }
+
+  appendIssueActivity(issueId: string, input: {
+    actorType: string;
+    actorId?: string | null;
+    type: string;
+    body?: string | null;
+    data?: unknown | null;
+  }): void {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    this.ctx.appendIssueActivity(issueId, input);
+  }
+
   deleteIssueMetadataKey(issueId: string, key: string): Record<string, string | number | boolean> {
     validateIssueMetadataKey(key);
+    validatePublicIssueMetadataKey(key);
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
-    const metadata = { ...issue.metadata };
+    const row = this.ctx.db.query("SELECT metadata FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    const metadata = parseJson<Record<string, unknown>>(row?.metadata, {});
     delete metadata[key];
     const now = nowIso();
     this.ctx.db.run(
@@ -2953,6 +2997,10 @@ function validateIssueMetadataKey(key: string): void {
   }
 }
 
+function validatePublicIssueMetadataKey(key: string): void {
+  if (key === "auto_title") throw new Error("auto_title is reserved for system metadata");
+}
+
 function validateIssueMetadataValue(value: unknown): string | number | boolean {
   if (!isIssueMetadataPrimitive(value)) {
     if (value === null) throw new Error("value cannot be null");
@@ -2968,7 +3016,7 @@ function isIssueMetadataPrimitive(value: unknown): value is string | number | bo
   return typeof value === "string" || typeof value === "boolean" || typeof value === "number";
 }
 
-function validateIssueMetadataSize(metadata: Record<string, string | number | boolean>): void {
+function validateIssueMetadataSize(metadata: Record<string, unknown>): void {
   if (Buffer.byteLength(toJson(metadata), "utf8") > 8 * 1024) {
     throw new Error("metadata exceeds the 8KB size limit");
   }
@@ -3265,6 +3313,18 @@ function parseIssueMetadata(value: unknown): Record<string, string | number | bo
     }
   }
   return metadata;
+}
+
+function sanitizeAutoTitleMetadata(raw: Record<string, unknown>): MultiremiIssueAutoTitleMetadata {
+  const source = raw.source === "auto" || raw.source === "manual" ? raw.source : undefined;
+  return {
+    ...(raw.locked === true ? { locked: true } : {}),
+    ...(typeof raw.generated_at === "string" ? { generated_at: raw.generated_at } : {}),
+    ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+    ...(source ? { source } : {}),
+    ...(typeof raw.content_hash === "string" ? { content_hash: raw.content_hash } : {}),
+    ...(typeof raw.count === "number" && Number.isFinite(raw.count) ? { count: raw.count } : {}),
+  };
 }
 
 function toIssueActivity(row: Row): MultiremiIssueActivity {

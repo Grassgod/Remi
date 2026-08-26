@@ -116,6 +116,49 @@ describe("HumanRequestDock", () => {
     );
   });
 
+  it("renders markdown context and hides a message that duplicates the first question", async () => {
+    renderDock([{
+      ...QUESTION_REQUEST,
+      payload: {
+        ...QUESTION_REQUEST.payload,
+        context: { text: "Review the **deployment tradeoffs** before choosing." },
+      },
+    }]);
+
+    const emphasized = await screen.findByText("deployment tradeoffs");
+    expect(emphasized.tagName).toBe("STRONG");
+    expect(screen.getAllByText("Which environment should I deploy to?")).toHaveLength(1);
+  });
+
+  it("renders an old question payload without context", async () => {
+    renderDock([QUESTION_REQUEST]);
+
+    await screen.findByText("Agent question");
+    expect(screen.queryByText("Earlier context omitted")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand" })).toBeNull();
+    expect(screen.getAllByText("Which environment should I deploy to?")).toHaveLength(1);
+  });
+
+  it("collapses overflowing context and toggles it open", async () => {
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(256);
+    try {
+      renderDock([{
+        ...QUESTION_REQUEST,
+        payload: {
+          ...QUESTION_REQUEST.payload,
+          context: { text: Array.from({ length: 9 }, (_, index) => `Line ${index + 1}`).join("\n") },
+        },
+      }]);
+
+      const expand = await screen.findByRole("button", { name: "Expand" });
+      expect(expand).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(expand);
+      expect(screen.getByRole("button", { name: "Collapse" })).toHaveAttribute("aria-expanded", "true");
+    } finally {
+      scrollHeight.mockRestore();
+    }
+  });
+
   it("allows long answer labels to wrap within a narrow request card", async () => {
     const longLabel = "Keep the Issue version after reviewing every conflicting paragraph";
     renderDock([{

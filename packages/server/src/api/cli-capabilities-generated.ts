@@ -1317,6 +1317,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.retitle": {
+      "command": "remi issue retitle",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.retitle",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.cancel": {
       "command": "remi issue cancel-task",
       "auth": [

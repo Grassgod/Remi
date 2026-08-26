@@ -125,6 +125,9 @@
   "human_requests": {
     "permission_title": "Permission required",
     "question_title": "Agent question",
+    "context_expand": "Expand",
+    "context_collapse": "Collapse",
+    "context_truncated": "Earlier context omitted",
     "answer_placeholder": "Type an answer…",
     "other_answer_placeholder": "Other answer (optional)…",
     "submit": "Submit",

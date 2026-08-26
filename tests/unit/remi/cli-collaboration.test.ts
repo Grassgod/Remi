@@ -191,6 +191,34 @@ describe("native collaboration CLI contracts", () => {
     expect(restored).toBe("/api/issues/iss_archived/restore");
     expect(JSON.parse(result.stdout)).toMatchObject({ id: "iss_archived", deleted_at: null });
   });
+
+  it("retitles an issue through the registered command and supports dry-run", async () => {
+    useCliEnv();
+    const spec = specById("issue.retitle");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === "/api/multiremi/issues/MUL-111/retitle") {
+        bodies.push(await request.json());
+        return Response.json({
+          title: "Use Luna to improve Issue titles",
+          previous_title: "Remi",
+          applied: (bodies.at(-1) as { apply: boolean }).apply,
+          reason: "generated",
+        });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+
+    await capture(() => registryFor([spec]).execute([
+      "issue", "retitle", "MUL-111", "--output", "json",
+    ]));
+    await capture(() => registryFor([spec]).execute([
+      "issue", "retitle", "MUL-111", "--dry-run", "--output", "json",
+    ]));
+
+    expect(bodies).toEqual([{ apply: true }, { apply: false }]);
+  });
 });
 
 function specById(id: string): CommandSpec {

@@ -139,6 +139,9 @@ function issueCompatibilitySpecs(): CommandSpec[] {
       { name: "agent-id", type: "string", valueName: "id", description: "Override agent" },
       { name: "prompt", type: "string", valueName: "text", description: "Override prompt" },
     ], ["issue", "rerun"]),
+    legacySpec("issue.retitle", ["issue", "retitle"], "Generate an Issue title with the workspace model gateway", "write", HUMAN_TASK, [refPositional("issue")], [
+      { name: "dry-run", type: "boolean", description: "Generate a title without applying it" },
+    ], ["issue", "retitle"]),
     legacySpec("issue.cancel", ["issue", "cancel-task"], "Cancel an issue task", "destructive", HUMAN_TASK, [refPositional("task")], [], ["issue", "cancel-task"]),
     legacySpec("issue.task-runs", ["issue", "runs"], "List issue task runs", "read", HUMAN_TASK, [refPositional("issue")], [], ["issue", "runs"]),
     legacySpec("task.messages", ["issue", "run-messages"], "List task execution messages", "read", HUMAN_TASK, [refPositional("task")], [

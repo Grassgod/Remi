@@ -41,6 +41,10 @@ export interface TaskHumanRequest {
     options?: HumanRequestPermissionOption[];
     message?: string;
     questions?: HumanRequestQuestion[];
+    context?: {
+      text: string;
+      truncated?: boolean;
+    };
   };
   status: TaskHumanRequestStatus;
   response: Record<string, unknown> | null;
@@ -66,6 +70,14 @@ const questionSchema = z.object({
   }),
 });
 
+const questionContextSchema = z
+  .object({
+    text: z.string(),
+    truncated: z.boolean().optional(),
+  })
+  .optional()
+  .catch(undefined);
+
 const humanRequestSchema = z.object({
   id: z.string(),
   taskId: z.string(),
@@ -76,6 +88,7 @@ const humanRequestSchema = z.object({
       options: z.array(permissionOptionSchema).optional(),
       message: z.string().optional(),
       questions: z.array(questionSchema).optional(),
+      context: questionContextSchema,
     })
     .loose(),
   status: z.enum(["pending", "responded", "timeout", "cancelled"]),

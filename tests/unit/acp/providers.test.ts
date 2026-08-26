@@ -152,6 +152,15 @@ describe("AcpProvider", () => {
     expect(provider.adapter.defaultExecutable()).toBe("codex-acp");
   });
 
+  it("exposes assistant text streamed for the active chat prompt", () => {
+    const provider = new AcpProvider({ agentType: "claude" });
+    expect(provider.getStreamedText("missing-chat")).toBe("");
+    provider["_pool"].set("chat-1", {
+      promptState: { text: "Decision context" },
+    } as never);
+    expect(provider.getStreamedText("chat-1")).toBe("Decision context");
+  });
+
   it("routes permission requests to the handler for the ACP session's chat", async () => {
     const provider = new AcpProvider({ agentType: "claude" });
     provider.setPermissionHandler(async () => ({ outcome: "selected", optionId: "global" }));

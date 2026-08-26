@@ -104,6 +104,8 @@ import {
 } from "./helpers.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
+import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
+import { retitleIssue } from "@multiremi/issue-title/service.js";
 import {
   createScmConnectionVerifier,
   type ScmConnectionVerifier,
@@ -188,6 +190,9 @@ export interface MultiremiApiOptions {
   sessionArchives?: SessionArchiveService;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
   scmPolling?: ScmPollingScheduler | null;
+  /** Undefined enables server-owned Issue title scanning; null explicitly disables it. */
+  issueTitleScheduler?: IssueTitleScheduler | null;
+  issueRetitle?: typeof retitleIssue;
   /** Disable every server-owned background job for a read-only blue/green candidate. */
   backgroundJobs?: boolean;
   verifyScmConnection?: ScmConnectionVerifier;
@@ -229,6 +234,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     repositoryWiki,
     sessionArchives,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
+    issueRetitle: options.issueRetitle ?? retitleIssue,
   };
 
   app.use("*", cors());
@@ -571,6 +577,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       ? new ScmPollingScheduler({ store: scmIngestionStore(store) })
       : options.scmPolling)
     : null;
+  const issueTitleScheduler = backgroundJobs
+    ? (options.issueTitleScheduler === undefined
+      ? new IssueTitleScheduler({ store })
+      : options.issueTitleScheduler)
+    : null;
   const controlPlaneSshMesh = backgroundJobs
     ? (options.controlPlaneSshMesh === undefined
       ? createControlPlaneSshMeshFromEnv(store)
@@ -578,6 +589,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     : null;
   scheduler?.start();
   scmPolling?.start();
+  issueTitleScheduler?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
@@ -793,6 +805,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     unsubscribeWorkspaceEvent();
     scheduler?.stop();
     scmPolling?.stop();
+    issueTitleScheduler?.stop();
     return stopServer(closeActiveConnections);
   };
   return server;
