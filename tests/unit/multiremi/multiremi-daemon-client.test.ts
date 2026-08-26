@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,12 @@ import {
 
 const originalFetch = globalThis.fetch;
 const temporaryRoots: string[] = [];
+
+async function readStreamingBody(body: unknown): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -188,11 +195,13 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     temporaryRoots.push(root);
     const archivePath = join(root, "sessions.tar.gz");
     writeFileSync(archivePath, "archive-bytes");
-    const requests: Array<{ url: string; method: string; headers: Headers; body: BodyInit | null | undefined }> = [];
+    const requests: Array<{ url: string; method: string; headers: Headers; body: unknown }> = [];
+    let uploadedBody = "";
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
       requests.push({ url, method, headers: new Headers(init?.headers), body: init?.body });
+      if (method === "PUT") uploadedBody = (await readStreamingBody(init?.body)).toString("utf8");
       if (url.includes("/status?source_revision=revision%2F1&sha256=abc")) {
         return Response.json({ latest: null, latest_ready: null, requested_ready: null, gc_ready: false });
       }
@@ -206,7 +215,7 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
             size_bytes: 13,
           },
           upload_attempt: 7,
-          upload_url: "/unused-by-client?attempt=7",
+          upload_url: "/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/archive%2F1/content?attempt=7",
         });
       }
       return Response.json({
@@ -256,8 +265,9 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       error: "pack failed",
     });
     expect(requests[4]?.headers.get("content-type")).toBe("application/octet-stream");
-    expect(requests[4]?.body).toBeInstanceOf(Uint8Array);
-    expect(Buffer.from(requests[4]?.body as Uint8Array).toString("utf8")).toBe("archive-bytes");
+    expect(requests[4]?.headers.get("content-length")).toBe("13");
+    expect(requests[4]?.body).not.toBeInstanceOf(Uint8Array);
+    expect(uploadedBody).toBe("archive-bytes");
     expect(JSON.parse(String(requests[6]?.body))).toEqual({
       runtime_id: "runtime/1",
       archive_id: "archive/1",
@@ -266,31 +276,192 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     });
   });
 
-  it("uploads archive bytes through Bun native fetch without a file-backed body", async () => {
+  it("refuses a large unconfigured proxy fallback and persists the explicit failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-proxy-limit-"));
+    temporaryRoots.push(root);
+    const archivePath = join(root, "sessions.tar.gz");
+    writeFileSync(archivePath, Buffer.alloc(8 * 1024 * 1024 + 1));
+    let putCount = 0;
+    let reportedError = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/init")) {
+        return Response.json({
+          archive: {
+            id: "archive-large",
+            status: "pending",
+            source_revision: "revision-large",
+            sha256: "abc",
+            size_bytes: 8 * 1024 * 1024 + 1,
+          },
+          upload_attempt: 1,
+          upload_url: "/api/daemon/runtimes/runtime-large/issues/issue-large/session-archives/archive-large/content?attempt=1",
+        });
+      }
+      if (init?.method === "PUT") putCount += 1;
+      if (url.includes("/failure?attempt=1")) {
+        reportedError = String(JSON.parse(String(init?.body)).error);
+        return Response.json({ archive: { id: "archive-large", status: "failed" } });
+      }
+      return Response.json({ archive: { id: "archive-large", status: "uploading" } });
+    }) as unknown as typeof globalThis.fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    await client.initIssueSessionArchive("runtime-large", "issue-large", {
+      sourceRevision: "revision-large",
+      sha256: "abc",
+      sizeBytes: 8 * 1024 * 1024 + 1,
+      fileCount: 1,
+    });
+
+    await expect(client.uploadIssueSessionArchive(
+      "runtime-large",
+      "issue-large",
+      "archive-large",
+      archivePath,
+    )).rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
+    expect(putCount).toBe(0);
+    expect(reportedError).toContain("MULTIREMI_ARCHIVE_UPLOAD_BASE_URL");
+  });
+
+  it("rejects an unexpected advertised host before sending daemon authorization", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-host-"));
+    temporaryRoots.push(root);
+    const archivePath = join(root, "sessions.tar.gz");
+    writeFileSync(archivePath, "host-check");
+    const requestedUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.endsWith("/init")) {
+        return Response.json({
+          archive: {
+            id: "archive-host",
+            status: "pending",
+            source_revision: "revision-host",
+            sha256: "abc",
+            size_bytes: 10,
+          },
+          upload_attempt: 4,
+          upload_url: "https://collector.example/api/daemon/runtimes/runtime-host/issues/issue-host/session-archives/archive-host/content?attempt=4",
+        });
+      }
+      return Response.json({ archive: { id: "archive-host", status: "failed" } });
+    }) as unknown as typeof globalThis.fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    await client.initIssueSessionArchive("runtime-host", "issue-host", {
+      sourceRevision: "revision-host",
+      sha256: "abc",
+      sizeBytes: 10,
+      fileCount: 1,
+    });
+
+    await expect(client.uploadIssueSessionArchive(
+      "runtime-host",
+      "issue-host",
+      "archive-host",
+      archivePath,
+    )).rejects.toThrow("unexpected host collector.example");
+    expect(requestedUrls.some((url) => url.startsWith("https://collector.example"))).toBe(false);
+    expect(requestedUrls.at(-1)).toContain("/failure?attempt=4");
+  });
+
+  it("uses an operator-trusted daemon override for the advertised upload path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-override-"));
+    temporaryRoots.push(root);
+    const archivePath = join(root, "sessions.tar.gz");
+    writeFileSync(archivePath, "override");
+    let putUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/init")) {
+        return Response.json({
+          archive: {
+            id: "archive-override",
+            status: "pending",
+            source_revision: "revision-override",
+            sha256: "abc",
+            size_bytes: 8,
+          },
+          upload_attempt: 2,
+          upload_url: "https://server-direct.example/api/daemon/runtimes/runtime-override/issues/issue-override/session-archives/archive-override/content?attempt=2",
+        });
+      }
+      if (init?.method === "PUT") {
+        putUrl = url;
+        await readStreamingBody(init.body);
+      }
+      return Response.json({
+        archive: {
+          id: "archive-override",
+          status: "uploading",
+          source_revision: "revision-override",
+          sha256: "abc",
+          size_bytes: 8,
+        },
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token", {
+      sessionArchiveUploadBaseUrl: "http://127.0.0.1:6120",
+    });
+    await client.initIssueSessionArchive("runtime-override", "issue-override", {
+      sourceRevision: "revision-override",
+      sha256: "abc",
+      sizeBytes: 8,
+      fileCount: 1,
+    });
+    await client.uploadIssueSessionArchive(
+      "runtime-override",
+      "issue-override",
+      "archive-override",
+      archivePath,
+    );
+
+    expect(putUrl).toBe(
+      "http://127.0.0.1:6120/api/daemon/runtimes/runtime-override/issues/issue-override/session-archives/archive-override/content?attempt=2",
+    );
+    expect(() => new MultiremiDaemonClient("https://remi.example", "daemon-token", {
+      sessionArchiveUploadBaseUrl: "file:///tmp/archive",
+    })).toThrow("MULTIREMI_ARCHIVE_UPLOAD_BASE_URL");
+  });
+
+  it("streams a direct archive larger than 10 MiB through Bun 1.3.14 with the exact SHA-256", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-native-upload-"));
     temporaryRoots.push(root);
     const archivePath = join(root, "sessions.tar.gz");
-    writeFileSync(archivePath, "native-fetch-archive");
-    let uploaded = "";
+    const archiveBytes = Buffer.alloc(12 * 1024 * 1024 + 17, 0x5a);
+    writeFileSync(archivePath, archiveBytes);
+    const expectedSha256 = createHash("sha256").update(archiveBytes).digest("hex");
+    let uploadedBytes = 0;
+    let uploadedChunks = 0;
+    const uploadedHash = createHash("sha256");
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch: async (request) => {
         const url = new URL(request.url);
         if (url.pathname.endsWith("/init")) {
+          const uploadPath = "/api/daemon/runtimes/runtime-native/issues/issue-native/session-archives/archive-native/content?attempt=3";
           return Response.json({
             archive: {
               id: "archive-native",
               status: "pending",
               source_revision: "revision-native",
               sha256: "def",
-              size_bytes: 20,
+              size_bytes: archiveBytes.byteLength,
             },
             upload_attempt: 3,
+            upload_url: new URL(uploadPath, request.url).toString(),
           });
         }
         if (request.method === "PUT") {
-          uploaded = Buffer.from(await request.arrayBuffer()).toString("utf8");
+          const reader = request.body!.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            uploadedBytes += value.byteLength;
+            uploadedChunks += 1;
+            uploadedHash.update(value);
+          }
         }
         return Response.json({
           archive: {
@@ -298,7 +469,7 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
             status: "uploading",
             source_revision: "revision-native",
             sha256: "def",
-            size_bytes: 20,
+            size_bytes: archiveBytes.byteLength,
           },
         });
       },
@@ -308,7 +479,7 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       await client.initIssueSessionArchive("runtime-native", "issue-native", {
         sourceRevision: "revision-native",
         sha256: "def",
-        sizeBytes: 20,
+        sizeBytes: archiveBytes.byteLength,
         fileCount: 1,
       });
       await client.uploadIssueSessionArchive(
@@ -317,7 +488,9 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
         "archive-native",
         archivePath,
       );
-      expect(uploaded).toBe("native-fetch-archive");
+      expect(uploadedBytes).toBe(archiveBytes.byteLength);
+      expect(uploadedChunks).toBeGreaterThan(1);
+      expect(uploadedHash.digest("hex")).toBe(expectedSha256);
     } finally {
       server.stop(true);
     }

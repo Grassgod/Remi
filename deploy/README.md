@@ -86,6 +86,63 @@ The updater may use this Compose file after cutover. Set
 `MULTIREMI_PLATFORM_OPENVIKING_CONTAINER` so externally managed dependencies
 still appear in the service status panel.
 
+## Direct Session Archive uploads (MUL-144)
+
+Session Archive content is a potentially large binary PUT. It must enter the
+API directly instead of passing through the Web container's Next.js
+`/api/:path*` compatibility rewrite. Keep that rewrite for normal API traffic
+and installations that have not enabled the direct path; do not use it for
+large archive bodies.
+
+The API and daemon recognize these settings:
+
+- `MULTIREMI_DAEMON_DIRECT_BASE_URL` (API): public API origin advertised in the
+  archive init response, for example `https://remi.example.com`. It must be an
+  `http(s)` origin with no credentials, path, query, or fragment. When unset,
+  init keeps returning the legacy relative upload URL.
+- `MULTIREMI_ARCHIVE_UPLOAD_BASE_URL` (daemon): operator-trusted API origin that
+  overrides the advertised origin for archive content only. Use it as a
+  temporary escape hatch or when the direct API uses a different hostname.
+- `MULTIREMI_ARCHIVE_PROXY_MAX_BYTES` (daemon): maximum archive size allowed
+  through a relative control-plane/Next.js fallback. The default is 8 MiB.
+  Larger archives fail before PUT and persist an actionable `last_error` that
+  names the direct-upload settings; smaller archives remain backward
+  compatible.
+
+An absolute URL advertised by the authenticated API is accepted without daemon
+configuration only when its hostname matches `MULTIREMI_SERVER_URL`; a daemon
+override explicitly trusts a different hostname. HTTPS control-plane URLs
+cannot be downgraded by the server response. In all cases the daemon verifies
+the exact archive pathname and attempt query, rejects credentials/fragments,
+and refuses redirects before attaching its Bearer token.
+
+Use [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf) in
+the public server block. The location has higher precedence than the generic
+Web location, disables request/response buffering, allows bodies up to 1 GiB,
+and gives a streaming upload 15 minutes. Replace its sample `16120` upstream
+port with the host's effective `REMI_API_BIND_PORT`. Keep the API container
+bound to loopback; Nginx is the external network path.
+
+For the production host `n37-117-209`, an authorized operator must perform the
+following steps. This repository change does not perform them:
+
+1. Read the deployment's Compose env and confirm the effective host API port;
+   do not assume the sample port.
+2. Add the direct location to the active Nginx server block ahead of the Web
+   catch-all, run `nginx -t`, then reload Nginx. Existing daemons immediately
+   benefit because they already use the same content pathname.
+3. Add `MULTIREMI_DAEMON_DIRECT_BASE_URL=https://n37-117-209.byted.org` to the
+   API secret env file and redeploy through the normal release/updater flow.
+4. Upgrade Runtime daemon CLIs through their normal release flow to obtain
+   streaming uploads, URL validation, the proxy-size guard, and durable upload
+   failure reporting. Platform deployment does not upgrade Runtime CLIs.
+5. Retry failed archives, then verify API access logs receive the content PUTs,
+   Web/Next.js logs do not, and each archive becomes `ready` with its declared
+   size and SHA-256. Check Web process memory/event-loop health during the run.
+
+Do not expose the API container port directly to the network and do not place
+daemon tokens in Nginx configuration or logs.
+
 ## Drain-protected updates (MUL-74)
 
 Update and rollback operations drain the platform before touching containers

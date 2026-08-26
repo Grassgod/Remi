@@ -8738,6 +8738,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",

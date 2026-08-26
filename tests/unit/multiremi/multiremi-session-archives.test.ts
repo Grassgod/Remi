@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -19,7 +20,7 @@ function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function fixture(daemonDirectBaseUrl?: string | null) {
+async function fixture(daemonDirectBaseUrl?: string | null, maxBytes = 1024 * 1024) {
   const store = createStore();
   store.ensureLocalWorkspace();
   const daemonId = "dmn_archive";
@@ -48,7 +49,7 @@ async function fixture(daemonDirectBaseUrl?: string | null) {
   archiveRoot = mkdtempSync(join(tmpdir(), "multiremi-session-archives-"));
   const sessionArchives = new SessionArchiveService(store, {
     root: archiveRoot,
-    maxBytes: 1024 * 1024,
+    maxBytes,
     minFreeBytes: 0,
   });
   const app = createMultiremiApp({
@@ -130,6 +131,52 @@ describe("Multiremi session archives", () => {
       .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
     await expect(fixture("file:///tmp/archive"))
       .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
+  });
+
+  it("streams a 12 MiB daemon upload directly into the API and completes SHA-256 verification", async () => {
+    const { store, app, issue, runtime, token } = await fixture(null, 64 * 1024 * 1024);
+    const archivePath = join(archiveRoot!, "daemon-source.tar.gz");
+    const bytes = Buffer.alloc(12 * 1024 * 1024 + 29, 0x41);
+    const digest = sha256(bytes);
+    writeFileSync(archivePath, bytes);
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: app.fetch,
+    });
+    try {
+      const origin = `http://127.0.0.1:${server.port}`;
+      const client = new MultiremiDaemonClient(origin, token.token, {
+        sessionArchiveUploadBaseUrl: origin,
+      });
+      const initialized = await client.initIssueSessionArchive(runtime.id, issue.id, {
+        sourceRevision: "api-stream-v1",
+        sha256: digest,
+        sizeBytes: bytes.byteLength,
+        fileCount: 1,
+      });
+      const uploaded = await client.uploadIssueSessionArchive(
+        runtime.id,
+        issue.id,
+        initialized.archive.id,
+        archivePath,
+      );
+      const completed = await client.completeIssueSessionArchive(
+        runtime.id,
+        issue.id,
+        initialized.archive.id,
+      );
+
+      expect(uploaded).toMatchObject({ status: "uploading", size_bytes: bytes.byteLength });
+      expect(completed).toMatchObject({ status: "ready", sha256: digest, size_bytes: bytes.byteLength });
+      expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({
+        status: "ready",
+        sha256: digest,
+        uploadedSizeBytes: bytes.byteLength,
+      });
+    } finally {
+      server.stop(true);
+    }
   });
 
   it("reports pre-init preparation failures to the control plane and retries without forging ready", async () => {

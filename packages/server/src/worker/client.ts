@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiProjectDocIndexEntry,
@@ -107,6 +108,11 @@ export interface MultiremiDaemonSessionArchiveInitResponse {
   upload_url: string | null;
 }
 
+export interface MultiremiDaemonClientOptions {
+  sessionArchiveUploadBaseUrl?: string | null;
+  sessionArchiveProxyMaxBytes?: number;
+}
+
 export interface MultiremiRecoverOrphansResult {
   orphaned: number;
   retried: number;
@@ -140,11 +146,19 @@ export function isTerminalDaemonAuthorityError(error: unknown): boolean {
 export class MultiremiDaemonClient {
   private baseUrl: string;
   private token: string | null;
-  private sessionArchiveUploadAttempts = new Map<string, number>();
+  private sessionArchiveUploadBaseUrl: URL | null;
+  private sessionArchiveProxyMaxBytes: number;
+  private sessionArchiveUploadAttempts = new Map<string, { attempt: number; uploadUrl: string | null }>();
 
-  constructor(baseUrl: string, token?: string | null) {
+  constructor(baseUrl: string, token?: string | null, options: MultiremiDaemonClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.token = token ?? null;
+    this.sessionArchiveUploadBaseUrl = normalizeSessionArchiveUploadBaseUrl(
+      options.sessionArchiveUploadBaseUrl,
+    );
+    this.sessionArchiveProxyMaxBytes = normalizeSessionArchiveProxyMaxBytes(
+      options.sessionArchiveProxyMaxBytes,
+    );
   }
 
   async registerRuntime(input: RegisterRuntimeInput): Promise<{ runtime: { id: string } }> {
@@ -490,7 +504,12 @@ export class MultiremiDaemonClient {
     );
     const key = sessionArchiveAttemptKey(runtimeId, issueId, response.archive.id);
     if (Number.isSafeInteger(response.upload_attempt) && Number(response.upload_attempt) > 0) {
-      this.sessionArchiveUploadAttempts.set(key, Number(response.upload_attempt));
+      this.sessionArchiveUploadAttempts.set(key, {
+        attempt: Number(response.upload_attempt),
+        uploadUrl: typeof response.upload_url === "string" && response.upload_url.trim()
+          ? response.upload_url.trim()
+          : null,
+      });
     } else {
       this.sessionArchiveUploadAttempts.delete(key);
     }
@@ -515,16 +534,53 @@ export class MultiremiDaemonClient {
     archiveId: string,
     archivePath: string,
   ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const attempt = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
-    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
-    // Bun 1.3.14 can crash when Bun.file is used as a fetch body in the co-resident ACP daemon.
-    const archive = await readFile(archivePath);
-    const resp = await fetch(this.baseUrl + path, {
-      method: "PUT",
-      headers: this.headers("application/octet-stream"),
-      body: archive,
-    });
-    return (await parseResponse<{ archive: MultiremiDaemonSessionArchiveWire }>(resp, "PUT", path)).archive;
+    const claim = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
+    const path = sessionArchiveUploadPath(runtimeId, issueId, archiveId, claim.attempt);
+    try {
+      const target = this.resolveSessionArchiveUploadTarget(path, claim.uploadUrl);
+      const archiveStat = await stat(archivePath);
+      if (!archiveStat.isFile()) throw new Error(`Session archive is not a regular file: ${archivePath}`);
+      if (!target.direct && archiveStat.size > this.sessionArchiveProxyMaxBytes) {
+        throw new Error(
+          `Session archive is ${archiveStat.size} bytes, exceeding the ${this.sessionArchiveProxyMaxBytes}-byte proxy fallback limit. `
+          + "Configure MULTIREMI_DAEMON_DIRECT_BASE_URL on the API or MULTIREMI_ARCHIVE_UPLOAD_BASE_URL on the daemon.",
+        );
+      }
+
+      // Bun 1.3.14 can crash when Bun.file is used as a fetch body in the co-resident ACP daemon.
+      // A Node ReadStream stays incremental without entering that Bun.file native path.
+      const archive = createReadStream(archivePath);
+      try {
+        const headers = new Headers(this.headers("application/octet-stream"));
+        headers.set("Content-Length", String(archiveStat.size));
+        const request: RequestInit & { duplex: "half" } = {
+          method: "PUT",
+          headers,
+          body: archive as unknown as BodyInit,
+          duplex: "half",
+          redirect: "error",
+        };
+        const resp = await fetch(target.url, request);
+        return (await parseResponse<{ archive: MultiremiDaemonSessionArchiveWire }>(resp, "PUT", path)).archive;
+      } finally {
+        archive.destroy();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        await this.post(
+          `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/failure?attempt=${claim.attempt}`,
+          { error: message },
+        );
+        this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+      } catch (reportError) {
+        const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
+        throw new Error(`${message}; additionally failed to persist archive upload failure: ${reportMessage}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
 
   async completeIssueSessionArchive(
@@ -532,7 +588,7 @@ export class MultiremiDaemonClient {
     issueId: string,
     archiveId: string,
   ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const attempt = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
+    const { attempt } = this.requireSessionArchiveUploadAttempt(runtimeId, issueId, archiveId);
     const key = sessionArchiveAttemptKey(runtimeId, issueId, archiveId);
     const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/complete?attempt=${attempt}`,
@@ -542,10 +598,60 @@ export class MultiremiDaemonClient {
     return response.archive;
   }
 
-  private requireSessionArchiveUploadAttempt(runtimeId: string, issueId: string, archiveId: string): number {
-    const attempt = this.sessionArchiveUploadAttempts.get(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
-    if (!attempt) throw new Error("Session archive must be initialized before upload or completion");
-    return attempt;
+  private requireSessionArchiveUploadAttempt(
+    runtimeId: string,
+    issueId: string,
+    archiveId: string,
+  ): { attempt: number; uploadUrl: string | null } {
+    const claim = this.sessionArchiveUploadAttempts.get(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+    if (!claim) throw new Error("Session archive must be initialized before upload or completion");
+    return claim;
+  }
+
+  private resolveSessionArchiveUploadTarget(
+    expectedPath: string,
+    advertisedUploadUrl: string | null,
+  ): { url: URL; direct: boolean } {
+    const controlBase = new URL(`${this.baseUrl}/`);
+    const advertised = advertisedUploadUrl ?? expectedPath;
+    let target: URL;
+    try {
+      target = new URL(advertised, controlBase);
+    } catch {
+      throw new Error("Session archive upload_url is not a valid URL");
+    }
+    const expected = new URL(expectedPath, controlBase);
+    if (
+      (target.protocol !== "http:" && target.protocol !== "https:")
+      || target.username
+      || target.password
+      || target.hash
+      || target.pathname !== expected.pathname
+      || target.search !== expected.search
+    ) {
+      throw new Error("Session archive upload_url does not match the initialized archive attempt");
+    }
+
+    if (this.sessionArchiveUploadBaseUrl) {
+      return {
+        url: new URL(expectedPath, this.sessionArchiveUploadBaseUrl),
+        direct: true,
+      };
+    }
+
+    const absoluteAdvertised = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(advertised)
+      || advertised.startsWith("//");
+    if (!absoluteAdvertised) return { url: expected, direct: false };
+    if (target.hostname !== controlBase.hostname) {
+      throw new Error(
+        `Refusing Session Archive upload_url for unexpected host ${target.hostname}; `
+        + "set MULTIREMI_ARCHIVE_UPLOAD_BASE_URL to explicitly trust a different API host.",
+      );
+    }
+    if (controlBase.protocol === "https:" && target.protocol !== "https:") {
+      throw new Error("Refusing Session Archive upload_url that downgrades the HTTPS control-plane connection");
+    }
+    return { url: target, direct: true };
   }
 
   async reportIssueWorkspaceCleaned(
@@ -608,6 +714,40 @@ export class MultiremiDaemonClient {
 
 function sessionArchiveAttemptKey(runtimeId: string, issueId: string, archiveId: string): string {
   return JSON.stringify([runtimeId, issueId, archiveId]);
+}
+
+function sessionArchiveUploadPath(runtimeId: string, issueId: string, archiveId: string, attempt: number): string {
+  return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
+}
+
+function normalizeSessionArchiveUploadBaseUrl(value: string | null | undefined): URL | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("MULTIREMI_ARCHIVE_UPLOAD_BASE_URL must be an absolute http(s) URL");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:")
+    || url.username
+    || url.password
+    || url.search
+    || url.hash
+    || (url.pathname !== "/" && url.pathname !== "")
+  ) {
+    throw new Error("MULTIREMI_ARCHIVE_UPLOAD_BASE_URL must be an http(s) origin without credentials, path, query, or fragment");
+  }
+  return url;
+}
+
+function normalizeSessionArchiveProxyMaxBytes(value: number | undefined): number {
+  if (value === undefined) return 8 * 1024 * 1024;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("MULTIREMI_ARCHIVE_PROXY_MAX_BYTES must be a non-negative safe integer");
+  }
+  return value;
 }
 
 async function parseResponse<T>(resp: Response, method: string, path: string): Promise<T> {

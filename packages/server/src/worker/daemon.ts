@@ -342,6 +342,10 @@ export interface MultiremiDaemonOptions {
   gitWorktreeInspector?: GitWorktreeInspector;
   /** Maximum uncompressed provider history accepted for one Issue snapshot. */
   sessionArchiveMaxSourceBytes?: number;
+  /** Operator-trusted API origin used only for Session Archive content uploads. */
+  sessionArchiveUploadBaseUrl?: string | null;
+  /** Largest archive allowed through the control-plane proxy fallback. */
+  sessionArchiveProxyMaxBytes?: number;
   /** Runtime-global immutable Agent Plugin cache. */
   pluginCacheRoot?: string;
   /** Injectable provider capability probe; production uses the native CLI and ACP bridge. */
@@ -508,7 +512,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -681,7 +685,13 @@ export class MultiremiDaemon {
       ? cleanupRetryDelays
       : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
-    this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token);
+    this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token, {
+      sessionArchiveUploadBaseUrl: options.sessionArchiveUploadBaseUrl === undefined
+        ? process.env.MULTIREMI_ARCHIVE_UPLOAD_BASE_URL ?? null
+        : options.sessionArchiveUploadBaseUrl,
+      sessionArchiveProxyMaxBytes: options.sessionArchiveProxyMaxBytes
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_PROXY_MAX_BYTES, 8 * 1024 * 1024),
+    });
     this.sshMeshManager = options.sshMeshManager ?? new SshMeshManager({
       workspaceId: this.options.workspaceId ?? "local",
       daemonId: this.options.daemonId ?? this.options.runtimeName,

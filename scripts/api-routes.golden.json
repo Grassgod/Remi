@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 611,
+    "routeCount": 612,
     "routeCountByPrefix": {
       "native": 204,
-      "compat": 394,
+      "compat": 395,
       "root": 13
     },
     "getRoutes": 264,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 347,
+    "mutationRoutes": 348,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -450,6 +450,7 @@
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
