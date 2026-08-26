@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { CODEBASE_SCM_CAPABILITIES, GITHUB_SCM_CAPABILITIES } from "@multiremi/scm/capabilities.js";
 import { CodebaseScmProviderAdapter } from "@multiremi/scm/codebase.js";
 import { GitHubScmProviderAdapter } from "@multiremi/scm/github.js";
+import { ScmHttpError } from "@multiremi/scm/http.js";
 import { deriveCanonicalCandidates } from "@multiremi/scm/reconcile.js";
-import type { ScmPollContext } from "@multiremi/scm/types.js";
+import { ScmStreamUnavailableError, type ScmPollContext } from "@multiremi/scm/types.js";
 import { scmBinding, scmConnection } from "./scm-test-helpers.js";
 
 const originalFetch = globalThis.fetch;
@@ -63,6 +64,111 @@ describe("SCM provider adapters", () => {
     expect(requests[0]?.url).toContain("per_page=100");
     expect(requests[0]?.authorization).toBe("Bearer token");
     expect(heartbeats).toBe(2);
+  });
+
+  it("classifies unavailable GitHub pull-request and Actions endpoints", async () => {
+    const cases = [
+      { stream: "change_requests" as const, status: 404, path: "/repos/acme/widgets/pulls" },
+      { stream: "reviews" as const, status: 410, path: "/repos/acme/widgets/pulls" },
+      { stream: "pipelines" as const, status: 404, path: "/repos/acme/widgets/actions/runs" },
+    ];
+    const adapter = new GitHubScmProviderAdapter();
+
+    for (const entry of cases) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({ message: "disabled" }), {
+        status: entry.status,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+      const error = await capturedError(adapter.poll(context(entry.stream)));
+      expect(error).toBeInstanceOf(ScmStreamUnavailableError);
+      expect(error).toMatchObject({
+        provider: "GitHub",
+        stream: entry.stream,
+        status: entry.status,
+        url: entry.path,
+      });
+    }
+  });
+
+  it("keeps a GitHub repository 404 as a hard error but classifies a missing default branch", async () => {
+    const adapter = new GitHubScmProviderAdapter();
+    globalThis.fetch = (async () => new Response(JSON.stringify({ message: "Not Found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    })) as typeof fetch;
+
+    const repositoryError = await capturedError(adapter.poll(context("default_branch")));
+    expect(repositoryError).toBeInstanceOf(ScmHttpError);
+    expect(repositoryError).not.toBeInstanceOf(ScmStreamUnavailableError);
+
+    globalThis.fetch = (async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/repos/acme/widgets") {
+        return new Response(JSON.stringify({ default_branch: "main" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ message: "Gone" }), {
+        status: 410,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const branchError = await capturedError(adapter.poll(context("default_branch")));
+    expect(branchError).toBeInstanceOf(ScmStreamUnavailableError);
+    expect(branchError).toMatchObject({
+      stream: "default_branch",
+      status: 410,
+      url: "/repos/acme/widgets/branches/main",
+      reason: "default branch unavailable",
+    });
+  });
+
+  it("continues GitHub comments when only issue comments are unavailable", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(path);
+      if (path.endsWith("/issues/comments")) {
+        return new Response(JSON.stringify({ message: "Not Found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify([{ id: 7, body: "review comment" }]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const page = await new GitHubScmProviderAdapter().poll(context("comments"));
+    expect(requests).toEqual([
+      "/repos/acme/widgets/issues/comments",
+      "/repos/acme/widgets/pulls/comments",
+    ]);
+    expect(page.done).toBe(true);
+    expect(page.observations.map((entry) => entry.externalId)).toEqual(["7"]);
+  });
+
+  it("classifies GitHub comments only when issue and review comments are unavailable", async () => {
+    globalThis.fetch = (async (input) => {
+      const path = new URL(String(input)).pathname;
+      const status = path.endsWith("/issues/comments") ? 404 : 410;
+      return new Response(JSON.stringify({ message: "disabled" }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const error = await capturedError(new GitHubScmProviderAdapter().poll(context("comments")));
+    expect(error).toBeInstanceOf(ScmStreamUnavailableError);
+    expect(error).toMatchObject({
+      stream: "comments",
+      status: 410,
+      url: "/repos/acme/widgets/pulls/comments",
+      reason: "issue and review comments unavailable",
+    });
   });
 
   it("uses one logical identity for GitHub workflow runs from polling and webhooks", async () => {
@@ -505,4 +611,13 @@ function syncCursor(
     leaseToken: null,
     updatedAt: "2026-08-21T07:55:00.000Z",
   };
+}
+
+async function capturedError(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+    throw new Error("expected promise to reject");
+  } catch (error) {
+    return error;
+  }
 }

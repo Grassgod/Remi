@@ -36,6 +36,19 @@ export interface ScmProviderCapabilities {
 
 export type ScmNormalizedState = Record<string, unknown>;
 
+export class ScmStreamUnavailableError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly stream: MultiremiScmSyncStream,
+    readonly status: number,
+    readonly url: string,
+    readonly reason: string,
+  ) {
+    super(`${provider} ${stream} poll failed: GET ${url} -> ${status} (${reason})`);
+    this.name = "ScmStreamUnavailableError";
+  }
+}
+
 /** A provider-neutral entity as observed during one poll. */
 export interface ScmEntityObservation {
   stream: MultiremiScmSyncStream;
