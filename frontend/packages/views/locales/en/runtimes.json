@@ -438,6 +438,7 @@
     "legend_output": "Output",
     "legend_cache_read": "Cache read",
     "legend_cache_write": "Cache write",
+    "legend_total_only": "Total only",
     "empty_no_usage": "No usage in this period.",
     "empty_pricing_missing": "Tokens recorded but pricing missing for:",
     "empty_pricing_hint": "Set a custom rate to include them in cost totals.",

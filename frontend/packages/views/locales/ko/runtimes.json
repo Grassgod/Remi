@@ -438,6 +438,7 @@
     "legend_output": "출력",
     "legend_cache_read": "캐시 읽기",
     "legend_cache_write": "캐시 쓰기",
+    "legend_total_only": "총량만",
     "empty_no_usage": "이 기간에는 사용량이 없습니다.",
     "empty_pricing_missing": "토큰은 기록됐지만 가격 정보가 없습니다:",
     "empty_pricing_hint": "비용 합계에 포함하려면 사용자 지정 단가를 설정하세요.",

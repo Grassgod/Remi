@@ -6,6 +6,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multiremi/ui/components/ui/tooltip";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -322,14 +327,19 @@ export function DashboardPage() {
     [agentTokenRows, runTimeRows],
   );
 
-  // Metric-level availability (MUL-93). Each KPI resolves to one of four
+  // Metric-level availability (MUL-93). Each KPI resolves to one of five
   // honest states: failed (series didn't load), not-collected (tasks ran
   // but no token usage was recorded — the cross-series signal that the
   // usage pipeline is broken, see MUL-92), unpriced (tokens exist but no
   // model resolves to a price, so a dollar figure would be fabricated),
-  // or a real measurement (including a genuine 0).
+  // total-only (tokens exist without billable splits), or a real measurement
+  // (including a genuine 0).
   const tokensTotal =
-    totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
+    totals.input +
+    totals.output +
+    totals.cacheRead +
+    totals.cacheWrite +
+    totals.totalOnly;
   const tokensFailed = dailyQuery.isError === true;
   const runTimeFailed = runTimeQuery.isError === true;
   const usageNotCollected =
@@ -345,6 +355,8 @@ export function DashboardPage() {
     tokensTotal > 0 &&
     totals.cost === 0 &&
     hasUnpricedTokens(dailyUsageInWindow);
+  const costTotalOnly =
+    tokensTotal > 0 && totals.totalOnly === tokensTotal;
 
   return (
     <div className="flex h-full flex-col">
@@ -420,6 +432,20 @@ export function DashboardPage() {
                   the runtime usage page uses). */}
               <UnmappedPricingNotice usage={dailyUsageInWindow} />
 
+              {totals.totalOnly > 0 && (
+                <div
+                  role="alert"
+                  className="flex items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs"
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+                  <p className="min-w-0 flex-1 text-foreground">
+                    {t(($) => $.kpi.total_only_notice, {
+                      tokens: formatTokens(totals.totalOnly),
+                    })}
+                  </p>
+                </div>
+              )}
+
               {/* KPI row — same 3-divide-x card grid the runtime usage
                   section uses, expanded to four tiles. Every tile prefers an
                   explicit "—" + reason over a fabricated 0 (MUL-93); a
@@ -428,7 +454,7 @@ export function DashboardPage() {
                 <KpiCard
                   label={t(($) => $.kpi.cost_label, { days })}
                   value={
-                    tokensFailed || usageNotCollected || costUnpriced
+                    tokensFailed || usageNotCollected || costUnpriced || costTotalOnly
                       ? "—"
                       : fmtMoney(totals.cost)
                   }
@@ -441,7 +467,9 @@ export function DashboardPage() {
                           })
                         : costUnpriced
                           ? t(($) => $.kpi.cost_unpriced)
-                          : undefined
+                          : costTotalOnly
+                            ? t(($) => $.kpi.cost_total_only)
+                            : undefined
                   }
                 />
                 <KpiCard
@@ -461,6 +489,8 @@ export function DashboardPage() {
                         : t(($) => $.kpi.tokens_hint, {
                             input: formatTokens(totals.input),
                             output: formatTokens(totals.output),
+                            cacheRead: formatTokens(totals.cacheRead),
+                            cacheWrite: formatTokens(totals.cacheWrite),
                           })
                   }
                 />
@@ -521,6 +551,7 @@ export function DashboardPage() {
                 timeFailed={runTimeDailyQuery.isError === true}
                 usageNotCollected={usageNotCollected}
                 costUnpriced={costUnpriced}
+                costTotalOnly={costTotalOnly}
                 onRetry={retryFailed}
               />
 
@@ -616,6 +647,7 @@ function TrendBlock({
   timeFailed,
   usageNotCollected,
   costUnpriced,
+  costTotalOnly,
   onRetry,
 }: {
   dim: Dim;
@@ -636,6 +668,8 @@ function TrendBlock({
   usageNotCollected: boolean;
   /** Tokens exist but no model resolves to a price. */
   costUnpriced: boolean;
+  /** Every recorded token has only a total, so cost is underivable. */
+  costTotalOnly: boolean;
   onRetry: () => void;
 }) {
   const { t } = useT("usage");
@@ -651,9 +685,10 @@ function TrendBlock({
 
   const totalCost = costData.reduce((sum, d) => sum + d.total, 0);
   const totalTokens = tokensData.reduce(
-    (sum, d) => sum + d.input + d.output + d.cacheRead + d.cacheWrite,
+    (sum, d) => sum + d.input + d.output + d.cacheRead + d.cacheWrite + d.totalOnly,
     0,
   );
+  const totalOnlyTokens = tokensData.reduce((sum, d) => sum + d.totalOnly, 0);
   const totalSeconds = timeData.reduce((sum, d) => sum + d.totalSeconds, 0);
   const totalTasks = tasksData.reduce(
     (sum, d) => sum + d.completed + d.failed,
@@ -668,22 +703,30 @@ function TrendBlock({
           ? totalSeconds === 0
           : totalTasks === 0;
 
-  // Why is the chart empty? An all-zero series has four honest answers
+  // Why is the chart empty? An all-zero series has five honest answers
   // (MUL-93) and they must not share one "no usage" caption: the series
   // failed to load, usage wasn't collected, tokens can't be priced, or
   // there genuinely was nothing in the window.
   const metricFailed =
     metric === "cost" || metric === "tokens" ? tokensFailed : timeFailed;
-  const placeholder: "failed" | "not_collected" | "unpriced" | "empty" | null =
+  const placeholder:
+    | "failed"
+    | "not_collected"
+    | "unpriced"
+    | "total_only"
+    | "empty"
+    | null =
     !isEmpty && !metricFailed
       ? null
       : metricFailed
         ? "failed"
         : (metric === "cost" || metric === "tokens") && usageNotCollected
           ? "not_collected"
-          : metric === "cost" && costUnpriced
-            ? "unpriced"
-            : "empty";
+          : metric === "cost" && costTotalOnly
+            ? "total_only"
+            : metric === "cost" && costUnpriced
+              ? "unpriced"
+              : "empty";
 
   const title =
     dim === "weekly"
@@ -706,16 +749,24 @@ function TrendBlock({
     <div className="rounded-lg border bg-card p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <h4 className="text-sm font-semibold">{title}</h4>
-        <Segmented
-          value={metric}
-          onChange={setMetric}
-          options={[
-            { label: t(($) => $.daily.metric_tokens), value: "tokens" as const },
-            { label: t(($) => $.daily.metric_cost), value: "cost" as const },
-            { label: t(($) => $.daily.metric_time), value: "time" as const },
-            { label: t(($) => $.daily.metric_tasks), value: "tasks" as const },
-          ]}
-        />
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {metric === "tokens" && totalOnlyTokens > 0 && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="h-2 w-2 rounded-sm bg-chart-5" />
+              {t(($) => $.daily.total_only_legend)}
+            </span>
+          )}
+          <Segmented
+            value={metric}
+            onChange={setMetric}
+            options={[
+              { label: t(($) => $.daily.metric_tokens), value: "tokens" as const },
+              { label: t(($) => $.daily.metric_cost), value: "cost" as const },
+              { label: t(($) => $.daily.metric_time), value: "time" as const },
+              { label: t(($) => $.daily.metric_tasks), value: "tasks" as const },
+            ]}
+          />
+        </div>
       </div>
       <div className="min-h-[240px]">
         {placeholder !== null ? (
@@ -732,9 +783,11 @@ function TrendBlock({
                   ? t(($) => $.daily.not_collected)
                   : placeholder === "unpriced"
                     ? t(($) => $.daily.cost_unpriced)
-                    : metric === "time" || metric === "tasks"
-                      ? t(($) => $.daily.no_tasks)
-                      : t(($) => $.daily.no_data)}
+                    : placeholder === "total_only"
+                      ? t(($) => $.daily.cost_total_only)
+                      : metric === "time" || metric === "tasks"
+                        ? t(($) => $.daily.no_tasks)
+                        : t(($) => $.daily.no_data)}
             </p>
             {placeholder === "failed" && (
               <Button type="button" variant="outline" size="sm" onClick={onRetry}>
@@ -911,9 +964,26 @@ function Leaderboard({
                   <div
                     className={`text-right text-xs tabular-nums ${sortBy === "tokens" ? "font-medium text-foreground" : "text-muted-foreground"}`}
                   >
-                    {tokensFailed || row.tokensUnavailable
-                      ? "—"
-                      : formatTokens(row.tokens)}
+                    {tokensFailed || row.tokensUnavailable ? (
+                      "—"
+                    ) : row.totalOnlyTokens > 0 ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span className="cursor-help underline decoration-dotted underline-offset-2">
+                              ~{formatTokens(row.tokens)}
+                            </span>
+                          }
+                        />
+                        <TooltipContent>
+                          {t(($) => $.leaderboard.total_only_tooltip, {
+                            tokens: formatTokens(row.totalOnlyTokens),
+                          })}
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      formatTokens(row.tokens)
+                    )}
                   </div>
                   <div
                     className={`text-right tabular-nums ${sortBy === "cost" ? "text-sm font-medium" : "text-xs text-muted-foreground"}`}

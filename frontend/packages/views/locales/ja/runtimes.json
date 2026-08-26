@@ -418,6 +418,7 @@
     "legend_output": "出力",
     "legend_cache_read": "キャッシュ読み取り",
     "legend_cache_write": "キャッシュ書き込み",
+    "legend_total_only": "総量のみ",
     "empty_no_usage": "この期間には使用量がありません。",
     "empty_pricing_missing": "トークンは記録されましたが、次のモデルの価格情報がありません:",
     "empty_pricing_hint": "コスト合計に含めるには、カスタム単価を設定してください。",

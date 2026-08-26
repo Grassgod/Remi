@@ -372,6 +372,9 @@ function WhenChart({
 
   const metricToggleVisible = !showHeatmap;
   const legendIncludesCacheRead = !showHeatmap && chartMetric === "tokens";
+  const legendIncludesTotalOnly =
+    legendIncludesCacheRead &&
+    (dim === "daily" ? dailyTokens : weeklyTokens).some((row) => row.totalOnly > 0);
 
   return (
     <div className="rounded-lg border bg-card p-4">
@@ -409,7 +412,10 @@ function WhenChart({
           </button>
         </div>
         {!showHeatmap && (
-          <ChartLegend includeCacheRead={legendIncludesCacheRead} />
+          <ChartLegend
+            includeCacheRead={legendIncludesCacheRead}
+            includeTotalOnly={legendIncludesTotalOnly}
+          />
         )}
       </div>
 
@@ -458,7 +464,7 @@ function DailyTab({
     // chart is genuinely empty (independent of pricing — unmapped models
     // still contribute raw token counts).
     const totalTokens = tokensData.reduce(
-      (s, d) => s + d.input + d.output + d.cacheRead + d.cacheWrite,
+      (s, d) => s + d.input + d.output + d.cacheRead + d.cacheWrite + d.totalOnly,
       0,
     );
     if (totalTokens === 0) return <EmptyChartState usage={usage} />;
@@ -482,7 +488,7 @@ function WeeklyTab({
 }) {
   if (metric === "tokens") {
     const totalTokens = tokensData.reduce(
-      (s, d) => s + d.input + d.output + d.cacheRead + d.cacheWrite,
+      (s, d) => s + d.input + d.output + d.cacheRead + d.cacheWrite + d.totalOnly,
       0,
     );
     if (totalTokens === 0) return <EmptyChartState usage={usage} />;
@@ -600,10 +606,16 @@ export function UnmappedPricingNotice({ usage }: { usage: readonly PriceableUsag
 // header so the chart body keeps its full vertical real estate.
 // ---------------------------------------------------------------------------
 
-function ChartLegend({ includeCacheRead = false }: { includeCacheRead?: boolean }) {
+function ChartLegend({
+  includeCacheRead = false,
+  includeTotalOnly = false,
+}: {
+  includeCacheRead?: boolean;
+  includeTotalOnly?: boolean;
+}) {
   const { t } = useT("runtimes");
-  // Token-stack mode adds a cache-read pip between output and cache-write to
-  // match the four-segment stack of DailyTokensChart. The cost chart drops
+  // Token-stack mode adds cache-read and total-only pips to match the
+  // five-segment stack of DailyTokensChart. The cost chart drops
   // cache-read because at typical pricing it'd be ~0 px tall in the stack.
   const items = [
     { label: t(($) => $.usage.legend_input), color: "var(--color-chart-1)" },
@@ -612,6 +624,9 @@ function ChartLegend({ includeCacheRead = false }: { includeCacheRead?: boolean 
       ? [{ label: t(($) => $.usage.legend_cache_read), color: "var(--color-chart-4)" }]
       : []),
     { label: t(($) => $.usage.legend_cache_write), color: "var(--color-chart-3)" },
+    ...(includeTotalOnly
+      ? [{ label: t(($) => $.usage.legend_total_only), color: "var(--color-chart-5)" }]
+      : []),
   ];
   return (
     <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -963,4 +978,3 @@ function computeTotals(rows: RuntimeUsage[]): UsageTotals {
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, cacheSavings: 0 },
   );
 }
-

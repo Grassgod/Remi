@@ -119,6 +119,7 @@ function usageRow(overrides: Record<string, unknown> = {}) {
     output_tokens: 0,
     cache_read_tokens: 0,
     cache_write_tokens: 0,
+    total_tokens: 1_000_000,
     task_count: 2,
     ...overrides,
   };
@@ -171,7 +172,40 @@ describe("DashboardPage — normal values", () => {
     expect(screen.getAllByText("1M").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("10m").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Across 2 tasks")).toBeTruthy();
+    expect(
+      screen.getByText("Input 1M · Output 0 · Cache read 0 · Cache write 0"),
+    ).toBeTruthy();
     expect(screen.queryByText("—")).toBeNull();
+  });
+
+  it("shows total-only history without fabricating a cost", () => {
+    const totalOnly = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 5_181_880,
+      task_count: 27,
+    };
+    setStates({
+      daily: { data: [usageRow(totalOnly)] },
+      "by-agent": {
+        data: [usageRow({ ...totalOnly, agent_id: "agent-1" })],
+      },
+      "agent-runtime": {
+        data: [{ ...RUN_TIME_ROW, task_count: 27 }],
+      },
+      "runtime-daily": {
+        data: [{ ...RUN_TIME_DAILY_ROW, task_count: 27 }],
+      },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    expect(screen.getAllByText("5.2M").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("~5.2M")).toBeTruthy();
+    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(screen.queryByText("$0.00")).toBeNull();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -347,6 +381,7 @@ describe("DashboardPage — cost without pricing", () => {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            total_tokens: 0,
             task_count: 0,
           }),
         ],

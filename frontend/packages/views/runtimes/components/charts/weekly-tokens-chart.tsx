@@ -6,7 +6,7 @@ import { StackedBarChart } from "./stacked-bar-chart";
 const localeTotal = (total: number) => total.toLocaleString();
 
 /**
- * Mirror of DailyTokensChart's four-segment stack — same series and colours
+ * Mirror of DailyTokensChart's five-segment stack — same series and colours
  * keep the Weekly view legible as a coarser cut of the Daily one.
  */
 export function WeeklyTokensChart({ data }: { data: WeeklyTokenData[] }) {
@@ -14,7 +14,7 @@ export function WeeklyTokensChart({ data }: { data: WeeklyTokenData[] }) {
   return (
     <StackedBarChart
       data={data}
-      config={tokenStackConfig}
+      config={tokenStackConfig(t(($) => $.usage.legend_total_only))}
       series={TOKEN_SERIES}
       stackId="tokens"
       yAxisWidth={50}

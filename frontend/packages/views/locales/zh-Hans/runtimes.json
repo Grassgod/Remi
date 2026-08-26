@@ -418,6 +418,7 @@
     "legend_output": "输出",
     "legend_cache_read": "缓存读取",
     "legend_cache_write": "缓存写入",
+    "legend_total_only": "仅总量",
     "empty_no_usage": "此期间无使用记录。",
     "empty_pricing_missing": "记录到 token，但缺少这些模型的价格：",
     "empty_pricing_hint": "可以设置自定义价格，把它们也纳入费用统计。",
