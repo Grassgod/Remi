@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./h
 let archiveRoot: string | null = null;
 
 afterEach(() => {
+  setSystemTime();
   resetMultiremiTestEnv();
   delete process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_BASE_MS;
   delete process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_MS;
@@ -104,9 +105,9 @@ async function createPhysicalReadyArchive(
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
+    if (performance.now() >= deadline) throw new Error("Timed out waiting for condition");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -395,6 +396,90 @@ describe("Multiremi session archives", () => {
       gc_ready: false,
     });
     expect(store.getSessionArchive(ready.id)?.metadata).toEqual({ providers: ["claude", "codex"] });
+  });
+
+  it("heartbeats slow upload progress so the stall detector does not fence a live attempt", async () => {
+    process.env.MULTIREMI_SESSION_ARCHIVE_UPLOAD_STALL_MS = "60000";
+    const startedAt = new Date("2026-08-26T00:00:00.000Z");
+    setSystemTime(startedAt);
+    const { store, issue, runtime, sessionArchives } = await fixture();
+    const bytes = new Uint8Array([1, 2, 3]);
+    const initialized = sessionArchives.initialize({
+      workspaceId: issue.workspaceId,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: runtime.daemonId!,
+      sourceRevision: "slow-upload-v1",
+      sha256: sha256(bytes),
+      sizeBytes: bytes.byteLength,
+    }).archive;
+    const claimed = await sessionArchives.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const upload = sessionArchives.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claimed.uploadAttempt!,
+      body,
+    );
+    await waitUntil(() => store.getSessionArchive(initialized.id)?.status === "uploading");
+
+    setSystemTime(new Date(startedAt.getTime() + 31_000));
+    controller.enqueue(bytes.subarray(0, 1));
+    await waitUntil(() => store.getSessionArchive(initialized.id)?.uploadedSizeBytes === 1);
+    setSystemTime(new Date(startedAt.getTime() + 62_000));
+    controller.enqueue(bytes.subarray(1, 2));
+    await waitUntil(() => store.getSessionArchive(initialized.id)?.uploadedSizeBytes === 2);
+
+    setSystemTime(new Date(startedAt.getTime() + 93_000));
+    expect(store.getSessionArchiveWorkspaceUsage(issue.workspaceId).pendingArchives).toBe(1);
+    expect(store.getSessionArchive(initialized.id)).toMatchObject({
+      status: "uploading",
+      uploadedSizeBytes: 2,
+      lastError: null,
+    });
+    controller.enqueue(bytes.subarray(2));
+    controller.close();
+
+    expect(await upload).toMatchObject({
+      status: "uploading",
+      uploadedSizeBytes: bytes.byteLength,
+    });
+    expect(await sessionArchives.complete(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claimed.uploadAttempt!,
+    )).toMatchObject({ status: "ready" });
+  });
+
+  it("does not downgrade a ready archive when its attempt count exceeds the retry budget", async () => {
+    process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS = "2";
+    const { store, issue, runtime, sessionArchives } = await fixture();
+    const ready = await createPhysicalReadyArchive(
+      sessionArchives,
+      issue.id,
+      runtime.id,
+      runtime.daemonId!,
+      Buffer.from("ready-over-budget"),
+    );
+    db!.run(
+      "UPDATE multiremi_session_archives SET attempt_count = 2 WHERE id = ?",
+      [ready.archiveId],
+    );
+
+    expect(store.claimSessionArchiveUploadAttempt(ready.archiveId, runtime.id)).toBeNull();
+    expect(store.getSessionArchive(ready.archiveId)).toMatchObject({
+      status: "ready",
+      attemptCount: 2,
+      retryExhaustedAt: null,
+      lastError: null,
+    });
   });
 
   it("reclaims a crashed same-Runtime upload with a fenced attempt and removes its partial", async () => {
@@ -1303,6 +1388,67 @@ describe("Multiremi session archives", () => {
     expect(store.getSessionArchive(first.id)).toMatchObject({ status: "superseded" });
     expect(current.status).toBe("pending");
     expect(store.getSessionArchiveWorkspaceUsage(issue.workspaceId).pendingArchives).toBe(1);
+  });
+
+  it("clears and ignores retry state on a superseded archive that sorts as latest", async () => {
+    process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS = "1";
+    const { store, app, issue, runtime, daemonHeaders, base } = await fixture();
+    const old = store.initSessionArchive({
+      workspaceId: issue.workspaceId,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: runtime.daemonId!,
+      sourceRevision: "superseded-old",
+      sha256: sha256(Buffer.from("old exhausted snapshot")),
+      sizeBytes: Buffer.byteLength("old exhausted snapshot"),
+    }, "sar_zzzzzzzzzzzz", "sar_zzzzzzzzzzzz/sessions.tar.gz").archive;
+    const oldAttempt = store.claimSessionArchiveUploadAttempt(old.id, runtime.id)!;
+    expect(store.markSessionArchiveFailedAttempt(
+      old.id,
+      runtime.id,
+      oldAttempt.attemptCount,
+      "old upload failed",
+    )).toMatchObject({ retryExhaustedAt: expect.any(String) });
+
+    const current = store.initSessionArchive({
+      workspaceId: issue.workspaceId,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: runtime.daemonId!,
+      sourceRevision: "superseded-current",
+      sha256: sha256(Buffer.from("current snapshot")),
+      sizeBytes: Buffer.byteLength("current snapshot"),
+    }, "sar_aaaaaaaaaaaa", "sar_aaaaaaaaaaaa/sessions.tar.gz").archive;
+    expect(store.getSessionArchive(old.id)).toMatchObject({
+      status: "superseded",
+      nextRetryAt: null,
+      retryExhaustedAt: null,
+    });
+
+    const tiedAt = "2026-08-26T12:00:00.000Z";
+    db!.run(
+      `UPDATE multiremi_session_archives
+       SET updated_at = ?, next_retry_at = ?, retry_exhausted_at = ?
+       WHERE id = ?`,
+      [tiedAt, "2999-01-01T00:00:00.000Z", tiedAt, old.id],
+    );
+    db!.run(
+      "UPDATE multiremi_session_archives SET updated_at = ? WHERE id = ?",
+      [tiedAt, current.id],
+    );
+    expect(store.getSessionArchiveStatus(issue.id).latest?.id).toBe(old.id);
+
+    const status = await app.request(`${base}/status`, {
+      headers: { Authorization: daemonHeaders.Authorization },
+    });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({
+      latest: {
+        id: old.id,
+        status: "superseded",
+        retry_state: "eligible",
+      },
+    });
   });
 
   it("rejects wrong daemon identity and never accepts a client file path", async () => {

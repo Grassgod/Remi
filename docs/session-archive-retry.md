@@ -16,6 +16,11 @@ authoritative gate for every upload claim.
 Invalid values fall back to their defaults. Restart the API service after
 changing these process environment variables.
 
+The upload stall threshold measures time since the last persisted upload
+progress. If `MULTIREMI_SESSION_ARCHIVE_MAX_BYTES` is increased, reassess
+`MULTIREMI_SESSION_ARCHIVE_UPLOAD_STALL_MS` against the maximum expected upload
+duration and slowest supported connection.
+
 ## Backoff
 
 The delay before another claim is `min(base * 2^(attempt - 1), max)`. A stable

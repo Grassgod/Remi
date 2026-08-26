@@ -335,6 +335,62 @@ describe("Issue workspace GC", () => {
     expect(preparationFailureReports).toBe(0);
   });
 
+  it("does not defer GC for a superseded archive with stale exhausted fields", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-superseded", "iss_superseded");
+    const outside = tempRoot();
+    symlinkSync(outside, join(workspace, ".multiremi", "sessions"));
+    let statusCalls = 0;
+    let preparationFailureReports = 0;
+    const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
+    Object.assign(daemon, {
+      options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
+      client: {
+        getIssueSessionArchiveStatus: async () => {
+          statusCalls++;
+          return {
+            latest: {
+              id: "sar_superseded",
+              status: "superseded",
+              retry_state: "exhausted",
+              retry_exhausted_at: "2026-08-26T00:00:00.000Z",
+            },
+            latest_ready: null,
+            requested_ready: null,
+            gc_ready: false,
+          };
+        },
+        reportIssueSessionArchiveFailure: async () => {
+          preparationFailureReports++;
+        },
+      },
+    });
+    const ensure = (issueId: string, workspaceDir: string, forceFreshSnapshot: boolean) =>
+      (daemon as unknown as {
+        ensureIssueSessionArchive(
+          issueId: string,
+          workspaceDir: string,
+          forceFreshSnapshot: boolean,
+        ): Promise<{ archiveId: string; sourceRevision: string; sha256: string } | null>;
+      }).ensureIssueSessionArchive(issueId, workspaceDir, forceFreshSnapshot);
+
+    const result = await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client: gcClient(),
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: ensure,
+      now: Date.now() + 1_000,
+    });
+
+    expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+    expect(existsSync(workspace)).toBe(true);
+    expect(statusCalls).toBe(1);
+    expect(preparationFailureReports).toBe(1);
+  });
+
   it("fails closed when a missing Issue still has provider Session state", async () => {
     const root = tempRoot();
     const workspace = issueWorkspace(root, "MUL-missing-history", "iss_missing_history");

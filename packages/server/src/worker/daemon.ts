@@ -1802,7 +1802,11 @@ export class MultiremiDaemon {
     issueId: string,
     archive: MultiremiDaemonSessionArchiveWire | null,
   ): boolean {
-    const retryState = archive?.retry_state
+    if (
+      !archive
+      || (archive.status !== "pending" && archive.status !== "uploading" && archive.status !== "failed")
+    ) return false;
+    const retryState = archive.retry_state
       ?? (archive?.retry_exhausted_at
         ? "exhausted"
         : archive?.next_retry_at && archive.next_retry_at > new Date().toISOString()

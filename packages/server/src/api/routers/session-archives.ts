@@ -46,6 +46,9 @@ type FailureBody = {
 
 function archiveWire(archive: MultiremiSessionArchive | null): Record<string, unknown> | null {
   if (!archive) return null;
+  const hasAutomaticRetryState = archive.status === "pending"
+    || archive.status === "uploading"
+    || archive.status === "failed";
   return {
     id: archive.id,
     workspace_id: archive.workspaceId,
@@ -64,9 +67,11 @@ function archiveWire(archive: MultiremiSessionArchive | null): Record<string, un
     last_error: archive.lastError,
     next_retry_at: archive.nextRetryAt,
     retry_exhausted_at: archive.retryExhaustedAt,
-    retry_state: archive.retryExhaustedAt
+    retry_state: hasAutomaticRetryState && archive.retryExhaustedAt
       ? "exhausted"
-      : archive.nextRetryAt && archive.nextRetryAt > new Date().toISOString()
+      : hasAutomaticRetryState
+        && archive.nextRetryAt
+        && archive.nextRetryAt > new Date().toISOString()
         ? "backoff"
         : "eligible",
     created_at: archive.createdAt,

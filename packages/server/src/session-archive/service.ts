@@ -36,6 +36,7 @@ import { createLogger } from "@shared/logger.js";
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
+const UPLOAD_PROGRESS_HEARTBEAT_MS = 30_000;
 const DEFAULT_ROOT = join(homedir(), ".remi", "multiremi", "session-archives");
 const ISSUE_PURGE_OUTBOX = ".issue-purge-outbox";
 const DEFAULT_PURGE_RECOVERY_INTERVAL_MS = 30_000;
@@ -320,6 +321,7 @@ export class SessionArchiveService {
 
     let handle: Awaited<ReturnType<typeof open>> | null = null;
     let uploaded = 0;
+    let lastProgressAt = Date.now();
     try {
       const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
         | (constants.O_NOFOLLOW ?? 0);
@@ -342,6 +344,25 @@ export class SessionArchiveService {
         while (offset < value.byteLength) {
           const result = await handle.write(value, offset, value.byteLength - offset, null);
           offset += result.bytesWritten;
+        }
+        const progressAt = Date.now();
+        if (progressAt - lastProgressAt >= UPLOAD_PROGRESS_HEARTBEAT_MS) {
+          const heartbeat = this.store.markSessionArchiveUploadedAttempt(
+            archive.id,
+            runtimeId,
+            attemptCount,
+            uploaded,
+          );
+          if (!heartbeat) {
+            await reader.cancel("archive upload attempt was superseded");
+            throw new SessionArchiveError(
+              "session archive upload attempt was superseded",
+              409,
+              "session_archive_attempt_conflict",
+            );
+          }
+          archive = heartbeat;
+          lastProgressAt = progressAt;
         }
       }
       await handle.sync();

@@ -173,6 +173,7 @@ export class SessionArchivesRepo {
   }
 
   workspaceUsage(workspaceId: string): SessionArchiveWorkspaceUsage {
+    // Deliberately converge stalled uploads on this low-frequency Settings read.
     this.normalizeStalledUploads(workspaceId);
     const totals = this.ctx.db.query(
       `SELECT
@@ -292,7 +293,8 @@ export class SessionArchivesRepo {
       // initialized instead of leaving it pending forever.
       this.ctx.db.run(
         `UPDATE multiremi_session_archives
-         SET status = 'superseded', updated_at = ?
+         SET status = 'superseded', next_retry_at = NULL,
+             retry_exhausted_at = NULL, updated_at = ?
          WHERE issue_id = ? AND (source_revision <> ? OR sha256 <> ?)
            AND status IN ('pending', 'uploading', 'failed')`,
         [now, input.issueId, input.sourceRevision, input.sha256],
@@ -301,7 +303,8 @@ export class SessionArchivesRepo {
       // not a second valid GC barrier.
       this.ctx.db.run(
         `UPDATE multiremi_session_archives
-         SET status = 'superseded', updated_at = ?
+         SET status = 'superseded', next_retry_at = NULL,
+             retry_exhausted_at = NULL, updated_at = ?
          WHERE issue_id = ? AND source_revision = ?
            AND sha256 <> ? AND status IN ('pending', 'uploading', 'ready', 'failed')`,
         [now, input.issueId, input.sourceRevision, input.sha256],
@@ -348,6 +351,11 @@ export class SessionArchivesRepo {
       let current = this.get(id);
       if (!current || current.retryExhaustedAt) return null;
       if (
+        current.status !== "pending"
+        && current.status !== "uploading"
+        && current.status !== "failed"
+      ) return null;
+      if (
         current.status === "uploading"
         && Date.parse(current.updatedAt) <= nowDate.getTime() - stallMs
       ) {
@@ -359,7 +367,8 @@ export class SessionArchivesRepo {
           `UPDATE multiremi_session_archives
            SET status = 'failed', last_error = COALESCE(last_error, 'retry budget exhausted'),
                retry_exhausted_at = ?, updated_at = ?, completed_at = NULL
-           WHERE id = ? AND runtime_id = ? AND retry_exhausted_at IS NULL`,
+           WHERE id = ? AND runtime_id = ? AND retry_exhausted_at IS NULL
+             AND status IN ('pending', 'uploading', 'failed')`,
           [now, now, id, runtimeId],
         );
         return null;
