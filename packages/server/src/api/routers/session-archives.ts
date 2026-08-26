@@ -62,6 +62,13 @@ function archiveWire(archive: MultiremiSessionArchive | null): Record<string, un
     metadata: archive.metadata,
     attempt_count: archive.attemptCount,
     last_error: archive.lastError,
+    next_retry_at: archive.nextRetryAt,
+    retry_exhausted_at: archive.retryExhaustedAt,
+    retry_state: archive.retryExhaustedAt
+      ? "exhausted"
+      : archive.nextRetryAt && archive.nextRetryAt > new Date().toISOString()
+        ? "backoff"
+        : "eligible",
     created_at: archive.createdAt,
     updated_at: archive.updatedAt,
     completed_at: archive.completedAt,
@@ -149,6 +156,7 @@ function workspaceStatus(deps: RouterDeps, workspaceId: string): Record<string, 
       ready_archives: usage.readyArchives,
       failed_archives: usage.failedArchives,
       pending_archives: usage.pendingArchives,
+      exhausted_archives: usage.exhaustedArchives,
       total_bytes: usage.totalBytes,
     },
     last_failure: usage.lastFailure
@@ -217,6 +225,7 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
       sourceRevision,
       sha256,
     );
+    await sessionArchives.cleanupExhaustedPartials(snapshot.latest);
     let physicallyVerifiedAttempt: number | null = null;
     if (c.req.query("verify_ready") === "1") {
       // A retry may supersede the row while its bytes are being hashed. Verify
@@ -482,7 +491,7 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
     const archive = store.getSessionArchive(c.req.param("archiveId"));
     if (!archive || archive.issueId !== issueId) return c.json({ error: "session archive not found" }, 404);
     try {
-      return c.json({ archive: archiveWire(sessionArchives.retry(archive.id)) });
+      return c.json({ archive: archiveWire(await sessionArchives.retry(archive.id)) });
     } catch (error) {
       return archiveError(c, error);
     }

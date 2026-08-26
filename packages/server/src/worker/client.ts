@@ -92,6 +92,9 @@ export interface MultiremiDaemonSessionArchiveWire {
   size_bytes: number;
   attempt_count?: number;
   last_error?: string | null;
+  next_retry_at?: string | null;
+  retry_exhausted_at?: string | null;
+  retry_state?: "eligible" | "backoff" | "exhausted";
 }
 
 export interface MultiremiDaemonSessionArchiveStatus {
@@ -460,14 +463,17 @@ export class MultiremiDaemonClient {
   async getIssueSessionArchiveStatus(
     runtimeId: string,
     issueId: string,
-    sourceRevision: string,
-    sha256: string,
+    sourceRevision?: string,
+    sha256?: string,
     verifyReady = false,
   ): Promise<MultiremiDaemonSessionArchiveStatus> {
-    const query = new URLSearchParams({ source_revision: sourceRevision, sha256 });
+    const query = new URLSearchParams();
+    if (sourceRevision) query.set("source_revision", sourceRevision);
+    if (sha256) query.set("sha256", sha256);
     if (verifyReady) query.set("verify_ready", "1");
+    const suffix = query.size ? `?${query}` : "";
     return this.get<MultiremiDaemonSessionArchiveStatus>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/status?${query}`,
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/status${suffix}`,
     );
   }
 

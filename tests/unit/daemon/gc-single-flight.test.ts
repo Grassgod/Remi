@@ -410,9 +410,10 @@ describe("daemon Session archive GC orchestration", () => {
         forceFreshSnapshot: boolean,
       ): Promise<unknown>;
     }).ensureIssueSessionArchive("iss_1", root, true)).toMatchObject({ archiveId: "isar_1" });
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.slice(0, 2)).toEqual(["rt_1", "iss_1"]);
-    expect(requests[0]?.[4]).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toEqual(["rt_1", "iss_1"]);
+    expect(requests[1]?.slice(0, 2)).toEqual(["rt_1", "iss_1"]);
+    expect(requests[1]?.[4]).toBe(true);
   });
 
   it("reports a preparation failure before init and leaves the workspace retryable", async () => {
@@ -428,6 +429,12 @@ describe("daemon Session archive GC orchestration", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
+        getIssueSessionArchiveStatus: async () => ({
+          latest: null,
+          latest_ready: null,
+          requested_ready: null,
+          gc_ready: false,
+        }),
         reportIssueSessionArchiveFailure: async (
           runtimeId: string,
           issueId: string,

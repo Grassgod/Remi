@@ -183,6 +183,27 @@ describe("MultiremiDaemonClient workspace configuration", () => {
 });
 
 describe("MultiremiDaemonClient Issue session archive wire", () => {
+  it("supports a lightweight archive status preflight without snapshot fields", async () => {
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requests.push(String(input));
+      return Response.json({
+        latest: { id: "sar_1", status: "failed", retry_state: "backoff" },
+        latest_ready: null,
+        requested_ready: null,
+        gc_ready: false,
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new MultiremiDaemonClient("https://remi.example/", "daemon-token");
+    await expect(client.getIssueSessionArchiveStatus("runtime/1", "issue/1")).resolves.toMatchObject({
+      latest: { retry_state: "backoff" },
+    });
+    expect(requests).toEqual([
+      "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/status",
+    ]);
+  });
+
   it("encodes archive scope and uploads the prepared bytes with daemon auth", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-daemon-client-archive-"));
     temporaryRoots.push(root);

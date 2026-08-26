@@ -191,6 +191,9 @@
     "session_archive_files": "파일 {{count}}개 · {{size}}",
     "session_archive_verify": "아카이브 검증",
     "session_archive_retry": "아카이브 재시도",
+    "session_archive_attempts": "{{count}}회 시도",
+    "session_archive_next_retry": "다음 재시도 {{time}}",
+    "session_archive_stopped": "자동 재시도 중지됨",
     "session_archive_status": {
       "ready": "준비됨",
       "failed": "실패",

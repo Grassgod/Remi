@@ -226,6 +226,7 @@ export function StorageCleanupTab() {
             <Metric label={t(($) => $.storageCleanup.ready)} value={status.usage.ready_archives} />
             <Metric label={t(($) => $.storageCleanup.pending)} value={status.usage.pending_archives} />
             <Metric label={t(($) => $.storageCleanup.failed)} value={status.usage.failed_archives} />
+            <Metric label={t(($) => $.storageCleanup.exhausted)} value={status.usage.exhausted_archives} />
             <Metric
               label={t(($) => $.storageCleanup.space_used)}
               value={formatBytes(status.usage.total_bytes, "0 B")}

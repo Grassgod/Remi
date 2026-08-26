@@ -26,6 +26,7 @@ const statusResponse = {
     ready_archives: 2,
     failed_archives: 1,
     pending_archives: 0,
+    exhausted_archives: 1,
     total_bytes: 1_024,
   },
   last_failure: {
@@ -133,6 +134,9 @@ describe("SessionArchivesEndpoints", () => {
       metadata: {},
       attempt_count: 1,
       last_error: null,
+      next_retry_at: null,
+      retry_exhausted_at: null,
+      retry_state: "future-server-state",
       created_at: "2026-08-19T00:00:00.000Z",
       updated_at: "2026-08-19T00:01:00.000Z",
       completed_at: "2026-08-19T00:01:00.000Z",
@@ -146,9 +150,11 @@ describe("SessionArchivesEndpoints", () => {
       new HttpClient("https://api.example.test"),
     );
 
-    await endpoints.listIssueSessionArchives("MUL/55");
+    const listed = await endpoints.listIssueSessionArchives("MUL/55");
     await endpoints.verifyIssueSessionArchive("MUL/55", "arc/1");
     await endpoints.retryIssueSessionArchive("MUL/55", "arc/1");
+
+    expect(listed.archives[0]?.retry_state).toBe("eligible");
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       "https://api.example.test/api/issues/MUL%2F55/session-archives",

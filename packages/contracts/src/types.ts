@@ -1525,6 +1525,8 @@ export interface MultiremiSessionArchive {
   metadata: Record<string, unknown>;
   attemptCount: number;
   lastError: string | null;
+  nextRetryAt: string | null;
+  retryExhaustedAt: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;

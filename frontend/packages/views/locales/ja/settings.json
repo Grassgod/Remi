@@ -487,6 +487,7 @@
     "ready": "準備完了",
     "pending": "保留中",
     "failed": "失敗",
+    "exhausted": "自動再試行を停止済み",
     "space_used": "使用容量",
     "last_failure": "最新のアーカイブ失敗",
     "cleanup_title": "ワークスペースのクリーンアップ",
