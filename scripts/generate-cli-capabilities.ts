@@ -522,6 +522,8 @@ function mappedOperationsCommand(route: string): string | null {
     [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/models\/:requestId$/, "runtime.model.status"],
     [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/update$/, "runtime.release.start"],
     [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/update\/:updateId$/, "runtime.release.status"],
+    [/^POST \/api\/runtimes\/:id\/commands$/, "runtime.command.run"],
+    [/^GET \/api\/runtimes\/:id\/commands\/:requestId$/, "runtime.command.run"],
     [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills$/, "runtime.skill.scan"],
     [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/:requestId$/, "runtime.skill.status"],
     [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/import$/, "runtime.skill.import"],

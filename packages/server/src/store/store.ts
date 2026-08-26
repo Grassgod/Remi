@@ -129,6 +129,7 @@ import type {
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateRuntimeUpdateInput,
+  CreateRuntimeCommandInput,
   CreateRuntimeLocalSkillImportInput,
   CreateSessionTaskInput,
   CreateSkillInput,
@@ -203,6 +204,7 @@ import type {
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
   MultiremiRuntimeDirectoryScanRequest,
+  MultiremiRuntimeCommandRequest,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeModelListRequest,
@@ -211,6 +213,7 @@ import type {
   PublishSessionResultInput,
   QuickCreateIssueInput,
   ReportRuntimeDirectoryScanInput,
+  ReportRuntimeCommandInput,
   ReportRuntimeModelListInput,
   QuickCreateIssueResult,
   ReportRuntimeLocalSkillImportInput,
@@ -1861,6 +1864,22 @@ runMigrations(this.db);
 
   reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
     return this.runtimes.reportRuntimeUpdateResult(runtimeId, requestId, input);
+  }
+
+  createRuntimeCommandRequest(runtimeId: string, input: CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest {
+    return this.runtimes.createRuntimeCommandRequest(runtimeId, input);
+  }
+
+  getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null {
+    return this.runtimes.getRuntimeCommandRequest(runtimeId, requestId);
+  }
+
+  claimRuntimeCommandRequest(runtimeId: string): MultiremiRuntimeCommandRequest | null {
+    return this.runtimes.claimRuntimeCommandRequest(runtimeId);
+  }
+
+  reportRuntimeCommandResult(runtimeId: string, requestId: string, input: ReportRuntimeCommandInput): MultiremiRuntimeCommandRequest {
+    return this.runtimes.reportRuntimeCommandResult(runtimeId, requestId, input);
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {

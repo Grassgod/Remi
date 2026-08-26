@@ -42,6 +42,7 @@ describe("operations CLI contracts", () => {
       "runtime.delete",
       "runtime.archive-agents-and-delete",
       "runtime.release.start",
+      "runtime.command.run",
       "runtime.cloud.status",
       "billing.balance",
       "platform.settings.update",
@@ -103,6 +104,45 @@ describe("operations CLI contracts", () => {
     const result = await capture(() => registryFor([spec]).execute(["runtime", "delete", "Builder runtime", "--yes", "--output", "json"]));
     expect(result.stderr).toContain("1 active agent(s)");
     expect(requests.some((request) => request.method === "DELETE")).toBe(true);
+  });
+
+  it("runs a runtime command, waits for completion, and prints both output streams", async () => {
+    useCliEnv();
+    const spec = specById("runtime.command.run");
+    let body: Record<string, unknown> | null = null;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/api/runtimes") {
+        return Response.json([{ id: "rt_123456", name: "Builder runtime" }]);
+      }
+      if (request.method === "POST" && path === "/api/runtimes/rt_123456/commands") {
+        body = await request.json() as Record<string, unknown>;
+        return Response.json({ id: "rcmd_1", status: "pending" }, { status: 202 });
+      }
+      if (request.method === "GET" && path === "/api/runtimes/rt_123456/commands/rcmd_1") {
+        return Response.json({
+          id: "rcmd_1",
+          status: "completed",
+          exit_code: 7,
+          stdout: "stdout-value",
+          stderr: "stderr-value",
+        });
+      }
+      throw new Error(`unexpected ${request.method} ${path}`);
+    });
+
+    const output = await capture(() => registryFor([spec]).execute([
+      "runtime", "command", "run", "Builder runtime",
+      "--command", "printf test",
+      "--arg", "first",
+      "--arg", "second",
+      "--timeout", "1234",
+    ]));
+
+    expect(body as unknown).toEqual({ command: "printf test", args: ["first", "second"], timeout_ms: 1234 });
+    expect(output.stdout).toContain("Exit code: 7");
+    expect(output.stdout).toContain("stdout-value");
+    expect(output.stderr).toContain("stderr-value");
   });
 
   it("reviews the daemon retirement snapshot and sends the exact confirmed snapshot", async () => {

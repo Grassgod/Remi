@@ -102,6 +102,7 @@ const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
   "runtime.create",
   "runtime.delete",
   "runtime.release.start",
+  "runtime.command.run",
   "share.create",
   "share.delete",
   "share.extend",

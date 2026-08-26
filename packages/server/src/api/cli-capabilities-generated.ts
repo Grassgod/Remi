@@ -3409,6 +3409,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "runtime.command.run": {
+      "command": "remi runtime command run",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.command.run",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "runtime.skill.scan": {
       "command": "remi runtime skill scan",
       "auth": [

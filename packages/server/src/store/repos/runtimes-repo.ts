@@ -2,8 +2,8 @@
 // families: model list, directory scan, update, local-skill list, local-skill import), extracted
 // verbatim from MultiremiStore (the facade delegates every public method here).
 //
-// The five async-request families share one lifecycle, described once by `RuntimeRequestQueue`
-// (./runtime-request-queue.ts) and configured five times by the specs below. Each family keeps its
+// The six async-request families share one lifecycle, described once by `RuntimeRequestQueue`
+// (./runtime-request-queue.ts) and configured by the specs below. Each family keeps its
 // own `create` (distinct INSERT columns) and `report` (distinct completed-branch payload); `get`,
 // `claim` and the timeout sweep are the shared template.
 import { createId, nowIso } from "@multiremi/ids.js";
@@ -24,11 +24,17 @@ import {
 import { type StoreContext } from "@multiremi/store/context.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
 import {
+  redactRuntimeCommandArgs,
+  redactRuntimeCommandText,
+  truncateRuntimeCommandOutput,
+} from "@multiremi/worker/runtime-command.js";
+import {
   RUNTIME_AUXILIARY_TABLES,
   RUNTIME_REQUEST_TABLES,
 } from "@multiremi/store/runtime-lifecycle-tables.js";
 import type {
   CreateRuntimeLocalSkillImportInput,
+  CreateRuntimeCommandInput,
   CreateRuntimeUpdateInput,
   MultiremiAgent,
   MultiremiAgentPluginRuntimeState,
@@ -38,6 +44,8 @@ import type {
   MultiremiRuntimeDirectoryScanParams,
   MultiremiRuntimeDirectoryScanRequest,
   MultiremiRuntimeDirectoryScanRequestStatus,
+  MultiremiRuntimeCommandRequest,
+  MultiremiRuntimeCommandRequestStatus,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeLocalSkillRequestStatus,
@@ -51,6 +59,7 @@ import type {
   MultiremiTaskStatus,
   RegisterRuntimeInput,
   ReportRuntimeDirectoryScanInput,
+  ReportRuntimeCommandInput,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeModelListInput,
@@ -91,6 +100,10 @@ const RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS = 60 * 1000;
+const RUNTIME_COMMAND_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
+const RUNTIME_COMMAND_RUNNING_TIMEOUT_MS = 6 * 60 * 1000;
+const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 60 * 1000;
+const MAX_RUNTIME_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 
 // ── async-request family specs ────────────────────────────────────────────────
 // The five knobs the shared queue template needs. Row mappers are hoisted function declarations
@@ -145,12 +158,23 @@ const LOCAL_SKILL_IMPORT_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeLocalSkill
   hydrate: toRuntimeLocalSkillImportRequest,
 };
 
+const COMMAND_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeCommandRequest> = {
+  table: "multiremi_runtime_command_requests",
+  idPrefix: "rcmd",
+  pendingTimeoutMs: RUNTIME_COMMAND_PENDING_TIMEOUT_MS,
+  runningTimeoutMs: RUNTIME_COMMAND_RUNNING_TIMEOUT_MS,
+  pendingTimeoutError: "daemon did not respond within 3 minutes",
+  runningTimeoutError: "daemon did not finish the command within 6 minutes",
+  hydrate: toRuntimeCommandRequest,
+};
+
 export class RuntimesRepo {
   private readonly modelListQueue: RuntimeRequestQueue<MultiremiRuntimeModelListRequest>;
   private readonly directoryScanQueue: RuntimeRequestQueue<MultiremiRuntimeDirectoryScanRequest>;
   private readonly updateQueue: RuntimeRequestQueue<MultiremiRuntimeUpdateRequest>;
   private readonly localSkillListQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillListRequest>;
   private readonly localSkillImportQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillImportRequest>;
+  private readonly commandQueue: RuntimeRequestQueue<MultiremiRuntimeCommandRequest>;
 
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
@@ -158,6 +182,7 @@ export class RuntimesRepo {
     this.updateQueue = new RuntimeRequestQueue(ctx.db, UPDATE_REQUESTS);
     this.localSkillListQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_LIST_REQUESTS);
     this.localSkillImportQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_IMPORT_REQUESTS);
+    this.commandQueue = new RuntimeRequestQueue(ctx.db, COMMAND_REQUESTS);
   }
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
@@ -1130,6 +1155,94 @@ export class RuntimesRepo {
     });
   }
 
+  createRuntimeCommandRequest(runtimeId: string, input: CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest {
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      const command = String(input.command ?? "").trim();
+      if (!command) throw new Error("command is required");
+      if (Buffer.byteLength(command, "utf8") > 16 * 1024) throw new Error("command must not exceed 16384 bytes");
+      if (!Array.isArray(input.args) || input.args.some((arg) => typeof arg !== "string")) {
+        if (input.args !== undefined) throw new Error("args must be an array of strings");
+      }
+      const args = input.args ?? [];
+      if (args.length > 100) throw new Error("args must not contain more than 100 entries");
+      if (args.some((arg) => Buffer.byteLength(arg, "utf8") > 8 * 1024)) {
+        throw new Error("each command arg must not exceed 8192 bytes");
+      }
+      const timeoutMs = normalizeRuntimeCommandTimeout(input.timeoutMs ?? input.timeout_ms);
+      const id = this.commandQueue.nextId();
+      const now = nowIso();
+      // Raw values are retained only for daemon dispatch; API and audit views use the redacted pair.
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_command_requests (
+          id, runtime_id, command, args, redacted_command, redacted_args, timeout_ms,
+          created_by, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [
+          id,
+          runtimeId,
+          command,
+          toJson(args),
+          redactRuntimeCommandText(command),
+          toJson(redactRuntimeCommandArgs(args)),
+          timeoutMs,
+          input.createdBy ?? input.created_by ?? null,
+          now,
+          now,
+        ],
+      );
+      return this.getRuntimeCommandRequest(runtimeId, id)!;
+    });
+  }
+
+  getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null {
+    return this.commandQueue.get(runtimeId, requestId);
+  }
+
+  claimRuntimeCommandRequest(runtimeId: string): MultiremiRuntimeCommandRequest | null {
+    return this.commandQueue.claim(runtimeId);
+  }
+
+  reportRuntimeCommandResult(
+    runtimeId: string,
+    requestId: string,
+    input: ReportRuntimeCommandInput,
+  ): MultiremiRuntimeCommandRequest {
+    const current = this.getRuntimeCommandRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    if (isTerminalRuntimeRequestStatus(current.status)) return current;
+    const status = normalizeRuntimeCommandReportStatus(input.status);
+    const now = nowIso();
+    const stdout = normalizeRuntimeCommandOutput(input.stdout);
+    const stderr = normalizeRuntimeCommandOutput(input.stderr);
+    const error = input.error == null
+      ? null
+      : truncateRuntimeCommandOutput(redactRuntimeCommandText(String(input.error)), 16 * 1024);
+    const exitCodeInput = input.exitCode ?? input.exit_code;
+    const exitCode = Number.isSafeInteger(exitCodeInput) ? Number(exitCodeInput) : null;
+    const durationInput = input.durationMs ?? input.duration_ms;
+    const durationMs = Number.isSafeInteger(durationInput) && Number(durationInput) >= 0
+      ? Number(durationInput)
+      : null;
+    this.ctx.db.run(
+      `UPDATE multiremi_runtime_command_requests
+       SET status = ?, exit_code = ?, stdout = ?, stderr = ?, duration_ms = ?, error = ?, updated_at = ?
+       WHERE id = ? AND runtime_id = ?`,
+      [
+        status,
+        status === "completed" ? exitCode : null,
+        stdout,
+        stderr,
+        durationMs,
+        status === "completed" ? null : error ?? (status === "timeout" ? "command timed out" : "command failed to start"),
+        now,
+        requestId,
+        runtimeId,
+      ],
+    );
+    return this.getRuntimeCommandRequest(runtimeId, requestId)!;
+  }
+
   heartbeatRuntime(runtimeId: string, options: {
     claimPending?: boolean;
     supportsBatchImport?: boolean;
@@ -1225,6 +1338,15 @@ export class RuntimesRepo {
     const pendingModelList = this.claimRuntimeModelListRequest(runtimeId);
     if (pendingModelList) {
       ack.pending_model_list = { id: pendingModelList.id };
+    }
+    const pendingCommand = this.claimRuntimeCommandRequest(runtimeId);
+    if (pendingCommand) {
+      ack.pending_command = {
+        id: pendingCommand.id,
+        command: pendingCommand.command,
+        args: pendingCommand.args,
+        timeout_ms: pendingCommand.timeoutMs,
+      };
     }
     const pendingLocalSkills = this.claimRuntimeLocalSkillListRequest(runtimeId);
     if (pendingLocalSkills) {
@@ -1671,6 +1793,57 @@ function normalizeRuntimeUpdateStatus(value: unknown): MultiremiRuntimeUpdateReq
   const status = String(value ?? "failed").trim();
   if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
   return "failed";
+}
+
+function toRuntimeCommandRequest(row: Row): MultiremiRuntimeCommandRequest {
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    command: String(row.command ?? ""),
+    args: normalizeRuntimeCommandArgs(parseJson(row.args, [])),
+    redactedCommand: String(row.redacted_command ?? ""),
+    redactedArgs: normalizeRuntimeCommandArgs(parseJson(row.redacted_args, [])),
+    timeoutMs: Number(row.timeout_ms ?? DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS),
+    createdBy: nullableString(row.created_by),
+    status: normalizeRuntimeCommandStatus(row.status),
+    exitCode: row.exit_code == null ? null : Number(row.exit_code),
+    stdout: nullableString(row.stdout),
+    stderr: nullableString(row.stderr),
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    error: nullableString(row.error),
+    runStartedAt: nullableString(row.run_started_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function normalizeRuntimeCommandStatus(value: unknown): MultiremiRuntimeCommandRequestStatus {
+  const status = String(value ?? "failed").trim();
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
+  return "failed";
+}
+
+function normalizeRuntimeCommandReportStatus(value: unknown): "completed" | "failed" | "timeout" {
+  if (value === "completed" || value === "failed" || value === "timeout") return value;
+  throw new Error(`invalid runtime command status: ${String(value ?? "")}`);
+}
+
+function normalizeRuntimeCommandTimeout(value: unknown): number {
+  if (value === undefined || value === null || value === "") return DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS;
+  const timeoutMs = Number(value);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > MAX_RUNTIME_COMMAND_TIMEOUT_MS) {
+    throw new Error(`timeout_ms must be an integer between 100 and ${MAX_RUNTIME_COMMAND_TIMEOUT_MS}`);
+  }
+  return timeoutMs;
+}
+
+function normalizeRuntimeCommandArgs(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((arg): arg is string => typeof arg === "string") : [];
+}
+
+function normalizeRuntimeCommandOutput(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  return truncateRuntimeCommandOutput(redactRuntimeCommandText(String(value)));
 }
 
 function normalizeRuntimeLocalSkillStatus(value: unknown): MultiremiRuntimeLocalSkillRequestStatus {

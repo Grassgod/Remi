@@ -573,6 +573,8 @@ export type MultiremiRuntimeDirectoryScanRequestStatus = "pending" | "running" |
 
 export type MultiremiRuntimeUpdateRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 
+export type MultiremiRuntimeCommandRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+
 export interface MultiremiRuntime {
   id: string;
   name: string;
@@ -730,6 +732,26 @@ export interface MultiremiRuntimeUpdateRequest {
   runStartedAt: string | null;
 }
 
+export interface MultiremiRuntimeCommandRequest {
+  id: string;
+  runtimeId: string;
+  command: string;
+  args: string[];
+  redactedCommand: string;
+  redactedArgs: string[];
+  timeoutMs: number;
+  createdBy: string | null;
+  status: MultiremiRuntimeCommandRequestStatus;
+  exitCode: number | null;
+  stdout: string | null;
+  stderr: string | null;
+  durationMs: number | null;
+  error: string | null;
+  runStartedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MultiremiDaemonHeartbeatAck {
   runtime_id: string;
   status: "ok" | "runtime_gone";
@@ -759,6 +781,12 @@ export interface MultiremiDaemonHeartbeatAck {
     id: string;
     skill_key: string;
   }>;
+  pending_command?: {
+    id: string;
+    command: string;
+    args: string[];
+    timeout_ms: number;
+  };
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -992,6 +1020,26 @@ export interface CreateRuntimeUpdateInput {
 export interface ReportRuntimeUpdateInput {
   status?: string;
   output?: string;
+  error?: string;
+}
+
+export interface CreateRuntimeCommandInput {
+  command?: string;
+  args?: string[];
+  timeoutMs?: number;
+  timeout_ms?: number;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface ReportRuntimeCommandInput {
+  status?: "completed" | "failed" | "timeout";
+  exitCode?: number | null;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  durationMs?: number;
+  duration_ms?: number;
   error?: string;
 }
 

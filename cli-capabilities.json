@@ -4762,6 +4762,22 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "runtime.command.run": {
+      "command": "remi runtime command run",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.command.run",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "runtime.skill.scan": {
       "command": "remi runtime skill scan",
       "aliases": [],
@@ -8155,6 +8171,9 @@
     "GET /api/runtimes/:id/activity": {
       "command": "runtime.activity"
     },
+    "GET /api/runtimes/:id/commands/:requestId": {
+      "command": "runtime.command.run"
+    },
     "GET /api/runtimes/:id/directory-scans/:requestId": {
       "command": "runtime.directory.status"
     },
@@ -8518,6 +8537,16 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/commands/claim": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -9035,6 +9064,9 @@
     },
     "POST /api/runtimes/:id/archive-agents-and-delete": {
       "command": "runtime.archive-agents-and-delete"
+    },
+    "POST /api/runtimes/:id/commands": {
+      "command": "runtime.command.run"
     },
     "POST /api/runtimes/:id/directory-scans": {
       "command": "runtime.directory.scan"

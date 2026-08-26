@@ -55,6 +55,7 @@ import {
   type MultiremiRepoSyncResult,
 } from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
+import { executeRuntimeCommand } from "./runtime-command.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
   writeTaskContext,
@@ -993,6 +994,9 @@ export class MultiremiDaemon {
     if (ack.pending_directory_scan) {
       await this.handleRuntimeDirectoryScan(runtimeId, ack.pending_directory_scan);
     }
+    if (ack.pending_command) {
+      await this.handleRuntimeCommand(runtimeId, ack.pending_command);
+    }
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
     }
@@ -1147,6 +1151,25 @@ export class MultiremiDaemon {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async handleRuntimeCommand(
+    runtimeId: string,
+    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_command"]>,
+  ): Promise<void> {
+    const result = await executeRuntimeCommand({
+      command: request.command,
+      args: request.args,
+      timeoutMs: request.timeout_ms,
+    });
+    await this.client.reportRuntimeCommandResult(runtimeId, request.id, {
+      status: result.status,
+      exit_code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      duration_ms: result.durationMs,
+      ...(result.error ? { error: result.error } : {}),
+    });
   }
 
   private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
