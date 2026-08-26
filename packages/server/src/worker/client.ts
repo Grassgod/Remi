@@ -111,6 +111,10 @@ export interface MultiremiDaemonSessionArchiveInitResponse {
 export interface MultiremiDaemonClientOptions {
   sessionArchiveUploadBaseUrl?: string | null;
   sessionArchiveProxyMaxBytes?: number;
+  sessionArchiveDirectProbeTtlMs?: number;
+  sessionArchiveDirectProbeTimeoutMs?: number;
+  sessionArchiveUploadTimeoutMs?: number;
+  sessionArchiveFailureReportTimeoutMs?: number;
 }
 
 export interface MultiremiRecoverOrphansResult {
@@ -148,6 +152,11 @@ export class MultiremiDaemonClient {
   private token: string | null;
   private sessionArchiveUploadBaseUrl: URL | null;
   private sessionArchiveProxyMaxBytes: number;
+  private sessionArchiveDirectProbeTtlMs: number;
+  private sessionArchiveDirectProbeTimeoutMs: number;
+  private sessionArchiveUploadTimeoutMs: number;
+  private sessionArchiveFailureReportTimeoutMs: number;
+  private sessionArchiveDirectRoutes = new Map<string, { direct: boolean; expiresAt: number }>();
   private sessionArchiveUploadAttempts = new Map<string, { attempt: number; uploadUrl: string | null }>();
 
   constructor(baseUrl: string, token?: string | null, options: MultiremiDaemonClientOptions = {}) {
@@ -158,6 +167,26 @@ export class MultiremiDaemonClient {
     );
     this.sessionArchiveProxyMaxBytes = normalizeSessionArchiveProxyMaxBytes(
       options.sessionArchiveProxyMaxBytes,
+    );
+    this.sessionArchiveDirectProbeTtlMs = normalizeSessionArchiveDurationMs(
+      options.sessionArchiveDirectProbeTtlMs,
+      5 * 60 * 1_000,
+      "MULTIREMI_ARCHIVE_DIRECT_PROBE_TTL_MS",
+    );
+    this.sessionArchiveDirectProbeTimeoutMs = normalizeSessionArchiveDurationMs(
+      options.sessionArchiveDirectProbeTimeoutMs,
+      10_000,
+      "MULTIREMI_ARCHIVE_DIRECT_PROBE_TIMEOUT_MS",
+    );
+    this.sessionArchiveUploadTimeoutMs = normalizeSessionArchiveDurationMs(
+      options.sessionArchiveUploadTimeoutMs,
+      15 * 60 * 1_000,
+      "MULTIREMI_ARCHIVE_UPLOAD_TIMEOUT_MS",
+    );
+    this.sessionArchiveFailureReportTimeoutMs = normalizeSessionArchiveDurationMs(
+      options.sessionArchiveFailureReportTimeoutMs,
+      10_000,
+      "MULTIREMI_ARCHIVE_FAILURE_REPORT_TIMEOUT_MS",
     );
   }
 
@@ -540,10 +569,14 @@ export class MultiremiDaemonClient {
       const target = this.resolveSessionArchiveUploadTarget(path, claim.uploadUrl);
       const archiveStat = await stat(archivePath);
       if (!archiveStat.isFile()) throw new Error(`Session archive is not a regular file: ${archivePath}`);
-      if (!target.direct && archiveStat.size > this.sessionArchiveProxyMaxBytes) {
+      const direct = target.directCandidate
+        ? await this.hasAttestedSessionArchiveDirectRoute(target.url)
+        : false;
+      if (!direct && archiveStat.size > this.sessionArchiveProxyMaxBytes) {
         throw new Error(
           `Session archive is ${archiveStat.size} bytes, exceeding the ${this.sessionArchiveProxyMaxBytes}-byte proxy fallback limit. `
-          + "Configure MULTIREMI_DAEMON_DIRECT_BASE_URL on the API or MULTIREMI_ARCHIVE_UPLOAD_BASE_URL on the daemon.",
+          + "Configure MULTIREMI_DAEMON_DIRECT_BASE_URL on the API or MULTIREMI_ARCHIVE_UPLOAD_BASE_URL on the daemon, "
+          + "and ensure the direct route returns X-Remi-Archive-Direct: 1 to its HEAD preflight.",
         );
       }
 
@@ -559,8 +592,20 @@ export class MultiremiDaemonClient {
           body: archive as unknown as BodyInit,
           duplex: "half",
           redirect: "error",
+          signal: AbortSignal.timeout(this.sessionArchiveUploadTimeoutMs),
         };
-        const resp = await fetch(target.url, request);
+        let resp: Response;
+        try {
+          resp = await fetch(target.url, request);
+        } catch (error) {
+          if (request.signal?.aborted) {
+            throw new Error(
+              `Session archive upload timed out after ${this.sessionArchiveUploadTimeoutMs}ms`,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
         return (await parseResponse<{ archive: MultiremiDaemonSessionArchiveWire }>(resp, "PUT", path)).archive;
       } finally {
         archive.destroy();
@@ -571,9 +616,19 @@ export class MultiremiDaemonClient {
         await this.post(
           `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/failure?attempt=${claim.attempt}`,
           { error: message },
+          undefined,
+          AbortSignal.timeout(this.sessionArchiveFailureReportTimeoutMs),
         );
         this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
       } catch (reportError) {
+        if (
+          reportError instanceof MultiremiDaemonHttpError
+          && reportError.status === 409
+          && reportError.code === "session_archive_attempt_conflict"
+        ) {
+          this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, issueId, archiveId));
+          throw error;
+        }
         const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
         throw new Error(`${message}; additionally failed to persist archive upload failure: ${reportMessage}`, {
           cause: error,
@@ -611,7 +666,7 @@ export class MultiremiDaemonClient {
   private resolveSessionArchiveUploadTarget(
     expectedPath: string,
     advertisedUploadUrl: string | null,
-  ): { url: URL; direct: boolean } {
+  ): { url: URL; directCandidate: boolean } {
     const controlBase = new URL(`${this.baseUrl}/`);
     const advertised = advertisedUploadUrl ?? expectedPath;
     let target: URL;
@@ -635,13 +690,13 @@ export class MultiremiDaemonClient {
     if (this.sessionArchiveUploadBaseUrl) {
       return {
         url: new URL(expectedPath, this.sessionArchiveUploadBaseUrl),
-        direct: true,
+        directCandidate: true,
       };
     }
 
     const absoluteAdvertised = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(advertised)
       || advertised.startsWith("//");
-    if (!absoluteAdvertised) return { url: expected, direct: false };
+    if (!absoluteAdvertised) return { url: expected, directCandidate: false };
     if (target.hostname !== controlBase.hostname) {
       throw new Error(
         `Refusing Session Archive upload_url for unexpected host ${target.hostname}; `
@@ -651,7 +706,34 @@ export class MultiremiDaemonClient {
     if (controlBase.protocol === "https:" && target.protocol !== "https:") {
       throw new Error("Refusing Session Archive upload_url that downgrades the HTTPS control-plane connection");
     }
-    return { url: target, direct: true };
+    return { url: target, directCandidate: true };
+  }
+
+  private async hasAttestedSessionArchiveDirectRoute(target: URL): Promise<boolean> {
+    const cacheKey = target.origin;
+    const now = Date.now();
+    const cached = this.sessionArchiveDirectRoutes.get(cacheKey);
+    if (cached && cached.expiresAt > now) return cached.direct;
+
+    let direct = false;
+    try {
+      const resp = await fetch(target, {
+        method: "HEAD",
+        headers: this.headers(),
+        redirect: "error",
+        signal: AbortSignal.timeout(this.sessionArchiveDirectProbeTimeoutMs),
+      });
+      direct = resp.status === 204
+        && resp.headers.get("X-Remi-Archive-Direct")?.trim() === "1";
+      await resp.body?.cancel().catch(() => undefined);
+    } catch {
+      direct = false;
+    }
+    this.sessionArchiveDirectRoutes.set(cacheKey, {
+      direct,
+      expiresAt: now + this.sessionArchiveDirectProbeTtlMs,
+    });
+    return direct;
   }
 
   async reportIssueWorkspaceCleaned(
@@ -684,11 +766,17 @@ export class MultiremiDaemonClient {
     return parseResponse<T>(resp, "GET", path);
   }
 
-  private async post<T = unknown>(path: string, body: unknown, tokenOverride?: string | null): Promise<T> {
+  private async post<T = unknown>(
+    path: string,
+    body: unknown,
+    tokenOverride?: string | null,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const resp = await fetch(this.baseUrl + path, {
       method: "POST",
       headers: this.headers("application/json", tokenOverride),
       body: JSON.stringify(body),
+      signal,
     });
     return parseResponse<T>(resp, "POST", path);
   }
@@ -748,6 +836,18 @@ function normalizeSessionArchiveProxyMaxBytes(value: number | undefined): number
     throw new Error("MULTIREMI_ARCHIVE_PROXY_MAX_BYTES must be a non-negative safe integer");
   }
   return value;
+}
+
+function normalizeSessionArchiveDurationMs(
+  value: number | undefined,
+  fallback: number,
+  environmentName: string,
+): number {
+  const duration = value ?? fallback;
+  if (!Number.isSafeInteger(duration) || duration < 1) {
+    throw new Error(`${environmentName} must be a positive safe integer`);
+  }
+  return duration;
 }
 
 async function parseResponse<T>(resp: Response, method: string, path: string): Promise<T> {

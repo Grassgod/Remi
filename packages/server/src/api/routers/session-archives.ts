@@ -353,6 +353,26 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
     }
   });
 
+  // Hono dispatches HEAD through GET routing before invoking the handler.
+  app.get(`${daemonBase}/:archiveId/content`, (c) => {
+    if (c.req.method !== "HEAD") {
+      return c.json({ error: "method not allowed" }, 405);
+    }
+    const scope = requireDaemonArchiveScope(c, deps);
+    if (scope instanceof Response) return scope;
+    try {
+      sessionArchives.preflightUpload(
+        scope.runtimeId,
+        scope.issueId,
+        c.req.param("archiveId"),
+        requiredUploadAttempt(c),
+      );
+      return c.body(null, 204);
+    } catch (error) {
+      return archiveError(c, error);
+    }
+  });
+
   app.put(`${daemonBase}/:archiveId/content`, async (c) => {
     const scope = requireDaemonArchiveScope(c, deps);
     if (scope instanceof Response) return scope;

@@ -142,7 +142,13 @@ describe("Multiremi session archives", () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch: app.fetch,
+      fetch: async (request) => {
+        const response = await app.fetch(request);
+        if (request.method !== "HEAD") return response;
+        const headers = new Headers(response.headers);
+        headers.set("X-Remi-Archive-Direct", "1");
+        return new Response(null, { status: response.status, headers });
+      },
     });
     try {
       const origin = `http://127.0.0.1:${server.port}`;
@@ -319,6 +325,14 @@ describe("Multiremi session archives", () => {
     expect(initialized.upload_attempt).toBe(1);
     expect(initialized.upload_url).toEndWith(`/${initialized.archive.id}/content?attempt=1`);
     expect(initialized.upload_url).toStartWith("/");
+
+    const preflight = await app.request(initialized.upload_url, {
+      method: "HEAD",
+      headers: { Authorization: daemonHeaders.Authorization },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("X-Remi-Archive-Direct")).toBeNull();
+    expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({ status: "pending", attemptCount: 1 });
 
     const idempotent = await app.request(`${base}/init`, {
       method: "POST",

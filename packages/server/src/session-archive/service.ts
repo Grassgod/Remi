@@ -366,6 +366,24 @@ export class SessionArchiveService {
     }
   }
 
+  preflightUpload(
+    runtimeId: string,
+    issueId: string,
+    archiveId: string,
+    attemptCount: number,
+  ): void {
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    archive = this.requireWritableArchive(archive, runtimeId);
+    this.assertCurrentAttempt(archive, attemptCount);
+    if (archive.status !== "pending" && archive.status !== "uploading") {
+      throw new SessionArchiveError(
+        `cannot upload archive in ${archive.status} state`,
+        409,
+        "session_archive_invalid_state",
+      );
+    }
+  }
+
   failUpload(
     runtimeId: string,
     issueId: string,
