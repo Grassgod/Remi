@@ -107,6 +107,8 @@ describe("ModelGatewayTab", () => {
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.getByText("Codex")).toBeInTheDocument();
     expect(screen.getByText("Task progress summaries")).toBeInTheDocument();
+    expect(screen.getByText("Issue automatic naming")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Automatic naming" })).toBeChecked();
     // claude fragment is pre-filled from server config
     expect(screen.getByDisplayValue(/ANTHROPIC_BASE_URL/)).toBeInTheDocument();
   });
@@ -156,6 +158,36 @@ describe("ModelGatewayTab", () => {
           transport: "openai",
           model: "claude-workspace",
           openai_model: "gpt-custom",
+        },
+      },
+    }));
+  });
+
+  it("persists issue automatic naming settings without dropping other workspace settings", async () => {
+    workspaceRef.current.settings = {
+      retained_setting: "yes",
+      issue_auto_title: {
+        enabled: false,
+        model: "gpt-old",
+        auth_token: "must-not-survive",
+      },
+    };
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByRole("switch", { name: "Automatic naming" })).not.toBeChecked();
+    expect(screen.getByLabelText("Model")).toHaveValue("gpt-old");
+    await user.click(screen.getByRole("switch", { name: "Automatic naming" }));
+    await user.clear(screen.getByLabelText("Model"));
+    await user.type(screen.getByLabelText("Model"), "gpt-5.6-luna-custom");
+    await user.click(screen.getByRole("button", { name: "Save naming settings" }));
+
+    await waitFor(() => expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
+      settings: {
+        retained_setting: "yes",
+        issue_auto_title: {
+          enabled: true,
+          model: "gpt-5.6-luna-custom",
         },
       },
     }));

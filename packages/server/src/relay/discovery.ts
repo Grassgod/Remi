@@ -1,7 +1,7 @@
-import { lookup as dnsLookup } from "node:dns/promises";
 import { createLogger } from "@shared/logger.js";
 import type { MultiremiStore, RelayEngine } from "@multiremi/store/store.js";
 import { extractBaseUrl, validateGatewayUrl } from "@multiremi/relay/fragment.js";
+import { publicRelayHttpRequest } from "@multiremi/relay/http.js";
 
 const log = createLogger("relay-discovery");
 
@@ -22,56 +22,6 @@ function joinUrl(base: string, path: string): string {
   return base.replace(/\/+$/, "") + path;
 }
 
-/** True if the (possibly IPv4-mapped-IPv6) address is loopback/private/link-local/metadata. */
-function isPrivateIp(ip: string): boolean {
-  let addr = ip.toLowerCase();
-  const mapped = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (mapped) addr = mapped[1];
-  const v4 = addr.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    return a === 0 || a === 10 || a === 127
-      || (a === 169 && b === 254)
-      || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && b === 168)
-      || (a === 100 && b >= 64 && b <= 127); // carrier-grade NAT / shared
-  }
-  // fe80::/10 spans fe80–febf, and unique-local is fc00::/7 (fc/fd).
-  return addr === "::1" || addr === "::" || /^fe[89ab]/.test(addr) || addr.startsWith("fc") || addr.startsWith("fd");
-}
-
-/** Resolve the host and reject if any address is internal (SSRF: no private targets). */
-async function assertPublicHost(hostname: string): Promise<void> {
-  const results = await dnsLookup(hostname, { all: true });
-  if (results.length === 0) throw new Error("gateway host did not resolve");
-  for (const { address } of results) {
-    if (isPrivateIp(address)) throw new Error("gateway host resolves to a private address");
-  }
-}
-
-/** Read the response with a hard size cap applied WHILE streaming (never buffer a huge body). */
-async function readCapped(res: Response, max: number): Promise<string> {
-  const declared = Number(res.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > max) throw new Error("gateway response too large");
-  const reader = res.body?.getReader();
-  if (!reader) return "";
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      total += value.byteLength;
-      if (total > max) { try { await reader.cancel(); } catch { /* ignore */ } throw new Error("gateway response too large"); }
-      chunks.push(value);
-    }
-  }
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) { merged.set(c, offset); offset += c.byteLength; }
-  return new TextDecoder().decode(merged);
-}
-
 /**
  * Default transport: fetch with a pre-flight resolve check (reject private IPs),
  * no redirect following, timeout, and a streamed size cap.
@@ -82,10 +32,7 @@ async function readCapped(res: Response, max: number): Promise<string> {
  * run rebinding infra against the server's network — accepted for this deployment.
  */
 const defaultHttpGet: HttpGet = async (url, headers) => {
-  const u = new URL(url);
-  await assertPublicHost(u.hostname);
-  const res = await fetch(u, { headers, redirect: "error", signal: AbortSignal.timeout(TIMEOUT_MS) });
-  return { status: res.status, text: await readCapped(res, MAX_BODY) };
+  return publicRelayHttpRequest(url, { headers }, { timeoutMs: TIMEOUT_MS, maxBodyBytes: MAX_BODY });
 };
 
 async function fetchGatewayModels(

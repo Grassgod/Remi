@@ -40,6 +40,20 @@ export interface UpdateIssueRequest {
   attachment_ids?: string[];
 }
 
+export type IssueRetitleReason =
+  | "generated"
+  | "gateway_unconfigured"
+  | "model_failed"
+  | "kept"
+  | "not_eligible";
+
+export interface IssueRetitleResponse {
+  title: string;
+  previous_title: string;
+  applied: boolean;
+  reason: IssueRetitleReason;
+}
+
 export interface ListIssuesParams {
   limit?: number;
   offset?: number;

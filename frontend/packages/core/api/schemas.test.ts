@@ -22,6 +22,7 @@ import {
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   ListIssuesResponseSchema,
+  IssueRetitleResponseSchema,
   ListLarkInstallationsResponseSchema,
   ListProjectDocsResponseSchema,
   ListWorkspaceDocsResponseSchema,
@@ -109,6 +110,24 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
       total: 1,
     };
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("IssueRetitleResponseSchema", () => {
+  it("accepts the snake_case retitle response", () => {
+    expect(IssueRetitleResponseSchema.parse({
+      title: "Add JWT authentication",
+      previous_title: "Remi",
+      applied: true,
+      reason: "generated",
+    })).toMatchObject({ applied: true, reason: "generated" });
+  });
+
+  it("rejects unknown reasons and missing titles", () => {
+    expect(IssueRetitleResponseSchema.safeParse({
+      applied: false,
+      reason: "unknown",
+    }).success).toBe(false);
   });
 });
 
