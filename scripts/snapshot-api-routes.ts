@@ -366,13 +366,15 @@ export interface SeedRefs {
   localSkillListRequestId: string;
   localSkillImportRequestId: string;
   runtimeUpdateRequestId: string;
+  runtimeCommandRequestId: string;
+  runtimeProvisionId: string;
   dependencyId: string;
   invitationId: string;
   templateSlug: string;
   metadataKey: string;
 }
 
-async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
+async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs> {
   const workspaceId = "local";
   store.ensureLocalWorkspace();
   store.updateWorkspace(workspaceId, {
@@ -634,6 +636,41 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
   const localSkillList = store.createRuntimeLocalSkillListRequest(runtime.id);
   const localSkillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "snapshot-skill", name: "Snapshot skill" });
   const runtimeUpdate = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9", scope: "agent" as any });
+  const runtimeCommandRequestId = "rcm_snapshot";
+  const runtimeProvisionId = "prov_snapshot";
+  db.run(
+    `INSERT INTO multiremi_runtime_command_requests (
+      id, runtime_id, command, args, redacted_command, redacted_args, timeout_ms,
+      created_by, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+    [
+      runtimeCommandRequestId,
+      runtime.id,
+      "printf snapshot",
+      "[]",
+      "printf snapshot",
+      "[]",
+      1_000,
+      member.userId ?? member.id,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+    ],
+  );
+  db.run(
+    `INSERT INTO multiremi_workspace_runtime_provisions (
+      id, workspace_id, kind, enabled, version_check, command, args, redacted_command, redacted_args,
+      trigger_kinds, timezone, timeout_ms, created_by, created_at, updated_at
+    ) VALUES (?, ?, 'command', 0, 0, ?, '[]', ?, '[]', '[]', 'UTC', 1000, ?, ?, ?)`,
+    [
+      runtimeProvisionId,
+      workspaceId,
+      "printf provision-snapshot",
+      "printf provision-snapshot",
+      member.userId ?? member.id,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+    ],
+  );
   store.updateRuntimeModels(runtime.id, [{ id: "claude-sonnet-4", name: "Claude Sonnet 4" } as any]);
   store.heartbeatRuntime(runtime.id);
 
@@ -686,6 +723,8 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
     localSkillListRequestId: (localSkillList as any).id ?? (localSkillList as any).requestId,
     localSkillImportRequestId: (localSkillImport as any).id ?? (localSkillImport as any).requestId,
     runtimeUpdateRequestId: (runtimeUpdate as any).id ?? (runtimeUpdate as any).requestId,
+    runtimeCommandRequestId,
+    runtimeProvisionId,
     dependencyId: dependency.id,
     invitationId: invitation.id,
     templateSlug: listAgentTemplates()[0]?.slug ?? "unknown-template",
@@ -733,6 +772,7 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
   resourceId: "projectResourceId",
   runId: "autopilotRunId",
   runtimeId: "runtimeId",
+  provisionId: "runtimeProvisionId",
   squadId: "squadId",
   taskId: "taskId",
   triggerId: "triggerId",
@@ -784,6 +824,7 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       return "sar_snapshot";
     case "requestId":
       if (pattern.includes("/human-requests/")) return refs.humanRequestId;
+      if (pattern.includes("/commands/")) return refs.runtimeCommandRequestId;
       if (pattern.includes("/local-skills/import/")) return refs.localSkillImportRequestId;
       if (pattern.includes("/local-skills/")) return refs.localSkillListRequestId;
       if (pattern.includes("/directory-scans/")) return refs.dirScanRequestId;
@@ -914,7 +955,7 @@ class Recorder {
 async function buildApp(): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
   const db = new Database(":memory:");
   const store = new MultiremiStore(db);
-  const refs = await seedStore(store);
+  const refs = await seedStore(store, db);
   const app = createMultiremiApp({ store, realtimeState: { enabled: true, connections: 0 } });
   return { app, store, db, refs };
 }
@@ -1265,6 +1306,11 @@ flow("runtimes", async (rec, refs) => {
   await rec.json("POST", `/api/runtimes/${id}/local-skills/import`, { skill_key: "snapshot-skill" });
   await rec.json("POST", `/api/multiremi/runtimes/${id}/update`, { targetVersion: "9.9.9" });
   await rec.json("POST", `/api/runtimes/${id}/update`, { target_version: "9.9.9" });
+  const command = await rec.json("POST", `/api/runtimes/${id}/commands`, {
+    command: "printf snapshot",
+    timeout_ms: 1_000,
+  });
+  await rec.call("GET", `/api/runtimes/${id}/commands/${command.body?.id ?? refs.runtimeCommandRequestId}`);
   await rec.json("POST", `/api/runtimes/${id}/archive-agents-and-delete`, {});
   await rec.call("DELETE", `/api/runtimes/${refs.runtimeId}`);
 });
@@ -1314,6 +1360,14 @@ flow("daemon", async (rec, refs) => {
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/update/${refs.runtimeUpdateRequestId}/result`, {
     status: "completed",
     version: "9.9.9",
+  });
+  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/commands/claim`, {});
+  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/commands/${refs.runtimeCommandRequestId}/result`, {
+    status: "completed",
+    exit_code: 0,
+    stdout: "snapshot",
+    stderr: "",
+    duration_ms: 1,
   });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/recover-orphans`, {});
   await rec.json("POST", "/api/daemon/deregister", { runtime_ids: [refs.runtimeId] });

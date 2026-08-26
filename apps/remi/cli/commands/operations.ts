@@ -1,4 +1,6 @@
 import {
+  AsyncOperationController,
+  CliError,
   ResourceResolver,
   sanitizeCliDetails,
   type CliApiClient,
@@ -20,12 +22,15 @@ import {
   encodePath,
   extractRecords,
   positional,
+  integerOption,
+  outputMode,
   queryOptions,
   renderResource,
   requestBody,
   requireConfirmation,
   requiredWorkspace,
   stringOption,
+  stringOptions,
 } from "./resource-common.js";
 
 const HUMAN: readonly CliIdentity[] = ["human"];
@@ -89,6 +94,7 @@ function runtimeSpecs(): CommandSpec[] {
     op({ id: "runtime.model.status", path: ["runtime", "model", "status"], description: "Get a model refresh request", method: "GET", apiPath: async (i, c) => `${await runtime("/models")(i, c)}/${encodePath(positional(i, 1, "request"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("request")] }),
     op({ id: "runtime.release.start", path: ["runtime", "release", "start"], description: "Start a runtime update", method: "POST", apiPath: runtime("/update"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
     op({ id: "runtime.release.status", path: ["runtime", "release", "status"], description: "Get a runtime update request", method: "GET", apiPath: async (i, c) => `${await runtime("/update")(i, c)}/${encodePath(positional(i, 1, "update"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("update")] }),
+    runtimeCommandRunSpec(),
     op({ id: "runtime.skill.scan", path: ["runtime", "skill", "scan"], description: "Request local skill discovery", method: "POST", apiPath: runtime("/local-skills"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
     op({ id: "runtime.skill.status", path: ["runtime", "skill", "status"], description: "Get local skill discovery status", method: "GET", apiPath: async (i, c) => `${await runtime("/local-skills")(i, c)}/${encodePath(positional(i, 1, "request"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("request")] }),
     op({ id: "runtime.skill.import", path: ["runtime", "skill", "import"], description: "Import local runtime skills", method: "POST", apiPath: runtime("/local-skills/import"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
@@ -120,6 +126,67 @@ function runtimeSpecs(): CommandSpec[] {
       options: INPUT_OPTIONS,
     })),
   ];
+
+  function runtimeCommandRunSpec(): CommandSpec {
+    return {
+      id: "runtime.command.run",
+      path: ["runtime", "command", "run"],
+      description: "Run a command on a runtime and wait for its result",
+      capability: "runtime.command.run",
+      auth: HUMAN,
+      mutation: "write",
+      outputs: ["table", "json", "jsonl"],
+      positionals: [ref("runtime")],
+      options: commandOptions([{
+        name: "command",
+        type: "string",
+        valueName: "cmd",
+        description: "Command to execute",
+        required: true,
+      }, {
+        name: "arg",
+        type: "string",
+        valueName: "value",
+        description: "Argument appended to the command",
+        repeatable: true,
+      }]),
+      run: async (invocation) => {
+        const client = await clientFor(invocation);
+        const runtimeId = await resolveRuntimeId(client, invocation, positional(invocation, 0, "runtime"));
+        const timeoutMs = integerOption(invocation, "timeout") ?? 60_000;
+        const createdResponse = await client.request<Record<string, unknown>>({
+          method: "POST",
+          path: `/api/runtimes/${encodePath(runtimeId)}/commands`,
+          body: {
+            command: stringOption(invocation, "command"),
+            args: stringOptions(invocation, "arg"),
+            timeout_ms: timeoutMs,
+          },
+        });
+        const created = createdResponse.data;
+        const requestId = String(created.id ?? "").trim();
+        if (!requestId) throw new CliError("server", "runtime command response did not include an id");
+        const controller = new AsyncOperationController<Record<string, unknown>>({
+          status: async (id) => (await client.request<Record<string, unknown>>({
+            method: "GET",
+            path: `/api/runtimes/${encodePath(runtimeId)}/commands/${encodePath(id)}`,
+          })).data,
+          cancel: async () => {
+            throw new CliError("usage", "runtime commands cannot be cancelled from this CLI version");
+          },
+          state: (request) => String(request.status ?? ""),
+          terminalStates: ["completed", "failed", "timeout"],
+          successStates: ["completed"],
+          failureDetails: (request) => request,
+        });
+        const finished = await controller.wait(requestId, {
+          timeoutMs: timeoutMs + 3 * 60_000 + 10_000,
+          pollIntervalMs: 500,
+        });
+        renderRuntimeCommandResult(invocation, finished);
+      },
+    };
+  }
 }
 
 function daemonSpecs(): CommandSpec[] {
@@ -483,6 +550,19 @@ function changeRequestPath(invocation: CommandInvocation): string {
 
 function renderSafe(invocation: CommandInvocation, value: unknown, collections: readonly string[] = []): void {
   renderResource(invocation, omitSecretFields(sanitizeCliDetails(value)), collections);
+}
+
+function renderRuntimeCommandResult(invocation: CommandInvocation, value: Record<string, unknown>): void {
+  if (outputMode(invocation) !== "table") {
+    renderSafe(invocation, value);
+    return;
+  }
+  const exitCode = value.exit_code ?? value.exitCode;
+  console.log(`Exit code: ${exitCode == null ? "-" : String(exitCode)}`);
+  const stdout = typeof value.stdout === "string" ? value.stdout : "";
+  const stderr = typeof value.stderr === "string" ? value.stderr : "";
+  if (stdout) console.log(stdout);
+  if (stderr) console.error(stderr);
 }
 
 function omitSecretFields(value: unknown): unknown {

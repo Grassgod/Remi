@@ -38,6 +38,10 @@ export const runtimeKeys = {
     ["runtimes", wsId, "daemons", daemonId, "retirement-plan"] as const,
   sshMesh: (wsId: string) =>
     ["runtimes", wsId, "ssh-mesh"] as const,
+  provisions: (wsId: string) =>
+    ["runtimes", wsId, "provisions"] as const,
+  provisionStates: (wsId: string, provisionId: string) =>
+    ["runtimes", wsId, "provisions", provisionId, "states"] as const,
 };
 
 export function daemonInventoryOptions(wsId: string) {

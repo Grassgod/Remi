@@ -315,6 +315,17 @@ export class MultiremiDaemonClient {
     await this.post(`/api/daemon/runtimes/${runtimeId}/update/${requestId}/result`, result);
   }
 
+  async reportRuntimeCommandResult(runtimeId: string, requestId: string, result: {
+    status: "completed" | "failed" | "timeout";
+    exit_code: number | null;
+    stdout: string;
+    stderr: string;
+    duration_ms: number;
+    error?: string;
+  }): Promise<void> {
+    await this.post(`/api/daemon/runtimes/${runtimeId}/commands/${requestId}/result`, result);
+  }
+
   async reportRuntimeModelListResult(runtimeId: string, requestId: string, result: {
     status: string;
     models?: MultiremiRuntimeModel[];

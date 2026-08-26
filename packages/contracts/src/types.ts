@@ -574,6 +574,12 @@ export type MultiremiRuntimeDirectoryScanRequestStatus = "pending" | "running" |
 
 export type MultiremiRuntimeUpdateRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 
+export type MultiremiRuntimeCommandRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+
+export type MultiremiRuntimeProvisionKind = "npm-global" | "command";
+export type MultiremiRuntimeProvisionTriggerKind = "cron" | "on_register" | "on_change";
+export type MultiremiRuntimeProvisionStatus = "pending" | "converged" | "drifted" | "failed";
+
 export interface MultiremiRuntime {
   id: string;
   name: string;
@@ -731,6 +737,88 @@ export interface MultiremiRuntimeUpdateRequest {
   runStartedAt: string | null;
 }
 
+export interface MultiremiRuntimeCommandRequest {
+  id: string;
+  runtimeId: string;
+  command: string;
+  args: string[];
+  redactedCommand: string;
+  redactedArgs: string[];
+  provisionId: string | null;
+  timeoutMs: number;
+  createdBy: string | null;
+  status: MultiremiRuntimeCommandRequestStatus;
+  exitCode: number | null;
+  stdout: string | null;
+  stderr: string | null;
+  durationMs: number | null;
+  error: string | null;
+  runStartedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiWorkspaceRuntimeProvision {
+  id: string;
+  workspaceId: string;
+  kind: MultiremiRuntimeProvisionKind;
+  enabled: boolean;
+  package: string | null;
+  version: string | null;
+  versionCheck: boolean;
+  bin: string | null;
+  registry: string | null;
+  command: string | null;
+  args: string[];
+  redactedCommand: string | null;
+  redactedArgs: string[];
+  triggerKinds: MultiremiRuntimeProvisionTriggerKind[];
+  cronExpression: string | null;
+  timezone: string | null;
+  nextRunAt: string | null;
+  lastFiredAt: string | null;
+  timeoutMs: number;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiRuntimeProvisionState {
+  provisionId: string;
+  runtimeId: string;
+  status: MultiremiRuntimeProvisionStatus;
+  observedVersion: string | null;
+  lastCommandRequestId: string | null;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkspaceRuntimeProvisionInput {
+  kind?: MultiremiRuntimeProvisionKind | string;
+  enabled?: boolean;
+  package?: string | null;
+  version?: string | null;
+  versionCheck?: boolean;
+  version_check?: boolean;
+  bin?: string | null;
+  registry?: string | null;
+  command?: string | null;
+  args?: string[];
+  triggerKinds?: MultiremiRuntimeProvisionTriggerKind[];
+  trigger_kinds?: MultiremiRuntimeProvisionTriggerKind[];
+  cronExpression?: string | null;
+  cron_expression?: string | null;
+  timezone?: string | null;
+  timeoutMs?: number;
+  timeout_ms?: number;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export type UpdateWorkspaceRuntimeProvisionInput = Partial<CreateWorkspaceRuntimeProvisionInput>;
+
 export interface MultiremiDaemonHeartbeatAck {
   runtime_id: string;
   status: "ok" | "runtime_gone";
@@ -760,6 +848,12 @@ export interface MultiremiDaemonHeartbeatAck {
     id: string;
     skill_key: string;
   }>;
+  pending_command?: {
+    id: string;
+    command: string;
+    args: string[];
+    timeout_ms: number;
+  };
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -993,6 +1087,29 @@ export interface CreateRuntimeUpdateInput {
 export interface ReportRuntimeUpdateInput {
   status?: string;
   output?: string;
+  error?: string;
+}
+
+export interface CreateRuntimeCommandInput {
+  command?: string;
+  args?: string[];
+  timeoutMs?: number;
+  timeout_ms?: number;
+  createdBy?: string | null;
+  created_by?: string | null;
+  provisionId?: string | null;
+  provision_id?: string | null;
+  provisionKind?: MultiremiRuntimeProvisionKind;
+}
+
+export interface ReportRuntimeCommandInput {
+  status?: "completed" | "failed" | "timeout";
+  exitCode?: number | null;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  durationMs?: number;
+  duration_ms?: number;
   error?: string;
 }
 
