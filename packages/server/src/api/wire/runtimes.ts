@@ -6,6 +6,7 @@ import type {
   MultiremiRuntime,
   MultiremiRuntimeDirectoryCandidate,
   MultiremiRuntimeDirectoryScanRequest,
+  MultiremiRuntimeCommandRequest,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeLocalSkillSummary,
@@ -188,6 +189,34 @@ export function runtimeUpdateRequestCompatibilityResponse(request: MultiremiRunt
   if (request.output) response.output = request.output;
   if (request.error) response.error = request.error;
   return response;
+}
+
+export function runtimeCommandRequestResponse(request: MultiremiRuntimeCommandRequest): Record<string, unknown> {
+  return {
+    id: request.id,
+    runtimeId: request.runtimeId,
+    runtime_id: request.runtimeId,
+    command: request.redactedCommand,
+    args: request.redactedArgs,
+    timeoutMs: request.timeoutMs,
+    timeout_ms: request.timeoutMs,
+    createdBy: request.createdBy,
+    created_by: request.createdBy,
+    status: request.status,
+    exitCode: request.exitCode,
+    exit_code: request.exitCode,
+    stdout: request.stdout,
+    stderr: request.stderr,
+    durationMs: request.durationMs,
+    duration_ms: request.durationMs,
+    error: request.error,
+    runStartedAt: request.runStartedAt,
+    run_started_at: request.runStartedAt,
+    createdAt: request.createdAt,
+    created_at: request.createdAt,
+    updatedAt: request.updatedAt,
+    updated_at: request.updatedAt,
+  };
 }
 
 function runtimeLocalSkillSummaryCompatibilityResponse(skill: MultiremiRuntimeLocalSkillSummary): Record<string, unknown> {

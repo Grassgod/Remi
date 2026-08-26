@@ -1,7 +1,7 @@
 // The queue protocol shared by every daemon async-request family (model list, directory scan,
-// runtime update, local-skill list, local-skill import).
+// runtime update, local-skill list, local-skill import, runtime command).
 //
-// All five families run the same lifecycle — a row is inserted `pending`, claimed into `running`,
+// All six families run the same lifecycle — a row is inserted `pending`, claimed into `running`,
 // timed out on either deadline, then closed by a report — and previously existed as five verbatim
 // copies of `get`/`claim`/`expire` in runtimes-repo.ts. The copies differed only in table name,
 // id prefix, the two deadlines and the human-readable timeout copy, so those five knobs are now a
@@ -18,7 +18,7 @@ type Row = Record<string, unknown>;
  * Every instance is a module-level constant declared beside the family it configures; no field is
  * ever derived from request input. `table` and the two timeout messages are interpolated into SQL
  * text rather than bound as parameters, which is what keeps the generated statements byte-identical
- * to the five hand-written copies this template replaced — do not widen these fields to accept
+ * to the original hand-written copies this template replaced — do not widen these fields to accept
  * caller-supplied strings.
  */
 export interface RuntimeRequestSpec<T> {

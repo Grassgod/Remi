@@ -117,6 +117,8 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     || (/^\/api\/runtimes\/[^/]+$/.test(path) && method === "DELETE")
     || (/^\/api\/runtimes\/[^/]+\/archive-agents-and-delete$/.test(path) && method === "POST")
     || (/^\/api\/(?:multiremi\/)?runtimes\/[^/]+\/update$/.test(path) && method === "POST")
+    || /^\/api\/runtimes\/[^/]+\/commands(?:\/[^/]+)?$/.test(path)
+    || /^\/api\/workspaces\/[^/]+\/runtime-provisions(?:\/[^/]+(?:\/states)?)?$/.test(path)
     || (/^\/api\/multiremi\/daemons\/[^/]+\/retire$/.test(path) && method === "POST")
     || (/^\/api\/workspaces\/[^/]+\/ssh-mesh$/.test(path) && method === "PUT")
     || (/^\/api\/workspaces\/[^/]+\/ssh-mesh\/rotate$/.test(path) && method === "POST")) {

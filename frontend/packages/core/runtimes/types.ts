@@ -22,6 +22,75 @@ export interface DaemonInventoryResponse {
   daemons: DaemonInventoryEntry[];
 }
 
+export type RuntimeProvisionKind = "npm-global" | "command";
+export type RuntimeProvisionTriggerKind = "cron" | "on_register" | "on_change";
+export type RuntimeProvisionStatus = "pending" | "converged" | "drifted" | "failed";
+
+export interface RuntimeProvision {
+  id: string;
+  workspace_id: string;
+  kind: string;
+  enabled: boolean;
+  package: string | null;
+  version: string | null;
+  version_check: boolean;
+  bin: string | null;
+  registry: string | null;
+  /** Redacted command returned by the server; the raw command never crosses this boundary. */
+  command: string | null;
+  /** Redacted arguments returned by the server. */
+  args: string[];
+  trigger_kinds: string[];
+  cron_expression: string | null;
+  timezone: string | null;
+  next_run_at: string | null;
+  last_fired_at: string | null;
+  timeout_ms: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeProvisionState {
+  provision_id: string;
+  runtime_id: string;
+  status: string;
+  observed_version: string | null;
+  last_command_request_id: string | null;
+  last_checked_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeProvisionInput {
+  kind?: RuntimeProvisionKind;
+  enabled?: boolean;
+  package?: string | null;
+  version?: string | null;
+  version_check?: boolean;
+  bin?: string | null;
+  registry?: string | null;
+  command?: string | null;
+  args?: string[];
+  trigger_kinds?: RuntimeProvisionTriggerKind[];
+  cron_expression?: string | null;
+  timezone?: string | null;
+  timeout_ms?: number;
+}
+
+export interface RuntimeProvisionListResponse {
+  provisions: RuntimeProvision[];
+}
+
+export interface RuntimeProvisionResponse {
+  provision: RuntimeProvision;
+}
+
+export interface RuntimeProvisionStatesResponse {
+  states: RuntimeProvisionState[];
+}
+
 export interface DaemonRetirementRuntime {
   id: string;
   name: string;

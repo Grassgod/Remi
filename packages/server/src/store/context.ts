@@ -49,6 +49,7 @@ import type {
   MultiremiProjectDoc,
   MultiremiProjectResource,
   MultiremiRuntime,
+  MultiremiRuntimeCommandRequest,
   MultiremiSessionEvent,
   MultiremiSessionParticipant,
   MultiremiSystemEvent,
@@ -331,6 +332,9 @@ export interface IssueSessionsSurface {
 
 export interface RuntimesSurface {
   getRuntime(id: string): MultiremiRuntime | null;
+  listRuntimes(): MultiremiRuntime[];
+  createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;
+  getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null;
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null;
   heartbeatRuntime(runtimeId: string, options?: {
     claimPending?: boolean;

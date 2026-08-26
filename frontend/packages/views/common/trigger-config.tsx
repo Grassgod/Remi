@@ -9,7 +9,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@multiremi/ui/components/ui/select";
-import { useT } from "../../i18n";
+import { useT } from "../i18n";
 
 export type TriggerFrequency = "hourly" | "daily" | "weekdays" | "weekly" | "custom";
 
