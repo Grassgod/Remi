@@ -575,6 +575,10 @@ export type MultiremiRuntimeUpdateRequestStatus = "pending" | "running" | "compl
 
 export type MultiremiRuntimeCommandRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 
+export type MultiremiRuntimeProvisionKind = "npm-global" | "command";
+export type MultiremiRuntimeProvisionTriggerKind = "cron" | "on_register" | "on_change";
+export type MultiremiRuntimeProvisionStatus = "pending" | "converged" | "drifted" | "failed";
+
 export interface MultiremiRuntime {
   id: string;
   name: string;
@@ -739,6 +743,7 @@ export interface MultiremiRuntimeCommandRequest {
   args: string[];
   redactedCommand: string;
   redactedArgs: string[];
+  provisionId: string | null;
   timeoutMs: number;
   createdBy: string | null;
   status: MultiremiRuntimeCommandRequestStatus;
@@ -751,6 +756,64 @@ export interface MultiremiRuntimeCommandRequest {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface MultiremiWorkspaceRuntimeProvision {
+  id: string;
+  workspaceId: string;
+  kind: MultiremiRuntimeProvisionKind;
+  enabled: boolean;
+  package: string | null;
+  version: string | null;
+  bin: string | null;
+  registry: string | null;
+  command: string | null;
+  args: string[];
+  redactedCommand: string | null;
+  redactedArgs: string[];
+  triggerKinds: MultiremiRuntimeProvisionTriggerKind[];
+  cronExpression: string | null;
+  timezone: string | null;
+  nextRunAt: string | null;
+  lastFiredAt: string | null;
+  timeoutMs: number;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiRuntimeProvisionState {
+  provisionId: string;
+  runtimeId: string;
+  status: MultiremiRuntimeProvisionStatus;
+  observedVersion: string | null;
+  lastCommandRequestId: string | null;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkspaceRuntimeProvisionInput {
+  kind?: MultiremiRuntimeProvisionKind | string;
+  enabled?: boolean;
+  package?: string | null;
+  version?: string | null;
+  bin?: string | null;
+  registry?: string | null;
+  command?: string | null;
+  args?: string[];
+  triggerKinds?: MultiremiRuntimeProvisionTriggerKind[];
+  trigger_kinds?: MultiremiRuntimeProvisionTriggerKind[];
+  cronExpression?: string | null;
+  cron_expression?: string | null;
+  timezone?: string | null;
+  timeoutMs?: number;
+  timeout_ms?: number;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export type UpdateWorkspaceRuntimeProvisionInput = Partial<CreateWorkspaceRuntimeProvisionInput>;
 
 export interface MultiremiDaemonHeartbeatAck {
   runtime_id: string;
@@ -1030,6 +1093,9 @@ export interface CreateRuntimeCommandInput {
   timeout_ms?: number;
   createdBy?: string | null;
   created_by?: string | null;
+  provisionId?: string | null;
+  provision_id?: string | null;
+  provisionKind?: MultiremiRuntimeProvisionKind;
 }
 
 export interface ReportRuntimeCommandInput {

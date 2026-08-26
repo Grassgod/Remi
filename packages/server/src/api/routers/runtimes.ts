@@ -309,7 +309,9 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
       const request = store.createRuntimeCommandRequest(loaded.runtime.id, {
-        ...body,
+        command: body.command,
+        args: body.args,
+        timeoutMs: body.timeoutMs ?? body.timeout_ms,
         createdBy: currentRequestUserId(c),
         created_by: currentRequestUserId(c),
       });

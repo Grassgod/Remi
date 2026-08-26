@@ -27,7 +27,15 @@ import {
   redactRuntimeCommandArgs,
   redactRuntimeCommandText,
   truncateRuntimeCommandOutput,
-} from "@multiremi/worker/runtime-command.js";
+} from "@multiremi/runtime-command-safety.js";
+import {
+  DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS,
+  MAX_NPM_GLOBAL_PROVISION_TIMEOUT_MS,
+  MAX_RUNTIME_COMMAND_TIMEOUT_MS,
+  normalizeRuntimeCommandTimeout,
+  RUNTIME_COMMAND_PENDING_TIMEOUT_MS,
+  RUNTIME_COMMAND_RUNNING_TIMEOUT_MS,
+} from "@multiremi/runtime-command-policy.js";
 import {
   RUNTIME_AUXILIARY_TABLES,
   RUNTIME_REQUEST_TABLES,
@@ -100,10 +108,6 @@ const RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS = 60 * 1000;
-const RUNTIME_COMMAND_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
-const RUNTIME_COMMAND_RUNNING_TIMEOUT_MS = 6 * 60 * 1000;
-const DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS = 60 * 1000;
-const MAX_RUNTIME_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 
 // ── async-request family specs ────────────────────────────────────────────────
 // The five knobs the shared queue template needs. Row mappers are hoisted function declarations
@@ -164,7 +168,7 @@ const COMMAND_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeCommandRequest> = {
   pendingTimeoutMs: RUNTIME_COMMAND_PENDING_TIMEOUT_MS,
   runningTimeoutMs: RUNTIME_COMMAND_RUNNING_TIMEOUT_MS,
   pendingTimeoutError: "daemon did not respond within 3 minutes",
-  runningTimeoutError: "daemon did not finish the command within 6 minutes",
+  runningTimeoutError: "daemon did not finish the command within 20 minutes",
   hydrate: toRuntimeCommandRequest,
 };
 
@@ -1169,15 +1173,19 @@ export class RuntimesRepo {
       if (args.some((arg) => Buffer.byteLength(arg, "utf8") > 8 * 1024)) {
         throw new Error("each command arg must not exceed 8192 bytes");
       }
-      const timeoutMs = normalizeRuntimeCommandTimeout(input.timeoutMs ?? input.timeout_ms);
+      const timeoutMaximum = input.provisionKind === "npm-global"
+        ? MAX_NPM_GLOBAL_PROVISION_TIMEOUT_MS
+        : MAX_RUNTIME_COMMAND_TIMEOUT_MS;
+      const timeoutMs = normalizeRuntimeCommandTimeout(input.timeoutMs ?? input.timeout_ms, timeoutMaximum);
+      const provisionId = cleanOptionalString(input.provisionId ?? input.provision_id);
       const id = this.commandQueue.nextId();
       const now = nowIso();
       // Raw values are retained only for daemon dispatch; API and audit views use the redacted pair.
       this.ctx.db.run(
         `INSERT INTO multiremi_runtime_command_requests (
-          id, runtime_id, command, args, redacted_command, redacted_args, timeout_ms,
+          id, runtime_id, command, args, redacted_command, redacted_args, provision_id, timeout_ms,
           created_by, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         [
           id,
           runtimeId,
@@ -1185,6 +1193,7 @@ export class RuntimesRepo {
           toJson(args),
           redactRuntimeCommandText(command),
           toJson(redactRuntimeCommandArgs(args)),
+          provisionId,
           timeoutMs,
           input.createdBy ?? input.created_by ?? null,
           now,
@@ -1196,11 +1205,27 @@ export class RuntimesRepo {
   }
 
   getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null {
-    return this.commandQueue.get(runtimeId, requestId);
+    const request = this.commandQueue.get(runtimeId, requestId);
+    if (!request || !isTerminalRuntimeRequestStatus(request.status)) return request;
+    if (request.command || request.args.length) {
+      this.ctx.db.run(
+        "UPDATE multiremi_runtime_command_requests SET command = '', args = '[]' WHERE id = ? AND runtime_id = ?",
+        [requestId, runtimeId],
+      );
+      return { ...request, command: "", args: [] };
+    }
+    return request;
   }
 
   claimRuntimeCommandRequest(runtimeId: string): MultiremiRuntimeCommandRequest | null {
-    return this.commandQueue.claim(runtimeId);
+    const request = this.commandQueue.claim(runtimeId);
+    this.ctx.db.run(
+      `UPDATE multiremi_runtime_command_requests
+       SET command = '', args = '[]'
+       WHERE runtime_id = ? AND status IN ('completed', 'failed', 'timeout') AND (command <> '' OR args <> '[]')`,
+      [runtimeId],
+    );
+    return request;
   }
 
   reportRuntimeCommandResult(
@@ -1226,7 +1251,8 @@ export class RuntimesRepo {
       : null;
     this.ctx.db.run(
       `UPDATE multiremi_runtime_command_requests
-       SET status = ?, exit_code = ?, stdout = ?, stderr = ?, duration_ms = ?, error = ?, updated_at = ?
+       SET status = ?, exit_code = ?, stdout = ?, stderr = ?, duration_ms = ?, error = ?,
+           command = '', args = '[]', updated_at = ?
        WHERE id = ? AND runtime_id = ?`,
       [
         status,
@@ -1803,6 +1829,7 @@ function toRuntimeCommandRequest(row: Row): MultiremiRuntimeCommandRequest {
     args: normalizeRuntimeCommandArgs(parseJson(row.args, [])),
     redactedCommand: String(row.redacted_command ?? ""),
     redactedArgs: normalizeRuntimeCommandArgs(parseJson(row.redacted_args, [])),
+    provisionId: nullableString(row.provision_id),
     timeoutMs: Number(row.timeout_ms ?? DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS),
     createdBy: nullableString(row.created_by),
     status: normalizeRuntimeCommandStatus(row.status),
@@ -1826,15 +1853,6 @@ function normalizeRuntimeCommandStatus(value: unknown): MultiremiRuntimeCommandR
 function normalizeRuntimeCommandReportStatus(value: unknown): "completed" | "failed" | "timeout" {
   if (value === "completed" || value === "failed" || value === "timeout") return value;
   throw new Error(`invalid runtime command status: ${String(value ?? "")}`);
-}
-
-function normalizeRuntimeCommandTimeout(value: unknown): number {
-  if (value === undefined || value === null || value === "") return DEFAULT_RUNTIME_COMMAND_TIMEOUT_MS;
-  const timeoutMs = Number(value);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > MAX_RUNTIME_COMMAND_TIMEOUT_MS) {
-    throw new Error(`timeout_ms must be an integer between 100 and ${MAX_RUNTIME_COMMAND_TIMEOUT_MS}`);
-  }
-  return timeoutMs;
 }
 
 function normalizeRuntimeCommandArgs(value: unknown): string[] {

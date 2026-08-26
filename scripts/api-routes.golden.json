@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 602,
+    "routeCount": 608,
     "routeCountByPrefix": {
       "native": 196,
-      "compat": 393,
+      "compat": 399,
       "root": 13
     },
-    "getRoutes": 260,
-    "getRoutesWithBody": 257,
+    "getRoutes": 263,
+    "getRoutesWithBody": 260,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 342,
+    "mutationRoutes": 345,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -118,6 +118,7 @@
     "DELETE /api/workspaces/:id/members/:memberId",
     "DELETE /api/workspaces/:id/repos/:repositoryId",
     "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "DELETE /api/workspaces/:id/runtime-provisions/:provisionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -367,6 +368,9 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/repository-wikis/atlas",
+    "GET /api/workspaces/:id/runtime-provisions",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -409,6 +413,7 @@
     "PATCH /api/workspaces/:id",
     "PATCH /api/workspaces/:id/members/:memberId",
     "PATCH /api/workspaces/:id/repos/:repositoryId",
+    "PATCH /api/workspaces/:id/runtime-provisions/:provisionId",
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "POST /api/agents",
     "POST /api/agents/:id/archive",
@@ -618,6 +623,7 @@
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/inspect",
     "POST /api/workspaces/:id/repository-wikis/atlas",
+    "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
     "POST /api/workspaces/:workspaceId/scm/connections",
@@ -964,6 +970,9 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/repository-wikis/atlas",
+    "GET /api/workspaces/:id/runtime-provisions",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -2996,7 +3005,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600240",
+        "order_id": "local-1767225600241",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -3480,7 +3489,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "1f07dafef349ec685218d65a5b6883573b686e440b8de6e918318cb6d8f65e9a",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -10746,6 +10755,72 @@
             "allowed": true
           },
           {
+            "id": "workspace.runtime-provision.create",
+            "command": "remi workspace runtime-provision create",
+            "capability": "workspace.runtime-provision.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.delete",
+            "command": "remi workspace runtime-provision delete",
+            "capability": "workspace.runtime-provision.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.get",
+            "command": "remi workspace runtime-provision get",
+            "capability": "workspace.runtime-provision.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.list",
+            "command": "remi workspace runtime-provision list",
+            "capability": "workspace.runtime-provision.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.states",
+            "command": "remi workspace runtime-provision states",
+            "capability": "workspace.runtime-provision.states",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.update",
+            "command": "remi workspace runtime-provision update",
+            "capability": "workspace.runtime-provision.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.ssh-mesh.get",
             "command": "remi workspace ssh-mesh get",
             "capability": "workspace.ssh-mesh.get",
@@ -14896,7 +14971,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "1f07dafef349ec685218d65a5b6883573b686e440b8de6e918318cb6d8f65e9a",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -19501,6 +19576,75 @@
       }
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions",
+      "route": "GET /api/workspaces/:id/runtime-provisions",
+      "path": "/api/workspaces/local/runtime-provisions",
+      "status": 200,
+      "body": {
+        "provisions": [
+          {
+            "id": "prov_snapshot",
+            "workspace_id": "local",
+            "kind": "command",
+            "enabled": false,
+            "package": null,
+            "version": null,
+            "bin": null,
+            "registry": null,
+            "command": "printf provision-snapshot",
+            "args": [],
+            "trigger_kinds": [],
+            "cron_expression": null,
+            "timezone": "UTC",
+            "next_run_at": null,
+            "last_fired_at": null,
+            "timeout_ms": 0,
+            "created_by": "local",
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>"
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions/:provisionId",
+      "route": "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+      "path": "/api/workspaces/local/runtime-provisions/prov_snapshot",
+      "status": 200,
+      "body": {
+        "provision": {
+          "id": "prov_snapshot",
+          "workspace_id": "local",
+          "kind": "command",
+          "enabled": false,
+          "package": null,
+          "version": null,
+          "bin": null,
+          "registry": null,
+          "command": "printf provision-snapshot",
+          "args": [],
+          "trigger_kinds": [],
+          "cron_expression": null,
+          "timezone": "UTC",
+          "next_run_at": null,
+          "last_fired_at": null,
+          "timeout_ms": 0,
+          "created_by": "local",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "route": "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "path": "/api/workspaces/local/runtime-provisions/prov_snapshot/states",
+      "status": 200,
+      "body": {
+        "states": []
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/session-archive",
       "route": "GET /api/workspaces/:id/session-archive",
       "path": "/api/workspaces/local/session-archive",
@@ -22394,7 +22538,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600241",
+        "id": "local-contact-1767225600242",
         "status": "received",
         "mode": "local",
         "request": {
@@ -23675,7 +23819,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600248",
+        "session_id": "local-lark-1767225600249",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

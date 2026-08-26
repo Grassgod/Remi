@@ -367,6 +367,7 @@ export interface SeedRefs {
   localSkillImportRequestId: string;
   runtimeUpdateRequestId: string;
   runtimeCommandRequestId: string;
+  runtimeProvisionId: string;
   dependencyId: string;
   invitationId: string;
   templateSlug: string;
@@ -636,6 +637,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   const localSkillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "snapshot-skill", name: "Snapshot skill" });
   const runtimeUpdate = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9", scope: "agent" as any });
   const runtimeCommandRequestId = "rcm_snapshot";
+  const runtimeProvisionId = "prov_snapshot";
   db.run(
     `INSERT INTO multiremi_runtime_command_requests (
       id, runtime_id, command, args, redacted_command, redacted_args, timeout_ms,
@@ -649,6 +651,21 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
       "printf snapshot",
       "[]",
       1_000,
+      member.userId ?? member.id,
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+    ],
+  );
+  db.run(
+    `INSERT INTO multiremi_workspace_runtime_provisions (
+      id, workspace_id, kind, enabled, command, args, redacted_command, redacted_args,
+      trigger_kinds, timezone, timeout_ms, created_by, created_at, updated_at
+    ) VALUES (?, ?, 'command', 0, ?, '[]', ?, '[]', '[]', 'UTC', 1000, ?, ?, ?)`,
+    [
+      runtimeProvisionId,
+      workspaceId,
+      "printf provision-snapshot",
+      "printf provision-snapshot",
       member.userId ?? member.id,
       "2026-01-01T00:00:00.000Z",
       "2026-01-01T00:00:00.000Z",
@@ -707,6 +724,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     localSkillImportRequestId: (localSkillImport as any).id ?? (localSkillImport as any).requestId,
     runtimeUpdateRequestId: (runtimeUpdate as any).id ?? (runtimeUpdate as any).requestId,
     runtimeCommandRequestId,
+    runtimeProvisionId,
     dependencyId: dependency.id,
     invitationId: invitation.id,
     templateSlug: listAgentTemplates()[0]?.slug ?? "unknown-template",
@@ -754,6 +772,7 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
   resourceId: "projectResourceId",
   runId: "autopilotRunId",
   runtimeId: "runtimeId",
+  provisionId: "runtimeProvisionId",
   squadId: "squadId",
   taskId: "taskId",
   triggerId: "triggerId",

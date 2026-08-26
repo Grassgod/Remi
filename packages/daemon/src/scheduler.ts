@@ -68,6 +68,7 @@ export class MultiremiScheduler {
     if (this.running) return;
     this.running = true;
     this.store.recoverLostScheduleTriggers();
+    this.store.recoverLostRuntimeProvisionSchedules();
     this.sync();
     this.timer = setInterval(() => this.sync(), this.pollIntervalMs);
     this.timer.unref?.();
@@ -91,6 +92,7 @@ export class MultiremiScheduler {
 
   sync(): void {
     this.tickDueTriggers();
+    this.tickRuntimeProvisions();
     this.tickSystemEvents();
     this.tickScmEvents();
     const active = new Map(
@@ -133,6 +135,21 @@ export class MultiremiScheduler {
       if (run) runs.push(run);
     }
     return runs;
+  }
+
+  tickRuntimeProvisions(now: Date = new Date()): number {
+    let fired = 0;
+    for (const provision of this.store.claimDueRuntimeProvisions(now)) {
+      try {
+        this.store.enqueueWorkspaceRuntimeProvision(provision.id);
+        fired += 1;
+      } catch (error) {
+        log.warn(`Runtime provision ${provision.id} dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.store.advanceRuntimeProvisionNextRun(provision.id, now);
+      }
+    }
+    return fired;
   }
 
   tickSystemEvents(now: Date = new Date()): AutopilotRun[] {

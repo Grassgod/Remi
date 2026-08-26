@@ -165,6 +165,108 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.runtime-provision.list": {
+      "command": "remi workspace runtime-provision list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.runtime-provision.get": {
+      "command": "remi workspace runtime-provision get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.runtime-provision.states": {
+      "command": "remi workspace runtime-provision states",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.states",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.runtime-provision.create": {
+      "command": "remi workspace runtime-provision create",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.runtime-provision.update": {
+      "command": "remi workspace runtime-provision update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.runtime-provision.delete": {
+      "command": "remi workspace runtime-provision delete",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.env.get": {
       "command": "remi workspace env get",
       "aliases": [],
@@ -7518,6 +7620,9 @@
     "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref": {
       "command": "wiki.repository.delete"
     },
+    "DELETE /api/workspaces/:id/runtime-provisions/:provisionId": {
+      "command": "workspace.runtime-provision.delete"
+    },
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId": {
       "command": "scm.connection.delete"
     },
@@ -8303,6 +8408,15 @@
     "GET /api/workspaces/:id/repository-wikis/atlas": {
       "command": "wiki.repository.atlas.status"
     },
+    "GET /api/workspaces/:id/runtime-provisions": {
+      "command": "workspace.runtime-provision.list"
+    },
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId": {
+      "command": "workspace.runtime-provision.get"
+    },
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId/states": {
+      "command": "workspace.runtime-provision.states"
+    },
     "GET /api/workspaces/:id/session-archive": {
       "command": "session.config.get"
     },
@@ -8432,6 +8546,9 @@
     },
     "PATCH /api/workspaces/:id/repos/:repositoryId": {
       "command": "repo.update"
+    },
+    "PATCH /api/workspaces/:id/runtime-provisions/:provisionId": {
+      "command": "workspace.runtime-provision.update"
     },
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId": {
       "command": "scm.connection.update"
@@ -9157,6 +9274,9 @@
     },
     "POST /api/workspaces/:id/repository-wikis/atlas": {
       "command": "wiki.repository.atlas.configure"
+    },
+    "POST /api/workspaces/:id/runtime-provisions": {
+      "command": "workspace.runtime-provision.create"
     },
     "POST /api/workspaces/:id/ssh-mesh/rotate": {
       "command": "workspace.ssh-mesh.rotate"

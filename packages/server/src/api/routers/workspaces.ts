@@ -44,6 +44,7 @@ import {
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type {
   CreateRepositoryWikiDocInput,
+  CreateWorkspaceRuntimeProvisionInput,
   CreateWorkspaceInput,
   MultiremiAutopilot,
   MultiremiAutopilotEventConfig,
@@ -53,6 +54,7 @@ import type {
   MultiremiRepositoryWikiDocRevision,
   UpdateRepositoryWikiDocInput,
   UpdateMultiremiPromptSettingsInput,
+  UpdateWorkspaceRuntimeProvisionInput,
 } from "@multiremi/contracts/types.js";
 import { nowIso } from "@multiremi/ids.js";
 import { RepositoryWikiUnavailableError } from "@multiremi/repository-wiki/service.js";
@@ -115,6 +117,70 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const workspace = store.getWorkspace(workspaceId);
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     return c.json(workspace);
+  });
+  app.get("/api/workspaces/:id/runtime-provisions", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json({ provisions: store.listWorkspaceRuntimeProvisions(workspaceId).map(runtimeProvisionResponse) });
+  });
+  app.post("/api/workspaces/:id/runtime-provisions", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<CreateWorkspaceRuntimeProvisionInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const provision = store.createWorkspaceRuntimeProvision(workspaceId, {
+        ...body,
+        createdBy: authenticatedRequestUserId(c) ?? "local",
+      });
+      return c.json({ provision: runtimeProvisionResponse(provision) }, 201);
+    } catch (error) {
+      return runtimeProvisionError(c, error);
+    }
+  });
+  app.get("/api/workspaces/:id/runtime-provisions/:provisionId", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const provision = store.getWorkspaceRuntimeProvision(c.req.param("provisionId"));
+    if (!provision || provision.workspaceId !== workspaceId) return c.json({ error: "runtime provision not found" }, 404);
+    return c.json({ provision: runtimeProvisionResponse(provision) });
+  });
+  app.patch("/api/workspaces/:id/runtime-provisions/:provisionId", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const provision = store.getWorkspaceRuntimeProvision(c.req.param("provisionId"));
+    if (!provision || provision.workspaceId !== workspaceId) return c.json({ error: "runtime provision not found" }, 404);
+    const body = await readJsonStrict<UpdateWorkspaceRuntimeProvisionInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json({ provision: runtimeProvisionResponse(store.updateWorkspaceRuntimeProvision(provision.id, {
+        ...body,
+        createdBy: authenticatedRequestUserId(c) ?? "local",
+      })) });
+    } catch (error) {
+      return runtimeProvisionError(c, error);
+    }
+  });
+  app.delete("/api/workspaces/:id/runtime-provisions/:provisionId", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const provision = store.getWorkspaceRuntimeProvision(c.req.param("provisionId"));
+    if (!provision || provision.workspaceId !== workspaceId) return c.json({ error: "runtime provision not found" }, 404);
+    store.deleteWorkspaceRuntimeProvision(provision.id, authenticatedRequestUserId(c) ?? "local");
+    return c.json({ deleted: true, id: provision.id });
+  });
+  app.get("/api/workspaces/:id/runtime-provisions/:provisionId/states", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const provision = store.getWorkspaceRuntimeProvision(c.req.param("provisionId"));
+    if (!provision || provision.workspaceId !== workspaceId) return c.json({ error: "runtime provision not found" }, 404);
+    return c.json({ states: store.listRuntimeProvisionStates(provision.id) });
   });
   app.get("/api/workspaces/:id/prompts", (c) => {
     const workspaceId = c.req.param("id");
@@ -1066,6 +1132,36 @@ function repositoryWikiDocResponse(doc: MultiremiRepositoryWikiDoc): Record<stri
     created_at: doc.createdAt,
     updated_at: doc.updatedAt,
   };
+}
+
+function runtimeProvisionResponse(provision: import("@multiremi/contracts/types.js").MultiremiWorkspaceRuntimeProvision) {
+  return {
+    id: provision.id,
+    workspace_id: provision.workspaceId,
+    kind: provision.kind,
+    enabled: provision.enabled,
+    package: provision.package,
+    version: provision.version,
+    bin: provision.bin,
+    registry: provision.registry,
+    command: provision.redactedCommand,
+    args: provision.redactedArgs,
+    trigger_kinds: provision.triggerKinds,
+    cron_expression: provision.cronExpression,
+    timezone: provision.timezone,
+    next_run_at: provision.nextRunAt,
+    last_fired_at: provision.lastFiredAt,
+    timeout_ms: provision.timeoutMs,
+    created_by: provision.createdBy,
+    created_at: provision.createdAt,
+    updated_at: provision.updatedAt,
+  };
+}
+
+function runtimeProvisionError(c: Context, error: unknown): Response {
+  const message = error instanceof Error ? error.message : "runtime provision request failed";
+  if (/not found/i.test(message)) return c.json({ error: message }, 404);
+  return c.json({ error: message }, 400);
 }
 
 function repositoryWikiRevisionResponse(revision: MultiremiRepositoryWikiDocRevision): Record<string, unknown> {
