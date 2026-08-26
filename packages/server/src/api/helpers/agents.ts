@@ -39,8 +39,9 @@ export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
 type ClaudeModelFamily = "opus" | "sonnet" | "haiku";
 
 function claudeModelFamily(modelId: string): ClaudeModelFamily | undefined {
-  return modelId.toLowerCase().match(
-    /^(?:claude-)?(opus|sonnet|haiku)(?:\[1m\])?(?:-\d+(?:-\d+)*)?$/,
+  const normalized = modelId.toLowerCase().replace(/\[1m\]$/, "");
+  return normalized.match(
+    /^(?:claude-)?(opus|sonnet|haiku)(?:-\d+(?:-\d+)*)?$/,
   )?.[1] as ClaudeModelFamily | undefined;
 }
 

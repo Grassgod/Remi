@@ -326,6 +326,58 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     expect((await providerDefault.json()).thinking_level).toBe("high");
   });
 
+  it("recognizes versioned Claude [1m] suffixes as strict family matches", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const levels = ["low", "medium", "high", "xhigh", "max"];
+    store.registerRuntime({
+      id: "rt_claude_versioned_1m",
+      name: "claude versioned 1m",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        {
+          id: "opus[1m]",
+          label: "Opus 1M",
+          provider: "anthropic",
+          default: true,
+          thinking: runtimeThinking(levels, "high"),
+        },
+        {
+          id: "sonnet",
+          label: "Sonnet",
+          provider: "anthropic",
+          default: false,
+          thinking: runtimeThinking(levels, "medium"),
+        },
+        { id: "haiku", label: "Haiku", provider: "anthropic", default: false },
+      ],
+    });
+    saveGatewayCatalog(store, "claude", [
+      { id: "claude-opus-5[1m]", label: "Claude Opus 5 1M" },
+      { id: "claude-sonnet-5[1m]", label: "Claude Sonnet 5 1M" },
+      { id: "claude-haiku-4-5[1m]", label: "Claude Haiku 4.5 1M" },
+    ]);
+
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const models = new Map(
+      body.providers.find((entry: any) => entry.provider === "claude").models
+        .map((model: any) => [model.id, model]),
+    );
+    const opus = models.get("claude-opus-5[1m]") as any;
+    const sonnet = models.get("claude-sonnet-5[1m]") as any;
+    const haiku = models.get("claude-haiku-4-5[1m]") as any;
+    expect(opus.thinking.supported_levels.map((level: any) => level.value)).toEqual(levels);
+    expect(opus.thinking.default_level).toBe("high");
+    expect(opus.default).toBe(true);
+    // The provider fallback omits this conflicting default_level, so retaining
+    // it proves the versioned Sonnet id resolved through the family branch.
+    expect(sonnet.thinking.default_level).toBe("medium");
+    expect(sonnet.default).toBeUndefined();
+    expect(haiku.thinking).toBeUndefined();
+  });
+
   it("fails closed on family and provider effort conflicts while preserving exact Codex metadata", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
@@ -449,16 +501,21 @@ describe("Multiremi store — fleet engine and model catalog", () => {
       ],
     });
     saveGatewayCatalog(store, "claude", [
-      { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
       { id: "claude-opus-5", label: "Claude Opus 5" },
+      { id: "claude-opus-5[1m]", label: "Claude Opus 5 1M" },
       { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
     ]);
 
     const app = createMultiremiApp({ store });
     const body = await (await app.request("/api/models")).json();
     const claude = body.providers.find((entry: any) => entry.provider === "claude");
-    expect(claude.models.every((model: any) => model.default === undefined)).toBe(true);
-    expect(claude.models.every((model: any) => model.thinking !== undefined)).toBe(true);
+    const opus = claude.models.filter((model: any) => model.id.startsWith("claude-opus-5"));
+    expect(opus).toHaveLength(2);
+    expect(opus.every((model: any) => model.default === undefined)).toBe(true);
+    expect(opus.every((model: any) => model.thinking !== undefined)).toBe(true);
+    const sonnet = claude.models.find((model: any) => model.id === "claude-sonnet-5");
+    expect(sonnet.default).toBeUndefined();
+    expect(sonnet.thinking).toBeDefined();
   });
 
   it("validates an agent's model and effort together against its workspace catalog", async () => {
