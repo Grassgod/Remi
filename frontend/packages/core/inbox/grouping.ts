@@ -1,5 +1,9 @@
 import type { InboxItem } from "../types";
-import { isInboxLedgerType } from "@multiremi/contracts";
+// Deep import, not the package barrel: this is a runtime value, so the bundler
+// has to resolve the module it comes from. The barrel re-exports the ACP and
+// provider protocol with NodeNext ".js" specifiers, which webpack cannot map
+// back to ".ts" — and the browser bundle has no business pulling that in.
+import { isInboxLedgerType } from "@multiremi/contracts/inbox";
 
 export type InboxSourceFilter = "all" | "automation" | "mentions" | "assignments";
 export type InboxDateGroup = "today" | "yesterday" | "this_week" | "earlier";

@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { isInboxLedgerType } from "@multiremi/contracts";
+import { isInboxLedgerType } from "@multiremi/contracts/inbox";
 import { inboxKeys } from "./queries";
 import type { InboxItem, IssueStatus } from "../types";
 
