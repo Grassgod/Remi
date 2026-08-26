@@ -11,6 +11,31 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
+function runtimeThinking(values: string[], defaultLevel?: string) {
+  return {
+    supportedLevels: values.map((value) => ({ value, label: value.toUpperCase() })),
+    ...(defaultLevel ? { defaultLevel } : {}),
+  };
+}
+
+function saveGatewayCatalog(
+  store: MultiremiStore,
+  engine: "claude" | "codex",
+  models: Array<{ id: string; label: string }>,
+): void {
+  store.setRelayModelDiscovery("local", true);
+  const revision = store.upsertRelayConfig("local", engine, {
+    fragment: JSON.stringify({
+      env: {
+        [engine === "claude" ? "ANTHROPIC_BASE_URL" : "OPENAI_BASE_URL"]: "https://gateway.example",
+      },
+    }),
+    tokenOp: "set",
+    authToken: "test-token",
+  });
+  store.saveGatewayModels("local", engine, { sourceRevision: revision, models });
+}
+
 describe("Multiremi store — fleet engine and model catalog", () => {
   it("rejects unknown providers smuggled through an any-provider runtime", async () => {
     const store = createStore();
@@ -151,7 +176,7 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     expect(codex.models).toEqual([]);
   });
 
-  it("keeps gateway visibility while preserving matching runtime effort metadata", async () => {
+  it("preserves exact runtime effort metadata on a matching gateway model", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     store.registerRuntime({
@@ -202,24 +227,238 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     });
     store.saveGatewayModels("local", "claude", {
       sourceRevision: revision,
-      models: [
-        { id: "claude-fable-5", label: "Gateway Fable 5" },
-        { id: "gateway-only", label: "Gateway only" },
-      ],
+      models: [{ id: "claude-fable-5", label: "Gateway Fable 5" }],
     });
 
     const app = createMultiremiApp({ store });
     const body = await (await app.request("/api/models")).json();
     const claude = body.providers.find((entry: any) => entry.provider === "claude");
-    expect(claude.models.map((model: any) => model.id)).toEqual(["claude-fable-5", "gateway-only"]);
+    expect(claude.models.map((model: any) => model.id)).toEqual(["claude-fable-5"]);
     const fable = claude.models[0];
     expect(fable.label).toBe("Gateway Fable 5");
     expect(fable.default).toBe(true);
     expect(fable.thinking.default_level).toBe("high");
-    // Fleet selection semantics are unchanged: the first/default runtime model
-    // wins; the gateway overlay only preserves that selected model's metadata.
+    // This legacy fixture intentionally covers exact-id precedence only. The
+    // production namespace mismatch is exercised separately below.
     expect(fable.thinking.supported_levels.map((level: any) => level.value).sort()).toEqual(["high", "low"]);
-    expect(claude.models[1].thinking).toBeUndefined();
+  });
+
+  it("resolves mismatched Claude families and provider effort metadata", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const levels = ["low", "medium", "high", "xhigh", "max"];
+    store.registerRuntime({
+      id: "rt_claude_aliases",
+      name: "claude aliases",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        {
+          id: "opus[1m]",
+          label: "Opus 1M",
+          provider: "anthropic",
+          default: true,
+          thinking: runtimeThinking(levels, "high"),
+        },
+        {
+          id: "sonnet",
+          label: "Sonnet",
+          provider: "anthropic",
+          default: false,
+          thinking: runtimeThinking(levels, "medium"),
+        },
+        { id: "haiku", label: "Haiku", provider: "anthropic", default: false },
+      ],
+    });
+    saveGatewayCatalog(store, "claude", [
+      { id: "claude-opus-5", label: "Claude Opus 5" },
+      { id: "claude-fable-5", label: "Claude Fable 5" },
+      { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+    ]);
+
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const models = new Map(
+      body.providers.find((entry: any) => entry.provider === "claude").models
+        .map((model: any) => [model.id, model]),
+    );
+    const opus = models.get("claude-opus-5") as any;
+    const fable = models.get("claude-fable-5") as any;
+    const haiku = models.get("claude-haiku-4-5-20251001") as any;
+    expect(opus.thinking.supported_levels.map((level: any) => level.value)).toEqual(levels);
+    expect(opus.default).toBe(true);
+    expect(fable.thinking.supported_levels.map((level: any) => level.value)).toEqual(levels);
+    expect(fable.thinking.default_level).toBeUndefined();
+    expect(fable.default).toBeUndefined();
+    // A known non-thinking family is a negative match, not a provider-fallback candidate.
+    expect(haiku.thinking).toBeUndefined();
+    expect(haiku.default).toBeUndefined();
+
+    const created = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Claude mismatch effort", provider: "claude" }),
+    });
+    expect(created.status).toBe(201);
+    const agent = await created.json();
+    const valid = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-fable-5", thinking_level: "max" }),
+    });
+    expect(valid.status).toBe(200);
+    expect(store.getAgent(agent.id)).toMatchObject({ model: "claude-fable-5", thinkingLevel: "max" });
+
+    const invalid = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thinking_level: "ultra" }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(store.getAgent(agent.id)?.thinkingLevel).toBe("max");
+
+    const providerDefault = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Claude default effort", provider: "claude", thinking_level: "high" }),
+    });
+    expect(providerDefault.status).toBe(201);
+    expect((await providerDefault.json()).thinking_level).toBe("high");
+  });
+
+  it("fails closed on family and provider effort conflicts while preserving exact Codex metadata", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.registerRuntime({
+      id: "rt_effort_conflicts",
+      name: "effort conflicts",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        {
+          id: "opus[1m]",
+          label: "Opus",
+          provider: "anthropic",
+          default: true,
+          thinking: runtimeThinking(["low", "high"]),
+        },
+        {
+          id: "sonnet",
+          label: "Sonnet",
+          provider: "anthropic",
+          default: false,
+          thinking: runtimeThinking(["low", "high"]),
+        },
+        {
+          id: "sonnet[1m]",
+          label: "Sonnet 1M",
+          provider: "anthropic",
+          default: false,
+          thinking: runtimeThinking(["low", "max"]),
+        },
+      ],
+    });
+    store.registerRuntime({
+      id: "rt_codex_effort_conflicts",
+      name: "codex effort conflicts",
+      provider: "codex",
+      workspaceId: "local",
+      models: [
+        {
+          id: "gpt-5.2",
+          label: "GPT-5.2",
+          provider: "openai",
+          default: false,
+          thinking: runtimeThinking(["low", "medium", "high", "xhigh"]),
+        },
+        {
+          id: "gpt-5.6-sol",
+          label: "GPT-5.6 Sol",
+          provider: "openai",
+          default: true,
+          thinking: runtimeThinking(["low", "medium", "high", "xhigh", "max", "ultra"]),
+        },
+      ],
+    });
+    saveGatewayCatalog(store, "claude", [
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+      { id: "claude-fable-5", label: "Claude Fable 5" },
+    ]);
+    saveGatewayCatalog(store, "codex", [
+      { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+      { id: "gpt-gateway-only", label: "Gateway only" },
+    ]);
+
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const claude = body.providers.find((entry: any) => entry.provider === "claude");
+    expect(claude.models.find((model: any) => model.id === "claude-sonnet-5").thinking).toBeUndefined();
+    expect(claude.models.find((model: any) => model.id === "claude-fable-5").thinking).toBeUndefined();
+    const codex = body.providers.find((entry: any) => entry.provider === "codex");
+    expect(codex.models.find((model: any) => model.id === "gpt-gateway-only").thinking).toBeUndefined();
+    expect(
+      codex.models.find((model: any) => model.id === "gpt-5.6-sol")
+        .thinking.supported_levels.map((level: any) => level.value),
+    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+
+    const codexAgent = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Codex max regression",
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        thinking_level: "max",
+      }),
+    });
+    expect(codexAgent.status).toBe(201);
+    expect((await codexAgent.json()).thinking_level).toBe("max");
+  });
+
+  it("requires default family matches to be unique on both sides", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const levels = ["low", "high"];
+    store.registerRuntime({
+      id: "rt_default_uniqueness",
+      name: "default uniqueness",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        {
+          id: "opus[1m]",
+          label: "Opus",
+          provider: "anthropic",
+          default: true,
+          thinking: runtimeThinking(levels),
+        },
+        {
+          id: "sonnet",
+          label: "Sonnet",
+          provider: "anthropic",
+          default: true,
+          thinking: runtimeThinking(levels),
+        },
+        {
+          id: "sonnet[1m]",
+          label: "Sonnet 1M",
+          provider: "anthropic",
+          default: true,
+          thinking: runtimeThinking(levels),
+        },
+      ],
+    });
+    saveGatewayCatalog(store, "claude", [
+      { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+      { id: "claude-opus-5", label: "Claude Opus 5" },
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+    ]);
+
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const claude = body.providers.find((entry: any) => entry.provider === "claude");
+    expect(claude.models.every((model: any) => model.default === undefined)).toBe(true);
+    expect(claude.models.every((model: any) => model.thinking !== undefined)).toBe(true);
   });
 
   it("validates an agent's model and effort together against its workspace catalog", async () => {
