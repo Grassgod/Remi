@@ -75,7 +75,7 @@ describe("SCM provider adapters", () => {
     const adapter = new GitHubScmProviderAdapter();
 
     for (const entry of cases) {
-      globalThis.fetch = (async () => new Response(JSON.stringify({ message: "disabled" }), {
+      globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({ message: "disabled" }), {
         status: entry.status,
         headers: { "Content-Type": "application/json" },
       })) as typeof fetch;
@@ -92,7 +92,7 @@ describe("SCM provider adapters", () => {
 
   it("keeps a GitHub repository 404 as a hard error but classifies a missing default branch", async () => {
     const adapter = new GitHubScmProviderAdapter();
-    globalThis.fetch = (async () => new Response(JSON.stringify({ message: "Not Found" }), {
+    globalThis.fetch = (async (_input, _init) => new Response(JSON.stringify({ message: "Not Found" }), {
       status: 404,
       headers: { "Content-Type": "application/json" },
     })) as typeof fetch;
@@ -390,6 +390,8 @@ describe("SCM provider adapters", () => {
         lastStartedAt: null,
         lastCompletedAt: null,
         lastError: null,
+        consecutiveFailures: 0,
+        suspendedUntil: null,
         leaseOwner: null,
         leaseUntil: null,
         leaseToken: null,
@@ -606,6 +608,8 @@ function syncCursor(
     lastStartedAt: null,
     lastCompletedAt: null,
     lastError: null,
+    consecutiveFailures: 0,
+    suspendedUntil: null,
     leaseOwner: null,
     leaseUntil: null,
     leaseToken: null,

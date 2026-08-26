@@ -120,6 +120,10 @@ export class MemoryScmIngestionStore implements ScmIngestionStore {
       lastStartedAt: input.lastStartedAt === undefined ? current?.lastStartedAt ?? null : input.lastStartedAt,
       lastCompletedAt: input.lastCompletedAt === undefined ? current?.lastCompletedAt ?? null : input.lastCompletedAt,
       lastError: input.lastError === undefined ? current?.lastError ?? null : input.lastError,
+      consecutiveFailures: input.consecutiveFailures === undefined
+        ? current?.consecutiveFailures ?? 0
+        : input.consecutiveFailures,
+      suspendedUntil: input.suspendedUntil === undefined ? current?.suspendedUntil ?? null : input.suspendedUntil,
       leaseOwner: current?.leaseOwner ?? null,
       leaseUntil: current?.leaseUntil ?? null,
       leaseToken: current?.leaseToken ?? null,
