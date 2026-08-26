@@ -811,8 +811,15 @@ function MachineDetail({
   ];
   if (machine.mode === "local" && runtimeTotal > 0) {
     metaParts.push(
+      // Keyed by machine so selecting another machine remounts the control.
+      // MachineDetail is reused across selections, so without this the update
+      // flow's running/failed state would carry over to the next machine and
+      // its retry would fire against the newly selected runtime. Keying on the
+      // machine (not cliUpdateRuntimeId) is deliberate: the representative
+      // runtime legitimately changes mid-update when the daemon restarts, and
+      // resetting there would discard a healthy update's own progress.
       <MachineCliUpdate
-        key="cli"
+        key={`cli-${machine.id}`}
         runtimeId={machine.cliUpdateRuntimeId}
         currentVersion={machine.cliVersion}
         cliVersions={machine.cliVersions}
