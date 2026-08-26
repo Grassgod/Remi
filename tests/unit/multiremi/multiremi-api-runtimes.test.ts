@@ -247,6 +247,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       output_tokens: 5,
       cache_read_tokens: 2,
       cache_write_tokens: 0,
+      total_tokens: 0,
     });
     expect(usageBody[0].runtimeId).toBeUndefined();
     expect(usageBody[0].cacheReadTokens).toBeUndefined();
@@ -260,6 +261,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       output_tokens: 5,
       cache_read_tokens: 2,
       cache_write_tokens: 0,
+      total_tokens: 0,
       task_count: 1,
     });
     expect(byAgentBody[0].agentId).toBeUndefined();
@@ -344,6 +346,109 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     });
     expect(invalidCompatibilityPatch.status).toBe(400);
     expect(await invalidCompatibilityPatch.json()).toEqual({ error: "visibility must be 'private' or 'public'" });
+  });
+
+  // MUL-123: pre-0.2.49 daemons reported only the context-occupancy total, so
+  // historical rows carry `total_tokens` with all four splits at zero. The
+  // dashboard wire has always forwarded it; the runtime wire dropped it, which
+  // made the runtime usage page render "0 tokens" over a non-empty window.
+  it("forwards total-only token history through both runtime usage compatibility mappers", async () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_total_only", name: "Legacy runtime", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Legacy agent", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "legacy usage" });
+    const app = createMultiremiApp({ store });
+
+    const claim = await app.request("/api/daemon/runtimes/rt_total_only/tasks/claim", { method: "POST" });
+    expect((await claim.json()).task.id).toBe(task.id);
+
+    // Exactly what a pre-0.2.49 daemon posts: a total, no splits.
+    const report = await app.request(`/api/daemon/tasks/${task.id}/usage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usage: [{ provider: "claude", model: "opus", total_tokens: 78048 }] }),
+    });
+    expect(report.status).toBe(200);
+
+    const daily = await (await app.request("/api/runtimes/rt_total_only/usage")).json();
+    expect(daily).toHaveLength(1);
+    expect(daily[0]).toEqual({
+      runtime_id: "rt_total_only",
+      date: expect.any(String),
+      provider: "claude",
+      model: "opus",
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 78048,
+    });
+    expect(daily[0].totalTokens).toBeUndefined();
+
+    const byAgent = await (await app.request("/api/runtimes/rt_total_only/usage/by-agent")).json();
+    expect(byAgent).toEqual([{
+      agent_id: agent.id,
+      model: "opus",
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 78048,
+      task_count: 1,
+    }]);
+    expect(byAgent[0].totalTokens).toBeUndefined();
+
+    // The runtime endpoints must agree with the dashboard endpoints that read
+    // the very same `listUsageDaily` / `listUsageByAgent` rollups.
+    const dashboardDaily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local")).json();
+    expect(dashboardDaily[0].total_tokens).toBe(daily[0].total_tokens);
+    const dashboardByAgent = await (await app.request("/api/dashboard/usage/by-agent?workspace_id=local")).json();
+    expect(dashboardByAgent[0].total_tokens).toBe(byAgent[0].total_tokens);
+  });
+
+  it("forwards total_tokens alongside splits when a modern daemon reports both", async () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_split", name: "Modern runtime", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Modern agent", provider: "claude", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "modern usage" });
+    const app = createMultiremiApp({ store });
+
+    const claim = await app.request("/api/daemon/runtimes/rt_split/tasks/claim", { method: "POST" });
+    expect((await claim.json()).task.id).toBe(task.id);
+    const report = await app.request(`/api/daemon/tasks/${task.id}/usage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        usage: [{
+          provider: "claude",
+          model: "opus",
+          input_tokens: 1200,
+          output_tokens: 340,
+          cache_read_tokens: 5600,
+          cache_write_tokens: 780,
+          total_tokens: 7920,
+        }],
+      }),
+    });
+    expect(report.status).toBe(200);
+
+    const daily = await (await app.request("/api/runtimes/rt_split/usage")).json();
+    expect(daily[0]).toMatchObject({
+      input_tokens: 1200,
+      output_tokens: 340,
+      cache_read_tokens: 5600,
+      cache_write_tokens: 780,
+      total_tokens: 7920,
+    });
+    const byAgent = await (await app.request("/api/runtimes/rt_split/usage/by-agent")).json();
+    expect(byAgent[0]).toMatchObject({
+      input_tokens: 1200,
+      output_tokens: 340,
+      cache_read_tokens: 5600,
+      cache_write_tokens: 780,
+      total_tokens: 7920,
+      task_count: 1,
+    });
   });
 
   it("scopes runtime console APIs by workspace and owner permissions", async () => {

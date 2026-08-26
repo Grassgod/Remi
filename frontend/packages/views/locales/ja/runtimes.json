@@ -406,7 +406,8 @@
     "kpi_cache_label": "キャッシュによる節約 · {{days}} 日",
     "kpi_cache_hint": "ヒット率 {{pct}}% · 読み取り {{reads}}",
     "kpi_tokens_label": "トークン · {{days}} 日",
-    "kpi_tokens_hint": "入力 {{input}} · 出力 {{output}}",
+    "kpi_tokens_hint": "入力 {{input}} · 出力 {{output}} · キャッシュ {{cache}}",
+    "kpi_tokens_hint_total_only": "入力 {{input}} · 出力 {{output}} · キャッシュ {{cache}} · 総量のみ {{totalOnly}}",
     "when_title": "このランタイムでコストが発生した時期",
     "when_tab_daily": "日別",
     "when_tab_weekly": "週別",
@@ -419,6 +420,7 @@
     "legend_output": "出力",
     "legend_cache_read": "キャッシュ読み取り",
     "legend_cache_write": "キャッシュ書き込み",
+    "legend_total_only": "総量のみ",
     "empty_no_usage": "この期間には使用量がありません。",
     "empty_pricing_missing": "トークンは記録されましたが、次のモデルの価格情報がありません:",
     "empty_pricing_hint": "コスト合計に含めるには、カスタム単価を設定してください。",
@@ -453,9 +455,11 @@
     "table_cache_w": "キャッシュ W",
     "no_data": "まだ使用量データがありません",
     "kpi_cost_unpriced": "使用モデルの価格情報がないため、費用を算出できません",
+    "kpi_cost_total_only": "トークン総量のみが記録されているため、費用を算出できません",
     "error_title": "使用量データを利用できません",
     "error_body": "使用量データの読み込みに失敗しました。使用量が 0 という意味ではありません。",
     "retry": "再試行",
-    "kpi_cache_unpriced": "使用モデルの価格情報がないため、節約額を算出できません"
+    "kpi_cache_unpriced": "使用モデルの価格情報がないため、節約額を算出できません",
+    "kpi_cache_total_only": "トークン総量のみが記録されているため、節約額を算出できません"
   }
 }

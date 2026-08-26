@@ -4,6 +4,7 @@ import type { AgentRuntime, RuntimeUsage } from "@multiremi/core/types";
 
 import {
   addDaysIso,
+  aggregateByDate,
   aggregateByWeek,
   aggregateCostByModel,
   collectUnmappedModels,
@@ -845,5 +846,100 @@ describe("computeCostInWindow", () => {
   it("returns 0 for an empty row set", () => {
     vi.setSystemTime(new Date("2026-05-20T12:00:00Z"));
     expect(computeCostInWindow([], 7, "UTC")).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MUL-123 — the runtime usage page's chart/KPI aggregation over a window made
+// entirely of pre-0.2.49 rows. These rows are exactly what
+// `runtimeUsageDailyCompatibilityResponse` emits now that it forwards
+// `total_tokens`; before that fix the field never arrived and `totalOnly`
+// stayed pinned at 0 next to a chart stacking millions of tokens.
+// ---------------------------------------------------------------------------
+describe("total-only rows from the runtime usage wire", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const totalOnlyRow = (date: string, total: number): RuntimeUsage => ({
+    runtime_id: "rt_total_only",
+    date,
+    provider: "claude",
+    model: "claude-sonnet-5",
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    total_tokens: total,
+  });
+
+  it("feeds totalOnly into the daily token chart instead of dropping the volume", () => {
+    const { dailyTokens, modelDist, dailyCost } = aggregateByDate([
+      totalOnlyRow("2026-05-18", 26_179_959),
+      totalOnlyRow("2026-05-19", 1_000_000),
+    ]);
+    expect(dailyTokens).toHaveLength(2);
+    expect(dailyTokens[0]).toMatchObject({
+      date: "2026-05-18",
+      input: 0,
+      output: 0,
+      totalOnly: 26_179_959,
+    });
+    expect(dailyTokens[1]?.totalOnly).toBe(1_000_000);
+    // Model distribution counts them as real volume...
+    expect(modelDist[0]).toMatchObject({
+      model: "claude-sonnet-5",
+      tokens: 27_179_959,
+    });
+    // ...but they are never priced: no input/output dimension to bill.
+    expect(modelDist[0]?.cost).toBe(0);
+    expect(dailyCost.every((d) => d.cost === 0)).toBe(true);
+  });
+
+  it("feeds totalOnly into the weekly token chart", () => {
+    vi.setSystemTime(new Date("2026-05-24T12:00:00Z"));
+    const { weeklyTokens } = aggregateByWeek(
+      [totalOnlyRow("2026-05-19", 26_179_959)],
+      "UTC",
+      1,
+    );
+    expect(weeklyTokens[0]).toMatchObject({
+      weekStart: "2026-05-18",
+      input: 0,
+      output: 0,
+      totalOnly: 26_179_959,
+    });
+  });
+
+  it("still reports 0 total-only tokens when the server omits total_tokens", () => {
+    // Older servers do not emit the field; absent must read as "not told",
+    // never as a fabricated volume.
+    const { total_tokens: _omitted, ...legacyRow } = totalOnlyRow(
+      "2026-05-19",
+      26_179_959,
+    );
+    const { dailyTokens } = aggregateByDate([legacyRow as RuntimeUsage]);
+    expect(dailyTokens[0]?.totalOnly).toBe(0);
+  });
+
+  it("ignores total_tokens on rows that carry a real split", () => {
+    const mixed: RuntimeUsage = {
+      ...totalOnlyRow("2026-05-19", 7_920),
+      input_tokens: 1_200,
+      output_tokens: 340,
+      cache_read_tokens: 5_600,
+      cache_write_tokens: 780,
+    };
+    const { dailyTokens } = aggregateByDate([mixed]);
+    expect(dailyTokens[0]).toMatchObject({
+      input: 1_200,
+      output: 340,
+      cacheRead: 5_600,
+      cacheWrite: 780,
+      totalOnly: 0,
+    });
   });
 });

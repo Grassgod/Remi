@@ -51,6 +51,7 @@ const VALID_DAILY_ROW = {
   output_tokens: 5,
   cache_read_tokens: 0,
   cache_write_tokens: 0,
+  total_tokens: 105,
   task_count: 1,
 };
 

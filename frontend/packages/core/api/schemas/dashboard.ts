@@ -31,6 +31,7 @@ const DashboardUsageDailySchema = z.object({
   output_tokens: z.number(),
   cache_read_tokens: z.number(),
   cache_write_tokens: z.number(),
+  total_tokens: z.number(),
   task_count: z.number(),
 }).loose();
 
@@ -43,6 +44,7 @@ const DashboardUsageByAgentSchema = z.object({
   output_tokens: z.number(),
   cache_read_tokens: z.number(),
   cache_write_tokens: z.number(),
+  total_tokens: z.number(),
   task_count: z.number(),
 }).loose();
 
