@@ -25,7 +25,11 @@ describe("Multiremi API — authentication and token scoping", () => {
       ["POST", "/api/workspaces", "workspace_lifecycle"],
       ["DELETE", "/api/workspaces/local", "workspace_lifecycle"],
       ["GET", "/api/cloud-billing/balance", "billing"],
-      ["GET", "/api/multiremi/platform/status", "platform_maintenance"],
+      // Platform status is task-readable, but only via GET, and only that exact
+      // path — everything else under /api/multiremi/platform stays maintenance.
+      ["POST", "/api/multiremi/platform/status", "platform_maintenance"],
+      ["PATCH", "/api/multiremi/platform/settings", "platform_maintenance"],
+      ["GET", "/api/multiremi/platform/status/history", "platform_maintenance"],
       ["POST", "/api/cloud-runtime/nodes/start", "platform_maintenance"],
       ["POST", "/api/runtimes/rt_1/update", "platform_maintenance"],
       ["PUT", "/api/workspaces/local/ssh-mesh", "platform_maintenance"],
@@ -54,10 +58,64 @@ describe("Multiremi API — authentication and token scoping", () => {
       ["POST", "/api/projects/prj_1/resources"],
       ["POST", "/api/workspaces/local/repos/repo_1/wiki/build"],
       ["POST", "/api/daemon/scm/git-credentials"],
+      // Operational agents inspect platform status and drive the operation
+      // lifecycle — see taskAllowedPlatformRequest in auth-guards.ts.
+      ["GET", "/api/multiremi/platform/status"],
+      ["GET", "/api/multiremi/platform/operations"],
+      ["POST", "/api/multiremi/platform/operations"],
+      ["POST", "/api/multiremi/platform/operations/op_1/cancel"],
     ] as const) {
       expect(taskTokenHardDenyCategory(new Request(`http://localhost${path}`, { method })), `${method} ${path}`)
         .toBeNull();
     }
+  });
+
+  // 5e8ee09f opened platform status + the operation lifecycle to task tokens so
+  // operational agents can run a release. The hard-deny table above is a pure
+  // function; this drives the real app so a future narrowing of the whitelist —
+  // or an unrelated guard rejecting task identity — fails here too.
+  it("lets a task token read platform status and drive platform operations", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Release agent", provider: "codex", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Ship a release", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "release" });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const auth = { Authorization: `Bearer ${taskToken.token}` };
+
+    const status = await app.request("/api/multiremi/platform/status", { headers: auth });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ canManage: true });
+
+    expect((await app.request("/api/multiremi/platform/operations", { headers: auth })).status).toBe(200);
+
+    const created = await app.request("/api/multiremi/platform/operations", {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "check_updates" }),
+    });
+    expect(created.status).toBe(202);
+    const operationId = (await created.json()).operation.id;
+    const cancelled = await app.request(`/api/multiremi/platform/operations/${operationId}/cancel`, {
+      method: "POST",
+      headers: auth,
+    });
+    expect(cancelled.status).toBe(200);
+    expect((await cancelled.json()).operation.status).toBe("cancelled");
+
+    // Updater settings stay maintenance-only: the whitelist is not a blanket
+    // pass for /api/multiremi/platform.
+    const settings = await app.request("/api/multiremi/platform/settings", {
+      method: "PATCH",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ autoUpdateStable: true }),
+    });
+    expect(settings.status).toBe(403);
+    expect(await settings.json()).toEqual({
+      error: "forbidden for task token",
+      code: "task_token_hard_denied",
+    });
   });
 
   it("scopes task-token Repository Wiki CRUD to its workspace rather than its current project", async () => {
