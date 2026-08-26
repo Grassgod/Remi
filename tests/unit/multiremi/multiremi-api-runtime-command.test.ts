@@ -140,7 +140,13 @@ describe("Multiremi API - runtime commands", () => {
       method: "POST", headers: headers(memberToken.token), body,
     })).status).toBe(403);
     expect((await app.request("/api/workspaces/local/runtime-provisions", {
+      method: "GET", headers: headers(memberToken.token),
+    })).status).toBe(200);
+    expect((await app.request("/api/workspaces/local/runtime-provisions", {
       method: "POST", headers: headers(taskToken.token), body,
+    })).status).toBe(403);
+    expect((await app.request("/api/workspaces/local/runtime-provisions", {
+      method: "GET", headers: headers(taskToken.token),
     })).status).toBe(403);
 
     const created = await app.request("/api/workspaces/local/runtime-provisions", {
@@ -151,10 +157,31 @@ describe("Multiremi API - runtime commands", () => {
     expect(response.provision).toMatchObject({
       workspace_id: "local",
       kind: "command",
+      version_check: false,
       command: "printf token=[REDACTED]",
       created_by: "provision-admin",
     });
     expect(JSON.stringify(response)).not.toContain("placeholder-value");
+    const runtime = store.registerRuntime({
+      id: "rt_provision_member_view",
+      name: "Provision member view",
+      provider: "codex",
+      workspaceId: "local",
+    });
+    const statesResponse = await app.request(
+      `/api/workspaces/local/runtime-provisions/${response.provision.id}/states`,
+      { headers: headers(memberToken.token) },
+    );
+    expect(statesResponse.status).toBe(200);
+    const statesBody = await statesResponse.json();
+    expect(statesBody.states).toEqual([
+      expect.objectContaining({
+        provision_id: response.provision.id,
+        runtime_id: runtime.id,
+        status: "pending",
+      }),
+    ]);
+    expect(statesBody.states[0]).not.toHaveProperty("runtimeId");
     const audit = db!.query("SELECT action, snapshot, actor_id FROM multiremi_runtime_provision_audit WHERE provision_id = ?")
       .get(response.provision.id) as { action: string; snapshot: string; actor_id: string };
     expect(audit).toMatchObject({ action: "create", actor_id: "provision-admin" });

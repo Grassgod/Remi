@@ -120,7 +120,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/workspaces/:id/runtime-provisions", (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     return c.json({ provisions: store.listWorkspaceRuntimeProvisions(workspaceId).map(runtimeProvisionResponse) });
   });
@@ -142,7 +142,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/workspaces/:id/runtime-provisions/:provisionId", (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const provision = store.getWorkspaceRuntimeProvision(c.req.param("provisionId"));
     if (!provision || provision.workspaceId !== workspaceId) return c.json({ error: "runtime provision not found" }, 404);
@@ -176,11 +176,11 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/workspaces/:id/runtime-provisions/:provisionId/states", (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const provision = store.getWorkspaceRuntimeProvision(c.req.param("provisionId"));
     if (!provision || provision.workspaceId !== workspaceId) return c.json({ error: "runtime provision not found" }, 404);
-    return c.json({ states: store.listRuntimeProvisionStates(provision.id) });
+    return c.json({ states: store.listRuntimeProvisionStates(provision.id).map(runtimeProvisionStateResponse) });
   });
   app.get("/api/workspaces/:id/prompts", (c) => {
     const workspaceId = c.req.param("id");
@@ -1142,6 +1142,7 @@ function runtimeProvisionResponse(provision: import("@multiremi/contracts/types.
     enabled: provision.enabled,
     package: provision.package,
     version: provision.version,
+    version_check: provision.versionCheck,
     bin: provision.bin,
     registry: provision.registry,
     command: provision.redactedCommand,
@@ -1155,6 +1156,20 @@ function runtimeProvisionResponse(provision: import("@multiremi/contracts/types.
     created_by: provision.createdBy,
     created_at: provision.createdAt,
     updated_at: provision.updatedAt,
+  };
+}
+
+function runtimeProvisionStateResponse(state: import("@multiremi/contracts/types.js").MultiremiRuntimeProvisionState) {
+  return {
+    provision_id: state.provisionId,
+    runtime_id: state.runtimeId,
+    status: state.status,
+    observed_version: state.observedVersion,
+    last_command_request_id: state.lastCommandRequestId,
+    last_checked_at: state.lastCheckedAt,
+    last_error: state.lastError,
+    created_at: state.createdAt,
+    updated_at: state.updatedAt,
   };
 }
 

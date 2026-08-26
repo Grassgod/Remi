@@ -50,13 +50,13 @@ export class RuntimeProvisionsRepo {
     const provision = this.ctx.db.transaction(() => {
       this.ctx.db.run(
         `INSERT INTO multiremi_workspace_runtime_provisions (
-          id, workspace_id, kind, enabled, package, version, bin, registry,
+          id, workspace_id, kind, enabled, package, version, version_check, bin, registry,
           command, args, redacted_command, redacted_args, trigger_kinds,
           cron_expression, timezone, next_run_at, timeout_ms, created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id, workspaceId, values.kind, values.enabled ? 1 : 0, values.package, values.version,
-          values.bin, values.registry, values.command, toJson(values.args), values.redactedCommand,
+          values.versionCheck ? 1 : 0, values.bin, values.registry, values.command, toJson(values.args), values.redactedCommand,
           toJson(values.redactedArgs), toJson(values.triggerKinds), values.cronExpression,
           values.timezone, nextRunAt, values.timeoutMs, input.createdBy ?? input.created_by ?? null, now, now,
         ],
@@ -77,6 +77,7 @@ export class RuntimeProvisionsRepo {
       enabled: input.enabled ?? current.enabled,
       package: input.package !== undefined ? input.package : current.package,
       version: input.version !== undefined ? input.version : current.version,
+      versionCheck: input.versionCheck ?? input.version_check ?? current.versionCheck,
       bin: input.bin !== undefined ? input.bin : current.bin,
       registry: input.registry !== undefined ? input.registry : current.registry,
       command: input.command !== undefined ? input.command : current.command,
@@ -97,12 +98,13 @@ export class RuntimeProvisionsRepo {
     const provision = this.ctx.db.transaction(() => {
       this.ctx.db.run(
         `UPDATE multiremi_workspace_runtime_provisions
-         SET kind = ?, enabled = ?, package = ?, version = ?, bin = ?, registry = ?, command = ?, args = ?,
+         SET kind = ?, enabled = ?, package = ?, version = ?, version_check = ?, bin = ?, registry = ?, command = ?, args = ?,
              redacted_command = ?, redacted_args = ?, trigger_kinds = ?, cron_expression = ?, timezone = ?,
              next_run_at = ?, timeout_ms = ?, updated_at = ?
          WHERE id = ?`,
         [
-          values.kind, values.enabled ? 1 : 0, values.package, values.version, values.bin, values.registry,
+          values.kind, values.enabled ? 1 : 0, values.package, values.version, values.versionCheck ? 1 : 0,
+          values.bin, values.registry,
           values.command, toJson(values.args), values.redactedCommand, toJson(values.redactedArgs),
           toJson(values.triggerKinds), values.cronExpression, values.timezone, nextRunAt, values.timeoutMs, now, id,
         ],
@@ -211,7 +213,13 @@ export class RuntimeProvisionsRepo {
         error = null;
       }
     } else if (request.status === "completed") {
-      error = `command exited with code ${request.exitCode ?? "unknown"}`;
+      if (provision.kind === "npm-global" && request.stdout?.includes("provision:version-check-failed")) {
+        error = "npm-global version check failed";
+      } else if (provision.kind === "npm-global" && request.stdout?.includes("provision:verify-failed")) {
+        error = "npm-global binary verification failed";
+      } else {
+        error = `command exited with code ${request.exitCode ?? "unknown"}`;
+      }
     }
     this.upsertState(provision.id, request.runtimeId, status, {
       observedVersion,
@@ -222,6 +230,16 @@ export class RuntimeProvisionsRepo {
   }
 
   private enqueueProvisionForRuntime(provision: MultiremiWorkspaceRuntimeProvision, runtimeId: string): void {
+    const previousState = this.listStates(provision.id).find((entry) => entry.runtimeId === runtimeId);
+    if (
+      provision.kind === "npm-global" &&
+      previousState?.status === "failed" &&
+      previousState.lastError === "npm-global version check failed" &&
+      previousState.lastCheckedAt &&
+      provision.updatedAt < previousState.lastCheckedAt
+    ) {
+      return;
+    }
     this.upsertState(provision.id, runtimeId, "pending", { requestId: null, checked: false, error: null });
     const runtime = this.ctx.runtimes().getRuntime(runtimeId);
     if (!runtime || runtime.status !== "online") return;
@@ -288,6 +306,7 @@ export class RuntimeProvisionsRepo {
       enabled: provision.enabled,
       package: provision.package,
       version: provision.version,
+      version_check: provision.versionCheck,
       bin: provision.bin,
       registry: provision.registry,
       command: provision.redactedCommand,
@@ -312,21 +331,36 @@ export function buildNpmGlobalProvisionCommand(provision: MultiremiWorkspaceRunt
   }
   const registry = provision.registry ?? DEFAULT_NPM_REGISTRY;
   const packageSpec = `${provision.package}@${provision.version}`;
-  const compareVersion = provision.version === "latest"
-    ? "echo \"provision:already:$observed\"; exit 0"
-    : `case "$observed" in *${shellQuote(provision.version)}*) echo "provision:already:$observed"; exit 0 ;; esac`;
+  const compareVersion = !provision.versionCheck
+    ? "echo \"provision:already:${observed:-unknown}\"; exit 0"
+    : provision.version === "latest"
+      ? "[ -n \"$observed\" ] && { echo \"provision:already:$observed\"; exit 0; }"
+      : `[ -n "$observed" ] && case "$observed" in *${shellQuote(provision.version)}*) echo "provision:already:$observed"; exit 0 ;; esac`;
+  const readObservedVersion = provision.versionCheck
+    ? "observed=\"$(\"$BIN\" --version 2>/dev/null || true)\""
+    : "observed=\"$(\"$BIN\" --version 2>/dev/null || true)\"; [ -n \"$observed\" ] || observed=unknown";
+  const verifyVersion = provision.versionCheck
+    ? [
+        "observed=\"$(\"$BIN\" --version 2>/dev/null || true)\"",
+        "[ -n \"$observed\" ] || { echo \"provision:version-check-failed\"; exit 1; }",
+        "echo \"provision:installed:$observed\"",
+      ]
+    : [
+        "observed=\"$(\"$BIN\" --version 2>/dev/null || true)\"; [ -n \"$observed\" ] || observed=unknown",
+        "echo \"provision:installed:$observed\"",
+      ];
   return [
     "set -e",
     `BIN=${shellQuote(provision.bin)}`,
     `PKG=${shellQuote(packageSpec)}`,
     `REGISTRY=${shellQuote(registry)}`,
     "if command -v \"$BIN\" >/dev/null 2>&1; then",
-    "  observed=\"$(\"$BIN\" --version 2>/dev/null || echo unknown)\"",
+    `  ${readObservedVersion}`,
     `  ${compareVersion}`,
     "fi",
     "npm install -g \"$PKG\" --registry=\"$REGISTRY\"",
     "command -v \"$BIN\" >/dev/null 2>&1 || { echo \"provision:verify-failed\"; exit 1; }",
-    "echo \"provision:installed:$(\"$BIN\" --version 2>/dev/null || echo unknown)\"",
+    ...verifyVersion,
   ].join("\n");
 }
 
@@ -343,6 +377,8 @@ function normalizeProvisionInput(input: CreateWorkspaceRuntimeProvisionInput) {
   if (kind === "npm-global") {
     const packageName = requiredString(input.package, "package");
     const version = requiredString(input.version, "version");
+    const versionCheck = input.versionCheck ?? input.version_check ?? true;
+    if (typeof versionCheck !== "boolean") throw new Error("version_check must be a boolean");
     const bin = requiredString(input.bin, "bin");
     if (!/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(packageName)) throw new Error("invalid npm package name");
     if (!/^[A-Za-z0-9._+-]+$/.test(version)) throw new Error("invalid npm package version");
@@ -351,7 +387,7 @@ function normalizeProvisionInput(input: CreateWorkspaceRuntimeProvisionInput) {
     assertSafeRegistry(registry);
     const timeoutMs = input.timeoutMs ?? input.timeout_ms ?? MAX_NPM_GLOBAL_PROVISION_TIMEOUT_MS;
     return {
-      kind, enabled, package: packageName, version, bin, registry, command: null, args: [],
+      kind, enabled, package: packageName, version, versionCheck, bin, registry, command: null, args: [],
       redactedCommand: null, redactedArgs: [], triggerKinds, cronExpression, timezone,
       timeoutMs: normalizeRuntimeCommandTimeout(timeoutMs, MAX_NPM_GLOBAL_PROVISION_TIMEOUT_MS),
     };
@@ -364,7 +400,7 @@ function normalizeProvisionInput(input: CreateWorkspaceRuntimeProvisionInput) {
   }
   const timeoutMs = normalizeRuntimeCommandTimeout(input.timeoutMs ?? input.timeout_ms, MAX_RUNTIME_COMMAND_TIMEOUT_MS);
   return {
-    kind, enabled, package: null, version: null, bin: null, registry: null, command, args,
+    kind, enabled, package: null, version: null, versionCheck: false, bin: null, registry: null, command, args,
     redactedCommand: redactRuntimeCommandText(command), redactedArgs: redactRuntimeCommandArgs(args),
     triggerKinds, cronExpression, timezone, timeoutMs,
   };
@@ -422,6 +458,7 @@ function toProvision(row: Row): MultiremiWorkspaceRuntimeProvision {
     enabled: Boolean(row.enabled),
     package: nullableString(row.package),
     version: nullableString(row.version),
+    versionCheck: Boolean(row.version_check),
     bin: nullableString(row.bin),
     registry: nullableString(row.registry),
     command: nullableString(row.command),

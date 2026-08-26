@@ -658,9 +658,9 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   );
   db.run(
     `INSERT INTO multiremi_workspace_runtime_provisions (
-      id, workspace_id, kind, enabled, command, args, redacted_command, redacted_args,
+      id, workspace_id, kind, enabled, version_check, command, args, redacted_command, redacted_args,
       trigger_kinds, timezone, timeout_ms, created_by, created_at, updated_at
-    ) VALUES (?, ?, 'command', 0, ?, '[]', ?, '[]', '[]', 'UTC', 1000, ?, ?, ?)`,
+    ) VALUES (?, ?, 'command', 0, 0, ?, '[]', ?, '[]', '[]', 'UTC', 1000, ?, ?, ?)`,
     [
       runtimeProvisionId,
       workspaceId,

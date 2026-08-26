@@ -125,6 +125,35 @@ describe("native CLI resource contracts", () => {
     expect(body).toEqual({ name: "Explicit", description: "file description" });
   });
 
+  it("passes the explicit Runtime provision version-check opt-out", async () => {
+    useCliEnv();
+    const spec = specById("workspace.runtime-provision.create");
+    let body: unknown;
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") {
+        return Response.json({ id: "ws_1", name: "Workspace" });
+      }
+      if (path === "/api/workspaces/ws_1/runtime-provisions" && request.method === "POST") {
+        body = await request.json();
+        return Response.json({ provision: { id: "prov_1", ...(body as object) } }, { status: 201 });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+
+    await execute(spec, [
+      "ws_1",
+      "--kind", "npm-global",
+      "--package", "example-tool",
+      "--version", "latest",
+      "--bin", "example-tool",
+      "--no-version-check",
+      "--output", "json",
+    ]);
+
+    expect(body).toMatchObject({ version_check: false });
+  });
+
   it("updates workspace prompts and issue archive settings through explicit commands", async () => {
     useCliEnv();
     const bodies = new Map<string, unknown>();

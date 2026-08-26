@@ -764,6 +764,7 @@ export interface MultiremiWorkspaceRuntimeProvision {
   enabled: boolean;
   package: string | null;
   version: string | null;
+  versionCheck: boolean;
   bin: string | null;
   registry: string | null;
   command: string | null;
@@ -798,6 +799,8 @@ export interface CreateWorkspaceRuntimeProvisionInput {
   enabled?: boolean;
   package?: string | null;
   version?: string | null;
+  versionCheck?: boolean;
+  version_check?: boolean;
   bin?: string | null;
   registry?: string | null;
   command?: string | null;

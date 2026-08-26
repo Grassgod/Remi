@@ -80,7 +80,7 @@ import {
   toCronExpression,
   type TriggerConfig,
   type TriggerFrequency,
-} from "./trigger-config";
+} from "../../common/trigger-config";
 import { WebhookEventFilterSection } from "./webhook-event-filter-section";
 import { useT } from "../../i18n";
 import { formatSchedulePartialFailureToast } from "./autopilot-dialog-toast";

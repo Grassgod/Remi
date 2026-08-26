@@ -48,7 +48,8 @@
     "actions_aria": "机器操作",
     "tabs": {
       "runtimes": "运行时",
-      "ssh_mesh": "SSH 互联"
+      "ssh_mesh": "SSH 互联",
+      "provisions": "预装与任务"
     },
     "retire": {
       "action": "停用并移除",
@@ -457,5 +458,80 @@
     "error_body": "用量数据加载失败，这不代表用量为 0。",
     "retry": "重试",
     "kpi_cache_unpriced": "所用模型缺少定价，无法计算节省金额"
+  },
+  "provisions": {
+    "title": "运行时声明",
+    "subtitle": "工作区声明及其在每个运行时上的最新状态。",
+    "add": "添加声明",
+    "filter_label": "声明类型",
+    "filters": { "all": "全部" },
+    "kinds": { "npm_global": "npm 全局包", "command": "命令", "unknown": "未知" },
+    "load_failed": "无法加载运行时声明",
+    "retry": "重试",
+    "empty": "还没有声明",
+    "empty_hint": "工作区的运行时声明会显示在这里。",
+    "filter_empty": "没有声明符合当前筛选。",
+    "enabled_label": "已启用",
+    "enabled": "已启用",
+    "disabled": "已停用",
+    "edit": "编辑声明",
+    "cancel": "取消",
+    "save": "保存",
+    "not_available": "不可用",
+    "summary": "{{converged}} 个已收敛 · {{attention}} 个需处理 · 共 {{total}} 个",
+    "triggers": {
+      "on_register": "运行时连接时",
+      "on_change": "声明变更时",
+      "cron": "定时"
+    },
+    "status": {
+      "pending": "待处理",
+      "converged": "已收敛",
+      "drifted": "已漂移",
+      "failed": "失败",
+      "unknown": "未知"
+    },
+    "matrix": {
+      "select": "选择一条声明查看各运行时状态。",
+      "title": "运行时状态",
+      "load_failed": "无法加载运行时状态。",
+      "empty": "还没有记录运行时状态。",
+      "error_details": "查看失败详情"
+    },
+    "form": {
+      "create_title": "添加运行时声明",
+      "edit_title": "编辑运行时声明",
+      "description": "将一条工作区声明应用到所属运行时。",
+      "kind": "类型",
+      "package": "包名",
+      "version": "版本",
+      "bin": "命令名",
+      "registry": "Registry",
+      "version_check": "必须通过 --version 检查",
+      "current_command": "当前命令（已脱敏）",
+      "replacement_command": "替换命令",
+      "command": "命令",
+      "leave_unchanged": "留空则保留当前命令",
+      "args": "参数",
+      "args_placeholder": "每行一个参数",
+      "triggers": "触发方式",
+      "timeout": "超时（毫秒）",
+      "timeout_invalid": "请输入大于 0 的毫秒数。",
+      "npm_required": "包名、版本和命令名不能为空。",
+      "command_required": "命令不能为空。"
+    },
+    "delete": {
+      "action": "删除声明",
+      "title": "删除这条声明？",
+      "description": "工作区将不再管理 {{target}}。",
+      "confirm": "删除声明"
+    },
+    "toast": {
+      "created": "已创建声明",
+      "updated": "已更新声明",
+      "deleted": "已删除声明",
+      "save_failed": "保存声明失败",
+      "delete_failed": "删除声明失败"
+    }
   }
 }

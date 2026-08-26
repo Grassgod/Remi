@@ -49,7 +49,7 @@ function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
-const statusConfig: Record<
+export const statusConfig: Record<
   RuntimeUpdateStatus,
   { icon: typeof Loader2; color: string }
 > = {

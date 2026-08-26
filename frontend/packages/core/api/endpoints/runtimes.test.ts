@@ -278,6 +278,54 @@ describe("RuntimesEndpoints daemon retirement", () => {
   });
 });
 
+describe("RuntimesEndpoints Runtime provisions", () => {
+  it("parses provision declarations and defaults version checks on older responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      provisions: [{
+        id: "prov-1",
+        workspace_id: "ws-1",
+        kind: "npm-global",
+        enabled: true,
+        package: "example-tool",
+        version: "latest",
+        bin: "example-tool",
+        command: null,
+      }],
+    })));
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.listRuntimeProvisions("ws-1")).resolves.toEqual([
+      expect.objectContaining({ id: "prov-1", version_check: true, args: [], trigger_kinds: [] }),
+    ]);
+  });
+
+  it.each([
+    null,
+    { provisions: null },
+    { provisions: [{ id: 42 }] },
+    { provisions: [{ id: "prov-1", workspace_id: "other", kind: "future", enabled: true }] },
+  ])("degrades malformed or cross-workspace provision lists to an empty list", async (body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.listRuntimeProvisions("ws-1")).resolves.toEqual([]);
+  });
+
+  it("keeps unknown state values renderable while filtering cross-provision rows", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      states: [
+        { provision_id: "prov-1", runtime_id: "rt-1", status: "future-state" },
+        { provision_id: "prov-other", runtime_id: "rt-2", status: "failed" },
+      ],
+    })));
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.listRuntimeProvisionStates("ws-1", "prov-1")).resolves.toEqual([
+      expect.objectContaining({ runtime_id: "rt-1", status: "future-state" }),
+    ]);
+  });
+});
+
 describe("RuntimesEndpoints SSH mesh", () => {
   const overview = {
     workspace_id: "ws-1",

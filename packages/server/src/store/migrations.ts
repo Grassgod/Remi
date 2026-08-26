@@ -512,6 +512,7 @@ export function runMigrations(db: SqlDatabase): void {
       enabled INTEGER NOT NULL DEFAULT 1,
       package TEXT,
       version TEXT,
+      version_check INTEGER NOT NULL DEFAULT 1,
       bin TEXT,
       registry TEXT,
       command TEXT,
@@ -2050,6 +2051,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_users", "external_id TEXT");
   addColumnIfMissing(db, "multiremi_workspace_members", "user_id TEXT");
   addColumnIfMissing(db, "multiremi_runtime_command_requests", "provision_id TEXT");
+  addColumnIfMissing(db, "multiremi_workspace_runtime_provisions", "version_check INTEGER NOT NULL DEFAULT 1");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_users_external_id ON multiremi_users(external_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
   backfillMemberUserIds(db);

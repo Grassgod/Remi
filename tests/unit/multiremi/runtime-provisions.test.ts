@@ -48,6 +48,152 @@ describe("workspace Runtime provisions", () => {
     expect(existsSync(join(dir, "npm-called"))).toBeFalse();
   });
 
+  it("accepts a healthy latest binary without reinstalling it", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const provision = store.createWorkspaceRuntimeProvision("local", {
+      kind: "npm-global",
+      package: "example-tool",
+      version: "latest",
+      bin: "example-tool",
+      enabled: false,
+      triggerKinds: [],
+    });
+    const dir = makeTempDir();
+    executable(join(dir, "example-tool"), "#!/bin/sh\necho 9.9.9\n");
+    executable(join(dir, "npm"), `#!/bin/sh\ntouch ${shellQuote(join(dir, "npm-called"))}\n`);
+
+    const result = await executeRuntimeCommand({
+      command: `export PATH=${shellQuote(`${dir}:/usr/bin:/bin`)}\n${buildNpmGlobalProvisionCommand(provision)}`,
+      timeoutMs: 2_000,
+    });
+
+    expect(result).toMatchObject({ status: "completed", exitCode: 0 });
+    expect(result.stdout).toContain("provision:already:9.9.9");
+    expect(existsSync(join(dir, "npm-called"))).toBeFalse();
+  });
+
+  it("repairs a latest binary whose version check fails before declaring convergence", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_repair_latest", name: "Repair latest", provider: "codex", workspaceId: "local" });
+    const provision = store.createWorkspaceRuntimeProvision("local", {
+      kind: "npm-global",
+      package: "example-tool",
+      version: "latest",
+      bin: "example-tool",
+      enabled: false,
+      triggerKinds: [],
+    });
+    store.updateWorkspaceRuntimeProvision(provision.id, { enabled: true });
+    store.enqueueWorkspaceRuntimeProvision(provision.id);
+    const request = store.claimRuntimeCommandRequest(runtime.id)!;
+    const dir = makeTempDir();
+    const binary = join(dir, "example-tool");
+    executable(binary, "#!/bin/sh\nexit 1\n");
+    executable(join(dir, "working-tool"), "#!/bin/sh\necho 9.9.9\n");
+    executable(join(dir, "npm"), [
+      "#!/bin/sh",
+      `cp ${shellQuote(join(dir, "working-tool"))} ${shellQuote(binary)}`,
+      `touch ${shellQuote(join(dir, "npm-called"))}`,
+      "",
+    ].join("\n"));
+
+    const result = await executeRuntimeCommand({
+      command: `export PATH=${shellQuote(`${dir}:/usr/bin:/bin`)}\n${request.command}`,
+      timeoutMs: 2_000,
+    });
+
+    expect(result).toMatchObject({ status: "completed", exitCode: 0 });
+    expect(result.stdout).toContain("provision:installed:9.9.9");
+    expect(existsSync(join(dir, "npm-called"))).toBeTrue();
+    store.reportRuntimeCommandResult(runtime.id, request.id, result);
+    expect(store.listRuntimeProvisionStates(provision.id)).toEqual([
+      expect.objectContaining({
+        runtimeId: runtime.id,
+        status: "converged",
+        observedVersion: "9.9.9",
+      }),
+    ]);
+  });
+
+  it("allows an explicit version-check opt-out for binaries without --version", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_no_version", name: "No version", provider: "codex", workspaceId: "local" });
+    const provision = store.createWorkspaceRuntimeProvision("local", {
+      kind: "npm-global",
+      package: "example-tool",
+      version: "latest",
+      versionCheck: false,
+      bin: "example-tool",
+      enabled: false,
+      triggerKinds: [],
+    });
+    store.updateWorkspaceRuntimeProvision(provision.id, { enabled: true });
+    store.enqueueWorkspaceRuntimeProvision(provision.id);
+    const request = store.claimRuntimeCommandRequest(runtime.id)!;
+    const dir = makeTempDir();
+    executable(join(dir, "example-tool"), "#!/bin/sh\nexit 1\n");
+    executable(join(dir, "npm"), `#!/bin/sh\ntouch ${shellQuote(join(dir, "npm-called"))}\n`);
+
+    const result = await executeRuntimeCommand({
+      command: `export PATH=${shellQuote(`${dir}:/usr/bin:/bin`)}\n${request.command}`,
+      timeoutMs: 2_000,
+    });
+
+    expect(result).toMatchObject({ status: "completed", exitCode: 0 });
+    expect(result.stdout).toContain("provision:already:unknown");
+    expect(existsSync(join(dir, "npm-called"))).toBeFalse();
+    store.reportRuntimeCommandResult(runtime.id, request.id, result);
+    expect(store.listRuntimeProvisionStates(provision.id)).toEqual([
+      expect.objectContaining({
+        runtimeId: runtime.id,
+        status: "converged",
+        observedVersion: "unknown",
+      }),
+    ]);
+  });
+
+  it("records a post-install version failure and suppresses unchanged cron retries", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_broken_version", name: "Broken", provider: "codex", workspaceId: "local" });
+    const provision = store.createWorkspaceRuntimeProvision("local", {
+      kind: "npm-global",
+      package: "example-tool",
+      version: "latest",
+      bin: "example-tool",
+      enabled: false,
+      triggerKinds: [],
+    });
+    store.updateWorkspaceRuntimeProvision(provision.id, { enabled: true });
+    store.enqueueWorkspaceRuntimeProvision(provision.id);
+    const request = store.claimRuntimeCommandRequest(runtime.id)!;
+    const dir = makeTempDir();
+    executable(join(dir, "example-tool"), "#!/bin/sh\nexit 1\n");
+    executable(join(dir, "npm"), "#!/bin/sh\nexit 0\n");
+
+    const result = await executeRuntimeCommand({
+      command: `export PATH=${shellQuote(`${dir}:/usr/bin:/bin`)}\n${request.command}`,
+      timeoutMs: 2_000,
+    });
+    expect(result).toMatchObject({ status: "completed", exitCode: 1 });
+    expect(result.stdout).toContain("provision:version-check-failed");
+
+    store.reportRuntimeCommandResult(runtime.id, request.id, result);
+    expect(store.listRuntimeProvisionStates(provision.id)).toEqual([
+      expect.objectContaining({
+        runtimeId: runtime.id,
+        status: "failed",
+        observedVersion: null,
+        lastError: "npm-global version check failed",
+      }),
+    ]);
+    store.enqueueWorkspaceRuntimeProvision(provision.id);
+    expect(store.claimRuntimeCommandRequest(runtime.id)).toBeNull();
+  });
+
   it("marks npm-global convergence failed when post-install binary verification fails", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
