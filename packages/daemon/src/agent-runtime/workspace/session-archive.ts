@@ -248,6 +248,10 @@ async function scanArchiveEntries(
       if (child.name === "." || child.name === "..") throw new Error("Invalid archive entry name");
       const archivePath = archiveDirectory ? `${archiveDirectory}/${child.name}` : child.name;
       assertArchiveRelativePath(archivePath);
+      // Session homes intentionally link provider credentials from the user's
+      // base Home. Exclude known secret/config names without opening or
+      // following them; unexpected symlinks still fail closed below.
+      if (EXCLUDED_FILE_NAMES.has(child.name)) continue;
       let handle: FileHandle | null = null;
       try {
         handle = await openFileHandleChild(directory, child.name);
@@ -256,7 +260,6 @@ async function scanArchiveEntries(
           if (!EXCLUDED_DIRECTORY_NAMES.has(child.name)) await visit(handle, archivePath);
           continue;
         }
-        if (EXCLUDED_FILE_NAMES.has(child.name)) continue;
         if (!info.isFile()) throw new Error(`Refusing to archive non-regular file: ${archivePath}`);
         log.debug(`Issue Session archive scanning file: ${archivePath} bytes=${info.size}`);
         const inspected = await inspectOpenRegularFile(handle, archivePath, info);

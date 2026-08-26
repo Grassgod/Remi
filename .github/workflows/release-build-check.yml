@@ -3,9 +3,11 @@ name: Release build check
 on:
   pull_request:
     paths:
+      - ".dockerignore"
       - ".github/workflows/release.yml"
       - ".github/workflows/platform-release.yml"
       - ".github/workflows/release-build-check.yml"
+      - ".remi/pipeline/skills/**"
       - "apps/**"
       - "cli-capabilities.json"
       - "bin/**"
@@ -24,9 +26,11 @@ on:
     branches:
       - main
     paths:
+      - ".dockerignore"
       - ".github/workflows/release.yml"
       - ".github/workflows/platform-release.yml"
       - ".github/workflows/release-build-check.yml"
+      - ".remi/pipeline/skills/**"
       - "apps/**"
       - "cli-capabilities.json"
       - "bin/**"
@@ -98,9 +102,10 @@ jobs:
       # failed on main from 5e8ee09f onward while this workflow stayed green
       # (MUL-128/MUL-129). Run the whole backend suite instead: `bunfig.toml`
       # scopes `bun test` to `tests/`, so this is every `tests/**/*.test.ts`
-      # (~1.7k tests, ~2min). Harnesses needing real providers/browsers/Postgres
-      # are named `*.ts` without `.test` and stay out of discovery — see
-      # TESTING.md.
+      # (~1.7k tests, ~2min). Mandatory real-provider/browser/Postgres harnesses
+      # are named `*.ts` without `.test`; discovered tests need no CI secrets or
+      # required external service. Optional integrations self-skip when their
+      # dependency is unavailable — see TESTING.md.
       - name: Backend test suite
         run: bun test
 
