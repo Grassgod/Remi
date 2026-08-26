@@ -8,6 +8,64 @@ import { createStore, db, metricValue, resetMultiremiTestEnv, workspaceRepoVersi
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — Go server compatibility endpoints", () => {
+  it("includes the direct blocker on queued Issue task responses", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      name: "Queue blocker runtime",
+      provider: "claude",
+      workspaceId: "local",
+      maxConcurrency: 10,
+    });
+    const firstAgent = store.createAgent({ name: "Builder", provider: "claude" });
+    const secondAgent = store.createAgent({ name: "Reviewer", provider: "claude" });
+    const issue = store.createIssue({ title: "Queue source", workspaceId: "local" });
+    const firstSession = store.createIssueSession(issue.id, { title: "Implementation" });
+    const secondSession = store.createIssueSession(issue.id, { title: "Review" });
+    const first = store.createTask({
+      agentId: firstAgent.id,
+      issueId: issue.id,
+      issueSessionId: firstSession.id,
+      priority: 10,
+      prompt: "Build",
+    });
+    const second = store.createTask({
+      agentId: secondAgent.id,
+      issueId: issue.id,
+      issueSessionId: secondSession.id,
+      prompt: "Review",
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: "Bearer root-secret" };
+    const discussionResponse = await app.request(`/api/issues/${issue.id}/sessions`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Discussion", holds_workspace: false }),
+    });
+    expect(discussionResponse.status).toBe(201);
+    expect(await discussionResponse.json()).toMatchObject({
+      title: "Discussion",
+      holds_workspace: false,
+    });
+
+    const response = await app.request(`/api/issues/${issue.id}/task-runs`, { headers });
+    expect(response.status).toBe(200);
+    const tasks = await response.json();
+    expect(tasks.find((task: { id: string }) => task.id === second.id)).toMatchObject({
+      holds_workspace: true,
+      queue_blocker: {
+        task_id: first.id,
+        agent_id: firstAgent.id,
+        agent_name: "Builder",
+        issue_session_id: firstSession.id,
+        issue_session_title: "Implementation",
+        reason: "issue_workspace",
+      },
+    });
+  });
+
   it("serves original daemon register and deregister endpoints", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });

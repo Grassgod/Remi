@@ -245,6 +245,9 @@ export interface AgentTask {
   issue_session_id?: string | null;
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
+  /** Whether this task owns the shared Issue workspace. Missing means true for older servers. */
+  holdsWorkspace?: boolean;
+  holds_workspace?: boolean;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   completedAt: string | null;

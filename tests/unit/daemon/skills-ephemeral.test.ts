@@ -91,3 +91,26 @@ test("a new Issue task invalidates the previous Session archive receipt", () => 
     issue_id: "iss_1",
   });
 });
+
+test("a discussion task writes private Session GC metadata without archive state", () => {
+  const workDir = workspace();
+  const metadataDir = join(workDir, ".multiremi");
+  mkdirSync(metadataDir, { recursive: true });
+  const receipt = join(metadataDir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE);
+  writeFileSync(receipt, "unrelated\n");
+
+  writeTaskGcContext(workDir, {
+    id: "tsk_discussion",
+    workspaceId: "ws_1",
+    issueId: "iss_1",
+    issueSessionId: "ises_discussion",
+    holdsWorkspace: false,
+  } as unknown as AgentTask);
+
+  expect(existsSync(receipt)).toBe(true);
+  expect(JSON.parse(readFileSync(join(metadataDir, "gc.json"), "utf8"))).toMatchObject({
+    kind: "discussion_issue",
+    issue_id: "iss_1",
+    issue_session_id: "ises_discussion",
+  });
+});

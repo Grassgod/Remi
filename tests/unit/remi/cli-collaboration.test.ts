@@ -130,6 +130,32 @@ describe("native collaboration CLI contracts", () => {
     expect(JSON.parse(jsonl.stdout)).toMatchObject({ id: "lbl_1", name: "Urgent" });
   });
 
+  it("creates workspace Sessions by default and supports discussion Sessions", async () => {
+    useCliEnv();
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = capabilityFetch("session.create", async (input) => {
+      const request = input;
+      expect(request.method).toBe("POST");
+      expect(new URL(request.url).pathname).toBe("/api/issues/MUL-136/sessions");
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push(body);
+      return Response.json({ id: `ises_${bodies.length}`, ...body }, { status: 201 });
+    });
+    const spec = specById("session.create");
+
+    await capture(() => registryFor([spec]).execute([
+      "session", "create", "MUL-136", "--title", "Implementation", "--output", "json",
+    ]));
+    await capture(() => registryFor([spec]).execute([
+      "session", "create", "MUL-136", "--title", "Design chat", "--discussion", "--output", "json",
+    ]));
+
+    expect(bodies).toEqual([
+      { title: "Implementation" },
+      { title: "Design chat", holds_workspace: false },
+    ]);
+  });
+
   it("executes task inspection and supervisor-only redispatch commands", async () => {
     useCliEnv();
     const inspect = specById("task.inspect");

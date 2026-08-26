@@ -1210,6 +1210,21 @@ export interface MultiremiTask {
   cancelledAt: string | null;
 }
 
+export type MultiremiTaskQueueBlockerReason =
+  | "session"
+  | "issue_workspace"
+  | "legacy_issue"
+  | "agent_capacity";
+
+export interface MultiremiTaskQueueBlocker {
+  taskId: string;
+  agentId: string;
+  agentName: string;
+  issueSessionId: string | null;
+  issueSessionTitle: string | null;
+  reason: MultiremiTaskQueueBlockerReason;
+}
+
 export interface MultiremiTaskTriggerMetadata {
   triggerThreadId: string | null;
   triggerCommentContent: string | null;

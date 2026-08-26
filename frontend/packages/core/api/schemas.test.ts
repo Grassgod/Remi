@@ -538,6 +538,7 @@ describe("IssueSessionListSchema", () => {
     expect(parsed[0]).toMatchObject({
       id: "sess_1",
       is_default: false,
+      holds_workspace: true,
       summary: null,
       participants: [],
     });

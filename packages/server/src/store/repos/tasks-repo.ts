@@ -45,6 +45,7 @@ import type {
   MultiremiTaskMessage,
   MultiremiTaskPromptArtifact,
   MultiremiTaskProjectContext,
+  MultiremiTaskQueueBlocker,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiTaskStatus,
   MultiremiTaskSteerKind,
@@ -139,6 +140,68 @@ export class TasksRepo {
       "SELECT * FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at DESC",
     ).all(issueId) as Row[];
     return rows.map(toTask);
+  }
+
+  getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
+    const issueBlocker = this.ctx.db.query(
+      `SELECT active.id AS task_id,
+              active.agent_id,
+              agent.name AS agent_name,
+              active.issue_session_id,
+              session.title AS issue_session_title,
+              CASE
+                WHEN queued.issue_session_id IS NOT NULL
+                  AND active.issue_session_id = queued.issue_session_id THEN 'session'
+                WHEN queued.issue_id IS NOT NULL
+                  AND queued.issue_session_id IS NULL
+                  AND active.issue_id = queued.issue_id THEN 'legacy_issue'
+                ELSE 'issue_workspace'
+              END AS blocker_reason
+       FROM multiremi_tasks queued
+       JOIN multiremi_tasks active ON active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+       JOIN multiremi_agents agent ON agent.id = active.agent_id
+       LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id
+       WHERE queued.id = ?
+         AND queued.status = 'queued'
+         AND (
+           (queued.issue_session_id IS NOT NULL AND active.issue_session_id = queued.issue_session_id)
+           OR (queued.issue_id IS NOT NULL AND queued.issue_session_id IS NULL AND active.issue_id = queued.issue_id)
+           OR (
+             queued.issue_id IS NOT NULL
+             AND queued.holds_workspace = 1
+             AND active.issue_id = queued.issue_id
+             AND active.holds_workspace = 1
+           )
+         )
+       ORDER BY active.dispatched_at ASC, active.created_at ASC
+       LIMIT 1`,
+    ).get(taskId) as Row | null;
+    if (issueBlocker) return toTaskQueueBlocker(issueBlocker);
+
+    const agentBlocker = this.ctx.db.query(
+      `SELECT active.id AS task_id,
+              active.agent_id,
+              agent.name AS agent_name,
+              active.issue_session_id,
+              session.title AS issue_session_title,
+              'agent_capacity' AS blocker_reason
+       FROM multiremi_tasks queued
+       JOIN multiremi_agents agent ON agent.id = queued.agent_id
+       JOIN multiremi_tasks active
+         ON active.agent_id = queued.agent_id
+        AND active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+       LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id
+       WHERE queued.id = ?
+         AND queued.status = 'queued'
+         AND (
+           SELECT COUNT(*) FROM multiremi_tasks running
+           WHERE running.agent_id = queued.agent_id
+             AND running.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+         ) >= agent.max_concurrent_tasks
+       ORDER BY active.dispatched_at ASC, active.created_at ASC
+       LIMIT 1`,
+    ).get(taskId) as Row | null;
+    return agentBlocker ? toTaskQueueBlocker(agentBlocker) : null;
   }
 
   createTask(input: CreateTaskInput): MultiremiTask {
@@ -2812,6 +2875,17 @@ function toTask(row: Row): MultiremiTask {
     completedAt: nullableString(row.completed_at),
     failedAt: nullableString(row.failed_at),
     cancelledAt: nullableString(row.cancelled_at),
+  };
+}
+
+function toTaskQueueBlocker(row: Row): MultiremiTaskQueueBlocker {
+  return {
+    taskId: String(row.task_id),
+    agentId: String(row.agent_id),
+    agentName: String(row.agent_name),
+    issueSessionId: nullableString(row.issue_session_id),
+    issueSessionTitle: nullableString(row.issue_session_title),
+    reason: String(row.blocker_reason) as MultiremiTaskQueueBlocker["reason"],
   };
 }
 

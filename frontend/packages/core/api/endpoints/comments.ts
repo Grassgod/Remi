@@ -1,6 +1,7 @@
 import type {
   AssigneeFrequencyEntry,
   Comment,
+  CreateIssueSessionRequest,
   IssueReaction,
   IssueSession,
   IssueSessionTask,
@@ -85,10 +86,10 @@ export class CommentsEndpoints {
     });
   }
 
-  async createIssueSession(issueId: string, title: string): Promise<IssueSession> {
+  async createIssueSession(issueId: string, input: CreateIssueSessionRequest): Promise<IssueSession> {
     const raw = await this.http.fetch<unknown>(`/api/issues/${issueId}/sessions`, {
       method: "POST",
-      body: JSON.stringify({ title }),
+      body: JSON.stringify(input),
     });
     return parseWithFallback(raw, IssueSessionSchema, EMPTY_ISSUE_SESSION, {
       endpoint: "POST /api/issues/:id/sessions",

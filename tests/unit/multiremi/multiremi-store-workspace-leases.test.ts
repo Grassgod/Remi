@@ -99,6 +99,14 @@ describe("Issue Session workspace leases", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
     expect(store.claimTask(runtime.id)).toBeNull();
     expect(store.getTask(second.id)?.status).toBe("queued");
+    expect(store.getTaskQueueBlocker(second.id)).toMatchObject({
+      taskId: first.id,
+      agentId: firstAgent.id,
+      agentName: "First",
+      issueSessionId: firstSession.id,
+      issueSessionTitle: "Work A",
+      reason: "issue_workspace",
+    });
   });
 
   it("keeps every Task in the same Session serialized", () => {
@@ -122,6 +130,12 @@ describe("Issue Session workspace leases", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
     expect(store.claimTask(runtime.id)).toBeNull();
     expect(store.getTask(second.id)?.status).toBe("queued");
+    expect(store.getTaskQueueBlocker(second.id)).toMatchObject({
+      taskId: first.id,
+      issueSessionId: session.id,
+      issueSessionTitle: "One discussion",
+      reason: "session",
+    });
   });
 
   it("keeps historical Issue Tasks without a Session serialized by Issue", () => {

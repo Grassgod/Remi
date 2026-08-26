@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Clock, Loader2, XCircle } from "lucide-react";
+import { Clock, Loader2, LockKeyhole, XCircle } from "lucide-react";
 import { api } from "@multiremi/core/api";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import { taskMessagesOptions } from "@multiremi/core/chat/queries";
@@ -110,6 +110,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
 
   const StepIcon = toolIcon(currentStep?.tool);
   const stepSummary = currentStep ? formatToolInputSummary(currentStep.tool ?? "", currentStep.input) : "";
+  const blocker = isQueued ? task.queue_blocker : null;
 
   return (
     <>
@@ -153,7 +154,23 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
               </span>
             )}
           </span>
-          {!ended && stepSummary && (
+          {blocker && (
+            <span
+              className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground"
+              title={blocker.task_id}
+            >
+              <LockKeyhole className="h-3 w-3 shrink-0" />
+              <span className="truncate">
+                {t(($) => $.agent_live.queued_blocked_by, {
+                  agent: blocker.agent_name,
+                  session: blocker.issue_session_title
+                    ?? t(($) => $.agent_live.queue_blocker_issue_fallback),
+                  task: blocker.task_id,
+                })}
+              </span>
+            </span>
+          )}
+          {!ended && !blocker && stepSummary && (
             <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
               <StepIcon className="h-3 w-3 shrink-0" />
               <span className="truncate font-mono">{stepSummary}</span>

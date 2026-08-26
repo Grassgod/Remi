@@ -996,7 +996,10 @@ describe("IssueDetail (shared)", () => {
     fireEvent.click(createDialog.getByRole("button", { name: "Create" }));
 
     await waitFor(() => {
-      expect(mockApiObj.createIssueSession).toHaveBeenCalledWith("issue-1", "Review");
+      expect(mockApiObj.createIssueSession).toHaveBeenCalledWith("issue-1", {
+        title: "Review",
+        holds_workspace: true,
+      });
     });
     // Sessions refetched → the rail gains a second row and the new session
     // is the one being read.

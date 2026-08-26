@@ -1,10 +1,10 @@
-/** Serializes provider execution with final archive-and-delete for one Issue. */
+/** Serializes provider execution with final archive-and-delete for one owned workspace root. */
 export class IssueWorkspaceLifecycleLocker {
   private tails = new Map<string, Promise<void>>();
 
-  async acquire(issueId: string): Promise<() => void> {
-    const key = issueId.trim();
-    if (!key) throw new Error("Issue workspace lifecycle lock requires an Issue id");
+  async acquire(workspaceKey: string): Promise<() => void> {
+    const key = workspaceKey.trim();
+    if (!key) throw new Error("Workspace lifecycle lock requires an ownership key");
 
     const previous = this.tails.get(key);
     let releaseGate!: () => void;
@@ -23,8 +23,8 @@ export class IssueWorkspaceLifecycleLocker {
     };
   }
 
-  async runExclusive<T>(issueId: string, action: () => Promise<T>): Promise<T> {
-    const release = await this.acquire(issueId);
+  async runExclusive<T>(workspaceKey: string, action: () => Promise<T>): Promise<T> {
+    const release = await this.acquire(workspaceKey);
     try {
       return await action();
     } finally {

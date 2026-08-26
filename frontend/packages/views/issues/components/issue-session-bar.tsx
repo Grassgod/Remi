@@ -1,7 +1,15 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { Bot, ChevronDown, Loader2, Plus, Share2 } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  FolderGit2,
+  Loader2,
+  MessagesSquare,
+  Plus,
+  Share2,
+} from "lucide-react";
 import type { Agent } from "@multiremi/core/types";
 import {
   useCreateIssueSession,
@@ -20,6 +28,7 @@ import {
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
+import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -97,15 +106,20 @@ export function NewSessionButton({
   const createSession = useCreateIssueSession(issueId);
   const [createOpen, setCreateOpen] = useState(false);
   const [sessionTitle, setSessionTitle] = useState("");
+  const [holdsWorkspace, setHoldsWorkspace] = useState(true);
   const titleFieldId = useId();
 
   const submitCreate = async () => {
     const title = sessionTitle.trim();
     if (!title) return;
     try {
-      const session = await createSession.mutateAsync({ title });
+      const session = await createSession.mutateAsync({
+        title,
+        holds_workspace: holdsWorkspace,
+      });
       if (session.id) onCreated?.(session.id);
       setSessionTitle("");
+      setHoldsWorkspace(true);
       setCreateOpen(false);
     } catch (error) {
       toast.error(error instanceof Error && error.message
@@ -126,7 +140,13 @@ export function NewSessionButton({
         <Plus className="h-3.5 w-3.5" />
       </Button>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog
+        open={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) setHoldsWorkspace(true);
+        }}
+      >
         <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t(($) => $.detail.new_session_title)}</DialogTitle>
@@ -134,17 +154,54 @@ export function NewSessionButton({
               {t(($) => $.detail.new_session_description)}
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto outline-none">
-            <Label htmlFor={titleFieldId}>{t(($) => $.detail.session_name)}</Label>
-            <Input
-              id={titleFieldId}
-              value={sessionTitle}
-              onChange={(event) => setSessionTitle(event.target.value)}
-              placeholder={t(($) => $.detail.session_name_placeholder)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void submitCreate();
-              }}
-            />
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto outline-none">
+            <div className="space-y-2">
+              <Label htmlFor={titleFieldId}>{t(($) => $.detail.session_name)}</Label>
+              <Input
+                id={titleFieldId}
+                value={sessionTitle}
+                onChange={(event) => setSessionTitle(event.target.value)}
+                placeholder={t(($) => $.detail.session_name_placeholder)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void submitCreate();
+                }}
+              />
+            </div>
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">
+                {t(($) => $.detail.session_type)}
+              </legend>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  aria-pressed={holdsWorkspace}
+                  onClick={() => setHoldsWorkspace(true)}
+                  className={cn(
+                    "flex min-h-10 items-center justify-center gap-2 rounded-md border px-3 text-sm transition-colors",
+                    holdsWorkspace
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-border text-muted-foreground hover:bg-accent/50",
+                  )}
+                >
+                  <FolderGit2 className="h-4 w-4 shrink-0" />
+                  <span>{t(($) => $.detail.session_type_work)}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={!holdsWorkspace}
+                  onClick={() => setHoldsWorkspace(false)}
+                  className={cn(
+                    "flex min-h-10 items-center justify-center gap-2 rounded-md border px-3 text-sm transition-colors",
+                    !holdsWorkspace
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-border text-muted-foreground hover:bg-accent/50",
+                  )}
+                >
+                  <MessagesSquare className="h-4 w-4 shrink-0" />
+                  <span>{t(($) => $.detail.session_type_discussion)}</span>
+                </button>
+              </div>
+            </fieldset>
           </div>
           <DialogFooter>
             <Button

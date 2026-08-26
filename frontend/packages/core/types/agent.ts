@@ -76,6 +76,17 @@ export interface AgentTask {
   issue_id: string;
   /** Product Session under the Issue. Empty/missing for legacy tasks. */
   issue_session_id?: string;
+  /** Immutable snapshot of whether this task owns the shared Issue workspace. */
+  holds_workspace?: boolean;
+  /** Direct active task currently preventing this queued task from being claimed. */
+  queue_blocker?: {
+    task_id: string;
+    agent_id: string;
+    agent_name: string;
+    issue_session_id: string | null;
+    issue_session_title: string | null;
+    reason: "session" | "issue_workspace" | "legacy_issue" | "agent_capacity";
+  } | null;
   // `waiting_local_directory` is the daemon-emitted hold state for the
   // local_directory flow: a task that has been dispatched but is parked
   // because another task currently owns the same on-disk path lock.
