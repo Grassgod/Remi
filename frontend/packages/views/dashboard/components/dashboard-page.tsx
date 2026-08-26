@@ -47,6 +47,7 @@ import {
   aggregateByDate,
   aggregateByWeek,
   formatTokens,
+  getSplitTokens,
   hasUnpricedTokens,
   todayIso,
 } from "../../runtimes/utils";
@@ -269,6 +270,13 @@ export function DashboardPage() {
     () => computeDailyTotals(dailyUsageInWindow),
     [dailyUsageInWindow],
   );
+  // The pricing CTA can only help rows with billable input/output/cache
+  // splits. A total-only row remains unpriceable even after the user adds a
+  // model rate, so keep it out of the unmapped-model notice.
+  const splitUsageInWindow = useMemo(
+    () => dailyUsageInWindow.filter((row) => getSplitTokens(row) > 0),
+    [dailyUsageInWindow],
+  );
   // Same daily rollup the runtime-detail page runs; the dashboard only reads
   // the two series its charts render.
   const { dailyCostStack: dailyCost, dailyTokens } = useMemo(
@@ -426,11 +434,10 @@ export function DashboardPage() {
                 </div>
               )}
 
-              {/* Pricing-gap banner — partial unmapping keeps the charts
-                  rendering while unpriced tokens silently contribute $0 to
-                  totals; give that gap a visible entry point (same component
-                  the runtime usage page uses). */}
-              <UnmappedPricingNotice usage={dailyUsageInWindow} />
+              {/* Pricing-gap banner — only split tokens can become billable
+                  after a model rate is configured. Total-only history is
+                  explained by the dedicated notice below instead. */}
+              <UnmappedPricingNotice usage={splitUsageInWindow} />
 
               {totals.totalOnly > 0 && (
                 <div

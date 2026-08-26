@@ -1,13 +1,14 @@
 import { formatTokens, type WeeklyTokenData } from "../../utils";
 import { useT } from "../../../i18n";
-import { TOKEN_SERIES, tokenStackConfig } from "./daily-tokens-chart";
+import { getTokenSeries, tokenStackConfig } from "./daily-tokens-chart";
 import { StackedBarChart } from "./stacked-bar-chart";
 
 const localeTotal = (total: number) => total.toLocaleString();
 
 /**
- * Mirror of DailyTokensChart's five-segment stack — same series and colours
- * keep the Weekly view legible as a coarser cut of the Daily one.
+ * Mirror of DailyTokensChart's four regular segments and conditional
+ * total-only segment. The same series and colours keep the Weekly view
+ * legible as a coarser cut of the Daily one.
  */
 export function WeeklyTokensChart({ data }: { data: WeeklyTokenData[] }) {
   const { t } = useT("runtimes");
@@ -15,7 +16,7 @@ export function WeeklyTokensChart({ data }: { data: WeeklyTokenData[] }) {
     <StackedBarChart
       data={data}
       config={tokenStackConfig(t(($) => $.usage.legend_total_only))}
-      series={TOKEN_SERIES}
+      series={getTokenSeries(data)}
       stackId="tokens"
       yAxisWidth={50}
       yAxisTickFormatter={formatTokens}

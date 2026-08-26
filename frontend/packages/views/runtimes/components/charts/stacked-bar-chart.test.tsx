@@ -95,7 +95,14 @@ vi.mock("@multiremi/ui/components/ui/chart", () => ({
   },
 }));
 
+vi.mock("../../../i18n", () => ({
+  useT: () => ({ t: () => "Total only" }),
+}));
+
 import { StackedBarChart } from "./stacked-bar-chart";
+import { DailyTokensChart } from "./daily-tokens-chart";
+import { WeeklyTokensChart } from "./weekly-tokens-chart";
+import type { DailyTokenData, WeeklyTokenData } from "../../utils";
 
 const CONFIG = {
   input: { label: "Input", color: "var(--chart-1)" },
@@ -114,6 +121,30 @@ const ROWS: Row[] = [
   { label: "5/4", partial: false, weekStart: "2026-05-04", input: 1, output: 2 },
   { label: "5/11", partial: true, weekStart: "2026-05-11", input: 3, output: 4 },
 ];
+
+const DAILY_TOKENS: DailyTokenData = {
+  date: "2026-08-26",
+  label: "8/26",
+  input: 1,
+  output: 2,
+  cacheRead: 3,
+  cacheWrite: 4,
+  totalOnly: 0,
+};
+
+const WEEKLY_TOKENS: WeeklyTokenData = {
+  weekStart: "2026-08-24",
+  weekEnd: "2026-08-30",
+  label: "Aug 24",
+  rangeLabel: "Aug 24 - Aug 30",
+  partial: true,
+  daysCovered: 3,
+  input: 1,
+  output: 2,
+  cacheRead: 3,
+  cacheWrite: 4,
+  totalOnly: 0,
+};
 
 afterEach(() => cleanup());
 
@@ -283,5 +314,56 @@ describe("StackedBarChart", () => {
 
     expect(getByTestId("tooltip-content").dataset.labelKey).toBe("undefined");
     expect(getByTestId("label").textContent).toBe("no-label-formatter");
+  });
+});
+
+describe("token charts", () => {
+  it.each([
+    ["daily", <DailyTokensChart key="daily-zero" data={[DAILY_TOKENS]} />],
+    ["weekly", <WeeklyTokensChart key="weekly-zero" data={[WEEKLY_TOKENS]} />],
+  ])("omits the zero total-only series from the %s chart", (_name, chart) => {
+    const { getAllByTestId } = render(chart);
+
+    const bars = getAllByTestId("bar");
+    expect(bars.map((bar) => bar.dataset.key)).toEqual([
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+    ]);
+    expect(bars).toHaveLength(4);
+    expect(bars.at(-1)?.dataset.radius).toBe("3,3,0,0");
+    // Recharts builds tooltip entries from rendered Bars, so no totalOnly
+    // Bar also means no spurious "Total only 0" tooltip entry.
+    expect(bars.map((bar) => bar.dataset.key)).not.toContain("totalOnly");
+  });
+
+  it.each([
+    [
+      "daily",
+      <DailyTokensChart
+        key="daily-total-only"
+        data={[{ ...DAILY_TOKENS, totalOnly: 5_181_880 }]}
+      />,
+    ],
+    [
+      "weekly",
+      <WeeklyTokensChart
+        key="weekly-total-only"
+        data={[{ ...WEEKLY_TOKENS, totalOnly: 5_181_880 }]}
+      />,
+    ],
+  ])("adds the non-zero total-only series to the %s chart", (_name, chart) => {
+    const { getAllByTestId } = render(chart);
+
+    const bars = getAllByTestId("bar");
+    expect(bars.map((bar) => bar.dataset.key)).toEqual([
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "totalOnly",
+    ]);
+    expect(bars.at(-1)?.dataset.radius).toBe("3,3,0,0");
   });
 });

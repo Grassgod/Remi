@@ -3,12 +3,14 @@ import { formatTokens, type DailyTokenData } from "../../utils";
 import { useT } from "../../../i18n";
 import { StackedBarChart } from "./stacked-bar-chart";
 
-// Five-segment stack — input / output / cache read / cache write / total
-// only. Unlike the cost chart, cache reads ARE visible here: a typical day on Claude shows
-// cache reads dominating raw token counts (often 10×+ input), so the user
-// only sees the real shape of usage when reads are stacked in. The cost
-// chart drops them for the opposite reason (their dollar contribution is
-// two orders of magnitude smaller and would be visually invisible).
+// Four regular segments — input / output / cache read / cache write — plus a
+// conditional total-only segment for historical rows that lack splits.
+// Unlike the cost chart, cache reads ARE visible here: a typical day on
+// Claude shows cache reads dominating raw token counts (often 10×+ input),
+// so the user only sees the real shape of usage when reads are stacked in.
+// The cost chart drops them for the opposite reason (their dollar
+// contribution is two orders of magnitude smaller and would be visually
+// invisible).
 //
 // Series → CSS chart token: stack reads bottom-up as chart-1 (deepest brand
 // blue, "input") → chart-2 (mid) → chart-4 (cache read) → chart-3 (lightest,
@@ -26,13 +28,23 @@ export function tokenStackConfig(totalOnlyLabel: string): ChartConfig {
   };
 }
 
-export const TOKEN_SERIES = [
+const TOKEN_SERIES = [
   "input",
   "output",
   "cacheRead",
   "cacheWrite",
+] as const;
+
+const TOKEN_SERIES_WITH_TOTAL_ONLY = [
+  ...TOKEN_SERIES,
   "totalOnly",
 ] as const;
+
+export function getTokenSeries(data: readonly Pick<DailyTokenData, "totalOnly">[]) {
+  return data.some((row) => row.totalOnly > 0)
+    ? TOKEN_SERIES_WITH_TOTAL_ONLY
+    : TOKEN_SERIES;
+}
 
 const localeTotal = (total: number) => total.toLocaleString();
 
@@ -42,7 +54,7 @@ export function DailyTokensChart({ data }: { data: DailyTokenData[] }) {
     <StackedBarChart
       data={data}
       config={tokenStackConfig(t(($) => $.usage.legend_total_only))}
-      series={TOKEN_SERIES}
+      series={getTokenSeries(data)}
       stackId="tokens"
       yAxisWidth={50}
       yAxisTickFormatter={formatTokens}

@@ -508,7 +508,13 @@ export function getSplitTokens(usage: TokenAggregable): number {
 
 // Older usage rows reported only a context-total value. It is a valid token
 // count, but it cannot be assigned to an input/output/cache dimension and
-// therefore cannot be priced.
+// therefore cannot be priced. The server groups by (date, model) or
+// (agent, model), so a bucket spanning the daemon upgrade cannot be split
+// safely here: the production 2026-08-26 claude-sonnet-5 bucket reports
+// 26,179,959 total tokens versus 25,516,515 split tokens. This heuristic
+// intentionally ignores that 663,444-token difference (2.53% of the bucket,
+// 0.41% of the supplied 30-day total) rather than treating it as a billable
+// dimension.
 export function getTotalOnlyTokens(usage: TokenAggregable): number {
   if (getSplitTokens(usage) !== 0) return 0;
   return Math.max(0, usage.total_tokens ?? 0);
