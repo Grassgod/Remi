@@ -204,8 +204,11 @@ function sessionCommandSpecs(): CommandSpec[] {
       const issue = positional(invocation, 0, "issue");
       await getAndRender(invocation, `/api/issues/${encodePath(issue)}/sessions/${encodePath(positional(invocation, 1, "session"))}`);
     }),
-    nativeSpec("session.create", ["session", "create"], "Create an issue Session", "write", HUMAN, [refPositional("issue")], [...INPUT_OPTIONS, ...titleStatusOptions()], async (invocation) => {
-      const body = await requestBody(invocation, { title: stringOption(invocation, "title") ?? undefined });
+    nativeSpec("session.create", ["session", "create"], "Create an issue Session", "write", HUMAN, [refPositional("issue")], [...INPUT_OPTIONS, ...titleStatusOptions(), discussionOption()], async (invocation) => {
+      const body = await requestBody(invocation, {
+        title: stringOption(invocation, "title") ?? undefined,
+        holds_workspace: invocation.options.discussion === true ? false : undefined,
+      });
       await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/sessions`, body);
     }),
     nativeSpec("session.update", ["session", "update"], "Update an issue Session", "write", HUMAN, [refPositional("issue"), refPositional("session")], [...INPUT_OPTIONS, ...titleStatusOptions()], async (invocation) => {
@@ -727,6 +730,9 @@ function titleStatusOptions(): CliOptionSpec[] { return [
   { name: "title", type: "string", valueName: "title", description: "Session title" },
   { name: "status", type: "string", valueName: "status", description: "Session status" },
 ]; }
+function discussionOption(): CliOptionSpec {
+  return { name: "discussion", type: "boolean", description: "Create without mounting the shared Issue workspace" };
+}
 function agentPromptOptions(): CliOptionSpec[] { return [
   { name: "agent", type: "string", valueName: "agent-id", description: "Agent ID" },
   { name: "prompt", type: "string", valueName: "text", description: "Task prompt" },

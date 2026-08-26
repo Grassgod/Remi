@@ -216,6 +216,10 @@ export class TasksRepo {
     if (requestedIssueSessionId && !issueSession) throw new Error(`Issue session not found: ${requestedIssueSessionId}`);
     if (issueSession && issueSession.issueId !== issueId) throw new Error("Issue session does not belong to task issue");
     if (issueSession && issueSession.workspaceId !== agent.workspaceId) throw new Error("Issue session workspace does not match agent workspace");
+    // Snapshot the lease decision on the Task. A Session setting may change
+    // later, but an in-flight Task must keep the workspace ownership it was
+    // created with. Historical Issue Tasks without a Session stay exclusive.
+    const holdsWorkspace = issueId ? (issueSession?.holdsWorkspace ?? true) : true;
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.ctx.runtimes().getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
     // Pool scheduling: tasks stay unbound so any provider-matching runtime can
@@ -300,13 +304,13 @@ export class TasksRepo {
       : null;
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
-        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, chat_session_id,
+        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, delegation_id, delegated_by_agent_id,
         assignment_event_id, assignment_source_event_id,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         taskKind,
@@ -315,6 +319,7 @@ export class TasksRepo {
         issueId,
         issueSession?.id ?? null,
         issueSessionGeneration,
+        holdsWorkspace ? 1 : 0,
         input.chatSessionId ?? null,
         triggerCommentId,
         triggerSummary,
@@ -1153,7 +1158,14 @@ export class TasksRepo {
              SELECT 1 FROM multiremi_tasks active
              WHERE active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
                AND (
-                 (t.issue_id IS NOT NULL AND active.issue_id = t.issue_id)
+                 (t.issue_session_id IS NOT NULL AND active.issue_session_id = t.issue_session_id)
+                 OR (t.issue_id IS NOT NULL AND t.issue_session_id IS NULL AND active.issue_id = t.issue_id)
+                 OR (
+                   t.issue_id IS NOT NULL
+                   AND t.holds_workspace = 1
+                   AND active.issue_id = t.issue_id
+                   AND active.holds_workspace = 1
+                 )
                  OR (active.agent_id = t.agent_id AND t.chat_session_id IS NOT NULL AND active.chat_session_id = t.chat_session_id)
                  OR (
                    active.agent_id = t.agent_id
@@ -2753,6 +2765,8 @@ function toTask(row: Row): MultiremiTask {
     issue_session_id: nullableString(row.issue_session_id),
     issueSessionGeneration: row.issue_session_generation == null ? null : Number(row.issue_session_generation),
     issue_session_generation: row.issue_session_generation == null ? null : Number(row.issue_session_generation),
+    holdsWorkspace: Boolean(Number(row.holds_workspace ?? 1)),
+    holds_workspace: Boolean(Number(row.holds_workspace ?? 1)),
     chatSessionId: nullableString(row.chat_session_id),
     autopilotRunId: nullableString(row.autopilot_run_id),
     triggerCommentId: nullableString(row.trigger_comment_id),

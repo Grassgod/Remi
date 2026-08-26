@@ -229,6 +229,7 @@ export function daemonTaskWireResponse(
     agent_id: task.agentId,
     runtime_id: task.runtimeId ?? "",
     issue_id: task.issueId ?? "",
+    holds_workspace: task.holdsWorkspace,
     workspace_id: task.workspaceId,
     status: task.status,
     priority: task.priority,
