@@ -6455,7 +6455,8 @@
       "command": "remi platform operation create",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.create",
       "mutation": "destructive",
@@ -6471,7 +6472,8 @@
       "command": "remi platform operation cancel",
       "aliases": [],
       "auth": [
-        "human"
+        "human",
+        "task"
       ],
       "capability": "platform.operation.cancel",
       "mutation": "destructive",

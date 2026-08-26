@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
-  it("advertises task parity for read-only platform and workspace operations but not platform mutations", () => {
+  it("advertises task parity for platform operations while keeping control-plane administration denied", () => {
     const registry = registryFor(specs);
     const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
     for (const id of [
@@ -33,6 +33,8 @@ describe("operations CLI contracts", () => {
       "platform.feedback.create",
       "platform.status",
       "platform.operation.list",
+      "platform.operation.create",
+      "platform.operation.cancel",
     ]) {
       expect(inventory.get(id)?.auth, id).toContain("task");
     }
@@ -42,8 +44,6 @@ describe("operations CLI contracts", () => {
       "runtime.release.start",
       "runtime.cloud.status",
       "billing.balance",
-      "platform.operation.create",
-      "platform.operation.cancel",
       "platform.settings.update",
       "daemon.retire",
       "lark.install.begin",
