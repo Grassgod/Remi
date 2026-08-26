@@ -223,7 +223,12 @@ export interface WorkspacesSurface {
 }
 
 export interface NotificationChannelsSurface {
-  matchNotificationRoutes(workspaceId: string, inboxType: string, severity: string): MultiremiNotificationChannel[];
+  matchNotificationRoutes(
+    workspaceId: string,
+    memberId: string,
+    inboxType: string,
+    severity: string,
+  ): MultiremiNotificationChannel[];
   recordPendingNotificationDelivery(
     item: MultiremiInboxItem,
     channel: MultiremiNotificationChannel,
@@ -790,7 +795,12 @@ export class StoreContext {
 
   private fanOutInboxItem(item: MultiremiInboxItem): void {
     try {
-      const routes = this.host.matchNotificationRoutes(item.workspaceId, item.type, item.severity);
+      const routes = this.host.matchNotificationRoutes(
+        item.workspaceId,
+        item.memberId,
+        item.type,
+        item.severity,
+      );
       for (const route of routes) {
         const delivery = this.host.recordPendingNotificationDelivery(item, route);
         queueMicrotask(() => void this.host.dispatchNotificationDelivery(delivery.id));

@@ -2081,6 +2081,8 @@ export type MultiremiNotificationDeliveryStatus = "pending" | "sent" | "failed";
 export interface MultiremiNotificationChannel {
   id: string;
   workspaceId: string;
+  /** null = workspace-level channel (admin managed); otherwise the owning member id. */
+  memberId: string | null;
   kind: MultiremiNotificationChannelKind;
   name: string;
   enabled: boolean;

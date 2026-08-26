@@ -3,6 +3,7 @@ import type {
   MultiremiNotificationChannelKind,
   MultiremiNotificationDeliveryStatus,
 } from "@multiremi/contracts/types.js";
+import type { DeliveryVisibilityScope } from "@multiremi/store/repos/notification-channels-repo.js";
 import { NotificationChannelValidationError } from "@multiremi/store/repos/notification-channels-repo.js";
 import {
   compatibilityWorkspaceId,
@@ -10,12 +11,18 @@ import {
   readJson,
   requireWorkspaceAdmin,
 } from "../helpers.js";
-import { authenticatedRequestUserId, currentTaskAccessToken } from "../wire/index.js";
+import {
+  authenticatedRequestUserId,
+  currentTaskAccessToken,
+  currentWorkspaceMember,
+  currentWorkspaceRoleStrict,
+} from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
 
 type ChannelBody = {
   workspaceId?: string | null;
   workspace_id?: string | null;
+  scope?: string;
   kind?: MultiremiNotificationChannelKind;
   name?: string;
   enabled?: boolean;
@@ -28,6 +35,13 @@ type ChannelBody = {
 
 const DELIVERY_STATUSES = new Set<MultiremiNotificationDeliveryStatus>(["pending", "sent", "failed"]);
 
+// A channel is owned either by the workspace (admin managed, mirrors every member's
+// matching inbox item) or by exactly one member (mirrors only their own). Ownership is
+// derived from the authenticated caller, never read off the request body — that is what
+// stops anyone from pointing someone else's notifications at a group of their choosing.
+const CHANNEL_SCOPES = new Set(["member", "workspace"]);
+const OWNER_FIELDS = ["memberId", "member_id", "ownerId", "owner_id"] as const;
+
 export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
@@ -35,18 +49,32 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
     const workspaceId = requestWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const channels = store.listNotificationChannels(workspaceId);
+    // Admins moderate the whole workspace, so they see every channel. Everyone else
+    // sees the workspace-level ones plus their own — never another member's group id.
+    const channels = isWorkspaceAdmin(c, store, workspaceId)
+      ? store.listNotificationChannels(workspaceId)
+      : store.listNotificationChannelsVisibleToMember(
+        workspaceId,
+        currentWorkspaceMember(c, store, workspaceId)?.id ?? "",
+      );
     return c.json({ channels, total: channels.length });
   });
 
   app.post("/api/multiremi/notification-channels", async (c) => {
     const body = await readJson<ChannelBody>(c);
     const workspaceId = body.workspaceId ?? body.workspace_id ?? requestWorkspaceId(c);
-    const denied = requireNotificationAdmin(c, store, workspaceId);
-    if (denied) return denied;
+    const rejected = rejectOwnerOverride(c, body);
+    if (rejected) return rejected;
+    const scope = body.scope === undefined ? "member" : String(body.scope).trim().toLowerCase();
+    if (!CHANNEL_SCOPES.has(scope)) {
+      return c.json({ error: "scope must be member or workspace" }, 400);
+    }
+    const owner = resolveChannelOwner(c, store, workspaceId, scope);
+    if (owner instanceof Response) return owner;
     try {
       const channel = store.createNotificationChannel({
         workspaceId,
+        memberId: owner,
         kind: body.kind ?? "feishu_group",
         name: body.name ?? "",
         enabled: body.enabled,
@@ -64,9 +92,14 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
   app.patch("/api/multiremi/notification-channels/:id", async (c) => {
     const current = store.getNotificationChannel(c.req.param("id"));
     if (!current) return c.json({ error: "notification channel not found" }, 404);
-    const denied = requireNotificationAdmin(c, store, current.workspaceId);
+    const denied = requireChannelOwnership(c, store, current);
     if (denied) return denied;
     const body = await readJson<ChannelBody>(c);
+    const rejected = rejectOwnerOverride(c, body);
+    if (rejected) return rejected;
+    if (body.scope !== undefined) {
+      return c.json({ error: "scope cannot be changed after the channel is created" }, 400);
+    }
     try {
       const channel = store.updateNotificationChannel(current.id, {
         name: body.name,
@@ -84,7 +117,7 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
   app.delete("/api/multiremi/notification-channels/:id", (c) => {
     const current = store.getNotificationChannel(c.req.param("id"));
     if (!current) return c.json({ error: "notification channel not found" }, 404);
-    const denied = requireNotificationAdmin(c, store, current.workspaceId);
+    const denied = requireChannelOwnership(c, store, current);
     if (denied) return denied;
     store.deleteNotificationChannel(current.id);
     return c.json({ ok: true, id: current.id });
@@ -107,6 +140,7 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
       workspaceId,
       status: rawStatus as MultiremiNotificationDeliveryStatus | undefined,
       limit,
+      scope: deliveryVisibility(c, store, workspaceId),
     });
     return c.json({ deliveries, total: deliveries.length });
   });
@@ -114,7 +148,12 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
   app.post("/api/multiremi/notification-deliveries/:id/retry", (c) => {
     const current = store.getNotificationDelivery(c.req.param("id"));
     if (!current) return c.json({ error: "notification delivery not found" }, 404);
-    const denied = requireNotificationAdmin(c, store, current.workspaceId);
+    const channel = store.getNotificationChannel(current.channelId);
+    // The channel can be gone while its failure record lives on; only an admin may
+    // re-drive an orphan, since there is no owner left to check against.
+    const denied = channel
+      ? requireChannelOwnership(c, store, channel)
+      : requireNotificationAdmin(c, store, current.workspaceId);
     if (denied) return denied;
     if (current.status === "sent") {
       return c.json({ error: "sent notification deliveries cannot be retried" }, 409);
@@ -144,6 +183,78 @@ function requireNotificationAdmin(c: Context, store: RouterDeps["store"], worksp
   }
   return denyCurrentUserWorkspaceAccess(c, store, workspaceId)
     ?? requireWorkspaceAdmin(c, store, workspaceId);
+}
+
+/**
+ * Mutating a channel: its owner may do it, and so may a workspace admin (who has to be
+ * able to pull the plug on a personal channel that is misbehaving). Workspace-level
+ * channels stay admin-only. Task tokens are refused outright in every case — an agent
+ * must never be able to point notifications anywhere.
+ */
+function requireChannelOwnership(
+  c: Context,
+  store: RouterDeps["store"],
+  channel: { workspaceId: string; memberId: string | null },
+): Response | null {
+  if (currentTaskAccessToken(c)) {
+    return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+  }
+  const denied = denyCurrentUserWorkspaceAccess(c, store, channel.workspaceId);
+  if (denied) return denied;
+  if (channel.memberId !== null) {
+    const member = currentWorkspaceMember(c, store, channel.workspaceId);
+    if (member && member.id === channel.memberId) return null;
+  }
+  return requireWorkspaceAdmin(c, store, channel.workspaceId);
+}
+
+/**
+ * Ownership for a new channel. `workspace` needs admin; `member` binds the channel to
+ * the caller's own membership and fails closed when there is no membership to bind to.
+ */
+function resolveChannelOwner(
+  c: Context,
+  store: RouterDeps["store"],
+  workspaceId: string,
+  scope: string,
+): string | null | Response {
+  if (scope === "workspace") {
+    const denied = requireNotificationAdmin(c, store, workspaceId);
+    return denied ?? null;
+  }
+  if (currentTaskAccessToken(c)) {
+    return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
+  }
+  const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  if (denied) return denied;
+  const member = currentWorkspaceMember(c, store, workspaceId);
+  if (!member) {
+    return c.json({ error: "no workspace membership to own a personal notification channel" }, 403);
+  }
+  return member.id;
+}
+
+function rejectOwnerOverride(c: Context, body: ChannelBody): Response | null {
+  const record = body as Record<string, unknown>;
+  const named = OWNER_FIELDS.find((field) => Object.prototype.hasOwnProperty.call(record, field));
+  if (!named) return null;
+  return c.json({ error: `${named} cannot be set: a channel is always owned by its creator` }, 400);
+}
+
+function deliveryVisibility(
+  c: Context,
+  store: RouterDeps["store"],
+  workspaceId: string,
+): DeliveryVisibilityScope {
+  if (isWorkspaceAdmin(c, store, workspaceId)) return { kind: "all" };
+  const member = currentTaskAccessToken(c) ? null : currentWorkspaceMember(c, store, workspaceId);
+  return member ? { kind: "member", memberId: member.id } : { kind: "workspaceOnly" };
+}
+
+function isWorkspaceAdmin(c: Context, store: RouterDeps["store"], workspaceId: string): boolean {
+  if (currentTaskAccessToken(c)) return false;
+  const role = currentWorkspaceRoleStrict(c, store, workspaceId);
+  return role === "owner" || role === "admin";
 }
 
 function channelError(c: Context, error: unknown): Response {

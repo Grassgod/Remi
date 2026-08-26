@@ -777,6 +777,7 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE TABLE IF NOT EXISTS multiremi_notification_channels (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
+      member_id TEXT,
       kind TEXT NOT NULL,
       name TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
@@ -1885,9 +1886,15 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_inbox_items", "details TEXT");
   addColumnIfMissing(db, "multiremi_notification_deliveries", "claim_seq INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_notification_deliveries", "leased_until TEXT");
+  // NULL member_id = workspace-level channel (admin managed); non-NULL = a single
+  // member's personal channel. Existing rows stay NULL, so channels created before
+  // this column keep their workspace-wide routing.
+  addColumnIfMissing(db, "multiremi_notification_channels", "member_id TEXT");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_multiremi_notification_deliveries_pending
       ON multiremi_notification_deliveries(status, leased_until, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_notification_channels_member
+      ON multiremi_notification_channels(workspace_id, member_id, enabled);
   `);
   ensureInboxGenericSchema(db);
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");

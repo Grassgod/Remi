@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import type { MultiremiNotificationDelivery } from "@multiremi/contracts/types.js";
+import type {
+  MultiremiNotificationChannel,
+  MultiremiNotificationDelivery,
+  MultiremiWorkspaceMember,
+} from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api/server.js";
 import {
   PermanentNotificationDeliveryError,
@@ -37,6 +41,48 @@ describe("Multiremi notification channels", () => {
     expect(current.listInboxItems(member.id).some((item) => item.issueId === issue.id)).toBe(true);
     expect(current.listNotificationDeliveries({ workspaceId: "local" })).toEqual([]);
     expect(sent).toEqual([]);
+  });
+
+  it("mirrors a personal channel only for its own member", async () => {
+    const sent: OutboundNotification[] = [];
+    const current = createTestStore(capturingSender(sent));
+    const owner = current.listWorkspaceMembers("local")[0]!;
+    const other = current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-other",
+      name: "Other member",
+      role: "member",
+    });
+    createChannel(current, { eventTypes: ["*"], memberId: owner.id, chatId: "oc_owner_group" });
+
+    createAssignedIssue(current, "Someone else's item", other);
+    await Bun.sleep(10);
+    expect(current.listNotificationDeliveries({ workspaceId: "local" })).toEqual([]);
+    expect(sent).toEqual([]);
+
+    createAssignedIssue(current, "The owner's own item", owner);
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" });
+    expect(pending).toHaveLength(1);
+    await waitForDelivery(current, pending[0]!.id, "sent");
+    expect(sent.map((notification) => notification.chatId)).toEqual(["oc_owner_group"]);
+  });
+
+  it("keeps mirroring a workspace-level channel for every member", async () => {
+    const sent: OutboundNotification[] = [];
+    const current = createTestStore(capturingSender(sent));
+    const other = current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-other",
+      name: "Other member",
+      role: "member",
+    });
+    createChannel(current, { eventTypes: ["*"] });
+
+    createAssignedIssue(current, "Workspace-wide mirror", other);
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" });
+    expect(pending).toHaveLength(1);
+    await waitForDelivery(current, pending[0]!.id, "sent");
+    expect(sent.map((notification) => notification.chatId)).toEqual(["oc_team_123"]);
   });
 
   it("does not fan out through a disabled channel", async () => {
@@ -402,7 +448,7 @@ describe("Multiremi notification channels", () => {
     expect(failed.lastError).not.toContain(appSecret.trim());
   });
 
-  it("forbids non-admin members from creating outbound channels", async () => {
+  it("forbids non-admin members from creating workspace-level outbound channels", async () => {
     const current = createTestStore(capturingSender([]));
     current.createWorkspaceMember({
       workspaceId: "local",
@@ -423,6 +469,7 @@ describe("Multiremi notification channels", () => {
       headers: jsonHeaders(memberToken.token),
       body: JSON.stringify({
         workspaceId: "local",
+        scope: "workspace",
         kind: "feishu_group",
         name: "Forbidden target",
         target: { chatId: "oc_team_123" },
@@ -432,6 +479,188 @@ describe("Multiremi notification channels", () => {
 
     expect(response.status).toBe(403);
     expect(current.listNotificationChannels("local")).toEqual([]);
+  });
+
+  it("lets a plain member own a personal channel and defaults to that scope", async () => {
+    const current = createTestStore(capturingSender([]));
+    const member = current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-member",
+      name: "Notification member",
+      role: "member",
+    });
+    const memberToken = await current.createAccessToken({
+      name: "Member token",
+      type: "pat",
+      workspaceId: "local",
+      userId: "notification-member",
+    });
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+
+    const response = await app.request("/api/multiremi/notification-channels", {
+      method: "POST",
+      headers: jsonHeaders(memberToken.token),
+      body: JSON.stringify({
+        workspaceId: "local",
+        kind: "feishu_group",
+        name: "My own group",
+        target: { chatId: "oc_my_own_group" },
+        eventTypes: ["*"],
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const { channel } = await response.json() as { channel: { memberId: string | null } };
+    expect(channel.memberId).toBe(member.id);
+  });
+
+  it("refuses to let a member name someone else as the channel owner", async () => {
+    const current = createTestStore(capturingSender([]));
+    const victim = current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-victim",
+      name: "Victim",
+      role: "member",
+    });
+    current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-attacker",
+      name: "Attacker",
+      role: "member",
+    });
+    const attackerToken = await current.createAccessToken({
+      name: "Attacker token",
+      type: "pat",
+      workspaceId: "local",
+      userId: "notification-attacker",
+    });
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+
+    for (const field of ["memberId", "member_id", "ownerId", "owner_id"]) {
+      const response = await app.request("/api/multiremi/notification-channels", {
+        method: "POST",
+        headers: jsonHeaders(attackerToken.token),
+        body: JSON.stringify({
+          workspaceId: "local",
+          kind: "feishu_group",
+          name: "Hijack",
+          target: { chatId: "oc_attacker_group" },
+          eventTypes: ["*"],
+          [field]: victim.id,
+        }),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(current.listNotificationChannels("local")).toEqual([]);
+  });
+
+  it("hides another member's personal channel and its delivery trail", async () => {
+    const sent: OutboundNotification[] = [];
+    const current = createTestStore(capturingSender(sent));
+    const admin = current.listWorkspaceMembers("local")[0]!;
+    const nosy = current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-nosy",
+      name: "Nosy member",
+      role: "member",
+    });
+    const nosyToken = await current.createAccessToken({
+      name: "Nosy token",
+      type: "pat",
+      workspaceId: "local",
+      userId: "notification-nosy",
+    });
+    createChannel(current, {
+      eventTypes: ["*"],
+      memberId: admin.id,
+      chatId: "oc_private_group",
+      name: "Admin private",
+    });
+    createChannel(current, { eventTypes: ["*"], name: "Shared" });
+    createAssignedIssue(current, "Two mirrors", admin);
+    await Bun.sleep(10);
+    // The admin's item matched both channels; only the shared one is anyone else's business.
+    expect(current.listNotificationDeliveries({ workspaceId: "local" })).toHaveLength(2);
+
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+    const channelsResponse = await app.request(
+      "/api/multiremi/notification-channels?workspaceId=local",
+      { headers: jsonHeaders(nosyToken.token) },
+    );
+    const channels = await channelsResponse.json() as { channels: MultiremiNotificationChannel[] };
+    expect(channels.channels.map((channel) => channel.name)).toEqual(["Shared"]);
+    expect(JSON.stringify(channels)).not.toContain("oc_private_group");
+
+    const deliveriesResponse = await app.request(
+      "/api/multiremi/notification-deliveries?workspaceId=local",
+      { headers: jsonHeaders(nosyToken.token) },
+    );
+    const deliveries = await deliveriesResponse.json() as { deliveries: MultiremiNotificationDelivery[] };
+    expect(deliveries.deliveries.map((delivery) => delivery.targetLabel)).toEqual(["Shared"]);
+    expect(nosy.id).not.toBe(admin.id);
+  });
+
+  it("shows a task token workspace-level deliveries only", async () => {
+    const current = createTestStore(capturingSender([]));
+    const owner = current.listWorkspaceMembers("local")[0]!;
+    const taskToken = await current.createAccessToken({
+      name: "Notification reader",
+      type: "task",
+      workspaceId: "local",
+      userId: "local",
+      taskId: "tsk_notification_read",
+      agentId: "agt_notification_read",
+    });
+    createChannel(current, { eventTypes: ["*"], memberId: owner.id, chatId: "oc_private_group", name: "Private" });
+    createChannel(current, { eventTypes: ["*"], name: "Shared" });
+    createAssignedIssue(current, "Task token visibility", owner);
+    await Bun.sleep(10);
+
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+    const response = await app.request(
+      "/api/multiremi/notification-deliveries?workspaceId=local",
+      { headers: jsonHeaders(taskToken.token) },
+    );
+    const body = await response.json() as { deliveries: MultiremiNotificationDelivery[] };
+
+    // Failure visibility for shared routing stays available to agents; a member's own
+    // outbound targets do not leak into anything an agent can read.
+    expect(body.deliveries.map((delivery) => delivery.targetLabel)).toEqual(["Shared"]);
+  });
+
+  it("refuses a member retrying another member's personal delivery", async () => {
+    const sender: OutboundNotificationSender = {
+      async send(): Promise<void> {
+        throw new PermanentNotificationDeliveryError("permanent outbound failure");
+      },
+    };
+    const current = createTestStore(sender);
+    const owner = current.listWorkspaceMembers("local")[0]!;
+    current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-outsider",
+      name: "Outsider",
+      role: "member",
+    });
+    const outsiderToken = await current.createAccessToken({
+      name: "Outsider token",
+      type: "pat",
+      workspaceId: "local",
+      userId: "notification-outsider",
+    });
+    createChannel(current, { eventTypes: ["*"], memberId: owner.id, chatId: "oc_owner_group" });
+    createAssignedIssue(current, "Owner-only failure", owner);
+    const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
+    const failed = await waitForDelivery(current, pending.id, "failed");
+
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+    const response = await app.request(
+      `/api/multiremi/notification-deliveries/${failed.id}/retry`,
+      { method: "POST", headers: jsonHeaders(outsiderToken.token) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(current.getNotificationDelivery(failed.id)!.status).toBe("failed");
   });
 
   it("hard-denies task credentials from configuring an outbound target", async () => {
@@ -768,22 +997,23 @@ function createTestStore(
 
 function createChannel(
   current: MultiremiStore,
-  input: { enabled?: boolean; eventTypes: string[] },
-): void {
-  current.createNotificationChannel({
+  input: { enabled?: boolean; eventTypes: string[]; memberId?: string | null; chatId?: string; name?: string },
+): MultiremiNotificationChannel {
+  return current.createNotificationChannel({
     workspaceId: "local",
+    memberId: input.memberId,
     kind: "feishu_group",
-    name: "Team notifications",
+    name: input.name ?? "Team notifications",
     enabled: input.enabled,
-    target: { chatId: "oc_team_123" },
+    target: { chatId: input.chatId ?? "oc_team_123" },
     eventTypes: input.eventTypes,
     minSeverity: "info",
     createdBy: "local",
   });
 }
 
-function createAssignedIssue(current: MultiremiStore, title: string) {
-  const member = current.listWorkspaceMembers("local")[0]!;
+function createAssignedIssue(current: MultiremiStore, title: string, assignee?: MultiremiWorkspaceMember) {
+  const member = assignee ?? current.listWorkspaceMembers("local")[0]!;
   const issue = current.createIssue({ title, workspaceId: "local" });
   current.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
   return { issue, member };

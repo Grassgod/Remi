@@ -23,6 +23,8 @@ const SEVERITY_RANK: Record<string, number> = {
 
 export interface CreateNotificationChannelInput {
   workspaceId: string;
+  /** null/undefined = workspace-level channel; otherwise the owning member id. */
+  memberId?: string | null;
   kind: MultiremiNotificationChannelKind;
   name: string;
   enabled?: boolean;
@@ -39,6 +41,11 @@ export interface UpdateNotificationChannelInput {
   eventTypes?: unknown;
   minSeverity?: string;
 }
+
+export type DeliveryVisibilityScope =
+  | { kind: "all" }
+  | { kind: "member"; memberId: string }
+  | { kind: "workspaceOnly" };
 
 export interface NotificationDeliveryContext {
   delivery: MultiremiNotificationDelivery;
@@ -77,6 +84,19 @@ export class NotificationChannelsRepo {
     return rows.map(toNotificationChannel);
   }
 
+  /**
+   * What one member is allowed to see: the workspace-level channels plus their own.
+   * Other members' personal channels — and the group ids inside them — stay hidden.
+   */
+  listChannelsVisibleToMember(workspaceId: string, memberId: string): MultiremiNotificationChannel[] {
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_notification_channels
+       WHERE workspace_id = ? AND (member_id IS NULL OR member_id = ?)
+       ORDER BY created_at ASC, id ASC`,
+    ).all(workspaceId, memberId) as Row[];
+    return rows.map(toNotificationChannel);
+  }
+
   createChannel(input: CreateNotificationChannelInput): MultiremiNotificationChannel {
     const workspaceId = requiredString(input.workspaceId, "workspaceId");
     if (input.kind !== "feishu_group") {
@@ -93,12 +113,13 @@ export class NotificationChannelsRepo {
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_notification_channels (
-        id, workspace_id, kind, name, enabled, target, event_types, min_severity,
+        id, workspace_id, member_id, kind, name, enabled, target, event_types, min_severity,
         created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         workspaceId,
+        ownerMemberId(input.memberId),
         input.kind,
         name,
         input.enabled === false ? 0 : 1,
@@ -158,11 +179,23 @@ export class NotificationChannelsRepo {
     ).changes > 0;
   }
 
-  matchRoutes(workspaceId: string, inboxType: string, severity: string): MultiremiNotificationChannel[] {
+  /**
+   * Routes for one inbox item. `memberId` is the item's recipient: workspace-level
+   * channels apply to everyone, personal channels only to their owner. A member can
+   * never receive a mirror of someone else's inbox item.
+   */
+  matchRoutes(
+    workspaceId: string,
+    memberId: string,
+    inboxType: string,
+    severity: string,
+  ): MultiremiNotificationChannel[] {
     const incomingRank = severityRank(severity);
+    const recipient = typeof memberId === "string" ? memberId.trim() : "";
     return this.listChannels(workspaceId).filter((channel) =>
       channel.enabled
       && channel.kind === "feishu_group"
+      && (channel.memberId === null || (recipient !== "" && channel.memberId === recipient))
       && (channel.eventTypes.includes("*") || channel.eventTypes.includes(inboxType))
       && incomingRank >= severityRank(channel.minSeverity)
     );
@@ -207,19 +240,52 @@ export class NotificationChannelsRepo {
     workspaceId: string;
     status?: MultiremiNotificationDeliveryStatus | null;
     limit?: number;
+    /**
+     * Who is asking. `all` is the admin view. `member` adds the caller's own personal
+     * channels on top of the workspace-level ones. `workspaceOnly` is for callers with
+     * no member identity (task tokens) — they never see a personal channel's rows.
+     * Deliveries whose channel row is already deleted stay visible in every scope: a
+     * removed channel must not bury the failure record it produced.
+     */
+    scope?: DeliveryVisibilityScope;
   }): MultiremiNotificationDelivery[] {
     const limit = normalizeLimit(input.limit);
-    const rows = input.status
-      ? this.ctx.db.query(
-        `SELECT * FROM multiremi_notification_deliveries
-         WHERE workspace_id = ? AND status = ?
-         ORDER BY created_at DESC, id DESC LIMIT ?`,
-      ).all(input.workspaceId, input.status, limit) as Row[]
-      : this.ctx.db.query(
-        `SELECT * FROM multiremi_notification_deliveries
-         WHERE workspace_id = ?
-         ORDER BY created_at DESC, id DESC LIMIT ?`,
-      ).all(input.workspaceId, limit) as Row[];
+    const scope = input.scope ?? { kind: "all" };
+    const conditions = ["workspace_id = ?"];
+    const values: unknown[] = [input.workspaceId];
+    if (input.status) {
+      conditions.push("status = ?");
+      values.push(input.status);
+    }
+    if (scope.kind !== "all") {
+      // Split rather than parameterising `? IS NULL`: Postgres cannot infer a type for a
+      // bare placeholder in that position, and this query runs on both backends.
+      const owned = scope.kind === "member" ? ownerMemberId(scope.memberId) : null;
+      if (owned === null) {
+        conditions.push(
+          `NOT EXISTS (
+             SELECT 1 FROM multiremi_notification_channels ch
+             WHERE ch.id = multiremi_notification_deliveries.channel_id
+               AND ch.member_id IS NOT NULL
+           )`,
+        );
+      } else {
+        conditions.push(
+          `NOT EXISTS (
+             SELECT 1 FROM multiremi_notification_channels ch
+             WHERE ch.id = multiremi_notification_deliveries.channel_id
+               AND ch.member_id IS NOT NULL AND ch.member_id <> ?
+           )`,
+        );
+        values.push(owned);
+      }
+    }
+    values.push(limit);
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_notification_deliveries
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
+    ).all(...values) as Row[];
     return rows.map(toNotificationDelivery);
   }
 
@@ -300,6 +366,16 @@ export class NotificationChannelsRepo {
   }
 }
 
+/**
+ * Owner ids only ever come from a resolved workspace member, never from a request
+ * body. Anything blank collapses to null (= workspace level) so a "" can never
+ * become a channel nobody owns but everybody skips.
+ */
+function ownerMemberId(value: unknown): string | null {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized === "" ? null : normalized;
+}
+
 function requiredString(value: unknown, name: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized) throw new NotificationChannelValidationError(`${name} is required`);
@@ -344,6 +420,7 @@ function toNotificationChannel(row: Row): MultiremiNotificationChannel {
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id ?? "local"),
+    memberId: ownerMemberId(row.member_id),
     kind: String(row.kind) as MultiremiNotificationChannelKind,
     name: String(row.name ?? ""),
     enabled: Number(row.enabled ?? 0) === 1,
