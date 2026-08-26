@@ -3516,6 +3516,8 @@ export interface MultiremiScmSyncCursor {
   lastStartedAt: string | null;
   lastCompletedAt: string | null;
   lastError: string | null;
+  consecutiveFailures: number;
+  suspendedUntil: string | null;
   leaseOwner: string | null;
   leaseUntil: string | null;
   leaseToken: string | null;
@@ -3532,6 +3534,8 @@ export interface UpsertScmSyncCursorInput {
   lastStartedAt?: string | null;
   lastCompletedAt?: string | null;
   lastError?: string | null;
+  consecutiveFailures?: number;
+  suspendedUntil?: string | null;
 }
 
 export interface ClaimScmSyncStreamInput {

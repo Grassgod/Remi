@@ -1,8 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import type { MultiremiScmSyncStream } from "@multiremi/contracts/types.js";
 import { GITHUB_SCM_CAPABILITIES } from "@multiremi/scm/capabilities.js";
+import { ScmHttpError } from "@multiremi/scm/http.js";
 import { pollIsDue, ScmPollingScheduler } from "@multiremi/scm/poller.js";
-import type { ScmPollContext, ScmPollPage, ScmProviderAdapter } from "@multiremi/scm/types.js";
+import {
+  ScmStreamUnavailableError,
+  type ScmPollContext,
+  type ScmPollPage,
+  type ScmProviderAdapter,
+} from "@multiremi/scm/types.js";
 import { MemoryScmIngestionStore, scmConnection } from "./scm-test-helpers.js";
 
 class FakeAdapter implements ScmProviderAdapter {
@@ -11,10 +17,11 @@ class FakeAdapter implements ScmProviderAdapter {
   calls: MultiremiScmSyncStream[] = [];
   head = "aaa";
   failStream: MultiremiScmSyncStream | null = null;
+  failError: Error = new Error("provider unavailable");
 
   async poll(context: ScmPollContext): Promise<ScmPollPage> {
     this.calls.push(context.stream);
-    if (context.stream === this.failStream) throw new Error("provider unavailable");
+    if (context.stream === this.failStream) throw this.failError;
     const observedAt = context.now.toISOString();
     if (context.stream === "default_branch") {
       return {
@@ -124,8 +131,40 @@ describe("SCM polling scheduler", () => {
     expect(result.failed).toBe(1);
     const cursor = store.getSyncCursor("scm_1", "repo_1", "reviews");
     expect(cursor?.lastError).toBe("provider unavailable");
+    expect(cursor?.consecutiveFailures).toBe(1);
+    expect(cursor?.suspendedUntil).toBeNull();
     expect(cursor?.lastCompletedAt).toBeNull();
     expect(cursor?.baselineCompletedAt).toBeNull();
+
+    adapter.failStream = null;
+    const recovered = await scheduler.runOnce(new Date("2026-08-21T08:01:00.000Z"));
+    expect(recovered.failed).toBe(0);
+    const recoveredCursor = store.getSyncCursor("scm_1", "repo_1", "reviews");
+    expect(recoveredCursor?.lastError).toBeNull();
+    expect(recoveredCursor?.consecutiveFailures).toBe(0);
+    expect(recoveredCursor?.suspendedUntil).toBeNull();
+  });
+
+  it("persists contextual HTTP errors without URL query parameters", async () => {
+    const store = new MemoryScmIngestionStore();
+    const adapter = new FakeAdapter();
+    adapter.failStream = "reviews";
+    adapter.failError = new ScmHttpError(
+      "SCM provider request failed (503)",
+      503,
+      null,
+      "",
+      "https://api.github.com/repos/acme/widgets/pulls?page=1&token=secret",
+      "GET",
+    );
+    const scheduler = new ScmPollingScheduler({ store, adapters: [adapter] });
+
+    await scheduler.runOnce(new Date("2026-08-21T08:00:00.000Z"));
+
+    const lastError = store.getSyncCursor("scm_1", "repo_1", "reviews")?.lastError;
+    expect(lastError).toBe("GitHub reviews poll failed: GET /repos/acme/widgets/pulls -> 503");
+    expect(lastError).not.toContain("token");
+    expect(lastError).not.toContain("secret");
   });
 
   it("uses provider cursors immediately but observes connection poll intervals after completion", () => {
@@ -136,7 +175,8 @@ describe("SCM polling scheduler", () => {
       connectionId: "scm_1", repositoryId: "repo_1", stream: "comments" as const,
       cursor: null, watermark: null, baselineCompletedAt: "2026-08-21T07:00:00.000Z",
       lastStartedAt: "2026-08-21T08:00:30.000Z", lastCompletedAt: "2026-08-21T08:00:30.000Z",
-      lastError: null, leaseOwner: null, leaseUntil: null, leaseToken: null,
+      lastError: null, consecutiveFailures: 0, suspendedUntil: null,
+      leaseOwner: null, leaseUntil: null, leaseToken: null,
       updatedAt: "2026-08-21T08:00:30.000Z",
     };
     expect(pollIsDue(connection, cursor, now)).toBe(false);
@@ -153,6 +193,107 @@ describe("SCM polling scheduler", () => {
       leaseToken: "lease-a",
       leaseUntil: "2026-08-21T08:00:59.000Z",
     }, now)).toBe(true);
+  });
+
+  it("backs off failed streams without ever polling them faster than healthy streams", () => {
+    const connection = scmConnection({ pollIntervalSeconds: 60 });
+    const cursor = {
+      connectionId: "scm_1",
+      repositoryId: "repo_1",
+      stream: "reviews" as const,
+      cursor: null,
+      watermark: null,
+      baselineCompletedAt: null,
+      lastStartedAt: "2026-08-21T08:00:00.000Z",
+      lastCompletedAt: null,
+      lastError: null,
+      consecutiveFailures: 0,
+      suspendedUntil: null,
+      leaseOwner: null,
+      leaseUntil: null,
+      leaseToken: null,
+      updatedAt: "2026-08-21T08:00:00.000Z",
+    };
+
+    const healthyDueAt = new Date("2026-08-21T08:01:00.000Z");
+    expect(pollIsDue(connection, cursor, healthyDueAt)).toBe(true);
+    expect(pollIsDue(connection, {
+      ...cursor,
+      lastError: "failed",
+      consecutiveFailures: 1,
+    }, healthyDueAt)).toBe(true);
+    expect(pollIsDue(connection, {
+      ...cursor,
+      lastError: "failed",
+      consecutiveFailures: 2,
+    }, healthyDueAt)).toBe(false);
+    expect(pollIsDue(connection, {
+      ...cursor,
+      lastError: "failed",
+      consecutiveFailures: 2,
+    }, new Date("2026-08-21T08:02:00.000Z"))).toBe(true);
+    expect(pollIsDue(connection, {
+      ...cursor,
+      lastError: "failed",
+      consecutiveFailures: 20,
+    }, new Date("2026-08-21T08:29:59.000Z"))).toBe(false);
+    expect(pollIsDue(connection, {
+      ...cursor,
+      lastError: "failed",
+      consecutiveFailures: 20,
+    }, new Date("2026-08-21T08:30:00.000Z"))).toBe(true);
+  });
+
+  it("honors suspended_until before resumable cursors", () => {
+    const connection = scmConnection({ pollIntervalSeconds: 60 });
+    const cursor = {
+      connectionId: "scm_1",
+      repositoryId: "repo_1",
+      stream: "comments" as const,
+      cursor: { kind: "review", page: 2 },
+      watermark: null,
+      baselineCompletedAt: null,
+      lastStartedAt: "2026-08-21T08:00:00.000Z",
+      lastCompletedAt: null,
+      lastError: "unavailable",
+      consecutiveFailures: 1,
+      suspendedUntil: "2026-08-21T14:00:00.000Z",
+      leaseOwner: null,
+      leaseUntil: null,
+      leaseToken: null,
+      updatedAt: "2026-08-21T08:00:00.000Z",
+    };
+    expect(pollIsDue(connection, cursor, new Date("2026-08-21T13:59:59.000Z"))).toBe(false);
+    expect(pollIsDue(connection, cursor, new Date("2026-08-21T14:00:00.000Z"))).toBe(true);
+  });
+
+  it("cools down an unavailable stream and does not call it again during suspension", async () => {
+    const store = new MemoryScmIngestionStore();
+    const adapter = new FakeAdapter();
+    adapter.failStream = "reviews";
+    adapter.failError = new ScmStreamUnavailableError(
+      "GitHub",
+      "reviews",
+      404,
+      "/repos/acme/widgets/pulls",
+      "pull requests unavailable",
+    );
+    let clock = new Date("2026-08-21T08:00:00.000Z");
+    const scheduler = new ScmPollingScheduler({ store, adapters: [adapter], now: () => clock });
+
+    const first = await scheduler.runOnce(clock);
+    expect(first.failed).toBe(1);
+    const cursor = store.getSyncCursor("scm_1", "repo_1", "reviews");
+    expect(cursor?.lastError).toBe(
+      "GitHub reviews poll failed: GET /repos/acme/widgets/pulls -> 404 (pull requests unavailable)",
+    );
+    expect(cursor?.consecutiveFailures).toBe(1);
+    expect(cursor?.suspendedUntil).toBe("2026-08-21T14:00:00.000Z");
+    expect(adapter.calls.filter((stream) => stream === "reviews")).toHaveLength(1);
+
+    clock = new Date("2026-08-21T13:59:59.000Z");
+    await scheduler.runOnce(clock);
+    expect(adapter.calls.filter((stream) => stream === "reviews")).toHaveLength(1);
   });
 
   it("uses a shared store lease to fence concurrent scheduler instances", async () => {
