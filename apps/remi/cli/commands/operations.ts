@@ -265,6 +265,22 @@ function feishuSpecs(): CommandSpec[] {
     unprocessed_retry_seconds: integerOption(i, "unprocessed-retry-seconds") ?? undefined,
     unprocessed_retry_limit: integerOption(i, "unprocessed-retry-limit") ?? undefined,
   });
+  const issueProposalOptions: readonly CliOptionSpec[] = [
+    { name: "title", type: "string", valueName: "text", required: true, description: "Issue title" },
+    { name: "description", type: "string", valueName: "text", description: "Issue description" },
+    { name: "project-id", type: "string", valueName: "id", description: "Project ID" },
+    { name: "priority", type: "string", valueName: "priority", description: "Issue priority" },
+    { name: "assignee-type", type: "string", valueName: "type", description: "Suggested assignee type" },
+    { name: "assignee-id", type: "string", valueName: "id", description: "Suggested assignee ID" },
+  ];
+  const issueProposalBody = (i: CommandInvocation) => requestBody(i, {
+    title: requiredStringOption(i, "title"),
+    description: stringOption(i, "description") ?? undefined,
+    project_id: stringOption(i, "project-id") ?? undefined,
+    priority: stringOption(i, "priority") ?? undefined,
+    assignee_type: stringOption(i, "assignee-type") ?? undefined,
+    assignee_id: stringOption(i, "assignee-id") ?? undefined,
+  });
   return [
     group("feishu", "Ingest and process allowlisted Feishu messages"),
     op({ id: "feishu.source.list", path: ["feishu", "source", "list"], description: "List Feishu message sources", method: "GET", apiPath: (i) => `${workspaceBase(i)}/sources`, auth: HUMAN, collections: ["sources"] }),
@@ -321,24 +337,22 @@ function feishuSpecs(): CommandSpec[] {
       method: "POST",
       apiPath: (i) => `${workspaceBase(i)}/messages/${encodePath(positional(i, 0, "message"))}/create-issue`,
       mutation: "write",
+      auth: HUMAN,
+      positionals: [ref("message")],
+      options: issueProposalOptions,
+      body: issueProposalBody,
+    }),
+    op({
+      id: "feishu.messages.propose-issue",
+      path: ["feishu", "messages", "propose-issue"],
+      description: "Propose an Issue for human approval and resolve a Feishu message",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/messages/${encodePath(positional(i, 0, "message"))}/propose-issue`,
+      mutation: "write",
       auth: HUMAN_TASK,
       positionals: [ref("message")],
-      options: [
-        { name: "title", type: "string", valueName: "text", required: true, description: "Issue title" },
-        { name: "description", type: "string", valueName: "text", description: "Issue description" },
-        { name: "project-id", type: "string", valueName: "id", description: "Project ID" },
-        { name: "priority", type: "string", valueName: "priority", description: "Issue priority" },
-        { name: "assignee-type", type: "string", valueName: "type", description: "Assignee type" },
-        { name: "assignee-id", type: "string", valueName: "id", description: "Assignee ID" },
-      ],
-      body: (i) => requestBody(i, {
-        title: requiredStringOption(i, "title"),
-        description: stringOption(i, "description") ?? undefined,
-        project_id: stringOption(i, "project-id") ?? undefined,
-        priority: stringOption(i, "priority") ?? undefined,
-        assignee_type: stringOption(i, "assignee-type") ?? undefined,
-        assignee_id: stringOption(i, "assignee-id") ?? undefined,
-      }),
+      options: issueProposalOptions,
+      body: issueProposalBody,
     }),
     op({
       id: "feishu.messages.notify",
@@ -363,6 +377,26 @@ function feishuSpecs(): CommandSpec[] {
       positionals: [ref("message")],
       options: [{ name: "draft-text", type: "string", valueName: "text", required: true, description: "Reply draft text" }],
       body: (i) => requestBody(i, { draft_text: requiredStringOption(i, "draft-text") }),
+    }),
+    op({
+      id: "feishu.proposals.approve",
+      path: ["feishu", "proposals", "approve"],
+      description: "Approve a Feishu Issue proposal",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/proposals/${encodePath(positional(i, 0, "proposal"))}/approve`,
+      mutation: "write",
+      auth: HUMAN,
+      positionals: [ref("proposal")],
+    }),
+    op({
+      id: "feishu.proposals.reject",
+      path: ["feishu", "proposals", "reject"],
+      description: "Reject a Feishu Issue proposal",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/proposals/${encodePath(positional(i, 0, "proposal"))}/reject`,
+      mutation: "write",
+      auth: HUMAN,
+      positionals: [ref("proposal")],
     }),
   ];
 }

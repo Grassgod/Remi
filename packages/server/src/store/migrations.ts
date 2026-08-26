@@ -7,6 +7,7 @@ const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
 const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
 const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_delivery_v3";
+const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4";
 const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
@@ -1236,6 +1237,10 @@ export function runMigrations(db: SqlDatabase): void {
       ref TEXT,
       reason TEXT,
       task_id TEXT,
+      proposal_payload TEXT NOT NULL DEFAULT '{}',
+      proposal_status TEXT NOT NULL DEFAULT 'not_applicable',
+      proposal_resolved_at TEXT,
+      proposal_resolved_by TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY(message_id) REFERENCES multiremi_feishu_messages(message_id) ON DELETE CASCADE,
       FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
@@ -1246,7 +1251,6 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_message_outcomes_task
       ON multiremi_feishu_message_outcomes(task_id, created_at)
       WHERE task_id IS NOT NULL;
-
     CREATE TABLE IF NOT EXISTS multiremi_webhook_deliveries (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1950,6 +1954,7 @@ export function runMigrations(db: SqlDatabase): void {
   ensureInboxGenericSchema(db);
   runMigrationOnce(db, FEISHU_INGEST_V2_MIGRATION, () => ensureFeishuIngestV2Schema(db));
   runMigrationOnce(db, FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION, () => ensureFeishuIngestAlertDeliveryV3Schema(db));
+  runMigrationOnce(db, FEISHU_ISSUE_PROPOSALS_V4_MIGRATION, () => ensureFeishuIssueProposalsV4Schema(db));
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_autopilots", "session_policy TEXT NOT NULL DEFAULT 'new'");
@@ -2394,6 +2399,28 @@ function ensureFeishuIngestAlertDeliveryV3Schema(db: SqlDatabase): void {
   );
   addColumnIfMissing(db, "multiremi_feishu_sources", "connection_alert_delivery_error_code TEXT");
   addColumnIfMissing(db, "multiremi_feishu_sources", "connection_alert_delivery_failed_at TEXT");
+}
+
+function ensureFeishuIssueProposalsV4Schema(db: SqlDatabase): void {
+  addColumnIfMissing(
+    db,
+    "multiremi_feishu_message_outcomes",
+    "proposal_payload TEXT NOT NULL DEFAULT '{}'",
+  );
+  addColumnIfMissing(
+    db,
+    "multiremi_feishu_message_outcomes",
+    "proposal_status TEXT NOT NULL DEFAULT 'not_applicable'",
+  );
+  addColumnIfMissing(db, "multiremi_feishu_message_outcomes", "proposal_resolved_at TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_message_outcomes", "proposal_resolved_by TEXT");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_feishu_issue_proposals_message
+      ON multiremi_feishu_message_outcomes(message_id)
+      WHERE outcome_kind = 'issue_proposed';
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_issue_proposals_status
+      ON multiremi_feishu_message_outcomes(workspace_id, outcome_kind, proposal_status, created_at);
+  `);
 }
 
 function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {

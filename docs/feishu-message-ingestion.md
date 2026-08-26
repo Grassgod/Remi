@@ -70,12 +70,15 @@ recreate the sidecar whenever it replaces the API container.
   recipient explicitly mutes this group, the system records a terminal
   `dismissed` outcome with reason `recipient_muted` instead of retrying and
   eventually reporting an unrelated processing timeout.
-- `create-issue` creates the Issue and its audited `issue_created` outcome in
-  one transaction. Replaying the command returns the same Issue instead of
-  creating a duplicate.
+- `propose-issue` creates a non-blocking Inbox proposal and audited
+  `issue_proposed` outcome. Only a human workspace admin can approve or reject
+  it; approval creates the Issue and `issue_created` outcome atomically and
+  idempotently, while rejection records `dismissed/proposal_rejected`.
+- The direct `create-issue` command is human-only. Task tokens cannot approve,
+  reject, or bypass the proposal flow.
 - Source status exposes the most recent successful ingestion, last sanitized
   error code, connection lag, consecutive failures, unresolved backlog, and
-  timeout count, and muted-delivery count through
+  timeout count, muted-delivery count, and pending Issue proposal count through
   `remi feishu source status <source>`.
 - After three consecutive connection failures, the workspace owner receives a
   deduplicated Inbox alert in the `system_notifications` group, independently

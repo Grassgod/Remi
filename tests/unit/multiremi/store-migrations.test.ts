@@ -75,6 +75,9 @@ describe("store migrations", () => {
     expect(tables).not.toContain("multiremi_github_settings");
     expect(tables).not.toContain("multiremi_github_pull_requests");
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
+    expect(columnNames(database, "multiremi_feishu_message_outcomes")).toEqual(expect.arrayContaining([
+      "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
+    ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
     expect(columnNames(database, "multiremi_autopilots")).toEqual(expect.arrayContaining([
       "session_policy", "workspace_policy",
@@ -209,6 +212,48 @@ describe("store migrations", () => {
     migrate(database);
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("upgrades Feishu outcome rows from v3 to issue proposal v4 idempotently", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      DROP INDEX idx_multiremi_feishu_issue_proposals_status;
+      DROP INDEX idx_multiremi_feishu_issue_proposals_message;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_payload;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_status;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_resolved_at;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_resolved_by;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_feishu_issue_proposals_v4';
+      INSERT INTO multiremi_feishu_message_outcomes (
+        id, workspace_id, message_id, outcome_kind, ref, reason, task_id, created_at
+      ) VALUES (
+        'fout_v3', 'local', 'om_v3', 'ignored', NULL, 'legacy', NULL,
+        '2026-08-26T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_feishu_message_outcomes")).toEqual(expect.arrayContaining([
+      "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
+    ]));
+    expect(database.query(
+      `SELECT proposal_payload, proposal_status, proposal_resolved_at, proposal_resolved_by
+       FROM multiremi_feishu_message_outcomes WHERE id = 'fout_v3'`,
+    ).get()).toEqual({
+      proposal_payload: "{}",
+      proposal_status: "not_applicable",
+      proposal_resolved_at: null,
+      proposal_resolved_by: null,
+    });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_feishu_issue_proposals_v4'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_feishu_issue_proposals_v4'",
     ).get()).toEqual({ count: 1 });
   });
 

@@ -307,6 +307,7 @@ describe("Feishu message ingestion", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "process messages" });
     const credential = await store.createTaskAccessToken(task, "local");
     const headers = { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" };
+    const humanHeaders = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
     const app = createMultiremiApp({ store, authToken: "root-secret", feishuSidecarEndpoints: sidecarEndpoints });
 
     const notification = await app.request("/api/workspaces/local/feishu/messages/om_notify/notify", {
@@ -358,7 +359,7 @@ describe("Feishu message ingestion", () => {
 
     const linkedIssue = await app.request("/api/workspaces/local/feishu/messages/om_issue/create-issue", {
       method: "POST",
-      headers,
+      headers: humanHeaders,
       body: JSON.stringify({ title: "Real Feishu follow-up", description: "Created atomically" }),
     });
     expect(linkedIssue.status).toBe(201);
@@ -369,7 +370,7 @@ describe("Feishu message ingestion", () => {
     ]);
     const replayedIssue = await app.request("/api/workspaces/local/feishu/messages/om_issue/create-issue", {
       method: "POST",
-      headers,
+      headers: humanHeaders,
       body: JSON.stringify({ title: "This retry must not create a duplicate" }),
     });
     expect(replayedIssue.status).toBe(200);
@@ -387,6 +388,168 @@ describe("Feishu message ingestion", () => {
     })).toThrow("Inbox recipient is unavailable");
     expect(store.listFeishuMessageOutcomes("om_no_recipient")).toEqual([]);
     expect(store.listInboxItems()).toHaveLength(inboxCountBefore);
+  });
+
+  it("requires human approval for proposed Issues and keeps proposals auditable after Inbox removal", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const source = store.createFeishuSource({
+      endpointName: "local",
+      enabled: false,
+      unprocessedRetrySeconds: 60,
+      allowlist: [{ chatId: "oc_proposals", addedAt: "2026-08-26T08:00:00.000Z" }],
+    });
+    store.ingestFeishuBatch(source.id, [
+      message("om_proposal_approve", "oc_proposals", "2026-08-26T08:01:00.000Z", "approve"),
+      message("om_proposal_reject", "oc_proposals", "2026-08-26T08:02:00.000Z", "reject"),
+      message("om_proposal_muted", "oc_proposals", "2026-08-26T08:03:00.000Z", "muted"),
+    ]);
+    const agent = store.createAgent({ name: "Proposal watcher", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "propose issues" });
+    const credential = await store.createTaskAccessToken(task, "local");
+    const taskHeaders = { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" };
+    const humanHeaders = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
+    const app = createMultiremiApp({ store, authToken: "root-secret", feishuSidecarEndpoints: sidecarEndpoints });
+
+    const directCreate = await app.request(
+      "/api/workspaces/local/feishu/messages/om_proposal_approve/create-issue",
+      { method: "POST", headers: taskHeaders, body: JSON.stringify({ title: "Bypass approval" }) },
+    );
+    expect(directCreate.status).toBe(403);
+    expect(await directCreate.json()).toMatchObject({ code: "human_approval_required" });
+    const forgedProposal = await app.request(
+      "/api/workspaces/local/feishu/messages/om_proposal_approve/resolve",
+      {
+        method: "POST",
+        headers: taskHeaders,
+        body: JSON.stringify({ outcome: "issue_proposed" }),
+      },
+    );
+    expect(forgedProposal.status).toBe(400);
+
+    const capturedLogs: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { capturedLogs.push(args.map(String).join(" ")); };
+    let proposed: Response;
+    try {
+      proposed = await app.request(
+        "/api/workspaces/local/feishu/messages/om_proposal_approve/propose-issue",
+        {
+          method: "POST",
+          headers: taskHeaders,
+          body: JSON.stringify({
+            title: "Human-reviewed follow-up",
+            description: "SENSITIVE_PROPOSAL_BODY must never enter logs",
+            priority: "high",
+          }),
+        },
+      );
+    } finally {
+      console.log = originalLog;
+    }
+    expect(capturedLogs.join("\n")).not.toContain("SENSITIVE_PROPOSAL_BODY");
+    expect(proposed.status).toBe(201);
+    const proposedBody = await proposed.json();
+    expect(proposedBody).toMatchObject({
+      delivered: true,
+      proposal: {
+        messageId: "om_proposal_approve",
+        status: "pending",
+        issue: { title: "Human-reviewed follow-up", priority: "high" },
+      },
+      outcome: { outcomeKind: "issue_proposed", ref: `inbox:${proposedBody.inboxItem.id}` },
+      inboxItem: {
+        type: "feishu_issue_proposal",
+        severity: "attention",
+        details: { proposal_id: proposedBody.proposal.id, message_id: "om_proposal_approve" },
+      },
+    });
+    expect(store.getFeishuMessage("om_proposal_approve")?.processedAt).toBeString();
+    expect(store.getFeishuMessage("om_proposal_approve")?.retryCount).toBe(0);
+    expect(store.getFeishuSourceStatus(source.id).pendingIssueProposalCount).toBe(1);
+    expect(store.reconcileUnprocessedFeishuMessages(source.id, new Date("2026-08-26T10:00:00.000Z"))).toMatchObject({
+      retried: 2,
+      dismissed: 0,
+    });
+
+    store.archiveInboxItem(proposedBody.inboxItem.id);
+    expect(store.getFeishuSourceStatus(source.id).pendingIssueProposalCount).toBe(1);
+    db!.run("DELETE FROM multiremi_inbox_items WHERE id = ?", [proposedBody.inboxItem.id]);
+    expect(store.getFeishuSourceStatus(source.id).pendingIssueProposalCount).toBe(1);
+
+    for (const action of ["approve", "reject"]) {
+      const denied = await app.request(
+        `/api/workspaces/local/feishu/proposals/${proposedBody.proposal.id}/${action}`,
+        { method: "POST", headers: taskHeaders },
+      );
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toMatchObject({ code: "human_approval_required" });
+    }
+
+    const approved = await app.request(
+      `/api/workspaces/local/feishu/proposals/${proposedBody.proposal.id}/approve`,
+      { method: "POST", headers: humanHeaders },
+    );
+    expect(approved.status).toBe(201);
+    const approvedBody = await approved.json();
+    expect(approvedBody).toMatchObject({
+      created: true,
+      proposal: { status: "approved" },
+      outcome: { outcomeKind: "issue_created", ref: `issue:${approvedBody.issue.id}` },
+      issue: { title: "Human-reviewed follow-up" },
+    });
+    const approvedAgain = await app.request(
+      `/api/workspaces/local/feishu/proposals/${proposedBody.proposal.id}/approve`,
+      { method: "POST", headers: humanHeaders },
+    );
+    expect(approvedAgain.status).toBe(200);
+    expect(await approvedAgain.json()).toMatchObject({ created: false, issue: { id: approvedBody.issue.id } });
+    expect(store.listIssues({ workspaceId: "local" }).filter((issue) => issue.id === approvedBody.issue.id)).toHaveLength(1);
+    expect(store.getFeishuSourceStatus(source.id).pendingIssueProposalCount).toBe(0);
+
+    const rejectedProposal = await app.request(
+      "/api/workspaces/local/feishu/messages/om_proposal_reject/propose-issue",
+      { method: "POST", headers: taskHeaders, body: JSON.stringify({ title: "Do not create this" }) },
+    );
+    expect(rejectedProposal.status).toBe(201);
+    const rejectedProposalBody = await rejectedProposal.json();
+    const rejected = await app.request(
+      `/api/workspaces/local/feishu/proposals/${rejectedProposalBody.proposal.id}/reject`,
+      { method: "POST", headers: humanHeaders },
+    );
+    expect(rejected.status).toBe(200);
+    expect(await rejected.json()).toMatchObject({
+      created: true,
+      issue: null,
+      proposal: { status: "rejected" },
+      outcome: { outcomeKind: "dismissed", reason: "proposal_rejected" },
+    });
+    const rejectedAgain = await app.request(
+      `/api/workspaces/local/feishu/proposals/${rejectedProposalBody.proposal.id}/reject`,
+      { method: "POST", headers: humanHeaders },
+    );
+    expect(await rejectedAgain.json()).toMatchObject({ created: false, proposal: { status: "rejected" } });
+    expect(store.getFeishuSourceStatus(source.id).pendingIssueProposalCount).toBe(0);
+
+    store.updateNotificationPreferences({ preferences: { feishu_messages: "muted" } });
+    const muted = await app.request(
+      "/api/workspaces/local/feishu/messages/om_proposal_muted/propose-issue",
+      { method: "POST", headers: taskHeaders, body: JSON.stringify({ title: "Muted proposal" }) },
+    );
+    expect(muted.status).toBe(200);
+    expect(await muted.json()).toMatchObject({
+      delivered: false,
+      proposal: null,
+      inboxItem: null,
+      outcome: { outcomeKind: "dismissed", reason: "recipient_muted" },
+    });
+    expect(store.getFeishuMessage("om_proposal_muted")?.processedAt).toBeString();
+    expect(store.getFeishuSourceStatus(source.id)).toMatchObject({
+      pendingIssueProposalCount: 0,
+      mutedDeliveryCount: 1,
+      timedOutCount: 0,
+      unprocessedCount: 0,
+    });
   });
 
   it("audits muted Feishu deliveries without suppressing connection alerts", async () => {

@@ -2683,6 +2683,7 @@ export interface MultiremiFeishuSourceStatus {
   unprocessedCount: number;
   timedOutCount: number;
   mutedDeliveryCount: number;
+  pendingIssueProposalCount: number;
   oldestUnprocessedAt: string | null;
   maximumRetryCount: number;
   lastSuccessfulIngestAt: string | null;
@@ -2697,6 +2698,7 @@ export interface MultiremiFeishuSourceStatus {
 }
 
 export type MultiremiFeishuMessageOutcomeKind =
+  | "issue_proposed"
   | "issue_created"
   | "notified"
   | "reply_drafted"
@@ -2743,6 +2745,20 @@ export interface CreateIssueFromMultiremiFeishuMessageInput {
   assignee_type?: MultiremiAssigneeType | null;
   assigneeId?: string | null;
   assignee_id?: string | null;
+}
+
+export type MultiremiFeishuIssueProposalStatus = "pending" | "approved" | "rejected";
+
+export interface MultiremiFeishuIssueProposal {
+  id: string;
+  workspaceId: string;
+  messageId: string;
+  inboxItemId: string | null;
+  issue: CreateIssueFromMultiremiFeishuMessageInput;
+  status: MultiremiFeishuIssueProposalStatus;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  createdAt: string;
 }
 
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────

@@ -847,7 +847,11 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
   if (type === "issue_assigned" || type === "unassigned") return "assignments";
   if (type === "comment_created" || type === "comment_mention") return "comments";
   if (type === "status_changed") return "status_changes";
-  if (type === "feishu_message_notification" || type === "feishu_reply_draft") return "feishu_messages";
+  if (
+    type === "feishu_message_notification"
+    || type === "feishu_reply_draft"
+    || type === "feishu_issue_proposal"
+  ) return "feishu_messages";
   if (type === "feishu_ingest_connection_alert") return "system_notifications";
   if (type.startsWith("agent_")) return "agent_activity";
   if (type.startsWith("system_") || type === "autopilot_paused") return "system_notifications";

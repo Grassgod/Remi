@@ -129,7 +129,7 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
     return createInboxOutcomeResponse(c, deps, "reply_drafted", body.draftText ?? body.draft_text ?? "");
   });
 
-  app.post("/api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue", async (c) => {
+  app.post("/api/workspaces/:workspaceId/feishu/messages/:messageId/propose-issue", async (c) => {
     const workspaceId = c.req.param("workspaceId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
@@ -138,17 +138,87 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
     const token = currentAccessToken(c);
     const taskToken = token?.type === "task" ? token : null;
     try {
+      const result = store.createFeishuIssueProposal(c.req.param("messageId"), {
+        ...body,
+        workspaceId,
+        recipientId: taskToken?.userId ?? currentRequestUserId(c),
+        taskId: taskToken?.taskId ?? null,
+        actorType: taskToken ? "agent" : "member",
+        actorId: taskToken?.agentId ?? currentRequestUserId(c),
+      });
+      if (result.inboxItem) {
+        store.emitWorkspaceEvent({
+          type: "inbox:new",
+          workspaceId,
+          actorType: taskToken ? "agent" : "member",
+          actorId: taskToken?.agentId ?? currentRequestUserId(c),
+          payload: { item: result.inboxItem },
+        });
+      }
+      return c.json(
+        { ...result, outcomes: store.listFeishuMessageOutcomes(result.message.messageId) },
+        result.delivered && result.created ? 201 : 200,
+      );
+    } catch (error) {
+      return feishuIngestErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue", async (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanFeishuApprover(c, deps, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<CreateIssueFromMultiremiFeishuMessageInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
       const result = store.createFeishuIssueOutcome(c.req.param("messageId"), {
         ...body,
         workspaceId,
-        taskId: taskToken?.taskId ?? null,
-        createdBy: taskToken?.userId ?? currentRequestUserId(c),
+        taskId: null,
+        createdBy: currentRequestUserId(c),
       });
       if (result.created) publishIssueCreated(c, store, result.issue);
       return c.json(
         { ...result, outcomes: store.listFeishuMessageOutcomes(result.message.messageId) },
         result.created ? 201 : 200,
       );
+    } catch (error) {
+      return feishuIngestErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/workspaces/:workspaceId/feishu/proposals/:proposalId/approve", (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanFeishuApprover(c, deps, workspaceId);
+    if (denied) return denied;
+    try {
+      const result = store.approveFeishuIssueProposal(c.req.param("proposalId"), {
+        workspaceId,
+        approvedBy: currentRequestUserId(c),
+      });
+      if (result.created && result.issue) publishIssueCreated(c, store, result.issue);
+      return c.json(
+        { ...result, outcomes: store.listFeishuMessageOutcomes(result.message.messageId) },
+        result.created ? 201 : 200,
+      );
+    } catch (error) {
+      return feishuIngestErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/workspaces/:workspaceId/feishu/proposals/:proposalId/reject", (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanFeishuApprover(c, deps, workspaceId);
+    if (denied) return denied;
+    try {
+      const result = store.rejectFeishuIssueProposal(c.req.param("proposalId"), {
+        workspaceId,
+        rejectedBy: currentRequestUserId(c),
+      });
+      return c.json({ ...result, outcomes: store.listFeishuMessageOutcomes(result.message.messageId) });
     } catch (error) {
       return feishuIngestErrorResponse(c, error);
     }
@@ -214,6 +284,13 @@ function requireHumanFeishuSourceAdmin(c: Context, deps: RouterDeps, workspaceId
   return requireWorkspaceAdmin(c, deps.store, workspaceId);
 }
 
+function requireHumanFeishuApprover(c: Context, deps: RouterDeps, workspaceId: string): Response | null {
+  if (currentAccessToken(c)?.type === "task") {
+    return c.json({ error: "forbidden for task token", code: "human_approval_required" }, 403);
+  }
+  return requireWorkspaceAdmin(c, deps.store, workspaceId);
+}
+
 function parseBooleanQuery(value: string | undefined, name: string): boolean | undefined {
   if (value === undefined) return undefined;
   if (value === "true" || value === "1") return true;
@@ -241,10 +318,18 @@ function requireConfiguredEndpoint(deps: RouterDeps, endpointName: string): void
 
 function feishuIngestErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.startsWith("Feishu source not found") || message.startsWith("Feishu message not found")) {
+  if (
+    message.startsWith("Feishu source not found")
+    || message.startsWith("Feishu message not found")
+    || message.startsWith("Feishu issue proposal not found")
+  ) {
     return c.json({ error: message }, 404);
   }
-  if (message === "Inbox recipient is unavailable or notifications are muted") {
+  if (
+    message === "Inbox recipient is unavailable or notifications are muted"
+    || message === "Inbox recipient is unavailable"
+    || message.includes("proposal is already")
+  ) {
     return c.json({ error: message }, 409);
   }
   if (

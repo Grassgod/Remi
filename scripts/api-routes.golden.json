@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 607,
+    "routeCount": 610,
     "routeCountByPrefix": {
       "native": 195,
-      "compat": 399,
+      "compat": 402,
       "root": 13
     },
     "getRoutes": 263,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 344,
+    "mutationRoutes": 347,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -623,7 +623,10 @@
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify",
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/propose-issue",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve",
+    "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/approve",
+    "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/reject",
     "POST /api/workspaces/:workspaceId/feishu/sources",
     "POST /api/workspaces/:workspaceId/scm/connections",
     "POST /api/workspaces/:workspaceId/scm/connections/:connectionId/verify",
@@ -3001,7 +3004,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600235",
+        "order_id": "local-1767225600236",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -7587,9 +7590,42 @@
             "allowed": true
           },
           {
+            "id": "feishu.messages.propose-issue",
+            "command": "remi feishu messages propose-issue",
+            "capability": "feishu.messages.propose-issue",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "feishu.messages.resolve",
             "command": "remi feishu messages resolve",
             "capability": "feishu.messages.resolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.proposals.approve",
+            "command": "remi feishu proposals approve",
+            "capability": "feishu.proposals.approve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.proposals.reject",
+            "command": "remi feishu proposals reject",
+            "capability": "feishu.proposals.reject",
             "outputs": [
               "table",
               "json",
@@ -22414,7 +22450,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600236",
+        "id": "local-contact-1767225600237",
         "status": "received",
         "mode": "local",
         "request": {
@@ -23695,7 +23731,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600243",
+        "session_id": "local-lark-1767225600244",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

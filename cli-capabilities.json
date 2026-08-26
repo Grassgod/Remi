@@ -6009,10 +6009,26 @@
       "command": "remi feishu messages create-issue",
       "aliases": [],
       "auth": [
+        "human"
+      ],
+      "capability": "feishu.messages.create-issue",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.messages.propose-issue": {
+      "command": "remi feishu messages propose-issue",
+      "aliases": [],
+      "auth": [
         "human",
         "task"
       ],
-      "capability": "feishu.messages.create-issue",
+      "capability": "feishu.messages.propose-issue",
       "mutation": "write",
       "output": [
         "table",
@@ -6047,6 +6063,38 @@
         "task"
       ],
       "capability": "feishu.messages.draft-reply",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.proposals.approve": {
+      "command": "remi feishu proposals approve",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.proposals.approve",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.proposals.reject": {
+      "command": "remi feishu proposals reject",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.proposals.reject",
       "mutation": "write",
       "output": [
         "table",
@@ -9313,8 +9361,17 @@
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify": {
       "command": "feishu.messages.notify"
     },
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/propose-issue": {
+      "command": "feishu.messages.propose-issue"
+    },
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve": {
       "command": "feishu.messages.resolve"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/approve": {
+      "command": "feishu.proposals.approve"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/reject": {
+      "command": "feishu.proposals.reject"
     },
     "POST /api/workspaces/:workspaceId/feishu/sources": {
       "command": "feishu.source.add"

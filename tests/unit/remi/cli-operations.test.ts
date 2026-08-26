@@ -25,7 +25,14 @@ describe("operations CLI contracts", () => {
   it("advertises task parity for workspace operations but not platform, billing, or destructive runtime commands", () => {
     const registry = registryFor(specs);
     const inventory = new Map(registry.inventory().map((entry) => [entry.id, entry]));
-    for (const id of ["runtime.list", "runtime.update", "autopilot.list", "autopilot.update", "platform.feedback.create"]) {
+    for (const id of [
+      "runtime.list",
+      "runtime.update",
+      "autopilot.list",
+      "autopilot.update",
+      "platform.feedback.create",
+      "feishu.messages.propose-issue",
+    ]) {
       expect(inventory.get(id)?.auth, id).toContain("task");
     }
     for (const id of [
@@ -38,6 +45,9 @@ describe("operations CLI contracts", () => {
       "platform.operation.list",
       "platform.settings.update",
       "daemon.retire",
+      "feishu.messages.create-issue",
+      "feishu.proposals.approve",
+      "feishu.proposals.reject",
       "lark.install.begin",
       "lark.installation.delete",
       "lark.binding.redeem",

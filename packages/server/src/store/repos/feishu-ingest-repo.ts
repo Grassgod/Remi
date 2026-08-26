@@ -10,6 +10,7 @@ import type {
   MultiremiFeishuMessage,
   MultiremiFeishuMessageOutcome,
   MultiremiFeishuMessageOutcomeKind,
+  MultiremiFeishuIssueProposal,
   MultiremiFeishuSource,
   MultiremiFeishuSyncCursor,
   MultiremiInboxItem,
@@ -97,6 +98,31 @@ export interface CreateFeishuIssueOutcomeResult {
   created: boolean;
 }
 
+export interface CreateFeishuIssueProposalInput extends CreateIssueFromMultiremiFeishuMessageInput {
+  workspaceId: string;
+  recipientId: string;
+  taskId?: string | null;
+  actorType: "agent" | "member";
+  actorId: string | null;
+}
+
+export interface CreateFeishuIssueProposalResult {
+  message: MultiremiFeishuMessage;
+  outcome: MultiremiFeishuMessageOutcome;
+  proposal: MultiremiFeishuIssueProposal | null;
+  inboxItem: MultiremiInboxItem | null;
+  delivered: boolean;
+  created: boolean;
+}
+
+export interface ResolveFeishuIssueProposalResult {
+  message: MultiremiFeishuMessage;
+  proposal: MultiremiFeishuIssueProposal;
+  outcome: MultiremiFeishuMessageOutcome;
+  issue: MultiremiIssue | null;
+  created: boolean;
+}
+
 export interface ReconcileFeishuUnprocessedResult {
   retried: number;
   dismissed: number;
@@ -104,6 +130,7 @@ export interface ReconcileFeishuUnprocessedResult {
 }
 
 const OUTCOME_KINDS = new Set<MultiremiFeishuMessageOutcomeKind>([
+  "issue_proposed",
   "issue_created",
   "notified",
   "reply_drafted",
@@ -472,6 +499,18 @@ export class FeishuIngestRepo {
        JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
        WHERE m.source_id = ? AND o.outcome_kind = 'dismissed' AND o.reason = 'recipient_muted'`,
     ).get(sourceId) as Row;
+    const pendingIssueProposals = this.ctx.db.query(
+      `SELECT COUNT(*) AS count
+       FROM multiremi_feishu_message_outcomes proposed
+       JOIN multiremi_feishu_messages m ON m.message_id = proposed.message_id
+       WHERE m.source_id = ? AND proposed.outcome_kind = 'issue_proposed'
+         AND proposed.proposal_status = 'pending'
+         AND NOT EXISTS (
+           SELECT 1 FROM multiremi_feishu_message_outcomes terminal
+           WHERE terminal.message_id = proposed.message_id
+             AND terminal.outcome_kind IN ('issue_created', 'dismissed')
+         )`,
+    ).get(sourceId) as Row;
     const lastSuccessfulIngestAt = nullableString(connection.last_successful_ingest_at);
     const successfulAt = lastSuccessfulIngestAt ? Date.parse(lastSuccessfulIngestAt) : Number.NaN;
     return {
@@ -479,6 +518,7 @@ export class FeishuIngestRepo {
       unprocessedCount: Number(backlog.count ?? 0),
       timedOutCount: Number(timedOut.count ?? 0),
       mutedDeliveryCount: Number(mutedDeliveries.count ?? 0),
+      pendingIssueProposalCount: Number(pendingIssueProposals.count ?? 0),
       oldestUnprocessedAt: nullableString(backlog.oldest),
       maximumRetryCount: Number(backlog.maximum_retry_count ?? 0),
       lastSuccessfulIngestAt,
@@ -659,7 +699,7 @@ export class FeishuIngestRepo {
     outcome: MultiremiFeishuMessageOutcome;
   } {
     if (!OUTCOME_KINDS.has(input.outcome)) throw new Error("invalid Feishu message outcome");
-    if (["issue_created", "notified", "reply_drafted"].includes(input.outcome)) {
+    if (["issue_proposed", "issue_created", "notified", "reply_drafted"].includes(input.outcome)) {
       throw new Error(`${input.outcome} outcomes must use the dedicated Feishu command`);
     }
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
@@ -765,7 +805,20 @@ export class FeishuIngestRepo {
     messageId: string,
     input: CreateFeishuIssueOutcomeInput,
   ): CreateFeishuIssueOutcomeResult {
-    const title = cleanRequiredText(input.title, "title");
+    const issueInput = normalizeIssueProposalInput(input);
+    return this.ctx.db.transaction(() => this.createIssueOutcomeWithinTransaction(messageId, {
+      ...issueInput,
+      workspaceId: input.workspaceId,
+      taskId: cleanOptionalString(input.taskId),
+      createdBy: cleanOptionalString(input.createdBy),
+    }))();
+  }
+
+  createIssueProposal(
+    messageId: string,
+    input: CreateFeishuIssueProposalInput,
+  ): CreateFeishuIssueProposalResult {
+    const issueInput = normalizeIssueProposalInput(input);
     return this.ctx.db.transaction(() => {
       const message = this.getMessage(messageId);
       if (!message || message.workspaceId !== input.workspaceId) {
@@ -773,56 +826,256 @@ export class FeishuIngestRepo {
       }
       const taskId = cleanOptionalString(input.taskId);
       this.assertTaskWorkspace(taskId, input.workspaceId);
-      // UPDATE is deliberately a no-op: it locks this message row on Postgres,
-      // making retries and concurrent workers observe an already-created outcome.
-      this.ctx.db.run(
-        "UPDATE multiremi_feishu_messages SET processed_at = processed_at WHERE message_id = ?",
-        [messageId],
-      );
+      this.lockMessage(messageId);
       const existingRow = this.ctx.db.query(
         `SELECT * FROM multiremi_feishu_message_outcomes
-         WHERE message_id = ? AND outcome_kind = 'issue_created'
+         WHERE message_id = ? AND outcome_kind = 'issue_proposed'
          ORDER BY created_at ASC, id ASC LIMIT 1`,
       ).get(messageId) as Row | null;
       if (existingRow) {
         const outcome = toOutcome(existingRow);
-        const issueId = outcome.ref?.startsWith("issue:") ? outcome.ref.slice("issue:".length) : "";
-        const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
-        if (!issue || issue.workspaceId !== input.workspaceId) {
-          throw new Error("existing Feishu issue outcome is invalid");
-        }
-        return { message: this.getMessage(messageId)!, outcome, issue, created: false };
+        return {
+          message: this.getMessage(messageId)!,
+          outcome,
+          proposal: toIssueProposal(existingRow),
+          inboxItem: null,
+          delivered: true,
+          created: false,
+        };
       }
-      const issue = this.ctx.issues().createIssue({
-        title,
-        description: input.description ?? null,
-        priority: input.priority,
+      const recipient = this.ctx.resolveWorkspaceMemberForNotification(input.workspaceId, input.recipientId);
+      if (!recipient || recipient.archivedAt) throw new Error("Inbox recipient is unavailable");
+      const dismissMutedProposal = (): CreateFeishuIssueProposalResult => {
+        const createdAt = nowIso();
+        const outcome = this.insertOutcome({
+          workspaceId: input.workspaceId,
+          messageId,
+          outcomeKind: "dismissed",
+          ref: null,
+          reason: "recipient_muted",
+          taskId,
+          createdAt,
+        });
+        this.markMessageProcessed(messageId, createdAt);
+        return {
+          message: this.getMessage(messageId)!,
+          outcome,
+          proposal: null,
+          inboxItem: null,
+          delivered: false,
+          created: true,
+        };
+      };
+      const inboxType = "feishu_issue_proposal";
+      if (this.ctx.isNotificationMuted(input.workspaceId, recipient.id, inboxType)) {
+        return dismissMutedProposal();
+      }
+      const proposalId = createId("fout");
+      const inboxItem = this.ctx.createInboxItem({
         workspaceId: input.workspaceId,
-        projectId: input.projectId ?? input.project_id ?? null,
-        assigneeType: input.assigneeType ?? input.assignee_type ?? null,
-        assigneeId: input.assigneeId ?? input.assignee_id ?? null,
-        contextRefs: [{
-          type: "feishu_message",
+        memberId: recipient.id,
+        severity: "attention",
+        type: inboxType,
+        title: "建议创建 Issue",
+        body: issueInput.title,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        details: {
+          proposal_id: proposalId,
+          proposed_issue: issueInput,
           message_id: message.messageId,
           source_id: message.sourceId,
           chat_id: message.chatId,
           message_app_link: message.messageAppLink,
-        }],
-        createdBy: cleanOptionalString(input.createdBy),
+          outcome_kind: "issue_proposed",
+        },
+        emitEvent: false,
       });
+      if (!inboxItem) {
+        if (this.ctx.isNotificationMuted(input.workspaceId, recipient.id, inboxType)) {
+          return dismissMutedProposal();
+        }
+        throw new Error("Inbox recipient is unavailable");
+      }
       const createdAt = nowIso();
       const outcome = this.insertOutcome({
+        id: proposalId,
         workspaceId: input.workspaceId,
         messageId,
-        outcomeKind: "issue_created",
-        ref: `issue:${issue.id}`,
+        outcomeKind: "issue_proposed",
+        ref: `inbox:${inboxItem.id}`,
         reason: null,
         taskId,
         createdAt,
+        proposalPayload: issueInput,
+        proposalStatus: "pending",
       });
       this.markMessageProcessed(messageId, createdAt);
-      return { message: this.getMessage(messageId)!, outcome, issue, created: true };
+      const row = this.getIssueProposalRow(proposalId, input.workspaceId);
+      return {
+        message: this.getMessage(messageId)!,
+        outcome,
+        proposal: toIssueProposal(row),
+        inboxItem,
+        delivered: true,
+        created: true,
+      };
     })();
+  }
+
+  approveIssueProposal(
+    proposalId: string,
+    input: { workspaceId: string; approvedBy: string },
+  ): ResolveFeishuIssueProposalResult {
+    return this.ctx.db.transaction(() => {
+      let proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
+      this.lockMessage(proposal.messageId);
+      proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
+      if (proposal.status === "rejected") throw new Error("Feishu issue proposal is already rejected");
+      const result = this.createIssueOutcomeWithinTransaction(proposal.messageId, {
+        ...proposal.issue,
+        workspaceId: input.workspaceId,
+        taskId: null,
+        createdBy: input.approvedBy,
+      });
+      const resolvedAt = nowIso();
+      this.ctx.db.run(
+        `UPDATE multiremi_feishu_message_outcomes
+         SET proposal_status = 'approved', proposal_resolved_at = COALESCE(proposal_resolved_at, ?),
+             proposal_resolved_by = COALESCE(proposal_resolved_by, ?)
+         WHERE id = ? AND outcome_kind = 'issue_proposed'`,
+        [resolvedAt, input.approvedBy, proposalId],
+      );
+      this.markProposalInboxHandled(proposal.inboxItemId);
+      return {
+        ...result,
+        proposal: toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId)),
+      };
+    })();
+  }
+
+  rejectIssueProposal(
+    proposalId: string,
+    input: { workspaceId: string; rejectedBy: string },
+  ): ResolveFeishuIssueProposalResult {
+    return this.ctx.db.transaction(() => {
+      let proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
+      this.lockMessage(proposal.messageId);
+      proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
+      if (proposal.status === "approved") throw new Error("Feishu issue proposal is already approved");
+      const existingRow = this.ctx.db.query(
+        `SELECT * FROM multiremi_feishu_message_outcomes
+         WHERE message_id = ? AND outcome_kind = 'dismissed' AND reason = 'proposal_rejected'
+         ORDER BY created_at ASC, id ASC LIMIT 1`,
+      ).get(proposal.messageId) as Row | null;
+      const createdAt = nowIso();
+      const outcome = existingRow ? toOutcome(existingRow) : this.insertOutcome({
+        workspaceId: input.workspaceId,
+        messageId: proposal.messageId,
+        outcomeKind: "dismissed",
+        ref: null,
+        reason: "proposal_rejected",
+        taskId: null,
+        createdAt,
+      });
+      this.ctx.db.run(
+        `UPDATE multiremi_feishu_message_outcomes
+         SET proposal_status = 'rejected', proposal_resolved_at = COALESCE(proposal_resolved_at, ?),
+             proposal_resolved_by = COALESCE(proposal_resolved_by, ?)
+         WHERE id = ? AND outcome_kind = 'issue_proposed'`,
+        [createdAt, input.rejectedBy, proposalId],
+      );
+      this.markProposalInboxHandled(proposal.inboxItemId);
+      this.markMessageProcessed(proposal.messageId, createdAt);
+      return {
+        message: this.getMessage(proposal.messageId)!,
+        proposal: toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId)),
+        outcome,
+        issue: null,
+        created: !existingRow,
+      };
+    })();
+  }
+
+  private createIssueOutcomeWithinTransaction(
+    messageId: string,
+    input: CreateFeishuIssueOutcomeInput,
+  ): CreateFeishuIssueOutcomeResult {
+    const message = this.getMessage(messageId);
+    if (!message || message.workspaceId !== input.workspaceId) {
+      throw new Error(`Feishu message not found: ${messageId}`);
+    }
+    const taskId = cleanOptionalString(input.taskId);
+    this.assertTaskWorkspace(taskId, input.workspaceId);
+    this.lockMessage(messageId);
+    const existingRow = this.ctx.db.query(
+      `SELECT * FROM multiremi_feishu_message_outcomes
+       WHERE message_id = ? AND outcome_kind = 'issue_created'
+       ORDER BY created_at ASC, id ASC LIMIT 1`,
+    ).get(messageId) as Row | null;
+    if (existingRow) {
+      const outcome = toOutcome(existingRow);
+      const issueId = outcome.ref?.startsWith("issue:") ? outcome.ref.slice("issue:".length) : "";
+      const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
+      if (!issue || issue.workspaceId !== input.workspaceId) {
+        throw new Error("existing Feishu issue outcome is invalid");
+      }
+      return { message: this.getMessage(messageId)!, outcome, issue, created: false };
+    }
+    const issue = this.ctx.issues().createIssue({
+      title: input.title,
+      description: input.description ?? null,
+      priority: input.priority,
+      workspaceId: input.workspaceId,
+      projectId: input.projectId ?? input.project_id ?? null,
+      assigneeType: input.assigneeType ?? input.assignee_type ?? null,
+      assigneeId: input.assigneeId ?? input.assignee_id ?? null,
+      contextRefs: [{
+        type: "feishu_message",
+        message_id: message.messageId,
+        source_id: message.sourceId,
+        chat_id: message.chatId,
+        message_app_link: message.messageAppLink,
+      }],
+      createdBy: cleanOptionalString(input.createdBy),
+    });
+    const createdAt = nowIso();
+    const outcome = this.insertOutcome({
+      workspaceId: input.workspaceId,
+      messageId,
+      outcomeKind: "issue_created",
+      ref: `issue:${issue.id}`,
+      reason: null,
+      taskId,
+      createdAt,
+    });
+    this.markMessageProcessed(messageId, createdAt);
+    return { message: this.getMessage(messageId)!, outcome, issue, created: true };
+  }
+
+  private lockMessage(messageId: string): void {
+    // UPDATE is deliberately a no-op: it locks this message row on Postgres.
+    this.ctx.db.run(
+      "UPDATE multiremi_feishu_messages SET processed_at = processed_at WHERE message_id = ?",
+      [messageId],
+    );
+  }
+
+  private getIssueProposalRow(proposalId: string, workspaceId: string): Row {
+    const row = this.ctx.db.query(
+      `SELECT * FROM multiremi_feishu_message_outcomes
+       WHERE id = ? AND workspace_id = ? AND outcome_kind = 'issue_proposed'`,
+    ).get(proposalId, workspaceId) as Row | null;
+    if (!row) throw new Error(`Feishu issue proposal not found: ${proposalId}`);
+    return row;
+  }
+
+  private markProposalInboxHandled(inboxItemId: string | null): void {
+    if (!inboxItemId) return;
+    this.ctx.db.run(
+      "UPDATE multiremi_inbox_items SET read = 1, archived = 1 WHERE id = ?",
+      [inboxItemId],
+    );
   }
 
   private assertTaskWorkspace(taskId: string | null, workspaceId: string): void {
@@ -834,6 +1087,7 @@ export class FeishuIngestRepo {
   }
 
   private insertOutcome(input: {
+    id?: string;
     workspaceId: string;
     messageId: string;
     outcomeKind: MultiremiFeishuMessageOutcomeKind;
@@ -841,13 +1095,27 @@ export class FeishuIngestRepo {
     reason: string | null;
     taskId: string | null;
     createdAt: string;
+    proposalPayload?: CreateIssueFromMultiremiFeishuMessageInput;
+    proposalStatus?: "pending" | "approved" | "rejected" | "not_applicable";
   }): MultiremiFeishuMessageOutcome {
-    const id = createId("fout");
+    const id = input.id ?? createId("fout");
     this.ctx.db.run(
       `INSERT INTO multiremi_feishu_message_outcomes (
-        id, workspace_id, message_id, outcome_kind, ref, reason, task_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, input.workspaceId, input.messageId, input.outcomeKind, input.ref, input.reason, input.taskId, input.createdAt],
+        id, workspace_id, message_id, outcome_kind, ref, reason, task_id,
+        proposal_payload, proposal_status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        input.workspaceId,
+        input.messageId,
+        input.outcomeKind,
+        input.ref,
+        input.reason,
+        input.taskId,
+        toJson(input.proposalPayload ?? {}),
+        input.proposalStatus ?? "not_applicable",
+        input.createdAt,
+      ],
     );
     const row = this.ctx.db.query("SELECT * FROM multiremi_feishu_message_outcomes WHERE id = ?").get(id) as Row | null;
     if (!row) throw new Error("Feishu message outcome insert failed");
@@ -974,6 +1242,24 @@ function cleanRequiredText(value: unknown, field: string): string {
   return text;
 }
 
+function normalizeIssueProposalInput(
+  input: CreateIssueFromMultiremiFeishuMessageInput,
+): CreateIssueFromMultiremiFeishuMessageInput {
+  const title = cleanRequiredText(input.title, "title");
+  const description = cleanOptionalString(input.description);
+  if (description && description.length > 20_000) {
+    throw new Error("description must not exceed 20000 characters");
+  }
+  return {
+    title,
+    description,
+    priority: cleanOptionalString(input.priority) ?? undefined,
+    projectId: cleanOptionalString(input.projectId ?? input.project_id),
+    assigneeType: input.assigneeType ?? input.assignee_type ?? null,
+    assigneeId: cleanOptionalString(input.assigneeId ?? input.assignee_id),
+  };
+}
+
 function normalizeConnectionErrorCode(value: unknown): string {
   const code = typeof value === "string" ? value.trim().toLowerCase() : "";
   return /^[a-z0-9][a-z0-9_.-]{0,127}$/u.test(code) ? code : "ingest_failed";
@@ -1056,5 +1342,24 @@ function toOutcome(row: Row): MultiremiFeishuMessageOutcome {
     reason: nullableString(row.reason),
     taskId: nullableString(row.task_id),
     createdAt: String(row.created_at),
+  };
+}
+
+function toIssueProposal(row: Row): MultiremiFeishuIssueProposal {
+  const status = String(row.proposal_status ?? "pending");
+  if (status !== "pending" && status !== "approved" && status !== "rejected") {
+    throw new Error("Feishu issue proposal has invalid status");
+  }
+  const outcome = toOutcome(row);
+  return {
+    id: outcome.id,
+    workspaceId: outcome.workspaceId,
+    messageId: outcome.messageId,
+    inboxItemId: outcome.ref?.startsWith("inbox:") ? outcome.ref.slice("inbox:".length) : null,
+    issue: parseJson<CreateIssueFromMultiremiFeishuMessageInput>(row.proposal_payload, { title: "" }),
+    status,
+    resolvedAt: nullableString(row.proposal_resolved_at),
+    resolvedBy: nullableString(row.proposal_resolved_by),
+    createdAt: outcome.createdAt,
   };
 }

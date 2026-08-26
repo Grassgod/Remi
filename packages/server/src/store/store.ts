@@ -20,6 +20,9 @@ import {
   type CreateFeishuInboxOutcomeResult,
   type CreateFeishuIssueOutcomeInput,
   type CreateFeishuIssueOutcomeResult,
+  type CreateFeishuIssueProposalInput,
+  type CreateFeishuIssueProposalResult,
+  type ResolveFeishuIssueProposalResult,
   type ClaimFeishuSyncStreamInput,
   type IngestedFeishuMessageInput,
   type IngestFeishuBatchResult,
@@ -1304,6 +1307,27 @@ runMigrations(this.db);
     input: CreateFeishuIssueOutcomeInput,
   ): CreateFeishuIssueOutcomeResult {
     return this.feishuIngest.createIssueOutcome(messageId, input);
+  }
+
+  createFeishuIssueProposal(
+    messageId: string,
+    input: CreateFeishuIssueProposalInput,
+  ): CreateFeishuIssueProposalResult {
+    return this.feishuIngest.createIssueProposal(messageId, input);
+  }
+
+  approveFeishuIssueProposal(
+    proposalId: string,
+    input: { workspaceId: string; approvedBy: string },
+  ): ResolveFeishuIssueProposalResult {
+    return this.feishuIngest.approveIssueProposal(proposalId, input);
+  }
+
+  rejectFeishuIssueProposal(
+    proposalId: string,
+    input: { workspaceId: string; rejectedBy: string },
+  ): ResolveFeishuIssueProposalResult {
+    return this.feishuIngest.rejectIssueProposal(proposalId, input);
   }
 
   deleteExpiredFeishuMessages(now?: Date): number {

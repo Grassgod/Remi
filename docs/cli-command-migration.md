@@ -56,10 +56,13 @@ mutation class, and `table|json|jsonl` output contract in the Registry.
 
 The Feishu ingestion domain exposes source administration through
 `remi feishu source list|get|status|add|update` and task-safe processing through
-`remi feishu messages list|resolve|notify|draft-reply`. `notify` and
-`draft-reply` atomically create a real Inbox item and its audited outcome;
-generic `resolve` cannot forge those outcomes. An empty source allowlist means
-zero ingestion; `source update --clear-allowlist` restores that state.
+`remi feishu messages list|resolve|notify|draft-reply|propose-issue`. Issue
+proposals are non-blocking Inbox items; only humans can run
+`remi feishu proposals approve|reject` or the administrative direct
+`messages create-issue` command. Dedicated commands atomically create their
+Inbox/Issue object and audited outcome, and generic `resolve` cannot forge those
+outcomes. An empty source allowlist means zero ingestion; `source update
+--clear-allowlist` restores that state.
 
 The current main integration also exposes archived Issue recovery, Workspace
 prompt/archive settings, and Repository Wiki administration through:

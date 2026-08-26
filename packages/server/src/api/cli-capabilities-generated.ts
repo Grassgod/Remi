@@ -4238,10 +4238,22 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "feishu.messages.create-issue": {
       "command": "remi feishu messages create-issue",
       "auth": [
+        "human"
+      ],
+      "capability": "feishu.messages.create-issue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.propose-issue": {
+      "command": "remi feishu messages propose-issue",
+      "auth": [
         "human",
         "task"
       ],
-      "capability": "feishu.messages.create-issue",
+      "capability": "feishu.messages.propose-issue",
       "output": [
         "table",
         "json",
@@ -4268,6 +4280,30 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "feishu.messages.draft-reply",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.proposals.approve": {
+      "command": "remi feishu proposals approve",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.proposals.approve",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.proposals.reject": {
+      "command": "remi feishu proposals reject",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.proposals.reject",
       "output": [
         "table",
         "json",
