@@ -817,7 +817,7 @@ export class AutopilotsRepo {
     options: MultiremiAutopilotFailureThresholdOptions,
   ): void {
     const { autopilot } = candidate;
-    const recipients = this.resolveAutopilotPausedRecipients(autopilot);
+    const recipients = this.ctx.resolveAutopilotNotificationRecipients(autopilot);
     if (!recipients.length) return;
     const failPct = Math.round(candidate.failRatio * 1000) / 10;
     const lookbackMs = normalizeFailureMonitorLookbackMs(options.lookbackMs);
@@ -857,17 +857,6 @@ export class AutopilotsRepo {
     }
   }
 
-  private resolveAutopilotPausedRecipients(autopilot: MultiremiAutopilot): string[] {
-    if (autopilot.createdByType === "member") {
-      const member = this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId, autopilot.createdById);
-      return member ? [member.id] : [];
-    }
-    const agent = this.ctx.agents().getAgent(autopilot.createdById);
-    if (!agent?.ownerId) return [];
-    const owner = this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId, agent.ownerId);
-    return owner ? [owner.id] : [];
-  }
-
   private assertFeishuEventConfigScope(
     config: MultiremiAutopilotFeishuEventConfig,
     autopilot: MultiremiAutopilot,
@@ -888,7 +877,6 @@ export class AutopilotsRepo {
       }
     }
   }
-
   private assertScmEventConfigScope(
     config: MultiremiAutopilotScmEventConfig,
     workspaceId: string,

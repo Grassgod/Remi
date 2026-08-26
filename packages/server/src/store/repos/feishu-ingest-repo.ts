@@ -762,12 +762,9 @@ export class FeishuIngestRepo {
       if (this.ctx.isNotificationMuted(input.workspaceId, recipient.id, inboxType)) {
         return dismissMutedDelivery();
       }
-      const inboxItem = this.ctx.createInboxItem({
+      const inboxItemInput = {
         workspaceId: input.workspaceId,
         memberId: recipient.id,
-        severity: outcomeKind === "reply_drafted" ? "attention" : "info",
-        type: inboxType,
-        title: outcomeKind === "reply_drafted" ? "飞书回复草稿" : "飞书消息提醒",
         body: text,
         actorType: input.actorType,
         actorId: input.actorId,
@@ -779,7 +776,23 @@ export class FeishuIngestRepo {
           outcome_kind: outcomeKind,
         },
         emitEvent: false,
-      });
+      };
+      let inboxItem: MultiremiInboxItem | null;
+      if (outcomeKind === "reply_drafted") {
+        inboxItem = this.ctx.createInboxItem({
+          ...inboxItemInput,
+          severity: "attention",
+          type: "feishu_reply_draft",
+          title: "飞书回复草稿",
+        });
+      } else {
+        inboxItem = this.ctx.createInboxItem({
+          ...inboxItemInput,
+          severity: "info",
+          type: "feishu_message_notification",
+          title: "飞书消息提醒",
+        });
+      }
       if (!inboxItem) {
         if (this.ctx.isNotificationMuted(input.workspaceId, recipient.id, inboxType)) {
           return dismissMutedDelivery();
@@ -875,7 +888,7 @@ export class FeishuIngestRepo {
         workspaceId: input.workspaceId,
         memberId: recipient.id,
         severity: "attention",
-        type: inboxType,
+        type: "feishu_issue_proposal",
         title: "建议创建 Issue",
         body: issueInput.title,
         actorType: input.actorType,

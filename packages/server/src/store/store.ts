@@ -4,6 +4,17 @@ import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
+import {
+  NotificationChannelsRepo,
+  type CreateNotificationChannelInput,
+  type NotificationVisibilityScope,
+  type NotificationDeliveryContext,
+  type UpdateNotificationChannelInput,
+} from "@multiremi/store/repos/notification-channels-repo.js";
+import {
+  OutboundNotificationDispatcher,
+  type NotificationSenderRegistry,
+} from "@multiremi/notifications/outbound-dispatcher.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
 import { PlatformOperationsRepo } from "@multiremi/store/repos/platform-operations-repo.js";
 import { PlatformMaintenanceRepo } from "@multiremi/store/repos/platform-maintenance-repo.js";
@@ -202,6 +213,9 @@ import type {
   MultiremiLabel,
   MultiremiNotificationPreferences,
   MultiremiNotificationPreferenceResponse,
+  MultiremiNotificationChannel,
+  MultiremiNotificationDelivery,
+  MultiremiNotificationDeliveryStatus,
   MultiremiPinnedItem,
   MultiremiIssueReaction,
   MultiremiIssueSubscriber,
@@ -351,6 +365,8 @@ export class MultiremiStore {
   private feedback: FeedbackRepo;
   private accessTokens: AccessTokensRepo;
   private issueShares: IssueSharesRepo;
+  private notificationChannels: NotificationChannelsRepo;
+  private notificationDispatcher: OutboundNotificationDispatcher;
   private cloudNodes: CloudRuntimeNodesRepo;
   private platformOperations: PlatformOperationsRepo;
   private platformMaintenance: PlatformMaintenanceRepo;
@@ -375,12 +391,31 @@ export class MultiremiStore {
   private autopilots: AutopilotsRepo;
   private tasks: TasksRepo;
 
-  constructor(db?: SqlDatabase) {
+  constructor(db?: SqlDatabase, options: {
+    notificationSenders?: NotificationSenderRegistry;
+    notificationMaxAttempts?: number;
+    notificationRetryBaseDelayMs?: number;
+    notificationSweepIntervalMs?: number;
+    notificationLeaseMs?: number;
+    notificationSendTimeoutMs?: number;
+    publicUrl?: string | null;
+  } = {}) {
     this.db = db ?? openMultiremiDatabase();
     this.ctx = new StoreContext(this.db, () => this);
     this.feedback = new FeedbackRepo(this.db);
     this.accessTokens = new AccessTokensRepo(this.db);
     this.issueShares = new IssueSharesRepo(this.db);
+    this.notificationChannels = new NotificationChannelsRepo(this.ctx);
+    this.notificationDispatcher = new OutboundNotificationDispatcher({
+      store: this,
+      senders: options.notificationSenders,
+      maxAttempts: options.notificationMaxAttempts,
+      retryBaseDelayMs: options.notificationRetryBaseDelayMs,
+      sweepIntervalMs: options.notificationSweepIntervalMs,
+      leaseMs: options.notificationLeaseMs,
+      sendTimeoutMs: options.notificationSendTimeoutMs,
+      publicUrl: options.publicUrl,
+    });
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
     this.platformOperations = new PlatformOperationsRepo(this.db);
     this.platformMaintenance = new PlatformMaintenanceRepo(this.db);
@@ -1190,6 +1225,123 @@ runMigrations(this.db);
     preferences: MultiremiNotificationPreferences;
   }): MultiremiNotificationPreferenceResponse {
     return this.workspaces.updateNotificationPreferences(input);
+  }
+
+  getNotificationChannel(id: string): MultiremiNotificationChannel | null {
+    return this.notificationChannels.getChannel(id);
+  }
+
+  listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
+    return this.notificationChannels.listChannels(workspaceId);
+  }
+
+  listNotificationChannelsInScope(
+    workspaceId: string,
+    scope: NotificationVisibilityScope,
+  ): MultiremiNotificationChannel[] {
+    return this.notificationChannels.listChannelsInScope(workspaceId, scope);
+  }
+
+  createNotificationChannel(input: CreateNotificationChannelInput): MultiremiNotificationChannel {
+    return this.notificationChannels.createChannel(input);
+  }
+
+  updateNotificationChannel(
+    id: string,
+    input: UpdateNotificationChannelInput,
+  ): MultiremiNotificationChannel | null {
+    return this.notificationChannels.updateChannel(id, input);
+  }
+
+  deleteNotificationChannel(id: string): boolean {
+    return this.notificationChannels.deleteChannel(id);
+  }
+
+  matchNotificationRoutes(
+    workspaceId: string,
+    memberId: string,
+    inboxType: string,
+    severity: string,
+  ): MultiremiNotificationChannel[] {
+    return this.notificationChannels.matchRoutes(workspaceId, memberId, inboxType, severity);
+  }
+
+  recordPendingNotificationDelivery(
+    item: MultiremiInboxItem,
+    channel: MultiremiNotificationChannel,
+  ): MultiremiNotificationDelivery {
+    return this.notificationChannels.recordPending(item, channel);
+  }
+
+  getNotificationDelivery(id: string): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.getDelivery(id);
+  }
+
+  getNotificationDeliveryContext(id: string): NotificationDeliveryContext | null {
+    return this.notificationChannels.getDeliveryContext(id);
+  }
+
+  listNotificationDeliveries(input: {
+    workspaceId: string;
+    status?: MultiremiNotificationDeliveryStatus | null;
+    limit?: number;
+    scope?: NotificationVisibilityScope;
+  }): MultiremiNotificationDelivery[] {
+    return this.notificationChannels.listDeliveries(input);
+  }
+
+  listPendingNotificationDeliveries(now: string, limit?: number): MultiremiNotificationDelivery[] {
+    return this.notificationChannels.listPendingDeliveries(now, limit);
+  }
+
+  claimNotificationDeliveryAttempt(
+    id: string,
+    expectedAttempts: number,
+    expectedClaimSeq: number,
+    maxAttempts: number,
+    claimedAt: string,
+    leasedUntil: string,
+  ): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.claimAttempt(
+      id,
+      expectedAttempts,
+      expectedClaimSeq,
+      maxAttempts,
+      claimedAt,
+      leasedUntil,
+    );
+  }
+
+  markNotificationDeliverySent(id: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markSent(id, expectedClaimSeq);
+  }
+
+  markNotificationDeliveryFailed(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.markFailed(id, error, expectedClaimSeq);
+  }
+
+  recordNotificationDeliveryError(id: string, error: string, expectedClaimSeq: number): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.recordRetryableError(id, error, expectedClaimSeq);
+  }
+
+  resetNotificationDeliveryForRetry(id: string, retryAt: string): MultiremiNotificationDelivery | null {
+    return this.notificationChannels.resetForRetry(id, retryAt);
+  }
+
+  dispatchNotificationDelivery(id: string): Promise<void> {
+    return this.notificationDispatcher.dispatch(id);
+  }
+
+  retryNotificationDelivery(id: string): MultiremiNotificationDelivery | null {
+    return this.notificationDispatcher.retry(id);
+  }
+
+  startNotificationDeliverySweeper(): void {
+    this.notificationDispatcher.start();
+  }
+
+  stopNotificationDeliverySweeper(): void {
+    this.notificationDispatcher.stop();
   }
 
   createFeedback(input: CreateFeedbackInput): MultiremiFeedback {

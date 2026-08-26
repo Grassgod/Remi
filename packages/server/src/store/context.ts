@@ -12,6 +12,7 @@ import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
+import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import type {
   AddSessionParticipantInput,
   CreateIssueCommentInput,
@@ -39,6 +40,8 @@ import type {
   MultiremiIssueSession,
   MultiremiMetricCounter,
   MultiremiNotificationGroupKey,
+  MultiremiNotificationChannel,
+  MultiremiNotificationDelivery,
   MultiremiNotificationPreferenceResponse,
   MultiremiAssigneeType,
   MultiremiAutopilot,
@@ -221,6 +224,20 @@ export interface WorkspacesSurface {
   getNotificationPreferences(input?: { workspaceId?: string | null; memberId?: string | null }): MultiremiNotificationPreferenceResponse;
 }
 
+export interface NotificationChannelsSurface {
+  matchNotificationRoutes(
+    workspaceId: string,
+    memberId: string,
+    inboxType: string,
+    severity: string,
+  ): MultiremiNotificationChannel[];
+  recordPendingNotificationDelivery(
+    item: MultiremiInboxItem,
+    channel: MultiremiNotificationChannel,
+  ): MultiremiNotificationDelivery;
+  dispatchNotificationDelivery(id: string): Promise<void>;
+}
+
 export interface SquadsSurface {
   getSquad(id: string): MultiremiSquad | null;
   listSquads(workspaceId?: string | null): MultiremiSquad[];
@@ -325,7 +342,7 @@ export interface RuntimesSurface {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
 }
 
-export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface {}
+export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -729,7 +746,11 @@ export class StoreContext {
     details?: unknown | null;
     emitEvent?: boolean;
     bypassMute?: boolean;
+    issueStatus?: string | null;
   }): MultiremiInboxItem | null {
+    const routing = INBOX_ROUTING[input.type];
+    const route = inboxRouteFor(input.type, { issueStatus: input.issueStatus, actorType: input.actorType });
+    if (route === "workbench_only" || route === "activity_only") return null;
     const issueId = cleanOptionalString(input.issueId);
     const issue = issueId ? this.host.getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
@@ -754,7 +775,7 @@ export class StoreContext {
         member.id,
         recipientType,
         member.id,
-        input.severity ?? "info",
+        input.severity ?? routing?.severity ?? "info",
         input.actorType ?? "system",
         input.actorId ?? null,
         input.type,
@@ -775,7 +796,27 @@ export class StoreContext {
         payload: { item },
       });
     }
+    this.fanOutInboxItem(item);
     return item;
+  }
+
+  private fanOutInboxItem(item: MultiremiInboxItem): void {
+    try {
+      const routes = this.host.matchNotificationRoutes(
+        item.workspaceId,
+        item.memberId,
+        item.type,
+        item.severity,
+      );
+      for (const route of routes) {
+        const delivery = this.host.recordPendingNotificationDelivery(item, route);
+        queueMicrotask(() => void this.host.dispatchNotificationDelivery(delivery.id));
+      }
+    } catch (error) {
+      log.warn(
+        `notification fan-out skipped for inbox item ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   resolveWorkspaceMemberForNotification(workspaceId: string, idOrUserId: string): MultiremiWorkspaceMember | null {
@@ -784,6 +825,17 @@ export class StoreContext {
     return this.host.listWorkspaceMembers(workspaceId).find((member) =>
       member.id === idOrUserId || member.id === `mem_${workspaceId}_${idOrUserId}`
     ) ?? null;
+  }
+
+  resolveAutopilotNotificationRecipients(autopilot: MultiremiAutopilot): string[] {
+    if (autopilot.createdByType === "member") {
+      const member = this.resolveWorkspaceMemberForNotification(autopilot.workspaceId, autopilot.createdById);
+      return member ? [member.id] : [];
+    }
+    const agent = this.agents().getAgent(autopilot.createdById);
+    if (!agent?.ownerId) return [];
+    const owner = this.resolveWorkspaceMemberForNotification(autopilot.workspaceId, agent.ownerId);
+    return owner ? [owner.id] : [];
   }
 
   isNotificationMuted(workspaceId: string, memberId: string, type: string): boolean {
@@ -854,7 +906,12 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
   ) return "feishu_messages";
   if (type === "feishu_ingest_connection_alert") return "system_notifications";
   if (type.startsWith("agent_")) return "agent_activity";
-  if (type.startsWith("system_") || type === "autopilot_paused") return "system_notifications";
+  if (
+    type.startsWith("system_")
+    || type === "autopilot_paused"
+    || type === "autopilot_run_completed"
+    || type === "autopilot_run_failed"
+  ) return "system_notifications";
   return "updates";
 }
 

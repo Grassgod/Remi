@@ -12,6 +12,8 @@ export type InboxItemType =
   | "due_date_changed"
   | "new_comment"
   | "mentioned"
+  | "comment_created"
+  | "comment_mention"
   | "review_requested"
   | "task_completed"
   | "task_failed"
@@ -19,7 +21,11 @@ export type InboxItemType =
   | "agent_completed"
   | "reaction_added"
   | "quick_create_done"
-  | "quick_create_failed";
+  | "quick_create_failed"
+  | "autopilot_paused"
+  | "autopilot_run_completed"
+  | "autopilot_run_failed"
+  | "autopilot_run_overdue";
 
 export interface InboxItem {
   id: string;

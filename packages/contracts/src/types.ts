@@ -2090,6 +2090,42 @@ export interface MultiremiInboxItem {
   issue: MultiremiIssue | null;
 }
 
+export type MultiremiNotificationChannelKind = "inapp" | "feishu_group";
+export type MultiremiNotificationDeliveryStatus = "pending" | "sent" | "failed";
+
+export interface MultiremiNotificationChannel {
+  id: string;
+  workspaceId: string;
+  /** null = workspace-level channel (admin managed); otherwise the owning member id. */
+  memberId: string | null;
+  kind: MultiremiNotificationChannelKind;
+  name: string;
+  enabled: boolean;
+  target: { chatId: string };
+  eventTypes: string[];
+  minSeverity: string;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiNotificationDelivery {
+  id: string;
+  workspaceId: string;
+  inboxItemId: string;
+  channelId: string;
+  channelKind: MultiremiNotificationChannelKind;
+  targetLabel: string;
+  status: MultiremiNotificationDeliveryStatus;
+  attempts: number;
+  claimSeq: number;
+  leasedUntil: string | null;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+  deliveredAt: string | null;
+  createdAt: string;
+}
+
 export interface MultiremiIssueReaction {
   id: string;
   issueId: string;

@@ -9,8 +9,23 @@
     "archive_all_read": "Archive all read",
     "archive_completed": "Archive completed"
   },
+  "filters": {
+    "label": "Notification source",
+    "all": "All",
+    "automation": "Automation",
+    "mentions": "Mentions",
+    "assignments": "Assignments"
+  },
+  "groups": {
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "this_week": "This week",
+    "earlier": "Earlier"
+  },
   "list": {
     "empty": "No notifications",
+    "filtered_empty": "No notifications match this filter",
+    "mark_group_read": "Mark group as read",
     "mark_done_tooltip": "Mark as done",
     "archive_tooltip": "Archive",
     "time": {
@@ -22,6 +37,7 @@
   },
   "detail": {
     "select_prompt": "Select a notification to view details",
+    "item_unavailable": "This notification is no longer available",
     "empty": "Your inbox is empty",
     "original_input": "Original input",
     "edit_advanced": "Edit as advanced form",
@@ -37,6 +53,8 @@
     "due_date_changed": "Due date changed",
     "new_comment": "New comment",
     "mentioned": "Mentioned",
+    "comment_created": "New comment",
+    "comment_mention": "Mentioned",
     "review_requested": "Review requested",
     "task_completed": "Task completed",
     "task_failed": "Task failed",
@@ -44,7 +62,11 @@
     "agent_completed": "Agent completed",
     "reaction_added": "Reacted",
     "quick_create_done": "Created with agent",
-    "quick_create_failed": "Create with agent failed"
+    "quick_create_failed": "Create with agent failed",
+    "autopilot_paused": "Automation paused",
+    "autopilot_run_completed": "Automation completed",
+    "autopilot_run_failed": "Automation failed",
+    "autopilot_run_overdue": "Automation overdue"
   },
   "labels": {
     "set_status_to": "Set status to",
@@ -64,6 +86,7 @@
     "archive_failed": "Failed to archive",
     "mark_done_failed": "Failed to mark as done",
     "mark_all_read_failed": "Failed to mark all as read",
+    "mark_group_read_failed": "Failed to mark group as read",
     "archive_all_failed": "Failed to archive all",
     "archive_all_read_failed": "Failed to archive read items",
     "archive_completed_failed": "Failed to archive completed"

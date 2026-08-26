@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 611,
+    "routeCount": 617,
     "routeCountByPrefix": {
-      "native": 196,
+      "native": 202,
       "compat": 402,
       "root": 13
     },
-    "getRoutes": 263,
-    "getRoutesWithBody": 260,
+    "getRoutes": 265,
+    "getRoutesWithBody": 262,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 348,
+    "mutationRoutes": 352,
     "mutationRoutesCovered": 272,
     "flows": [
       "agents-compat",
@@ -95,6 +95,7 @@
     "DELETE /api/multiremi/issues/:id/subscribers/:memberId",
     "DELETE /api/multiremi/labels/:id",
     "DELETE /api/multiremi/members/:id",
+    "DELETE /api/multiremi/notification-channels/:id",
     "DELETE /api/multiremi/pins/:itemType/:itemId",
     "DELETE /api/multiremi/projects/:id",
     "DELETE /api/multiremi/projects/:id/resources/:resourceId",
@@ -269,6 +270,8 @@
     "GET /api/multiremi/members",
     "GET /api/multiremi/members/:id",
     "GET /api/multiremi/models",
+    "GET /api/multiremi/notification-channels",
+    "GET /api/multiremi/notification-deliveries",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
     "GET /api/multiremi/platform/operations",
@@ -399,6 +402,7 @@
     "PATCH /api/multiremi/issues/:id",
     "PATCH /api/multiremi/labels/:id",
     "PATCH /api/multiremi/members/:id",
+    "PATCH /api/multiremi/notification-channels/:id",
     "PATCH /api/multiremi/platform/settings",
     "PATCH /api/multiremi/projects/:id",
     "PATCH /api/multiremi/projects/:id/resources/:resourceId",
@@ -554,6 +558,8 @@
     "POST /api/multiremi/issues/quick-create",
     "POST /api/multiremi/labels",
     "POST /api/multiremi/members",
+    "POST /api/multiremi/notification-channels",
+    "POST /api/multiremi/notification-deliveries/:id/retry",
     "POST /api/multiremi/pins",
     "POST /api/multiremi/platform/operations",
     "POST /api/multiremi/platform/operations/:id/cancel",
@@ -875,6 +881,8 @@
     "GET /api/multiremi/members",
     "GET /api/multiremi/members/:id",
     "GET /api/multiremi/models",
+    "GET /api/multiremi/notification-channels",
+    "GET /api/multiremi/notification-deliveries",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
     "GET /api/multiremi/platform/operations",
@@ -8711,6 +8719,72 @@
             "id": "memory.update",
             "command": "remi memory update",
             "capability": "memory.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.channel.create",
+            "command": "remi notification channel create",
+            "capability": "notification.channel.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.channel.delete",
+            "command": "remi notification channel delete",
+            "capability": "notification.channel.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.channel.list",
+            "command": "remi notification channel list",
+            "capability": "notification.channel.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.channel.update",
+            "command": "remi notification channel update",
+            "capability": "notification.channel.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.delivery.list",
+            "command": "remi notification delivery list",
+            "capability": "notification.delivery.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "notification.delivery.retry",
+            "command": "remi notification delivery retry",
+            "capability": "notification.delivery.retry",
             "outputs": [
               "table",
               "json",
@@ -16931,6 +17005,26 @@
             ]
           }
         ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/notification-channels",
+      "route": "GET /api/multiremi/notification-channels",
+      "path": "/api/multiremi/notification-channels",
+      "status": 200,
+      "body": {
+        "channels": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/notification-deliveries",
+      "route": "GET /api/multiremi/notification-deliveries",
+      "path": "/api/multiremi/notification-deliveries",
+      "status": 200,
+      "body": {
+        "deliveries": [],
+        "total": 0
       }
     },
     {
