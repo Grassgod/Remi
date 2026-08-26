@@ -65,6 +65,16 @@ function familyThinkingConsensus(models: FleetModelResponse[]): FleetModelThinki
   return first;
 }
 
+/**
+ * Last-resort tier for gateway models with no exact and no family counterpart
+ * (e.g. `claude-fable-5`, which has no runtime id at all): if every effort-capable
+ * runtime model of this provider agrees on one level set, assume a new model of the
+ * same provider shares it. This is a heuristic, so it fails closed on any
+ * disagreement — Codex, whose runtimes expose 4- and 6-level sets, never reaches a
+ * consensus here. It never propagates `default`; only an exact or unambiguous family
+ * hit may do that. Revisit if a future Claude model ships an effort set that diverges
+ * from its siblings — it would be given the consensus set rather than its own.
+ */
 function providerThinkingConsensus(models: FleetModelResponse[]): FleetModelThinkingResponse | undefined {
   const capable = models.flatMap((model) =>
     model.thinking?.supported_levels.length ? [model.thinking] : []
