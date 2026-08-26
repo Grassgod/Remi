@@ -96,12 +96,16 @@ async function startHarness(options: {
   const providerFactory: MultiremiDaemonProviderFactory = () => {
     let permissionHandler: ((params: RequestPermissionParams) => Promise<PermissionOutcome>) | null = null;
     let elicitationHandler: ((params: ElicitationCreateParams) => Promise<unknown>) | null = null;
+    let streamedText = "";
     return {
       setPermissionHandler(handler) {
         permissionHandler = handler;
       },
       setElicitationHandler(handler) {
         elicitationHandler = handler as typeof elicitationHandler;
+      },
+      getStreamedText(chatId) {
+        return chatId === task.id ? streamedText : "";
       },
       async *sendStream() {
         yield { sessionUpdate: "agent_thought_chunk", content: [{ type: "text", text: "About to run a tool" }] } as any;
@@ -111,6 +115,7 @@ async function startHarness(options: {
         outcomes.push(await permissionHandler(PERMISSION_PARAMS));
         if (options.withElicitation) {
           if (!elicitationHandler) throw new Error("elicitation handler not registered");
+          streamedText = "I compared deployment risk and rollback speed before asking.";
           elicitationResults.push(await elicitationHandler(ELICITATION_PARAMS));
         }
         yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Task done" }] } as any;
@@ -220,6 +225,9 @@ describe("Multiremi approval routing e2e", () => {
         "pending question request",
       );
       expect(question.payload).toMatchObject({ message: "Which environment should I deploy to?" });
+      expect(question.payload).toMatchObject({
+        context: { text: "I compared deployment risk and rollback speed before asking." },
+      });
       const questions = (question.payload as { questions: Array<{ question: { question: string } }> }).questions;
       expect(questions).toHaveLength(1);
       expect(h.store.getTaskStatus(h.taskId)).toBe("awaiting_human" as MultiremiTaskStatus);

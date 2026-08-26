@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MessageCircleQuestion, ShieldAlert } from "lucide-react";
 import {
@@ -13,6 +13,9 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../i18n";
+import { Markdown } from "./markdown";
+
+const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
 /** Pending permission and AskUserQuestion forms for any in-flight task. */
 export function HumanRequestDock({ taskId }: { taskId: string | null }) {
@@ -90,6 +93,8 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
   const { t } = useT("chat");
   const respond = useRespondHumanRequest();
   const questions = request.payload.questions ?? [];
+  const message = request.payload.message?.trim();
+  const showMessage = Boolean(message && message !== questions[0]?.question.question.trim());
   const [answers, setAnswers] = useState<Record<string, string>>({});
   // Free-text "other" answers, kept separate from option picks. A non-empty
   // other-answer wins over a picked option, matching the agent's read-back
@@ -121,8 +126,9 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
         <MessageCircleQuestion className="h-3.5 w-3.5 text-blue-500" />
         <span>{t(($) => $.human_requests.question_title)}</span>
       </div>
-      {request.payload.message && (
-        <div className="mt-1 break-words text-xs text-muted-foreground">{request.payload.message}</div>
+      {request.payload.context && <QuestionContext context={request.payload.context} />}
+      {showMessage && (
+        <div className="mt-1 break-words text-xs text-muted-foreground">{message}</div>
       )}
       <div className="mt-2 flex flex-col gap-2.5">
         {questions.map(({ fieldKey, otherFieldKey, question }) => {
@@ -189,6 +195,58 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
       </div>
       {respond.isError && (
         <div className="mt-2 text-xs text-destructive">{t(($) => $.human_requests.response_failed)}</div>
+      )}
+    </div>
+  );
+}
+
+function QuestionContext({ context }: { context: { text: string; truncated?: boolean } }) {
+  const { t } = useT("chat");
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [hasOverflow, setHasOverflow] = useState(false);
+
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const measure = () => setHasOverflow(content.scrollHeight > COLLAPSED_CONTEXT_HEIGHT_PX);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [context.text]);
+
+  return (
+    <div className="mt-2 min-w-0 border-l-2 border-border pl-2.5">
+      {context.truncated && (
+        <div className="mb-1 text-[11px] text-muted-foreground">
+          {t(($) => $.human_requests.context_truncated)}
+        </div>
+      )}
+      <div className={cn(!expanded && "max-h-32 overflow-hidden")}>
+        <div ref={contentRef}>
+          <Markdown
+            mode="minimal"
+            className="text-xs text-muted-foreground [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+          >
+            {context.text}
+          </Markdown>
+        </div>
+      </div>
+      {hasOverflow && (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-expanded={expanded}
+          className="mt-1 h-auto px-1 py-0.5 text-xs text-muted-foreground"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded
+            ? t(($) => $.human_requests.context_collapse)
+            : t(($) => $.human_requests.context_expand)}
+        </Button>
       )}
     </div>
   );
