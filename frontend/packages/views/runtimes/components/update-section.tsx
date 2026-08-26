@@ -340,10 +340,14 @@ export function MachineCliUpdate({
   const config = flow.status ? statusConfig[flow.status] : null;
   const StatusIcon = config?.icon;
 
+  // min-w rather than a fixed w: the slot keeps a stable floor so the machine
+  // header doesn't jitter as the state changes, but it may still grow for
+  // longer version strings. A hard width clipped the Update button off the
+  // right edge at ordinary versions (0.2.49 -> 0.2.50).
   return (
     <span
       data-testid="machine-cli-update"
-      className="inline-flex h-6 w-48 max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-md border bg-background px-1.5 align-middle"
+      className="inline-flex h-6 min-w-48 max-w-full items-center gap-1.5 overflow-hidden rounded-md border bg-background px-1.5 align-middle"
     >
       <span className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">
         CLI
@@ -364,7 +368,7 @@ export function MachineCliUpdate({
           </TooltipContent>
         </Tooltip>
       ) : (
-        <span className="shrink-0 font-mono text-xs text-foreground">
+        <span className="min-w-0 truncate font-mono text-xs text-foreground">
           {currentVersion ?? t(($) => $.update.version_unknown)}
         </span>
       )}
@@ -434,13 +438,15 @@ export function MachineCliUpdate({
       ) : hasUpdate ? (
         <>
           <span className="shrink-0 text-xs text-muted-foreground">→</span>
-          <span className="shrink-0 font-mono text-xs text-info">
+          <span className="min-w-0 truncate font-mono text-xs text-info">
             {latestVersion}
           </span>
+          {/* The action never yields space: if anything has to give, the
+              version strings above truncate instead of the button. */}
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className="inline-flex min-w-0">
+                <span className="inline-flex shrink-0">
                   <Button
                     type="button"
                     variant="outline"

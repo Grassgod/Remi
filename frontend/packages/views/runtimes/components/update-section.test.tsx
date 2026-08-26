@@ -97,7 +97,10 @@ describe("MachineCliUpdate", () => {
     });
 
     const control = screen.getByTestId("machine-cli-update");
-    expect(control).toHaveClass("h-6", "w-48", "overflow-hidden");
+    // Single-line and floor-width, but not a hard width: a fixed w-48 clipped
+    // the action off the right edge once version strings grew.
+    expect(control).toHaveClass("h-6", "min-w-48", "overflow-hidden");
+    expect(control).not.toHaveClass("w-48");
     expect(control).not.toHaveTextContent(fullError);
 
     vi.useRealTimers();
