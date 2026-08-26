@@ -164,9 +164,10 @@ function aliasPrefixOf(spec: string): string | null {
  *   @shared/contracts/    the same contracts package under its @shared alias
  *   @acp/                 ACP client, used by the worker
  *   @daemon/              agent-runtime (session, repo checkout, skills, prompts)
+ *   @connectors/          outbound notification adapters (Feishu)
  *
  * Notably absent and expected to stay absent: @remi/ (the other product core),
- * @connectors/, @memory/, @queue/, @auth/.
+ * @memory/, @queue/, @auth/.
  */
 const SERVER_ALLOWED_ALIASES = new Set([
   "@multiremi/",
@@ -175,6 +176,7 @@ const SERVER_ALLOWED_ALIASES = new Set([
   "@shared/contracts/",
   "@acp/",
   "@daemon/",
+  "@connectors/",
 ]);
 
 describe("packages/server dependency set", () => {

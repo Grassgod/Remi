@@ -40,6 +40,8 @@ import type {
   MultiremiIssueSession,
   MultiremiMetricCounter,
   MultiremiNotificationGroupKey,
+  MultiremiNotificationChannel,
+  MultiremiNotificationDelivery,
   MultiremiNotificationPreferenceResponse,
   MultiremiAssigneeType,
   MultiremiAutopilot,
@@ -221,6 +223,20 @@ export interface WorkspacesSurface {
   getNotificationPreferences(input?: { workspaceId?: string | null; memberId?: string | null }): MultiremiNotificationPreferenceResponse;
 }
 
+export interface NotificationChannelsSurface {
+  matchNotificationRoutes(
+    workspaceId: string,
+    memberId: string,
+    inboxType: string,
+    severity: string,
+  ): MultiremiNotificationChannel[];
+  recordPendingNotificationDelivery(
+    item: MultiremiInboxItem,
+    channel: MultiremiNotificationChannel,
+  ): MultiremiNotificationDelivery;
+  dispatchNotificationDelivery(id: string): Promise<void>;
+}
+
 export interface SquadsSurface {
   getSquad(id: string): MultiremiSquad | null;
   listSquads(workspaceId?: string | null): MultiremiSquad[];
@@ -325,7 +341,7 @@ export interface RuntimesSurface {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
 }
 
-export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface {}
+export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -778,7 +794,27 @@ export class StoreContext {
         payload: { item },
       });
     }
+    this.fanOutInboxItem(item);
     return item;
+  }
+
+  private fanOutInboxItem(item: MultiremiInboxItem): void {
+    try {
+      const routes = this.host.matchNotificationRoutes(
+        item.workspaceId,
+        item.memberId,
+        item.type,
+        item.severity,
+      );
+      for (const route of routes) {
+        const delivery = this.host.recordPendingNotificationDelivery(item, route);
+        queueMicrotask(() => void this.host.dispatchNotificationDelivery(delivery.id));
+      }
+    } catch (error) {
+      log.warn(
+        `notification fan-out skipped for inbox item ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   resolveWorkspaceMemberForNotification(workspaceId: string, idOrUserId: string): MultiremiWorkspaceMember | null {

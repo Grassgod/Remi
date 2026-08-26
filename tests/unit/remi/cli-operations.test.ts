@@ -49,6 +49,10 @@ describe("operations CLI contracts", () => {
       "lark.install.begin",
       "lark.installation.delete",
       "lark.binding.redeem",
+      "notification.channel.create",
+      "notification.channel.update",
+      "notification.channel.delete",
+      "notification.delivery.retry",
       "context.auth.logout",
     ]) {
       expect(inventory.get(id)?.auth, id).not.toContain("task");

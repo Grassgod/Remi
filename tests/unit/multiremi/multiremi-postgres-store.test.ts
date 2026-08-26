@@ -665,6 +665,42 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getIssue(i1.id)?.title).toBe("One");
   });
 
+  it("persists notification channels and delivery state on Postgres", () => {
+    const ws = freshWorkspace();
+    const member = store.listWorkspaceMembers(ws)[0]!;
+    const issue = store.createIssue({ title: "PG notification", workspaceId: ws });
+    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
+    const item = store.listInboxItems(member.id).find((entry) => entry.issueId === issue.id)!;
+    const channel = store.createNotificationChannel({
+      workspaceId: ws,
+      kind: "feishu_group",
+      name: "PG team group",
+      target: { chatId: "oc_pg_team" },
+      eventTypes: ["issue_assigned"],
+      minSeverity: "info",
+      createdBy: member.id,
+    });
+
+    const delivery = store.recordPendingNotificationDelivery(item, channel);
+    expect(store.listNotificationChannels(ws)).toEqual([
+      expect.objectContaining({ id: channel.id, target: { chatId: "oc_pg_team" } }),
+    ]);
+    expect(store.listNotificationDeliveries({ workspaceId: ws })).toEqual([
+      expect.objectContaining({ id: delivery.id, status: "pending", attempts: 0 }),
+    ]);
+    const claimedAt = new Date().toISOString();
+    const claimed = store.claimNotificationDeliveryAttempt(
+      delivery.id,
+      0,
+      delivery.claimSeq,
+      3,
+      claimedAt,
+      new Date(Date.now() + 30_000).toISOString(),
+    );
+    expect(claimed?.attempts).toBe(1);
+    expect(store.markNotificationDeliverySent(delivery.id, claimed!.claimSeq)?.status).toBe("sent");
+  });
+
   it("projects and links provider-neutral change requests on Postgres", () => {
     const ws = freshWorkspace();
     const repositoryId = `repo_pg_scm_${wsCounter}`;
