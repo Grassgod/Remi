@@ -17,7 +17,8 @@
   CLI 使用任务 provider env、独立临时 cwd 和同一超时预算。
 - **凭证**：Anthropic API/CLI 复用任务自身的 provider 配置（workspace Relay 下发的
   `ANTHROPIC_BASE_URL/AUTH_TOKEN`，或本机 `~/.claude/settings.json` 的 env），否则回退 daemon 进程环境变量；
-  OpenAI 兼容通道依次读取专用覆盖、`OPENAI_API_KEY` 环境变量、`$HOME/.codex/auth.json`。
+  OpenAI 兼容通道除专用环境变量覆盖外，从 workspace Relay fragment 读取任务网关地址，
+  key 依次读取专用覆盖、`OPENAI_API_KEY` 环境变量、`$HOME/.codex/auth.json`。
   没有任何可用通道凭证时，本任务禁用摘要。
 - **隔离性**：摘要调用 fire-and-forget，与主循环并行；失败只打日志，不影响任务执行；
   同一任务同时最多一个在途调用。
@@ -45,7 +46,7 @@ OpenAI 兼容模型和 Claude 兜底模型。设置保存在 workspace `settings
 | `MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS` | `45000` | T：两次摘要之间的最小间隔（防抖） |
 | `MULTIREMI_PROGRESS_SUMMARY_MODEL` | `claude-haiku-4-5-20251001` | 摘要模型 id（Relay 场景按网关支持的模型配置） |
 | `MULTIREMI_PROGRESS_SUMMARY_TRANSPORT` | `auto` | `auto`：OpenAI → Anthropic API → Claude CLI；`api`：只用 Messages API；`cli`：优先 Claude CLI，二进制缺失时回退 API；`openai`：配置可解析时只用 OpenAI，无法解析时回退 `auto` |
-| `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` | `ANTHROPIC_BASE_URL` | OpenAI 兼容网关地址，可带或不带末尾 `/v1`；任务 provider env 优先于 daemon env |
+| `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` | workspace Relay fragment / `ANTHROPIC_BASE_URL` | OpenAI 兼容网关地址，可带或不带末尾 `/v1`；专用变量优先，其次当前任务的 Relay `base_url`，最后兼容回退到任务及 daemon 的 `ANTHROPIC_BASE_URL` |
 | `MULTIREMI_PROGRESS_SUMMARY_OPENAI_MODEL` | `gpt-5.6-luna` | OpenAI 兼容模型 id；可覆盖为网关支持的其他模型 |
 | `MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY` | `OPENAI_API_KEY` / `~/.codex/auth.json` | OpenAI 兼容网关 key；专用变量优先，其次环境变量，最后读取 `$HOME/.codex/auth.json` |
 | `MULTIREMI_PROGRESS_SUMMARY_MAX_DIGEST_CHARS` | `12000` | 压缩视图字符预算 |
