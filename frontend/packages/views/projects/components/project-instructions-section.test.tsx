@@ -43,10 +43,31 @@ vi.mock("../../editor", () => ({
       />
     );
   }),
-  ReadonlyContent: ({ content }: { content: string }) => (
-    <div data-testid="instructions-preview">{content}</div>
+  ReadonlyContent: ({ content, density }: { content: string; density?: string }) => (
+    <div data-testid="instructions-preview" data-density={density}>
+      {content}
+    </div>
   ),
 }));
+
+// jsdom has no layout, so scrollHeight is always 0 and the preview would never
+// consider itself overflowing. Drive it from the fixture instead.
+function stubMeasuredHeight(height: number) {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollHeight",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get() {
+      return this.querySelector("[data-testid='instructions-preview']") ? height : 0;
+    },
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(HTMLElement.prototype, "scrollHeight", descriptor);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+  };
+}
 
 import { ProjectInstructionsSection } from "./project-instructions-section";
 
@@ -85,6 +106,50 @@ describe("ProjectInstructionsSection", () => {
     );
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(screen.getByText(/Updated today by Ada/i)).toBeInTheDocument();
+  });
+
+  it("renders the sidebar preview at compact density", () => {
+    renderSection();
+
+    expect(screen.getByTestId("instructions-preview")).toHaveAttribute(
+      "data-density",
+      "compact",
+    );
+  });
+
+  it("offers no expand affordance when the preview fits", () => {
+    const restore = stubMeasuredHeight(60);
+    try {
+      renderSection();
+      expect(screen.queryByRole("button", { name: /Show all/i })).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("fades and expands instructions that overflow the collapsed preview", () => {
+    const restore = stubMeasuredHeight(400);
+    try {
+      renderSection({ instructions: "# Heading\n\n" + "- item\n".repeat(40) });
+
+      const toggle = screen.getByRole("button", { name: /Show all/i });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+      // Clamp + fade while collapsed, so nothing is cut mid-element.
+      const clamp = screen.getByTestId("instructions-preview").parentElement?.parentElement;
+      expect(clamp).toHaveStyle({ maxHeight: "112px" });
+      expect(clamp?.querySelector("[aria-hidden]")).toBeInTheDocument();
+
+      fireEvent.click(toggle);
+
+      const expanded = screen.getByRole("button", { name: /Show less/i });
+      expect(expanded).toHaveAttribute("aria-expanded", "true");
+      expect(
+        screen.getByTestId("instructions-preview").parentElement?.parentElement,
+      ).not.toHaveStyle({ maxHeight: "112px" });
+    } finally {
+      restore();
+    }
   });
 
   it("saves only on the explicit action and explains session effect and secret handling", async () => {

@@ -9,5 +9,9 @@
 @import "./shell.css";
 @import "./prose.css";
 @import "./code.css";
+/* Density override — must follow prose.css/code.css so equal-weight rules lose
+   to it; the doubled `.rich-text-editor` selectors also make it win on
+   specificity alone. */
+@import "./compact.css";
 @import "./mermaid.css";
 @import "./media.css";
