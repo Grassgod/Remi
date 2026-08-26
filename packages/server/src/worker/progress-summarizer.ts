@@ -16,6 +16,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
+import { extractBaseUrl, type RelayEngine } from "@multiremi/relay/fragment.js";
 
 const log = createLogger("multiremi-progress");
 
@@ -41,6 +42,11 @@ export interface ProgressSummaryConfig {
   transport: ProgressSummaryTransport;
   /** Dedicated OpenAI-compatible endpoint. Null unless all three env values are usable. */
   openAi: OpenAiProgressSummaryConfig | null;
+}
+
+export interface ProgressSummaryRelaySource {
+  engine: RelayEngine;
+  fragment: string;
 }
 
 export const PROGRESS_SUMMARY_DEFAULTS = {
@@ -77,6 +83,7 @@ export function resolveProgressSummaryConfig(
   defaults: {
     providerEnv?: Record<string, string>;
     codexAuthApiKey?: string | null;
+    relayBaseUrl?: string | null;
     workspacePolicy?: WorkspaceProgressSummaryPolicy;
   } = {},
 ): ProgressSummaryConfig {
@@ -93,6 +100,7 @@ export function resolveProgressSummaryConfig(
     ?? PROGRESS_SUMMARY_DEFAULTS.transport;
   const openAiBaseUrl = (
     env.MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL?.trim()
+    || defaults.relayBaseUrl?.trim()
     || defaults.providerEnv?.ANTHROPIC_BASE_URL?.trim()
     || env.ANTHROPIC_BASE_URL?.trim()
   )?.replace(/\/+$/, "");
@@ -142,8 +150,16 @@ export async function resolveTaskProgressSummaryConfig(
   processEnv: Record<string, string | undefined> = process.env,
   authKeyReader: (env: Record<string, string | undefined>) => Promise<string | null> = readCodexAuthApiKey,
   workspacePolicy?: WorkspaceProgressSummaryPolicy,
+  relaySource?: ProgressSummaryRelaySource,
 ): Promise<ProgressSummaryConfig> {
-  const envConfig = resolveProgressSummaryConfig(processEnv, { providerEnv, workspacePolicy });
+  const relayBaseUrl = relaySource
+    ? extractBaseUrl(relaySource.engine, relaySource.fragment)
+    : null;
+  const envConfig = resolveProgressSummaryConfig(processEnv, {
+    providerEnv,
+    relayBaseUrl,
+    workspacePolicy,
+  });
   if (!envConfig.enabled || envConfig.transport === "api" || envConfig.transport === "cli" || envConfig.openAi) {
     return envConfig;
   }
@@ -154,6 +170,7 @@ export async function resolveTaskProgressSummaryConfig(
   return resolveProgressSummaryConfig(processEnv, {
     providerEnv,
     codexAuthApiKey,
+    relayBaseUrl,
     workspacePolicy,
   });
 }

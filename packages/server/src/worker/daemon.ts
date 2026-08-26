@@ -2009,7 +2009,7 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "start", {});
       this.enqueueTaskReport(task.id, "progress", { summary: "Agent execution started", step: 1, total: 3 });
-      progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv);
+      progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
         // The run loop only leaves a task unfinalized when the output was
@@ -2490,6 +2490,7 @@ export class MultiremiDaemon {
   private async createTaskProgressSummarizer(
     task: MultiremiTaskWithAgent,
     providerEnv?: Record<string, string>,
+    relayFragment?: string,
   ): Promise<TaskProgressSummarizer | null> {
     try {
       const workspacePolicy = resolveWorkspaceProgressSummaryPolicy(
@@ -2500,6 +2501,10 @@ export class MultiremiDaemon {
         process.env,
         undefined,
         workspacePolicy,
+        (task.agent?.provider === "codex" || task.agent?.provider === "claude")
+          && relayFragment !== undefined
+          ? { engine: task.agent.provider, fragment: relayFragment }
+          : undefined,
       );
       if (!config.enabled) return null;
       const credentials = resolveSummarizerCredentials(providerEnv);
