@@ -152,15 +152,23 @@ export class AutopilotsRepo {
     }
     const createdByType = normalizeAutopilotCreatorType(input.createdByType ?? input.created_by_type);
     const createdById = cleanOptionalString(input.createdById ?? input.created_by_id) ?? "local";
+    const issueCreationRestricted = Boolean(input.issueCreationRestricted ?? input.issue_creation_restricted);
+    const issueCreationRestrictedByTaskId = issueCreationRestricted
+      ? cleanOptionalString(input.issueCreationRestrictedByTaskId)
+      : null;
+    const issueCreationRestrictionReason = issueCreationRestricted
+      ? input.issueCreationRestrictionReason ?? (issueCreationRestrictedByTaskId ? "restricted_task" : "human_policy")
+      : null;
     const id = input.id ?? createId("aut");
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_autopilots (
         id, title, description, project_id, workspace_id, assignee_type,
         assignee_id, status, execution_mode, session_policy, workspace_policy, issue_title_template,
-        trigger_kind, trigger_label, cron_expression, created_by_type,
+        trigger_kind, trigger_label, cron_expression, issue_creation_restricted,
+        issue_creation_restriction_reason, issue_creation_restricted_by_task_id, created_by_type,
         created_by_id, last_run_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       [
         id,
         input.title.trim(),
@@ -177,6 +185,9 @@ export class AutopilotsRepo {
         input.triggerKind ?? input.trigger_kind ?? "manual",
         input.triggerLabel ?? input.trigger_label ?? null,
         input.cronExpression ?? input.cron_expression ?? null,
+        issueCreationRestricted ? 1 : 0,
+        issueCreationRestrictionReason,
+        issueCreationRestrictedByTaskId,
         createdByType,
         createdById,
         now,
@@ -208,6 +219,19 @@ export class AutopilotsRepo {
     const nextExecutionMode = input.executionMode ?? current.executionMode;
     const nextSessionPolicy = input.sessionPolicy ?? current.sessionPolicy;
     const nextWorkspacePolicy = input.workspacePolicy ?? current.workspacePolicy;
+    const restrictionInput = input.issueCreationRestricted ?? input.issue_creation_restricted;
+    const nextIssueCreationRestricted = restrictionInput ?? current.issueCreationRestricted;
+    const nextIssueCreationRestrictedByTaskId = nextIssueCreationRestricted
+      ? restrictionInput === undefined
+        ? current.issueCreationRestrictedByTaskId
+        : cleanOptionalString(input.issueCreationRestrictedByTaskId)
+      : null;
+    const nextIssueCreationRestrictionReason = nextIssueCreationRestricted
+      ? restrictionInput === undefined
+        ? current.issueCreationRestrictionReason
+        : input.issueCreationRestrictionReason
+          ?? (nextIssueCreationRestrictedByTaskId ? "restricted_task" : "human_policy")
+      : null;
     if (!isAutopilotExecutionMode(nextExecutionMode)) throw new Error("Invalid Autopilot execution_mode");
     if (nextSessionPolicy !== "new" && nextSessionPolicy !== "reuse_latest") throw new Error("Invalid Autopilot session_policy");
     if (nextWorkspacePolicy !== "reuse_issue") throw new Error("Invalid Autopilot workspace_policy");
@@ -260,8 +284,9 @@ export class AutopilotsRepo {
       }
     }
     const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_autopilots SET
+    this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `UPDATE multiremi_autopilots SET
         title = ?,
         description = ?,
         project_id = ?,
@@ -275,6 +300,9 @@ export class AutopilotsRepo {
         trigger_kind = ?,
         trigger_label = ?,
         cron_expression = ?,
+        issue_creation_restricted = ?,
+        issue_creation_restriction_reason = ?,
+        issue_creation_restricted_by_task_id = ?,
         updated_at = ?
        WHERE id = ?`,
       [
@@ -291,10 +319,25 @@ export class AutopilotsRepo {
         input.triggerKind ?? current.triggerKind,
         input.triggerLabel === undefined ? current.triggerLabel : input.triggerLabel,
         input.cronExpression === undefined ? current.cronExpression : input.cronExpression,
+        nextIssueCreationRestricted ? 1 : 0,
+        nextIssueCreationRestrictionReason,
+        nextIssueCreationRestrictedByTaskId,
         now,
         id,
-      ],
-    );
+        ],
+      );
+      if (restrictionInput === false) {
+        this.ctx.db.run(
+          `UPDATE multiremi_autopilot_triggers
+           SET issue_creation_restricted = 0,
+               issue_creation_restriction_reason = NULL,
+               issue_creation_restricted_by_task_id = NULL,
+               updated_at = ?
+           WHERE autopilot_id = ?`,
+          [now, id],
+        );
+      }
+    })();
     return this.getAutopilot(id)!;
   }
 
@@ -383,12 +426,21 @@ export class AutopilotsRepo {
     const id = createId("trg");
     const now = nowIso();
     const webhookToken = kind === "webhook" ? createId("awt", 18) : null;
-    this.ctx.db.run(
-      `INSERT INTO multiremi_autopilot_triggers (
+    const issueCreationRestricted = Boolean(input.issueCreationRestricted ?? input.issue_creation_restricted);
+    const issueCreationRestrictedByTaskId = issueCreationRestricted
+      ? cleanOptionalString(input.issueCreationRestrictedByTaskId)
+      : null;
+    const issueCreationRestrictionReason = issueCreationRestricted
+      ? input.issueCreationRestrictionReason ?? (issueCreationRestrictedByTaskId ? "restricted_task" : "human_policy")
+      : null;
+    this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `INSERT INTO multiremi_autopilot_triggers (
         id, autopilot_id, kind, enabled, cron_expression, timezone, next_run_at,
         webhook_token, webhook_url, provider, label, event_filters, event_config,
+        issue_creation_restricted, issue_creation_restriction_reason, issue_creation_restricted_by_task_id,
         signing_secret_hash, signing_secret_hint, last_fired_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
       [
         id,
         autopilotId,
@@ -402,14 +454,35 @@ export class AutopilotsRepo {
         input.label ?? null,
         eventFilters ? toJson(eventFilters) : null,
         eventConfig ? toJson(eventConfig) : null,
+        issueCreationRestricted ? 1 : 0,
+        issueCreationRestrictionReason,
+        issueCreationRestrictedByTaskId,
         now,
         now,
-      ],
-    );
-    this.ctx.db.run(
-      "UPDATE multiremi_autopilots SET trigger_kind = ?, trigger_label = ?, cron_expression = ?, updated_at = ? WHERE id = ?",
-      [kind, input.label ?? autopilot.triggerLabel, input.cronExpression ?? input.cron_expression ?? autopilot.cronExpression, now, autopilotId],
-    );
+        ],
+      );
+      this.ctx.db.run(
+        `UPDATE multiremi_autopilots SET
+           trigger_kind = ?, trigger_label = ?, cron_expression = ?,
+           issue_creation_restricted = CASE WHEN ? = 1 THEN 1 ELSE issue_creation_restricted END,
+           issue_creation_restriction_reason = CASE WHEN ? = 1 THEN ? ELSE issue_creation_restriction_reason END,
+           issue_creation_restricted_by_task_id = CASE WHEN ? = 1 THEN ? ELSE issue_creation_restricted_by_task_id END,
+           updated_at = ?
+         WHERE id = ?`,
+        [
+          kind,
+          input.label ?? autopilot.triggerLabel,
+          input.cronExpression ?? input.cron_expression ?? autopilot.cronExpression,
+          issueCreationRestricted ? 1 : 0,
+          issueCreationRestricted ? 1 : 0,
+          issueCreationRestrictionReason,
+          issueCreationRestricted ? 1 : 0,
+          issueCreationRestrictedByTaskId,
+          now,
+          autopilotId,
+        ],
+      );
+    })();
     return this.getAutopilotTrigger(id)!;
   }
 
@@ -424,6 +497,19 @@ export class AutopilotsRepo {
     const eventConfigInput = input.eventConfig !== undefined ? input.eventConfig : input.event_config;
     const eventConfig = eventConfigInput === undefined ? current.eventConfig : normalizeAutopilotEventConfig(eventConfigInput);
     const enabled = input.enabled === undefined ? current.enabled : input.enabled;
+    const restrictionInput = input.issueCreationRestricted ?? input.issue_creation_restricted;
+    const nextIssueCreationRestricted = restrictionInput ?? current.issueCreationRestricted;
+    const nextIssueCreationRestrictedByTaskId = nextIssueCreationRestricted
+      ? restrictionInput === undefined
+        ? current.issueCreationRestrictedByTaskId
+        : cleanOptionalString(input.issueCreationRestrictedByTaskId)
+      : null;
+    const nextIssueCreationRestrictionReason = nextIssueCreationRestricted
+      ? restrictionInput === undefined
+        ? current.issueCreationRestrictionReason
+        : input.issueCreationRestrictionReason
+          ?? (nextIssueCreationRestrictedByTaskId ? "restricted_task" : "human_policy")
+      : null;
     if ((current.kind === "system_event" || current.kind === "scm_event") && !eventConfig) {
       throw new Error(`event_config is required for ${current.kind} triggers`);
     }
@@ -468,8 +554,9 @@ export class AutopilotsRepo {
         ? computeScheduleNextRun(cronExpression, timezone)
         : current.nextRunAt
       : null;
-    this.ctx.db.run(
-      `UPDATE multiremi_autopilot_triggers SET
+    this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `UPDATE multiremi_autopilot_triggers SET
         enabled = ?,
         cron_expression = ?,
         timezone = ?,
@@ -477,6 +564,9 @@ export class AutopilotsRepo {
         label = ?,
         event_filters = ?,
         event_config = ?,
+        issue_creation_restricted = ?,
+        issue_creation_restriction_reason = ?,
+        issue_creation_restricted_by_task_id = ?,
         updated_at = ?
        WHERE id = ?`,
       [
@@ -487,19 +577,34 @@ export class AutopilotsRepo {
         input.label === undefined ? current.label : input.label,
         eventFilters ? toJson(eventFilters) : null,
         eventConfig ? toJson(eventConfig) : null,
+        nextIssueCreationRestricted ? 1 : 0,
+        nextIssueCreationRestrictionReason,
+        nextIssueCreationRestrictedByTaskId,
         now,
         triggerId,
-      ],
-    );
-    this.ctx.db.run(
-      "UPDATE multiremi_autopilots SET trigger_label = ?, cron_expression = ?, updated_at = ? WHERE id = ?",
-      [
-        input.label === undefined ? current.label : input.label,
-        input.cronExpression ?? input.cron_expression ?? current.cronExpression,
-        now,
-        autopilotId,
-      ],
-    );
+        ],
+      );
+      this.ctx.db.run(
+        `UPDATE multiremi_autopilots SET
+           trigger_label = ?, cron_expression = ?,
+           issue_creation_restricted = CASE WHEN ? = 1 THEN 1 ELSE issue_creation_restricted END,
+           issue_creation_restriction_reason = CASE WHEN ? = 1 THEN ? ELSE issue_creation_restriction_reason END,
+           issue_creation_restricted_by_task_id = CASE WHEN ? = 1 THEN ? ELSE issue_creation_restricted_by_task_id END,
+           updated_at = ?
+         WHERE id = ?`,
+        [
+          input.label === undefined ? current.label : input.label,
+          input.cronExpression ?? input.cron_expression ?? current.cronExpression,
+          restrictionInput === true ? 1 : 0,
+          restrictionInput === true ? 1 : 0,
+          nextIssueCreationRestrictionReason,
+          restrictionInput === true ? 1 : 0,
+          nextIssueCreationRestrictedByTaskId,
+          now,
+          autopilotId,
+        ],
+      );
+    })();
     return this.getAutopilotTrigger(triggerId)!;
   }
 
@@ -666,10 +771,14 @@ export class AutopilotsRepo {
         for (const row of triggerRows) {
           const trigger = toAutopilotTrigger(row);
           if (!systemEventMatchesConfig(event, trigger.eventConfig)) continue;
+          const sourceTaskId = isRecord(event.payload)
+            ? cleanOptionalString(event.payload.automation_source_task_id)
+            : null;
           runs.push(this.runAutopilot(trigger.autopilotId, {
             source: "system_event",
             triggerId: trigger.id,
             eventId: event.id,
+            sourceTaskId,
             triggerIssueId: trigger.eventConfig?.resource === "feishu_source"
               ? trigger.eventConfig.triggerIssueId
               : event.resourceId,
@@ -958,7 +1067,7 @@ export class AutopilotsRepo {
     const repositoryId = cleanOptionalString(input.repositoryId ?? input.repository_id) ?? null;
     const dedupeKey = cleanOptionalString(input.dedupeKey ?? input.dedupe_key) ?? null;
     const sourceTaskId = cleanOptionalString(input.sourceTaskId ?? input.source_task_id) ?? null;
-    if ((triggerId == null) !== (eventId == null)) throw new Error("trigger_id and event_id must be provided together");
+    if (eventId && !triggerId) throw new Error("event_id requires trigger_id");
     if (source === "system_event" && (!triggerId || !eventId)) {
       throw new Error("system_event runs require trigger_id and event_id");
     }
@@ -970,9 +1079,15 @@ export class AutopilotsRepo {
       const autopilot = this.getAutopilot(autopilotId);
       if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
       this.assertRepositoryWikiBuildScope(autopilot, repositoryId, dedupeKey);
+      let trigger: MultiremiAutopilotTrigger | null = null;
       if (triggerId) {
-        const trigger = this.getAutopilotTrigger(triggerId);
+        trigger = this.getAutopilotTrigger(triggerId);
         if (!trigger || trigger.autopilotId !== autopilot.id) throw new Error(`Autopilot trigger not found: ${triggerId}`);
+      }
+      const sourceTask = sourceTaskId ? this.ctx.tasks().getTask(sourceTaskId) : null;
+      if (sourceTaskId && !sourceTask) throw new Error(`Source task not found: ${sourceTaskId}`);
+      if (sourceTask && sourceTask.workspaceId !== autopilot.workspaceId) {
+        throw new Error("Source task belongs to another workspace");
       }
 
       if (triggerId && eventId) {
@@ -1023,6 +1138,12 @@ export class AutopilotsRepo {
           ? autopilot.issueTitleTemplate || autopilot.title
           : autopilot.description || autopilot.issueTitleTemplate || autopilot.title);
       const agent = this.ctx.resolveAutopilotAgent(autopilot);
+      const issueCreationRestricted = Boolean(
+        autopilot.issueCreationRestricted
+        || trigger?.issueCreationRestricted
+        || sourceTask?.issueCreationRestricted
+        || agent?.issueCreationRequiresProposal,
+      );
       const skippedReason = !agent
         ? "No runnable agent"
         : autopilot.status !== "active"
@@ -1063,6 +1184,9 @@ export class AutopilotsRepo {
         [now, now, autopilotId],
       );
       if (skippedReason || !agent) return this.getAutopilotRun(runId)!;
+      if (autopilot.executionMode === "create_issue" && issueCreationRestricted) {
+        throw new Error("issue_creation_requires_proposal");
+      }
 
       let issue: MultiremiIssue | null = null;
       let issueSessionId: string | null = null;
@@ -1119,6 +1243,7 @@ export class AutopilotsRepo {
         assignmentAuthorId: autopilot.id,
         assignmentSourceEventId: eventId,
         parentTaskId: sourceTaskId,
+        issueCreationRestricted,
       });
       taskToNotify = task;
       issueSessionId = task.issueSessionId ?? issueSessionId;
@@ -1269,9 +1394,9 @@ export class AutopilotsRepo {
       `INSERT INTO multiremi_webhook_deliveries (
         id, workspace_id, autopilot_id, trigger_id, provider, event, dedupe_key, dedupe_source,
         signature_status, status, attempt_count, selected_headers, content_type, raw_body,
-        response_status, response_body, autopilot_run_id, replayed_from_delivery_id, error,
+        source_task_id, response_status, response_body, autopilot_run_id, replayed_from_delivery_id, error,
         received_at, last_attempt_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?, ?, ?)`,
       [
         deliveryId,
         autopilot.workspaceId,
@@ -1285,6 +1410,7 @@ export class AutopilotsRepo {
         toJson(selectedWebhookHeaders(headers)),
         envelope.request.contentType ?? null,
         input.rawBody ?? toJson(envelope.eventPayload),
+        cleanOptionalString(input.sourceTaskId),
         input.replayedFromDeliveryId ?? null,
         now,
         now,
@@ -1337,6 +1463,7 @@ export class AutopilotsRepo {
         payload: envelope,
         source: "webhook",
         sourceTaskId: input.sourceTaskId,
+        triggerId: trigger?.id ?? null,
       });
       if (trigger) {
         this.ctx.db.run("UPDATE multiremi_autopilot_triggers SET last_fired_at = ?, updated_at = ? WHERE id = ?", [now, now, trigger.id]);
@@ -1373,6 +1500,9 @@ export class AutopilotsRepo {
     if (delivery.status === "rejected" || delivery.signatureStatus === "invalid" || delivery.signatureStatus === "missing") {
       throw new Error("Cannot replay a rejected delivery");
     }
+    const sourceRow = this.ctx.db.query(
+      "SELECT source_task_id FROM multiremi_webhook_deliveries WHERE id = ?",
+    ).get(delivery.id) as Row | null;
     const payload = delivery.rawBody ? parseJson(delivery.rawBody, null) : null;
     return this.handleAutopilotWebhook(autopilotId, {
       payload,
@@ -1381,7 +1511,7 @@ export class AutopilotsRepo {
       provider: delivery.provider,
       signatureStatus: "not_required",
       replayedFromDeliveryId: delivery.id,
-      sourceTaskId: options.sourceTaskId,
+      sourceTaskId: options.sourceTaskId ?? nullableString(sourceRow?.source_task_id),
     });
   }
 
@@ -1432,6 +1562,10 @@ export class AutopilotsRepo {
 
 function normalizeAutopilotCreatorType(value: unknown): "member" | "agent" {
   return value === "agent" ? "agent" : "member";
+}
+
+function normalizeIssueCreationRestrictionReason(value: unknown): "restricted_task" | "human_policy" {
+  return value === "restricted_task" ? "restricted_task" : "human_policy";
 }
 
 function isAutopilotExecutionMode(value: unknown): value is MultiremiAutopilot["executionMode"] {
@@ -1861,6 +1995,13 @@ function toAutopilot(row: Row): MultiremiAutopilot {
   const triggerKind = String(row.trigger_kind ?? "manual");
   const triggerLabel = nullableString(row.trigger_label);
   const cronExpression = nullableString(row.cron_expression);
+  const issueCreationRestricted = Boolean(Number(row.issue_creation_restricted ?? 0));
+  const issueCreationRestrictionReason = issueCreationRestricted
+    ? normalizeIssueCreationRestrictionReason(row.issue_creation_restriction_reason)
+    : null;
+  const issueCreationRestrictedByTaskId = issueCreationRestricted
+    ? nullableString(row.issue_creation_restricted_by_task_id)
+    : null;
   const createdByType = normalizeAutopilotCreatorType(row.created_by_type);
   const createdById = String(row.created_by_id ?? "local");
   const lastRunAt = nullableString(row.last_run_at);
@@ -1893,6 +2034,12 @@ function toAutopilot(row: Row): MultiremiAutopilot {
     trigger_label: triggerLabel,
     cronExpression,
     cron_expression: cronExpression,
+    issueCreationRestricted,
+    issue_creation_restricted: issueCreationRestricted,
+    issueCreationRestrictionReason,
+    issue_creation_restriction_reason: issueCreationRestrictionReason,
+    issueCreationRestrictedByTaskId,
+    issue_creation_restricted_by_task_id: issueCreationRestrictedByTaskId,
     createdByType,
     created_by_type: createdByType,
     createdById,
@@ -1912,6 +2059,7 @@ function toAutopilotTrigger(row: Row): MultiremiAutopilotTrigger {
   const webhookUrl = nullableString(row.webhook_url);
   const kind = String(row.kind ?? "webhook") as MultiremiAutopilotTrigger["kind"];
   const signingSecret = nullableString(row.signing_secret_hash);
+  const issueCreationRestricted = Boolean(Number(row.issue_creation_restricted ?? 0));
   return {
     id: String(row.id),
     autopilotId: String(row.autopilot_id),
@@ -1927,6 +2075,13 @@ function toAutopilotTrigger(row: Row): MultiremiAutopilotTrigger {
     label: nullableString(row.label),
     eventFilters: parseWebhookEventFiltersRow(row.event_filters),
     eventConfig: parseAutopilotEventConfigRow(row.event_config),
+    issueCreationRestricted,
+    issueCreationRestrictionReason: issueCreationRestricted
+      ? normalizeIssueCreationRestrictionReason(row.issue_creation_restriction_reason)
+      : null,
+    issueCreationRestrictedByTaskId: issueCreationRestricted
+      ? nullableString(row.issue_creation_restricted_by_task_id)
+      : null,
     signingSecretSet: Boolean(signingSecret),
     signingSecretHint: nullableString(row.signing_secret_hint),
     lastFiredAt: nullableString(row.last_fired_at),

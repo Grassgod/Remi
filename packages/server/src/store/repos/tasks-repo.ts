@@ -197,7 +197,10 @@ export class TasksRepo {
       throw new Error("Parent task belongs to another workspace");
     }
     const issueCreationRestricted = Boolean(
-      parentTask?.issueCreationRestricted || agent.issueCreationRequiresProposal,
+      input.issueCreationRestricted
+      || input.issue_creation_restricted
+      || parentTask?.issueCreationRestricted
+      || agent.issueCreationRequiresProposal,
     );
     const issueId = input.issueId ?? triggerComment?.issueId ?? null;
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;

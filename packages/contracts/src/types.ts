@@ -2935,6 +2935,12 @@ export interface MultiremiAutopilot {
   trigger_label?: string | null;
   cronExpression: string | null;
   cron_expression?: string | null;
+  issueCreationRestricted: boolean;
+  issue_creation_restricted?: boolean;
+  issueCreationRestrictionReason: "restricted_task" | "human_policy" | null;
+  issue_creation_restriction_reason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId: string | null;
+  issue_creation_restricted_by_task_id?: string | null;
   createdByType: "member" | "agent";
   created_by_type?: "member" | "agent";
   createdById: string;
@@ -2963,6 +2969,9 @@ export interface MultiremiAutopilotTrigger {
   eventFilters: MultiremiWebhookEventFilter[] | null;
   eventConfig: MultiremiAutopilotEventConfig | null;
   event_config?: MultiremiAutopilotEventConfig | null;
+  issueCreationRestricted: boolean;
+  issueCreationRestrictionReason: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId: string | null;
   signingSecretSet: boolean;
   signingSecretHint: string | null;
   lastFiredAt: string | null;
@@ -3019,6 +3028,11 @@ export interface CreateAutopilotInput {
   created_by_type?: "member" | "agent";
   createdById?: string | null;
   created_by_id?: string | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface CreateAutopilotTriggerInput {
@@ -3033,6 +3047,11 @@ export interface CreateAutopilotTriggerInput {
   event_filters?: MultiremiWebhookEventFilter[] | null;
   eventConfig?: MultiremiAutopilotEventConfig | null;
   event_config?: MultiremiAutopilotEventConfig | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface UpdateAutopilotTriggerInput {
@@ -3045,6 +3064,11 @@ export interface UpdateAutopilotTriggerInput {
   event_filters?: MultiremiWebhookEventFilter[] | null;
   eventConfig?: MultiremiAutopilotEventConfig | null;
   event_config?: MultiremiAutopilotEventConfig | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface UpdateAutopilotInput {
@@ -3061,6 +3085,11 @@ export interface UpdateAutopilotInput {
   triggerKind?: string;
   triggerLabel?: string | null;
   cronExpression?: string | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface RunAutopilotInput {

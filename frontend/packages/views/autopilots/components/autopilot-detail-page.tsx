@@ -5,6 +5,7 @@ import {
   Zap, Play, Clock, Plus, Trash2, Loader2, Pencil,
   Ban, ChevronDown, ChevronRight,
   Activity, Webhook, Copy, Check, RotateCw, GitPullRequest,
+  ShieldAlert,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { autopilotDetailOptions, autopilotRunsOptions } from "@multiremi/core/autopilots/queries";
@@ -694,6 +695,22 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
     updateAutopilot.mutate({ id: autopilotId, status: checked ? "active" : "paused" });
   };
 
+  const handleClearIssueCreationRestriction = async () => {
+    try {
+      await updateAutopilot.mutateAsync({
+        id: autopilotId,
+        issue_creation_restricted: false,
+      });
+      toast.success(t(($) => $.detail.policy_cleared));
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : t(($) => $.detail.policy_clear_failed),
+      );
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -757,6 +774,32 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto p-6 space-y-8">
+          {autopilot.issue_creation_restricted && (
+            <section className="flex flex-col gap-3 border-y border-amber-500/30 bg-amber-500/5 px-4 py-3 sm:flex-row sm:items-center">
+              <ShieldAlert className="h-4 w-4 shrink-0 text-amber-600" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">{t(($) => $.detail.policy_title)}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {autopilot.issue_creation_restriction_reason === "restricted_task"
+                    ? t(($) => $.detail.policy_restricted_task)
+                    : t(($) => $.detail.policy_human)}
+                  {autopilot.issue_creation_restricted_by_task_id
+                    ? ` · ${autopilot.issue_creation_restricted_by_task_id}`
+                    : ""}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleClearIssueCreationRestriction}
+                disabled={updateAutopilot.isPending}
+              >
+                {updateAutopilot.isPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : t(($) => $.detail.policy_clear)}
+              </Button>
+            </section>
+          )}
           {/* Properties */}
           <section className="space-y-4">
             <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">

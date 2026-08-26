@@ -10,6 +10,7 @@ const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_
 const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4";
 const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_policy";
 const TASK_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_task_issue_proposal_policy";
+const AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_autopilot_issue_proposal_policy";
 const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
@@ -1107,6 +1108,9 @@ export function runMigrations(db: SqlDatabase): void {
       trigger_kind TEXT NOT NULL DEFAULT 'manual',
       trigger_label TEXT,
       cron_expression TEXT,
+      issue_creation_restricted INTEGER NOT NULL DEFAULT 0,
+      issue_creation_restriction_reason TEXT,
+      issue_creation_restricted_by_task_id TEXT,
       created_by_type TEXT NOT NULL DEFAULT 'member',
       created_by_id TEXT NOT NULL DEFAULT 'local',
       last_run_at TEXT,
@@ -1132,6 +1136,9 @@ export function runMigrations(db: SqlDatabase): void {
       label TEXT,
       event_filters TEXT,
       event_config TEXT,
+      issue_creation_restricted INTEGER NOT NULL DEFAULT 0,
+      issue_creation_restriction_reason TEXT,
+      issue_creation_restricted_by_task_id TEXT,
       signing_secret_hash TEXT,
       signing_secret_hint TEXT,
       last_fired_at TEXT,
@@ -1312,6 +1319,7 @@ export function runMigrations(db: SqlDatabase): void {
       selected_headers TEXT NOT NULL DEFAULT '{}',
       content_type TEXT,
       raw_body TEXT,
+      source_task_id TEXT,
       response_status INTEGER,
       response_body TEXT,
       autopilot_run_id TEXT,
@@ -1322,6 +1330,7 @@ export function runMigrations(db: SqlDatabase): void {
       created_at TEXT NOT NULL,
       FOREIGN KEY(autopilot_id) REFERENCES multiremi_autopilots(id) ON DELETE CASCADE,
       FOREIGN KEY(autopilot_run_id) REFERENCES multiremi_autopilot_runs(id) ON DELETE SET NULL,
+      FOREIGN KEY(source_task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL,
       FOREIGN KEY(replayed_from_delivery_id) REFERENCES multiremi_webhook_deliveries(id) ON DELETE SET NULL
     );
 
@@ -1877,6 +1886,15 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, TASK_ISSUE_PROPOSAL_POLICY_MIGRATION, () => {
     addColumnIfMissing(db, "multiremi_tasks", "issue_creation_restricted INTEGER NOT NULL DEFAULT 0");
     addColumnIfMissing(db, "multiremi_autopilot_runs", "source_task_id TEXT");
+  });
+  runMigrationOnce(db, AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_autopilots", "issue_creation_restricted INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing(db, "multiremi_autopilots", "issue_creation_restriction_reason TEXT");
+    addColumnIfMissing(db, "multiremi_autopilots", "issue_creation_restricted_by_task_id TEXT");
+    addColumnIfMissing(db, "multiremi_autopilot_triggers", "issue_creation_restricted INTEGER NOT NULL DEFAULT 0");
+    addColumnIfMissing(db, "multiremi_autopilot_triggers", "issue_creation_restriction_reason TEXT");
+    addColumnIfMissing(db, "multiremi_autopilot_triggers", "issue_creation_restricted_by_task_id TEXT");
+    addColumnIfMissing(db, "multiremi_webhook_deliveries", "source_task_id TEXT");
   });
   addColumnIfMissing(db, "multiremi_squads", "avatar_url TEXT");
   addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");

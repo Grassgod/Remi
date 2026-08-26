@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -263,6 +264,280 @@ describe("agent Issue proposal policy", () => {
       await expectRestrictedTaskCannotCreateIssue(fixture, taskId, `${label} Agent delegation`);
     }
   });
+
+  it("persists a restricted task's taint on schedule triggers and blocks future background Issue creation", async () => {
+    const fixture = await policyFixture();
+    const autopilot = fixture.store.createAutopilot({
+      title: "Future scheduled delegation",
+      assigneeId: fixture.worker.id,
+      executionMode: "run_only",
+      triggerKind: "schedule",
+    });
+    const createTrigger = await fixture.app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: fixture.restrictedHeaders,
+      body: JSON.stringify({ kind: "schedule", cron_expression: "0 * * * *" }),
+    });
+    expect(createTrigger.status).toBe(201);
+    const taskView = await createTrigger.json() as Record<string, unknown>;
+    expect(taskView).not.toHaveProperty("issue_creation_restricted");
+
+    const storedAutopilot = fixture.store.getAutopilot(autopilot.id)!;
+    const trigger = fixture.store.listAutopilotTriggers(autopilot.id)[0]!;
+    expect(storedAutopilot).toMatchObject({
+      issueCreationRestricted: true,
+      issueCreationRestrictionReason: "restricted_task",
+      issueCreationRestrictedByTaskId: fixture.restrictedTask.id,
+    });
+    expect(trigger).toMatchObject({
+      issueCreationRestricted: true,
+      issueCreationRestrictionReason: "restricted_task",
+      issueCreationRestrictedByTaskId: fixture.restrictedTask.id,
+    });
+
+    const scheduler = new MultiremiScheduler({ store: fixture.store, pollIntervalMs: 60_000 });
+    const runs = scheduler.tickDueTriggers(new Date(Date.parse(trigger.nextRunAt!) + 1_000));
+    expect(runs).toHaveLength(1);
+    expect(fixture.store.getTask(runs[0]!.taskId!)?.issueCreationRestricted).toBe(true);
+    await expectRestrictedTaskCannotCreateIssue(
+      fixture,
+      runs[0]!.taskId!,
+      "persisted schedule trigger",
+      false,
+    );
+  });
+
+  it("persists system-event taint independently of the later event caller", async () => {
+    const fixture = await policyFixture();
+    const project = fixture.store.createProject({ title: "Approval policy project" });
+    const triggerIssue = fixture.store.createIssue({
+      title: "Later human event",
+      workspaceId: "local",
+      projectId: project.id,
+      status: "todo",
+    });
+    const autopilot = fixture.store.createAutopilot({
+      title: "Future system event",
+      assigneeId: fixture.worker.id,
+      executionMode: "trigger_issue",
+      projectId: project.id,
+    });
+    const configured = await fixture.app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: fixture.restrictedHeaders,
+      body: JSON.stringify({
+        kind: "system_event",
+        event_config: {
+          resource: "issue",
+          event: "status_changed",
+          conditions: [{ field: "status", operator: "becomes", value: "done" }],
+          project_id: project.id,
+        },
+      }),
+    });
+    expect(configured.status).toBe(201);
+
+    const changed = await fixture.app.request(`/api/issues/${triggerIssue.id}`, {
+      method: "PATCH",
+      headers: fixture.humanHeaders,
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(changed.status).toBe(200);
+    const [run] = fixture.store.dispatchPendingSystemEvents();
+    expect(run).toBeDefined();
+    expect(fixture.store.getTask(run!.taskId!)?.issueCreationRestricted).toBe(true);
+    await expectRestrictedTaskCannotCreateIssue(
+      fixture,
+      run!.taskId!,
+      "persisted system-event trigger",
+      false,
+    );
+  });
+
+  it("uses trusted event and webhook-delivery source tasks as a second inheritance path", async () => {
+    const fixture = await policyFixture();
+    const project = fixture.store.createProject({ title: "Source lineage project" });
+    const eventIssue = fixture.store.createIssue({
+      title: "Restricted source event",
+      workspaceId: "local",
+      projectId: project.id,
+      status: "todo",
+    });
+    const eventAutopilot = fixture.store.createAutopilot({
+      title: "Clean system-event automation",
+      assigneeId: fixture.worker.id,
+      executionMode: "trigger_issue",
+      projectId: project.id,
+    });
+    fixture.store.createAutopilotTrigger(eventAutopilot.id, {
+      kind: "system_event",
+      eventConfig: {
+        resource: "issue",
+        event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }],
+        projectId: project.id,
+      },
+    });
+    const changed = await fixture.app.request(`/api/issues/${eventIssue.id}`, {
+      method: "PATCH",
+      headers: fixture.restrictedHeaders,
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(changed.status).toBe(200);
+    const [eventRun] = fixture.store.dispatchPendingSystemEvents();
+    expect(eventRun).toBeDefined();
+    await expectRestrictedTaskCannotCreateIssue(
+      fixture,
+      eventRun!.taskId!,
+      "system-event source task",
+    );
+
+    const webhookAutopilot = fixture.store.createAutopilot({
+      title: "Clean webhook automation",
+      assigneeId: fixture.worker.id,
+      executionMode: "run_only",
+      triggerKind: "webhook",
+    });
+    fixture.store.createAutopilotTrigger(webhookAutopilot.id, { kind: "webhook" });
+    const firstDelivery = await fixture.app.request(`/api/multiremi/autopilots/${webhookAutopilot.id}/webhook`, {
+      method: "POST",
+      headers: fixture.restrictedHeaders,
+      body: JSON.stringify({ payload: { event: "source-lineage" } }),
+    });
+    expect(firstDelivery.status).toBe(201);
+    const storedDelivery = fixture.store.listWebhookDeliveries(webhookAutopilot.id)[0]!;
+    const replay = await fixture.app.request(
+      `/api/autopilots/${webhookAutopilot.id}/deliveries/${storedDelivery.id}/replay`,
+      { method: "POST", headers: fixture.humanHeaders },
+    );
+    expect(replay.status).toBe(201);
+    const replayDelivery = fixture.store.listWebhookDeliveries(webhookAutopilot.id)
+      .find((delivery) => delivery.replayedFromDeliveryId === storedDelivery.id)!;
+    expect(replayDelivery).toBeDefined();
+    await expectRestrictedTaskCannotCreateIssue(
+      fixture,
+      replayDelivery.autopilotRunId
+        ? fixture.store.getAutopilotRun(replayDelivery.autopilotRunId)!.taskId!
+        : "missing",
+      "webhook delivery replay lineage",
+    );
+  });
+
+  it("makes taint human-visible and clearable while keeping it hidden and immutable for tasks", async () => {
+    const fixture = await policyFixture();
+    const autopilot = fixture.store.createAutopilot({
+      title: "Shared Wiki-like automation",
+      assigneeId: fixture.worker.id,
+      executionMode: "run_only",
+      triggerKind: "schedule",
+    });
+    const trigger = fixture.store.createAutopilotTrigger(autopilot.id, {
+      kind: "schedule",
+      cronExpression: "0 * * * *",
+    });
+    const tainted = await fixture.app.request(`/api/autopilots/${autopilot.id}`, {
+      method: "PATCH",
+      headers: fixture.restrictedHeaders,
+      body: JSON.stringify({ title: "Touched by restricted task" }),
+    });
+    expect(tainted.status).toBe(200);
+    expect(await tainted.json()).not.toHaveProperty("issue_creation_restricted");
+    expect(fixture.store.getAutopilot(autopilot.id)?.issueCreationRestricted).toBe(true);
+
+    for (const [path, body] of [
+      [`/api/autopilots/${autopilot.id}`, { issue_creation_restricted: false }],
+      [`/api/autopilots/${autopilot.id}/triggers/${trigger.id}`, { issue_creation_restricted: false }],
+    ] as const) {
+      const denied = await fixture.app.request(path, {
+        method: "PATCH",
+        headers: fixture.restrictedHeaders,
+        body: JSON.stringify(body),
+      });
+      expect(denied.status, path).toBe(403);
+      expect(await denied.json()).toMatchObject({ code: "human_autopilot_policy_required" });
+    }
+
+    const humanView = await fixture.app.request(`/api/autopilots/${autopilot.id}`, {
+      headers: fixture.humanHeaders,
+    });
+    expect(humanView.status).toBe(200);
+    expect((await humanView.json() as { autopilot: Record<string, unknown> }).autopilot).toMatchObject({
+      issue_creation_restricted: true,
+      issue_creation_restriction_reason: "restricted_task",
+      issue_creation_restricted_by_task_id: fixture.restrictedTask.id,
+    });
+
+    const beforeClearRun = fixture.store.runAutopilot(autopilot.id, { source: "schedule" });
+    await expectRestrictedTaskCannotCreateIssue(
+      fixture,
+      beforeClearRun.taskId!,
+      "human-triggered tainted automation",
+      false,
+    );
+
+    const cleared = await fixture.app.request(`/api/autopilots/${autopilot.id}`, {
+      method: "PATCH",
+      headers: fixture.humanHeaders,
+      body: JSON.stringify({ issue_creation_restricted: false }),
+    });
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toMatchObject({ issue_creation_restricted: false });
+    expect(fixture.store.getAutopilot(autopilot.id)).toMatchObject({
+      issueCreationRestricted: false,
+      issueCreationRestrictionReason: null,
+      issueCreationRestrictedByTaskId: null,
+    });
+    expect(fixture.store.getAutopilotTrigger(trigger.id)).toMatchObject({
+      issueCreationRestricted: false,
+      issueCreationRestrictionReason: null,
+      issueCreationRestrictedByTaskId: null,
+    });
+
+    const afterClearRun = fixture.store.runAutopilot(autopilot.id, { source: "schedule" });
+    const afterClearTask = fixture.store.getTask(afterClearRun.taskId!)!;
+    expect(afterClearTask.issueCreationRestricted).toBe(false);
+    const credential = await fixture.store.createTaskAccessToken(afterClearTask, "local");
+    const created = await fixture.app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${credential.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title: "Allowed after human clear" }),
+    });
+    expect(created.status).toBe(201);
+  });
+
+  it("keeps task snapshots restricted while applying live Agent policy to legacy ordinary tasks", async () => {
+    const fixture = await policyFixture();
+    fixture.store.updateAgent(fixture.restricted.id, { issueCreationRequiresProposal: false });
+    await expectRestrictedTaskCannotCreateIssue(
+      fixture,
+      fixture.restrictedTask.id,
+      "persisted restricted task snapshot",
+      false,
+    );
+
+    fixture.store.updateAgent(fixture.ordinary.id, { issueCreationRequiresProposal: true });
+    await expectRestrictedTaskCannotCreateIssue(
+      fixture,
+      fixture.ordinaryTask.id,
+      "live ordinary Agent restriction",
+      false,
+      false,
+    );
+    fixture.store.updateAgent(fixture.ordinary.id, { issueCreationRequiresProposal: false });
+    const ordinaryCredential = await fixture.store.createTaskAccessToken(fixture.ordinaryTask, "local");
+    const restored = await fixture.app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ordinaryCredential.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title: "Restored ordinary task" }),
+    });
+    expect(restored.status).toBe(201);
+  });
 });
 
 async function policyFixture() {
@@ -306,12 +581,12 @@ async function expectRestrictedTaskCannotCreateIssue(
   fixture: Awaited<ReturnType<typeof policyFixture>>,
   taskId: string,
   label: string,
+  expectParent = true,
+  expectSnapshot = true,
 ): Promise<void> {
   const task = fixture.store.getTask(taskId)!;
-  expect(task, label).toMatchObject({
-    parentTaskId: expect.any(String),
-    issueCreationRestricted: true,
-  });
+  expect(task.issueCreationRestricted, label).toBe(expectSnapshot);
+  if (expectParent) expect(task.parentTaskId, label).toBeString();
   const credential = await fixture.store.createTaskAccessToken(task, "local");
   const before = fixture.store.listIssues({ workspaceId: "local" }).length;
   const response = await fixture.app.request("/api/issues", {

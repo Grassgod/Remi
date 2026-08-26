@@ -39,10 +39,30 @@ export type AutopilotCompatibilityUpdateInput = {
   trigger_kind?: string | null;
   trigger_label?: string | null;
   cron_expression?: string | null;
+  issue_creation_restricted?: boolean;
 };
 
-export function autopilotCompatibilityResponse(autopilot: MultiremiAutopilot): Record<string, unknown> {
-  return {
+export function autopilotResponse(
+  autopilot: MultiremiAutopilot,
+  options: { redactPolicy?: boolean } = {},
+): Record<string, unknown> {
+  const response: Record<string, unknown> = { ...autopilot };
+  if (options.redactPolicy) {
+    delete response.issueCreationRestricted;
+    delete response.issue_creation_restricted;
+    delete response.issueCreationRestrictionReason;
+    delete response.issue_creation_restriction_reason;
+    delete response.issueCreationRestrictedByTaskId;
+    delete response.issue_creation_restricted_by_task_id;
+  }
+  return response;
+}
+
+export function autopilotCompatibilityResponse(
+  autopilot: MultiremiAutopilot,
+  options: { redactPolicy?: boolean } = {},
+): Record<string, unknown> {
+  const response: Record<string, unknown> = {
     id: autopilot.id,
     workspace_id: autopilot.workspaceId,
     title: autopilot.title,
@@ -61,6 +81,12 @@ export function autopilotCompatibilityResponse(autopilot: MultiremiAutopilot): R
     created_at: autopilot.createdAt,
     updated_at: autopilot.updatedAt,
   };
+  if (!options.redactPolicy) {
+    response.issue_creation_restricted = autopilot.issueCreationRestricted;
+    response.issue_creation_restriction_reason = autopilot.issueCreationRestrictionReason;
+    response.issue_creation_restricted_by_task_id = autopilot.issueCreationRestrictedByTaskId;
+  }
+  return response;
 }
 
 export function autopilotCreateCompatibilityInput(
@@ -111,6 +137,8 @@ export function autopilotCreateCompatibilityInput(
     trigger_label: input.trigger_label ?? null,
     cronExpression: input.cron_expression ?? null,
     cron_expression: input.cron_expression ?? null,
+    issueCreationRestricted: input.issue_creation_restricted,
+    issue_creation_restricted: input.issue_creation_restricted,
     created_by_type: input.created_by_type,
     created_by_id: input.created_by_id,
   });
@@ -171,12 +199,16 @@ export function autopilotUpdateCompatibilityInput(
   if (hasOwn(input, "trigger_kind")) output.triggerKind = input.trigger_kind ?? undefined;
   if (hasOwn(input, "trigger_label")) output.triggerLabel = input.trigger_label ?? null;
   if (hasOwn(input, "cron_expression")) output.cronExpression = input.cron_expression ?? null;
+  if (hasOwn(input, "issue_creation_restricted")) {
+    output.issueCreationRestricted = input.issue_creation_restricted;
+    output.issue_creation_restricted = input.issue_creation_restricted;
+  }
   return output;
 }
 
 export function autopilotTriggerCompatibilityResponse(
   trigger: MultiremiAutopilotTrigger,
-  options: { redactSecrets?: boolean } = {},
+  options: { redactSecrets?: boolean; redactPolicy?: boolean } = {},
 ): Record<string, unknown> {
   const isWebhook = trigger.kind === "webhook";
   const redactSecrets = options.redactSecrets === true;
@@ -200,6 +232,11 @@ export function autopilotTriggerCompatibilityResponse(
     updated_at: trigger.updatedAt,
     event_config: trigger.eventConfig,
   };
+  if (!options.redactPolicy) {
+    response.issue_creation_restricted = trigger.issueCreationRestricted;
+    response.issue_creation_restriction_reason = trigger.issueCreationRestrictionReason;
+    response.issue_creation_restricted_by_task_id = trigger.issueCreationRestrictedByTaskId;
+  }
   if (isWebhook && trigger.eventFilters?.length) response.event_filters = trigger.eventFilters;
   return response;
 }
@@ -370,6 +407,8 @@ export function autopilotTriggerCreateCompatibilityInput(input: CreateAutopilotT
     event_filters: eventFilters,
     eventConfig,
     event_config: eventConfig,
+    issueCreationRestricted: input.issue_creation_restricted,
+    issue_creation_restricted: input.issue_creation_restricted,
   };
 }
 
@@ -392,6 +431,10 @@ export function autopilotTriggerUpdateCompatibilityInput(input: UpdateAutopilotT
   if (eventConfig !== undefined) {
     output.eventConfig = eventConfig;
     output.event_config = eventConfig;
+  }
+  if (hasOwn(input, "issue_creation_restricted")) {
+    output.issueCreationRestricted = input.issue_creation_restricted;
+    output.issue_creation_restricted = input.issue_creation_restricted;
   }
   return output;
 }
@@ -572,8 +615,8 @@ function validateIssueTitleTemplateCompatibility(template: string | null | undef
 
 export function autopilotTriggerResponse(
   trigger: MultiremiAutopilotTrigger,
-  options: { redactSecrets?: boolean } = {},
-): MultiremiAutopilotTrigger & {
+  options: { redactSecrets?: boolean; redactPolicy?: boolean } = {},
+): Record<string, unknown> & {
   autopilot_id: string;
   cron_expression: string | null;
   next_run_at: string | null;
@@ -588,7 +631,20 @@ export function autopilotTriggerResponse(
   updated_at: string;
 } {
   const redactSecrets = options.redactSecrets === true;
-  return {
+  const response: Record<string, unknown> & {
+    autopilot_id: string;
+    cron_expression: string | null;
+    next_run_at: string | null;
+    webhook_token: string | null;
+    webhook_path: string | null;
+    webhook_url: string | null;
+    event_filters: MultiremiAutopilotTrigger["eventFilters"];
+    event_config: MultiremiAutopilotTrigger["eventConfig"];
+    signing_secret_set: boolean;
+    last_fired_at: string | null;
+    created_at: string;
+    updated_at: string;
+  } = {
     ...trigger,
     webhookToken: redactSecrets ? null : trigger.webhookToken,
     webhookPath: redactSecrets ? null : trigger.webhookPath,
@@ -607,4 +663,14 @@ export function autopilotTriggerResponse(
     created_at: trigger.createdAt,
     updated_at: trigger.updatedAt,
   };
+  if (options.redactPolicy) {
+    delete response.issueCreationRestricted;
+    delete response.issueCreationRestrictionReason;
+    delete response.issueCreationRestrictedByTaskId;
+  } else {
+    response.issue_creation_restricted = trigger.issueCreationRestricted;
+    response.issue_creation_restriction_reason = trigger.issueCreationRestrictionReason;
+    response.issue_creation_restricted_by_task_id = trigger.issueCreationRestrictedByTaskId;
+  }
+  return response;
 }

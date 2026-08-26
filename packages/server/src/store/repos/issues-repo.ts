@@ -939,6 +939,7 @@ export class IssuesRepo {
         previousStatus: current.status,
         actorType: "system",
         actorId: null,
+        automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
       });
       return next;
     })();

@@ -79,6 +79,9 @@ export interface Autopilot {
   session_policy: AutopilotSessionPolicy;
   workspace_policy: AutopilotWorkspacePolicy;
   issue_title_template: string | null;
+  issue_creation_restricted?: boolean;
+  issue_creation_restriction_reason?: "restricted_task" | "human_policy" | null;
+  issue_creation_restricted_by_task_id?: string | null;
   created_by_type: string;
   created_by_id: string;
   last_run_at: string | null;
@@ -113,6 +116,9 @@ export interface AutopilotTrigger {
   // "accept all events".
   event_filters?: WebhookEventFilter[] | null;
   event_config: AutopilotEventConfig | null;
+  issue_creation_restricted?: boolean;
+  issue_creation_restriction_reason?: "restricted_task" | "human_policy" | null;
+  issue_creation_restricted_by_task_id?: string | null;
   last_fired_at: string | null;
   created_at: string;
   updated_at: string;
@@ -181,6 +187,7 @@ export interface UpdateAutopilotRequest {
   session_policy?: AutopilotSessionPolicy;
   workspace_policy?: AutopilotWorkspacePolicy;
   issue_title_template?: string | null;
+  issue_creation_restricted?: boolean;
 }
 
 export interface CreateAutopilotTriggerRequest {

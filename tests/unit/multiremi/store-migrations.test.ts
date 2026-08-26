@@ -357,6 +357,68 @@ describe("store migrations", () => {
     ).get()).toEqual({ count: 1 });
   });
 
+  it("adds persistent Autopilot proposal taint with unrestricted legacy defaults", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_autopilots DROP COLUMN issue_creation_restricted;
+      ALTER TABLE multiremi_autopilots DROP COLUMN issue_creation_restriction_reason;
+      ALTER TABLE multiremi_autopilots DROP COLUMN issue_creation_restricted_by_task_id;
+      ALTER TABLE multiremi_autopilot_triggers DROP COLUMN issue_creation_restricted;
+      ALTER TABLE multiremi_autopilot_triggers DROP COLUMN issue_creation_restriction_reason;
+      ALTER TABLE multiremi_autopilot_triggers DROP COLUMN issue_creation_restricted_by_task_id;
+      ALTER TABLE multiremi_webhook_deliveries DROP COLUMN source_task_id;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_autopilot_issue_proposal_policy';
+      INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at)
+      VALUES ('agt_autopilot_policy_legacy', 'Legacy automation agent', 'codex',
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z');
+      INSERT INTO multiremi_autopilots (
+        id, title, workspace_id, assignee_type, assignee_id, status, execution_mode,
+        session_policy, workspace_policy, trigger_kind, created_by_type, created_by_id,
+        created_at, updated_at
+      ) VALUES (
+        'aut_policy_legacy', 'Legacy automation', 'local', 'agent',
+        'agt_autopilot_policy_legacy', 'active', 'run_only', 'new', 'reuse_issue',
+        'schedule', 'member', 'local', '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z'
+      );
+      INSERT INTO multiremi_autopilot_triggers (
+        id, autopilot_id, kind, enabled, created_at, updated_at
+      ) VALUES (
+        'atr_policy_legacy', 'aut_policy_legacy', 'schedule', 1,
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      `SELECT issue_creation_restricted, issue_creation_restriction_reason,
+              issue_creation_restricted_by_task_id
+       FROM multiremi_autopilots WHERE id = 'aut_policy_legacy'`,
+    ).get()).toEqual({
+      issue_creation_restricted: 0,
+      issue_creation_restriction_reason: null,
+      issue_creation_restricted_by_task_id: null,
+    });
+    expect(database.query(
+      `SELECT issue_creation_restricted, issue_creation_restriction_reason,
+              issue_creation_restricted_by_task_id
+       FROM multiremi_autopilot_triggers WHERE id = 'atr_policy_legacy'`,
+    ).get()).toEqual({
+      issue_creation_restricted: 0,
+      issue_creation_restriction_reason: null,
+      issue_creation_restricted_by_task_id: null,
+    });
+    expect(columnNames(database, "multiremi_webhook_deliveries")).toContain("source_task_id");
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_autopilot_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_autopilot_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+  });
+
   it("migrates legacy GitHub PR projections and settings without dual-writing", () => {
     const database = freshDb();
     migrate(database);

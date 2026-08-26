@@ -2016,7 +2016,10 @@
         "created_by_id": "local",
         "last_run_at": null,
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2041,7 +2044,10 @@
         "created_by_id": "local",
         "last_run_at": null,
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2067,7 +2073,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2093,7 +2102,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2119,7 +2131,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2145,7 +2160,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2197,7 +2215,10 @@
         "created_by_id": "local",
         "last_run_at": "<timestamp>",
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2318,6 +2339,12 @@
           "trigger_label": null,
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -2364,6 +2391,12 @@
           "trigger_label": "snapshot trigger",
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -2613,6 +2646,12 @@
           "trigger_label": "snapshot trigger",
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -3028,7 +3067,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600238",
+        "order_id": "local-1767225600239",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -6320,7 +6359,10 @@
             "created_by_id": "local",
             "last_run_at": "<timestamp>",
             "created_at": "<timestamp>",
-            "updated_at": "<timestamp>"
+            "updated_at": "<timestamp>",
+            "issue_creation_restricted": false,
+            "issue_creation_restriction_reason": null,
+            "issue_creation_restricted_by_task_id": null
           }
         ],
         "total": 1
@@ -6349,7 +6391,10 @@
           "created_by_id": "local",
           "last_run_at": "<timestamp>",
           "created_at": "<timestamp>",
-          "updated_at": "<timestamp>"
+          "updated_at": "<timestamp>",
+          "issue_creation_restricted": false,
+          "issue_creation_restriction_reason": null,
+          "issue_creation_restricted_by_task_id": null
         },
         "triggers": [
           {
@@ -6370,7 +6415,10 @@
             "last_fired_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
-            "event_config": null
+            "event_config": null,
+            "issue_creation_restricted": false,
+            "issue_creation_restriction_reason": null,
+            "issue_creation_restricted_by_task_id": null
           }
         ]
       }
@@ -14639,6 +14687,12 @@
             "trigger_label": "snapshot trigger",
             "cronExpression": null,
             "cron_expression": null,
+            "issueCreationRestricted": false,
+            "issue_creation_restricted": false,
+            "issueCreationRestrictionReason": null,
+            "issue_creation_restriction_reason": null,
+            "issueCreationRestrictedByTaskId": null,
+            "issue_creation_restricted_by_task_id": null,
             "createdByType": "member",
             "created_by_type": "member",
             "createdById": "local",
@@ -14687,6 +14741,12 @@
           "trigger_label": "snapshot trigger",
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -14714,6 +14774,9 @@
             "label": "snapshot trigger",
             "eventFilters": null,
             "eventConfig": null,
+            "issueCreationRestricted": false,
+            "issueCreationRestrictionReason": null,
+            "issueCreationRestrictedByTaskId": null,
             "signingSecretSet": false,
             "signingSecretHint": null,
             "lastFiredAt": null,
@@ -14730,7 +14793,10 @@
             "signing_secret_set": false,
             "last_fired_at": null,
             "created_at": "<timestamp>",
-            "updated_at": "<timestamp>"
+            "updated_at": "<timestamp>",
+            "issue_creation_restricted": false,
+            "issue_creation_restriction_reason": null,
+            "issue_creation_restricted_by_task_id": null
           }
         ],
         "runs": [
@@ -22583,7 +22649,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600239",
+        "id": "local-contact-1767225600240",
         "status": "received",
         "mode": "local",
         "request": {
@@ -23864,7 +23930,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600246",
+        "session_id": "local-lark-1767225600247",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,
