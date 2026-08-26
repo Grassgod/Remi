@@ -110,9 +110,6 @@ function validateDaemonInstallRequestBody(
       return { error: `${field} must be a positive number` };
     }
   }
-  if (body.expiresInDays != null || body.expires_in_days != null) {
-    return { error: "daemon tokens cannot expire; retire the daemon to revoke machine trust" };
-  }
   for (const field of ["createToken", "create_token"] as const) {
     if (body[field] != null && typeof body[field] !== "boolean") {
       return { error: `${field} must be a boolean` };

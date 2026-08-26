@@ -6082,6 +6082,104 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "notification.channel.list": {
+      "command": "remi notification channel list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.channel.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.channel.create": {
+      "command": "remi notification channel create",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.create",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.channel.update": {
+      "command": "remi notification channel update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.channel.delete": {
+      "command": "remi notification channel delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.channel.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.delivery.list": {
+      "command": "remi notification delivery list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "notification.delivery.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "notification.delivery.retry": {
+      "command": "remi notification delivery retry",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "notification.delivery.retry",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "pin.group": {
       "command": "remi pin",
       "aliases": [],
@@ -7433,6 +7531,9 @@
     "DELETE /api/multiremi/members/:id": {
       "command": "member.delete"
     },
+    "DELETE /api/multiremi/notification-channels/:id": {
+      "command": "notification.channel.delete"
+    },
     "DELETE /api/multiremi/pins/:itemType/:itemId": {
       "command": "pin.delete"
     },
@@ -7991,6 +8092,12 @@
     "GET /api/multiremi/models": {
       "command": "runtime.model.catalog"
     },
+    "GET /api/multiremi/notification-channels": {
+      "command": "notification.channel.list"
+    },
+    "GET /api/multiremi/notification-deliveries": {
+      "command": "notification.delivery.list"
+    },
     "GET /api/multiremi/notification-preferences": {
       "command": "notification.get"
     },
@@ -8374,6 +8481,9 @@
     },
     "PATCH /api/multiremi/members/:id": {
       "command": "member.update"
+    },
+    "PATCH /api/multiremi/notification-channels/:id": {
+      "command": "notification.channel.update"
     },
     "PATCH /api/multiremi/platform/settings": {
       "command": "platform.settings.update"
@@ -8910,6 +9020,12 @@
     },
     "POST /api/multiremi/members": {
       "command": "member.create"
+    },
+    "POST /api/multiremi/notification-channels": {
+      "command": "notification.channel.create"
+    },
+    "POST /api/multiremi/notification-deliveries/:id/retry": {
+      "command": "notification.delivery.retry"
     },
     "POST /api/multiremi/pins": {
       "command": "pin.create"

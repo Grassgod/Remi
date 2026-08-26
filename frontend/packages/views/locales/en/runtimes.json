@@ -315,6 +315,7 @@
     "step2_hint": "Writes the connection config, then keeps the daemon running in the background.",
     "credential_loading": "Creating a secure connection credential...",
     "credential_error": "Couldn't create a connection credential.",
+    "credential_error_detail": "Reason: {{reason}}",
     "credential_retry": "Retry",
     "live_listening": "Waiting for your computer",
     "live_listening_hint": "We'll detect it as soon as the daemon starts — usually under a minute.",

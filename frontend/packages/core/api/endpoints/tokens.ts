@@ -48,7 +48,6 @@ export class TokensEndpoints {
       body: JSON.stringify({
         workspace_id: data.workspace_id,
         token_name: data.name,
-        expires_in_days: data.expires_in_days,
         create_token: true,
       }),
     });

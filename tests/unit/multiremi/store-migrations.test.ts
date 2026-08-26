@@ -45,6 +45,8 @@ describe("store migrations", () => {
       "multiremi_issue_activity",
       "multiremi_issue_subscribers",
       "multiremi_inbox_items",
+      "multiremi_notification_channels",
+      "multiremi_notification_deliveries",
       "multiremi_tasks",
       "multiremi_task_messages",
       "multiremi_workspaces",
@@ -83,6 +85,9 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_autopilot_runs")).toEqual(expect.arrayContaining([
       "trigger_id", "event_id", "issue_session_id", "repository_id", "dedupe_key",
     ]));
+    expect(columnNames(database, "multiremi_scm_sync_cursors")).toEqual(expect.arrayContaining([
+      "consecutive_failures", "suspended_until",
+    ]));
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining([
       "issue_kind", "source_issue_id", "lifecycle_state", "completed_at", "archived_at",
     ]));
@@ -104,6 +109,39 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
       "source_revision", "sha256", "relative_path", "status", "uploaded_size_bytes",
     ]));
+    expect(columnNames(database, "multiremi_notification_deliveries")).toEqual(expect.arrayContaining([
+      "claim_seq", "leased_until",
+    ]));
+  });
+
+  it("adds the notification delivery lease to a pre-lease table", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_notification_deliveries (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        inbox_item_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        channel_kind TEXT NOT NULL,
+        target_label TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        last_attempt_at TEXT,
+        delivered_at TEXT,
+        created_at TEXT NOT NULL
+      );
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_notification_deliveries")).toEqual(expect.arrayContaining([
+      "claim_seq", "leased_until",
+    ]));
+    expect(database.query(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_multiremi_notification_deliveries_pending'`,
+    ).get()).toEqual({ name: "idx_multiremi_notification_deliveries_pending" });
   });
 
   it("migrates legacy GitHub PR projections and settings without dual-writing", () => {

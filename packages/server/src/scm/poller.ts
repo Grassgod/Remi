@@ -8,14 +8,17 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { CodebaseScmProviderAdapter } from "./codebase.js";
 import { GitHubScmProviderAdapter } from "./github.js";
+import { ScmHttpError } from "./http.js";
 import { reconcileObservation } from "./reconcile.js";
 import type { ScmIngestionStore, ScmProviderAdapter } from "./types.js";
-import { SCM_SYNC_STREAMS } from "./types.js";
+import { SCM_SYNC_STREAMS, ScmStreamUnavailableError } from "./types.js";
 
 const log = createLogger("multiremi-scm-poller");
 const DEFAULT_TICK_INTERVAL_MS = 10_000;
 const DEFAULT_MAX_PAGES_PER_TICK = 50;
 const DEFAULT_STREAM_LEASE_MS = 5 * 60 * 1_000;
+const MAX_ERROR_BACKOFF_SECONDS = 30 * 60;
+const STREAM_UNAVAILABLE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
 const POLLING_CYCLE_CURSOR_KEY = "__multiremi_cycle";
 
 export interface ScmPollingSchedulerOptions {
@@ -151,7 +154,6 @@ export class ScmPollingScheduler {
       ({ cycleStartedAt, providerCursor } = pollingCycle(cursor, startedAt));
       cursor = this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
         lastStartedAt: startedAt.toISOString(),
-        lastError: null,
       }, startedAt);
       const credential = this.store.getConnectionCredential(connection.id);
       if (!credential) throw new Error("SCM connection credential is unavailable");
@@ -194,6 +196,8 @@ export class ScmPollingScheduler {
           cursor: page.done ? null : encodePollingCycle(cycleStartedAt, providerCursor),
           watermark: previousWatermark,
           lastError: null,
+          consecutiveFailures: 0,
+          suspendedUntil: null,
         }, startedAt);
         if (page.done) {
           const completedAt = this.now().toISOString();
@@ -203,6 +207,8 @@ export class ScmPollingScheduler {
             baselineCompletedAt: cursor?.baselineCompletedAt ?? completedAt,
             lastCompletedAt: completedAt,
             lastError: null,
+            consecutiveFailures: 0,
+            suspendedUntil: null,
           }, startedAt);
           completed = true;
           break;
@@ -214,12 +220,18 @@ export class ScmPollingScheduler {
         log.warn(`SCM poll lease was lost for ${key}; stale results were discarded`);
         return { completed: false, eventsCreated, error: null };
       }
-      const message = errorMessage(error).slice(0, 1_000);
+      const message = pollErrorMessage(error, connection.provider, stream).slice(0, 1_000);
       if (leaseToken) {
         try {
+          const consecutiveFailures = (cursor?.consecutiveFailures ?? 0) + 1;
+          const suspendedUntil = error instanceof ScmStreamUnavailableError
+            ? new Date(this.now().getTime() + STREAM_UNAVAILABLE_COOLDOWN_MS).toISOString()
+            : null;
           this.writeClaimedCursor(connection.id, binding.repositoryId, stream, leaseToken, cursor, {
             watermark: previousWatermark,
             lastError: message,
+            consecutiveFailures,
+            suspendedUntil,
           }, startedAt);
         } catch (writeError) {
           if (!(writeError instanceof ScmStreamLeaseLostError)) throw writeError;
@@ -248,7 +260,14 @@ export class ScmPollingScheduler {
     current: MultiremiScmSyncCursor | null,
     patch: Partial<Pick<
       MultiremiScmSyncCursor,
-      "cursor" | "watermark" | "baselineCompletedAt" | "lastStartedAt" | "lastCompletedAt" | "lastError"
+      | "cursor"
+      | "watermark"
+      | "baselineCompletedAt"
+      | "lastStartedAt"
+      | "lastCompletedAt"
+      | "lastError"
+      | "consecutiveFailures"
+      | "suspendedUntil"
     >>,
     leaseReference: Date,
   ): MultiremiScmSyncCursor {
@@ -270,6 +289,12 @@ export class ScmPollingScheduler {
         ? patch.lastCompletedAt ?? null
         : current?.lastCompletedAt ?? null,
       lastError: Object.prototype.hasOwnProperty.call(patch, "lastError") ? patch.lastError ?? null : current?.lastError ?? null,
+      consecutiveFailures: Object.prototype.hasOwnProperty.call(patch, "consecutiveFailures")
+        ? patch.consecutiveFailures ?? 0
+        : current?.consecutiveFailures ?? 0,
+      suspendedUntil: Object.prototype.hasOwnProperty.call(patch, "suspendedUntil")
+        ? patch.suspendedUntil ?? null
+        : current?.suspendedUntil ?? null,
     });
     if (!cursor) throw new ScmStreamLeaseLostError();
     return cursor;
@@ -305,18 +330,31 @@ export function pollIsDue(
   cursor: MultiremiScmSyncCursor | null,
   now: Date,
 ): boolean {
+  let expiredLease = false;
   if (cursor?.leaseToken) {
     const leaseUntil = cursor.leaseUntil ? Date.parse(cursor.leaseUntil) : Number.NaN;
-    return !Number.isFinite(leaseUntil) || leaseUntil <= now.getTime();
+    if (Number.isFinite(leaseUntil) && leaseUntil > now.getTime()) return false;
+    expiredLease = true;
   }
+  if (cursor?.suspendedUntil) {
+    const suspendedUntil = Date.parse(cursor.suspendedUntil);
+    if (Number.isFinite(suspendedUntil) && suspendedUntil > now.getTime()) return false;
+  }
+  if (expiredLease) return true;
   if (cursor?.cursor) return true;
   const latest = cursor?.lastStartedAt || cursor?.lastCompletedAt;
   if (!latest) return true;
   const timestamp = Date.parse(latest);
   if (!Number.isFinite(timestamp)) return true;
-  const intervalSeconds = cursor?.lastError
-    ? Math.min(30, Math.max(10, connection.pollIntervalSeconds))
-    : Math.max(10, connection.pollIntervalSeconds);
+  const baseIntervalSeconds = Math.max(10, connection.pollIntervalSeconds);
+  const consecutiveFailures = Math.max(
+    0,
+    Math.floor(cursor?.consecutiveFailures ?? (cursor?.lastError ? 1 : 0)),
+  );
+  const backoffMultiplier = 2 ** Math.min(Math.max(0, consecutiveFailures - 1), 30);
+  const intervalSeconds = consecutiveFailures > 0
+    ? Math.min(Math.max(baseIntervalSeconds, MAX_ERROR_BACKOFF_SECONDS), baseIntervalSeconds * backoffMultiplier)
+    : baseIntervalSeconds;
   return now.getTime() - timestamp >= intervalSeconds * 1_000;
 }
 
@@ -368,4 +406,25 @@ function stringValue(value: unknown): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function pollErrorMessage(
+  error: unknown,
+  provider: MultiremiScmConnection["provider"],
+  stream: MultiremiScmSyncStream,
+): string {
+  if (error instanceof ScmStreamUnavailableError) return error.message;
+  if (error instanceof ScmHttpError) {
+    const providerName = provider === "github" ? "GitHub" : "Codebase";
+    return `${providerName} ${stream} poll failed: ${error.method} ${requestPath(error.url)} -> ${error.status}`;
+  }
+  return errorMessage(error);
+}
+
+function requestPath(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
 }

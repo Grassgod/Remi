@@ -18,6 +18,8 @@ on:
       - "package.json"
       - "packages/**"
       - "scripts/**"
+      - "tests/**"
+      - "tsconfig.json"
   push:
     branches:
       - main
@@ -37,6 +39,8 @@ on:
       - "package.json"
       - "packages/**"
       - "scripts/**"
+      - "tests/**"
+      - "tsconfig.json"
 
 permissions:
   contents: read
@@ -77,11 +81,28 @@ jobs:
       - name: Build Multiremi daemon CLI release archives
         run: MULTIREMI_VERSION=v0.0.0-ci bun run build:multiremi
 
-      - name: Verify CLI capability coverage and contracts
-        run: |
-          bun run cli:capabilities:check
-          bun test tests/unit/multiremi/cli-capabilities-manifest.test.ts tests/unit/multiremi/multiremi-api-cli.test.ts tests/unit/multiremi/api-route-snapshot.test.ts tests/unit/multiremi/multiremi-cli-dispatch.test.ts tests/unit/multiremi/multiremi-cli-collaboration-auth.test.ts tests/unit/multiremi/multiremi-cli-agent-extensions-auth.test.ts tests/unit/multiremi/multiremi-cli-operations-auth.test.ts tests/unit/multiremi/multiremi-issue-sessions.test.ts tests/unit/multiremi/multiremi-multiuser-auth.test.ts tests/unit/multiremi/multiremi-store-chat.test.ts tests/unit/multiremi/multiremi-store-task-routing.test.ts tests/unit/multiremi/multiremi-store-daemon-wire.test.ts tests/unit/multiremi/multiremi-project-docs-prompt.test.ts tests/unit/daemon/agent-runtime-send-options.test.ts tests/unit/remi/cli-context.test.ts tests/unit/remi/cli-resources.test.ts tests/unit/remi/cli-collaboration.test.ts tests/unit/remi/cli-agent-extensions.test.ts tests/unit/remi/cli-operations.test.ts tests/unit/remi/cli-plugin-registry.test.ts
-          bun test tests/integration/multiremi-daemon-smoke.test.ts --test-name-pattern "starts homepage Chat|resumes chat tasks"
+      - name: Verify CLI capability coverage
+        run: bun run cli:capabilities:check
+
+      # Fast structural gates, kept ahead of the full suite so a boundary or
+      # lockfile break fails in seconds: package boundaries, contracts purity,
+      # and the lockfile-registry guard (a mirror-polluted bun.lock passes the
+      # frozen install above and only fails later at cold-cache download — this
+      # test is the first gate that catches it). These files run again as part
+      # of the full suite below; the duplication buys the fast failure.
+      - name: Architecture guard tests
+        run: bun test tests/arch/
+
+      # This step used to enumerate ~20 test files by hand, so anything outside
+      # the list never ran in CI — tests/unit/multiremi/multiremi-api-auth.test.ts
+      # failed on main from 5e8ee09f onward while this workflow stayed green
+      # (MUL-128/MUL-129). Run the whole backend suite instead: `bunfig.toml`
+      # scopes `bun test` to `tests/`, so this is every `tests/**/*.test.ts`
+      # (~1.7k tests, ~2min). Harnesses needing real providers/browsers/Postgres
+      # are named `*.ts` without `.test` and stay out of discovery — see
+      # TESTING.md.
+      - name: Backend test suite
+        run: bun test
 
       # This workflow path-filters on `frontend/**` but used to build only the
       # server/CLI, so a broken web app went green. These two steps are the
@@ -91,13 +112,6 @@ jobs:
 
       - name: Test frontend packages and apps
         run: bun run test:frontend
-
-      # Fast structural gates: package boundaries, contracts purity, and the
-      # lockfile-registry guard (a mirror-polluted bun.lock passes the frozen
-      # install above and only fails later at cold-cache download — this test
-      # is the first gate that catches it).
-      - name: Architecture guard tests
-        run: bun test tests/arch/
 
       - uses: docker/setup-buildx-action@v3
 

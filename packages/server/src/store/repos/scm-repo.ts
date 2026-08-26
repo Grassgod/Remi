@@ -703,8 +703,9 @@ export class ScmRepo {
       this.ctx.db.run(
       `INSERT INTO multiremi_scm_sync_cursors (
         connection_id, repository_id, stream, cursor, watermark, baseline_completed_at,
-        last_started_at, last_completed_at, last_error, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        last_started_at, last_completed_at, last_error, consecutive_failures, suspended_until,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(connection_id, repository_id, stream) DO UPDATE SET
         cursor = excluded.cursor,
         watermark = excluded.watermark,
@@ -712,6 +713,8 @@ export class ScmRepo {
         last_started_at = excluded.last_started_at,
         last_completed_at = excluded.last_completed_at,
         last_error = excluded.last_error,
+        consecutive_failures = excluded.consecutive_failures,
+        suspended_until = excluded.suspended_until,
         updated_at = excluded.updated_at`,
       [
         input.connectionId,
@@ -723,6 +726,8 @@ export class ScmRepo {
         input.lastStartedAt === undefined ? current?.lastStartedAt ?? null : input.lastStartedAt,
         input.lastCompletedAt === undefined ? current?.lastCompletedAt ?? null : input.lastCompletedAt,
         input.lastError === undefined ? current?.lastError ?? null : input.lastError,
+        input.consecutiveFailures === undefined ? current?.consecutiveFailures ?? 0 : input.consecutiveFailures,
+        input.suspendedUntil === undefined ? current?.suspendedUntil ?? null : input.suspendedUntil,
         now,
         ],
       );
@@ -741,8 +746,9 @@ export class ScmRepo {
       this.ctx.db.run(
         `INSERT OR IGNORE INTO multiremi_scm_sync_cursors (
           connection_id, repository_id, stream, cursor, watermark, baseline_completed_at,
-          last_started_at, last_completed_at, last_error, lease_owner, lease_until, lease_token, updated_at
-        ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)`,
+          last_started_at, last_completed_at, last_error, consecutive_failures, suspended_until,
+          lease_owner, lease_until, lease_token, updated_at
+        ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, ?)`,
         [input.connectionId, input.repositoryId, input.stream, claimedAt],
       );
       const row = this.ctx.db.query(
@@ -779,6 +785,8 @@ export class ScmRepo {
         last_started_at = CASE WHEN ? = 1 THEN ? ELSE last_started_at END,
         last_completed_at = CASE WHEN ? = 1 THEN ? ELSE last_completed_at END,
         last_error = CASE WHEN ? = 1 THEN ? ELSE last_error END,
+        consecutive_failures = CASE WHEN ? = 1 THEN ? ELSE consecutive_failures END,
+        suspended_until = CASE WHEN ? = 1 THEN ? ELSE suspended_until END,
         lease_until = CASE WHEN ? = 1 THEN ? ELSE lease_until END,
         updated_at = ?
        WHERE connection_id = ? AND repository_id = ? AND stream = ? AND lease_token = ?
@@ -796,6 +804,10 @@ export class ScmRepo {
       input.lastCompletedAt ?? null,
       input.lastError === undefined ? 0 : 1,
       input.lastError ?? null,
+      input.consecutiveFailures === undefined ? 0 : 1,
+      input.consecutiveFailures ?? 0,
+      input.suspendedUntil === undefined ? 0 : 1,
+      input.suspendedUntil ?? null,
       input.leaseUntil === undefined ? 0 : 1,
       leaseUntil,
       now,
@@ -1807,6 +1819,8 @@ function toSyncCursor(row: Row): MultiremiScmSyncCursor {
     lastStartedAt: nullableString(row.last_started_at),
     lastCompletedAt: nullableString(row.last_completed_at),
     lastError: nullableString(row.last_error),
+    consecutiveFailures: Number(row.consecutive_failures ?? 0),
+    suspendedUntil: nullableString(row.suspended_until),
     leaseOwner: nullableString(row.lease_owner),
     leaseUntil: nullableString(row.lease_until),
     leaseToken: nullableString(row.lease_token),
