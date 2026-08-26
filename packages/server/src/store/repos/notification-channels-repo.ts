@@ -42,7 +42,14 @@ export interface UpdateNotificationChannelInput {
   minSeverity?: string;
 }
 
-export type DeliveryVisibilityScope =
+/**
+ * How much of a workspace's outbound configuration one caller may see. `all` is the
+ * admin view, `member` adds that member's own personal channels to the workspace-level
+ * ones, and `workspaceOnly` is for callers with no member identity of their own — task
+ * tokens above all, whose userId resolves to a real membership they must not inherit.
+ * Channel listing and delivery listing both take this, so the two cannot drift apart.
+ */
+export type NotificationVisibilityScope =
   | { kind: "all" }
   | { kind: "member"; memberId: string }
   | { kind: "workspaceOnly" };
@@ -84,16 +91,24 @@ export class NotificationChannelsRepo {
     return rows.map(toNotificationChannel);
   }
 
-  /**
-   * What one member is allowed to see: the workspace-level channels plus their own.
-   * Other members' personal channels — and the group ids inside them — stay hidden.
-   */
-  listChannelsVisibleToMember(workspaceId: string, memberId: string): MultiremiNotificationChannel[] {
-    const rows = this.ctx.db.query(
-      `SELECT * FROM multiremi_notification_channels
-       WHERE workspace_id = ? AND (member_id IS NULL OR member_id = ?)
-       ORDER BY created_at ASC, id ASC`,
-    ).all(workspaceId, memberId) as Row[];
+  /** Channels one caller may see. Other members' group ids never appear. */
+  listChannelsInScope(
+    workspaceId: string,
+    scope: NotificationVisibilityScope,
+  ): MultiremiNotificationChannel[] {
+    if (scope.kind === "all") return this.listChannels(workspaceId);
+    const owned = scope.kind === "member" ? ownerMemberId(scope.memberId) : null;
+    const rows = owned === null
+      ? this.ctx.db.query(
+        `SELECT * FROM multiremi_notification_channels
+         WHERE workspace_id = ? AND member_id IS NULL
+         ORDER BY created_at ASC, id ASC`,
+      ).all(workspaceId) as Row[]
+      : this.ctx.db.query(
+        `SELECT * FROM multiremi_notification_channels
+         WHERE workspace_id = ? AND (member_id IS NULL OR member_id = ?)
+         ORDER BY created_at ASC, id ASC`,
+      ).all(workspaceId, owned) as Row[];
     return rows.map(toNotificationChannel);
   }
 
@@ -247,7 +262,7 @@ export class NotificationChannelsRepo {
      * Deliveries whose channel row is already deleted stay visible in every scope: a
      * removed channel must not bury the failure record it produced.
      */
-    scope?: DeliveryVisibilityScope;
+    scope?: NotificationVisibilityScope;
   }): MultiremiNotificationDelivery[] {
     const limit = normalizeLimit(input.limit);
     const scope = input.scope ?? { kind: "all" };

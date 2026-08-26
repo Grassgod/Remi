@@ -514,6 +514,40 @@ describe("Multiremi notification channels", () => {
     expect(channel.memberId).toBe(member.id);
   });
 
+  it("rejects a scope that is only a scope after coercion", async () => {
+    const current = createTestStore(capturingSender([]));
+    current.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "notification-member",
+      name: "Notification member",
+      role: "member",
+    });
+    const memberToken = await current.createAccessToken({
+      name: "Member token",
+      type: "pat",
+      workspaceId: "local",
+      userId: "notification-member",
+    });
+    const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+
+    for (const scope of [["member"], ["workspace"], 1, { kind: "member" }, null]) {
+      const response = await app.request("/api/multiremi/notification-channels", {
+        method: "POST",
+        headers: jsonHeaders(memberToken.token),
+        body: JSON.stringify({
+          workspaceId: "local",
+          scope,
+          kind: "feishu_group",
+          name: "Coerced scope",
+          target: { chatId: "oc_team_123" },
+          eventTypes: ["*"],
+        }),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(current.listNotificationChannels("local")).toEqual([]);
+  });
+
   it("refuses to let a member name someone else as the channel owner", async () => {
     const current = createTestStore(capturingSender([]));
     const victim = current.createWorkspaceMember({
@@ -600,9 +634,11 @@ describe("Multiremi notification channels", () => {
     expect(nosy.id).not.toBe(admin.id);
   });
 
-  it("shows a task token workspace-level deliveries only", async () => {
+  it("shows a task token workspace-level channels and deliveries only", async () => {
     const current = createTestStore(capturingSender([]));
     const owner = current.listWorkspaceMembers("local")[0]!;
+    // A task token carries userId=local, which resolves to the owner's membership.
+    // Both endpoints have to refuse to treat that as "this agent is that member".
     const taskToken = await current.createAccessToken({
       name: "Notification reader",
       type: "task",
@@ -617,6 +653,14 @@ describe("Multiremi notification channels", () => {
     await Bun.sleep(10);
 
     const app = createMultiremiApp({ store: current, authToken: "root-secret" });
+    const channelsResponse = await app.request(
+      "/api/multiremi/notification-channels?workspaceId=local",
+      { headers: jsonHeaders(taskToken.token) },
+    );
+    const channels = await channelsResponse.json() as { channels: MultiremiNotificationChannel[] };
+    expect(channels.channels.map((channel) => channel.name)).toEqual(["Shared"]);
+    expect(JSON.stringify(channels)).not.toContain("oc_private_group");
+
     const response = await app.request(
       "/api/multiremi/notification-deliveries?workspaceId=local",
       { headers: jsonHeaders(taskToken.token) },

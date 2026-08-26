@@ -7,7 +7,7 @@ import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import {
   NotificationChannelsRepo,
   type CreateNotificationChannelInput,
-  type DeliveryVisibilityScope,
+  type NotificationVisibilityScope,
   type NotificationDeliveryContext,
   type UpdateNotificationChannelInput,
 } from "@multiremi/store/repos/notification-channels-repo.js";
@@ -1210,8 +1210,11 @@ runMigrations(this.db);
     return this.notificationChannels.listChannels(workspaceId);
   }
 
-  listNotificationChannelsVisibleToMember(workspaceId: string, memberId: string): MultiremiNotificationChannel[] {
-    return this.notificationChannels.listChannelsVisibleToMember(workspaceId, memberId);
+  listNotificationChannelsInScope(
+    workspaceId: string,
+    scope: NotificationVisibilityScope,
+  ): MultiremiNotificationChannel[] {
+    return this.notificationChannels.listChannelsInScope(workspaceId, scope);
   }
 
   createNotificationChannel(input: CreateNotificationChannelInput): MultiremiNotificationChannel {
@@ -1257,7 +1260,7 @@ runMigrations(this.db);
     workspaceId: string;
     status?: MultiremiNotificationDeliveryStatus | null;
     limit?: number;
-    scope?: DeliveryVisibilityScope;
+    scope?: NotificationVisibilityScope;
   }): MultiremiNotificationDelivery[] {
     return this.notificationChannels.listDeliveries(input);
   }

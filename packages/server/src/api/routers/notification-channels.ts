@@ -3,7 +3,7 @@ import type {
   MultiremiNotificationChannelKind,
   MultiremiNotificationDeliveryStatus,
 } from "@multiremi/contracts/types.js";
-import type { DeliveryVisibilityScope } from "@multiremi/store/repos/notification-channels-repo.js";
+import type { NotificationVisibilityScope } from "@multiremi/store/repos/notification-channels-repo.js";
 import { NotificationChannelValidationError } from "@multiremi/store/repos/notification-channels-repo.js";
 import {
   compatibilityWorkspaceId,
@@ -49,14 +49,10 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
     const workspaceId = requestWorkspaceId(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    // Admins moderate the whole workspace, so they see every channel. Everyone else
-    // sees the workspace-level ones plus their own — never another member's group id.
-    const channels = isWorkspaceAdmin(c, store, workspaceId)
-      ? store.listNotificationChannels(workspaceId)
-      : store.listNotificationChannelsVisibleToMember(
-        workspaceId,
-        currentWorkspaceMember(c, store, workspaceId)?.id ?? "",
-      );
+    const channels = store.listNotificationChannelsInScope(
+      workspaceId,
+      notificationVisibility(c, store, workspaceId),
+    );
     return c.json({ channels, total: channels.length });
   });
 
@@ -65,7 +61,13 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
     const workspaceId = body.workspaceId ?? body.workspace_id ?? requestWorkspaceId(c);
     const rejected = rejectOwnerOverride(c, body);
     if (rejected) return rejected;
-    const scope = body.scope === undefined ? "member" : String(body.scope).trim().toLowerCase();
+    // Only a real string counts: String(["workspace"]) is "workspace", and a scope that
+    // survives by coercion is a scope nobody wrote down.
+    const scope = body.scope === undefined
+      ? "member"
+      : typeof body.scope === "string"
+      ? body.scope.trim().toLowerCase()
+      : "";
     if (!CHANNEL_SCOPES.has(scope)) {
       return c.json({ error: "scope must be member or workspace" }, 400);
     }
@@ -140,7 +142,7 @@ export function registerNotificationChannelRoutes(app: Hono, deps: RouterDeps): 
       workspaceId,
       status: rawStatus as MultiremiNotificationDeliveryStatus | undefined,
       limit,
-      scope: deliveryVisibility(c, store, workspaceId),
+      scope: notificationVisibility(c, store, workspaceId),
     });
     return c.json({ deliveries, total: deliveries.length });
   });
@@ -241,12 +243,20 @@ function rejectOwnerOverride(c: Context, body: ChannelBody): Response | null {
   return c.json({ error: `${named} cannot be set: a channel is always owned by its creator` }, 400);
 }
 
-function deliveryVisibility(
+/**
+ * The single answer to "how much of this workspace's outbound config may this caller
+ * see". Channels and deliveries both route through here on purpose: when the two had
+ * their own copies of this logic, the channel list forgot to exclude task tokens and
+ * handed an agent another member's group id.
+ */
+function notificationVisibility(
   c: Context,
   store: RouterDeps["store"],
   workspaceId: string,
-): DeliveryVisibilityScope {
+): NotificationVisibilityScope {
   if (isWorkspaceAdmin(c, store, workspaceId)) return { kind: "all" };
+  // A task token's userId resolves to a real membership it must not inherit, so it
+  // never gets a member scope — only the workspace-level channels.
   const member = currentTaskAccessToken(c) ? null : currentWorkspaceMember(c, store, workspaceId);
   return member ? { kind: "member", memberId: member.id } : { kind: "workspaceOnly" };
 }
