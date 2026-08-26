@@ -77,6 +77,27 @@ describe("agent extension CLI contracts", () => {
     expect(JSON.parse(jsonl)).toMatchObject({ id: "agt_123", name: "Builder" });
   });
 
+  it("sets supervisor authority through a human-only command", async () => {
+    useCliEnv();
+    const spec = specById("agent.supervisor.set");
+    let body: unknown;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/agents") {
+        return Response.json({ agents: [{ id: "agt_123", name: "Organizer", provider: "codex" }] });
+      }
+      expect(request.method).toBe("PUT");
+      expect(url.pathname).toBe("/api/agents/agt_123/supervisor");
+      body = await request.json();
+      return Response.json({ id: "agt_123", supervisor: true });
+    });
+    await capture(() => registryFor([spec]).execute([
+      "agent", "supervisor", "set", "Organizer", "--enabled", "--output", "json",
+    ]));
+    expect(body).toEqual({ enabled: true });
+    expect(registryFor([spec]).inventory()[0]?.auth).toEqual(["human"]);
+  });
+
   it("resolves squad names and requires confirmation before member removal", async () => {
     useCliEnv();
     const spec = specById("squad.member.remove");

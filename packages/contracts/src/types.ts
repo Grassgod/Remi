@@ -85,6 +85,7 @@ export interface MultiremiAgent {
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  supervisor?: boolean;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1261,6 +1262,35 @@ export interface MultiremiTaskMessage {
   /** Low-frequency display semantics: title/kind/locations/content_blocks/duration_ms/entries/usage. */
   meta: Record<string, unknown> | null;
   createdAt: string;
+}
+
+export type MultiremiOrganizerActionKind = "steer" | "force_answer" | "cancel" | "redispatch";
+
+export interface MultiremiOrganizerAction {
+  id: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
+  createdAt: string;
+}
+
+export interface CreateOrganizerActionInput {
+  id?: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId?: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
 }
 
 export interface TaskUsageEntry {
@@ -2967,6 +2997,7 @@ export interface MultiremiAccessToken {
   name: string;
   type: MultiremiAccessTokenType;
   purpose: MultiremiAccessTokenPurpose;
+  scopes?: string[];
   tokenPrefix: string;
   lastUsedAt: string | null;
   expiresAt: string | null;

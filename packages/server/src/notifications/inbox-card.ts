@@ -11,6 +11,7 @@ const EVENT_LABELS: Record<string, string> = {
   autopilot_failed: "Autopilot run failed",
   inspection_completed: "Inspection completed",
   inspection_failed: "Inspection failed",
+  organizer_action: "Organizer acted on a task",
 };
 
 const HEADER_TEMPLATES: Record<string, string> = {

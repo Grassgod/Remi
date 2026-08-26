@@ -12,7 +12,11 @@ import {
   readJson,
   readJsonStrict,
   readJsonStrictAllowEmpty,
+  readOrganizerMode,
   removeWorkspaceRepository,
+  organizerSettings,
+  parseOrganizerMode,
+  requireHumanWorkspaceAdmin,
   requireWorkspaceAdmin,
   safeCreateWorkspace,
   safeLeaveWorkspace,
@@ -115,6 +119,28 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const workspace = store.getWorkspace(workspaceId);
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     return c.json(workspace);
+  });
+  app.get("/api/workspaces/:id/organizer", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    return c.json({ workspace_id: workspaceId, mode: readOrganizerMode(workspace) });
+  });
+  app.put("/api/workspaces/:id/organizer", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{ mode?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const mode = parseOrganizerMode(body.mode);
+    if (!mode) return c.json({ error: "mode must be report_only or act", code: "organizer_mode_invalid" }, 400);
+    store.updateWorkspace(workspaceId, { settings: organizerSettings(workspace, mode) });
+    return c.json({ workspace_id: workspaceId, mode });
   });
   app.get("/api/workspaces/:id/prompts", (c) => {
     const workspaceId = c.req.param("id");

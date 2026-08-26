@@ -10,6 +10,7 @@ export * from "./helpers/integrations.js";
 export * from "./helpers/issues.js";
 export * from "./helpers/jwt.js";
 export * from "./helpers/login.js";
+export * from "./helpers/organizer.js";
 export * from "./helpers/projects.js";
 export * from "./helpers/repositories.js";
 export * from "./helpers/realtime-types.js";

@@ -36,6 +36,7 @@ import {
 
 const HUMAN_TASK: readonly CliIdentity[] = ["human", "task"];
 const HUMAN: readonly CliIdentity[] = ["human"];
+const TASK: readonly CliIdentity[] = ["task"];
 const DEPRECATED_SINCE = "0.3.0";
 
 const ISSUE_LIST_OPTIONS: readonly CliOptionSpec[] = [
@@ -490,19 +491,31 @@ function taskCommandSpecs(): CommandSpec[] {
     ], async (invocation) => {
       await mutateAndRender(invocation, "POST", "/api/multiremi/tasks", await requestBody(invocation, { agentId: requiredOption(invocation, "agent"), prompt: stringOption(invocation, "prompt") ?? undefined, issueId: stringOption(invocation, "issue") ?? undefined, chatSessionId: stringOption(invocation, "chat") ?? undefined }));
     }),
-    nativeSpec("task.cancel", ["task", "cancel"], "Cancel a task", "destructive", HUMAN_TASK, [refPositional("task")], [YES_OPTION], async (invocation) => {
+    nativeSpec("task.cancel", ["task", "cancel"], "Cancel a task", "destructive", HUMAN_TASK, [refPositional("task")], [YES_OPTION,
+      { name: "reason", type: "string", valueName: "text", description: "Organizer action criterion" },
+    ], async (invocation) => {
       requireConfirmation(invocation);
-      await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/cancel`, {});
+      await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/cancel`, { reason: stringOption(invocation, "reason") ?? undefined });
+    }),
+    nativeSpec("task.redispatch", ["task", "redispatch"], "Cancel and cold-start a replacement task", "destructive", TASK, [refPositional("task")], [YES_OPTION,
+      { name: "reason", type: "string", valueName: "text", description: "Organizer action criterion" },
+    ], async (invocation) => {
+      requireConfirmation(invocation);
+      await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/redispatch`, {
+        reason: requiredOption(invocation, "reason"),
+      });
     }),
     nativeSpec("task.steer", ["task", "steer"], "Send a mid-run directive to a live task", "write", HUMAN_TASK, [refPositional("task")], [
       { name: "content", type: "string", valueName: "text", description: "Directive content", conflictsWith: ["content-file", "content-stdin"] },
       { name: "content-file", type: "string", valueName: "path|-", description: "Read directive from a file or stdin", conflictsWith: ["content", "content-stdin"] },
       { name: "content-stdin", type: "boolean", description: "Read directive from stdin", conflictsWith: ["content", "content-file"] },
       { name: "force-answer", type: "boolean", description: "Ask the agent to wrap up and deliver its best conclusion now" },
+      { name: "reason", type: "string", valueName: "text", description: "Organizer action criterion" },
     ], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, {
         content: await contentOption(invocation),
         ...(invocation.options["force-answer"] === true ? { force_answer: true } : {}),
+        reason: stringOption(invocation, "reason") ?? undefined,
       });
     }),
     nativeSpec("task.steer.list", ["task", "steer", "list"], "List steer directives sent to a task", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
@@ -513,6 +526,9 @@ function taskCommandSpecs(): CommandSpec[] {
     ], async (invocation) => {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/messages`, ["messages"], { since: integerOption(invocation, "since") });
     }, [{ path: ["task", "messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task message list" }]),
+    nativeSpec("task.inspect", ["task", "inspect"], "Inspect derived task health metadata", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
+      await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/inspection`, ["inspection"]);
+    }),
     nativeSpec("task.prompt", ["task", "prompt"], "Get a recorded task prompt", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/prompt`);
     }),

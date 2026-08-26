@@ -42,6 +42,7 @@ export function runMigrations(db: SqlDatabase): void {
       custom_args TEXT NOT NULL DEFAULT '[]',
       mcp_config TEXT,
       thinking_level TEXT,
+      supervisor INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -491,6 +492,7 @@ export function runMigrations(db: SqlDatabase): void {
       name TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'pat',
       purpose TEXT NOT NULL DEFAULT 'personal',
+      scopes TEXT NOT NULL DEFAULT '[]',
       token_hash TEXT NOT NULL UNIQUE,
       token_prefix TEXT NOT NULL,
       last_used_at TEXT,
@@ -501,6 +503,25 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_workspace ON multiremi_access_tokens(workspace_id, type);
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_hash ON multiremi_access_tokens(token_hash);
+
+    CREATE TABLE IF NOT EXISTS multiremi_organizer_actions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      supervisor_task_id TEXT NOT NULL,
+      supervisor_agent_id TEXT NOT NULL,
+      target_task_id TEXT NOT NULL,
+      target_issue_id TEXT,
+      replacement_task_id TEXT,
+      report_issue_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_target
+      ON multiremi_organizer_actions(target_task_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_supervisor
+      ON multiremi_organizer_actions(supervisor_task_id, created_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_issue_shares (
       id TEXT PRIMARY KEY,
@@ -1759,6 +1780,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_agents", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_agents", "runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_agents", "max_concurrent_tasks INTEGER NOT NULL DEFAULT 6");
+  addColumnIfMissing(db, "multiremi_agents", "supervisor INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_squads", "avatar_url TEXT");
   addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");
   addColumnIfMissing(
@@ -1795,6 +1817,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "agent_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "user_id TEXT NOT NULL DEFAULT 'local'");
+  addColumnIfMissing(db, "multiremi_access_tokens", "scopes TEXT NOT NULL DEFAULT '[]'");
   const accessTokenPurposeAdded = addColumnIfMissing(
     db,
     "multiremi_access_tokens",

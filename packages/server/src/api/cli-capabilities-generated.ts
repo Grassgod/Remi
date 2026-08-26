@@ -118,6 +118,31 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.organizer.get": {
+      "command": "remi workspace organizer get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.organizer.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.organizer.update": {
+      "command": "remi workspace organizer update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.organizer.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.ssh-mesh.get": {
       "command": "remi workspace ssh-mesh get",
       "auth": [
@@ -2458,6 +2483,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "task.redispatch": {
+      "command": "remi task redispatch",
+      "auth": [
+        "task"
+      ],
+      "capability": "task.redispatch",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "task.steer": {
       "command": "remi task steer",
       "auth": [
@@ -2491,6 +2528,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "task.message.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "task.inspect": {
+      "command": "remi task inspect",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.inspect",
       "output": [
         "table",
         "json",
@@ -2582,6 +2632,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "agent.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.supervisor.set": {
+      "command": "remi agent supervisor set",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.supervisor.set",
       "output": [
         "table",
         "json",
