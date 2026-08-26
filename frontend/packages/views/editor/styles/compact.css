@@ -1,0 +1,174 @@
+/*
+ * Compact prose density — `<ReadonlyContent density="compact">`.
+ *
+ * For Markdown embedded in a chrome surface (sidebar cards, inline previews)
+ * rather than rendered as the page's main body. The default tier in prose.css
+ * is already "compact" for a 14px body, but inside a `text-xs` card its h1
+ * (22px) renders three times larger than the card's own heading, and inline
+ * code (14px mono + border + 2.0 line-height) turns a repo URL into a chip
+ * that fills the whole row.
+ *
+ * Rules here:
+ *   - Sizes are `em`, not `rem`, so the whole block scales with whatever base
+ *     font-size the host card sets. The base default below is 12px (text-xs).
+ *   - Headings converge toward body size and separate by WEIGHT and COLOR,
+ *     not scale — h1 1.15em / h2 1.05em / h3+ 1em.
+ *   - Inline code drops to body size with a hairline-free tint, and long
+ *     unbreakable tokens (git remotes, hostnames) wrap instead of pushing the
+ *     card wider.
+ *   - Vertical rhythm is roughly halved to match the surrounding card.
+ *
+ * Every selector is `.rich-text-editor.rich-text-editor--compact ...` (0,2,x)
+ * so it outranks the equivalent prose.css/code.css rule (0,1,x) regardless of
+ * import order, and the default variant is untouched.
+ */
+
+.rich-text-editor.rich-text-editor--compact {
+  font-size: 0.75rem;
+  line-height: 1.6;
+  /* Long words break only when they would otherwise overflow the card. */
+  overflow-wrap: break-word;
+}
+
+/* --- Headings: hierarchy by weight/color, not by scale --- */
+
+.rich-text-editor.rich-text-editor--compact h1,
+.rich-text-editor.rich-text-editor--compact h2,
+.rich-text-editor.rich-text-editor--compact h3,
+.rich-text-editor.rich-text-editor--compact h4,
+.rich-text-editor.rich-text-editor--compact h5,
+.rich-text-editor.rich-text-editor--compact h6 {
+  margin-top: 0.85em;
+  margin-bottom: 0.3em;
+  line-height: 1.4;
+  letter-spacing: 0;
+  color: var(--foreground);
+}
+
+.rich-text-editor.rich-text-editor--compact h1 {
+  font-size: 1.15em;
+  font-weight: 600;
+}
+
+.rich-text-editor.rich-text-editor--compact h2 {
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+.rich-text-editor.rich-text-editor--compact h3,
+.rich-text-editor.rich-text-editor--compact h4,
+.rich-text-editor.rich-text-editor--compact h5,
+.rich-text-editor.rich-text-editor--compact h6 {
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.rich-text-editor.rich-text-editor--compact h4,
+.rich-text-editor.rich-text-editor--compact h5,
+.rich-text-editor.rich-text-editor--compact h6 {
+  color: var(--muted-foreground);
+}
+
+/* --- Block rhythm --- */
+
+.rich-text-editor.rich-text-editor--compact p {
+  margin-top: 0.4em;
+  margin-bottom: 0.4em;
+  line-height: 1.6;
+}
+
+.rich-text-editor.rich-text-editor--compact ul,
+.rich-text-editor.rich-text-editor--compact ol {
+  margin: 0.3em 0;
+  padding-inline-start: 1.35em;
+  padding-inline-end: 0;
+}
+
+.rich-text-editor.rich-text-editor--compact ul ul,
+.rich-text-editor.rich-text-editor--compact ul ol,
+.rich-text-editor.rich-text-editor--compact ol ul,
+.rich-text-editor.rich-text-editor--compact ol ol {
+  margin: 0.15em 0;
+}
+
+.rich-text-editor.rich-text-editor--compact li,
+.rich-text-editor.rich-text-editor--compact li + li {
+  margin-top: 0.15em;
+  margin-bottom: 0.15em;
+  line-height: 1.6;
+}
+
+.rich-text-editor.rich-text-editor--compact blockquote {
+  margin: 0.4em 0;
+  padding-left: 0.6em;
+  border-left-width: 2px;
+}
+
+.rich-text-editor.rich-text-editor--compact hr {
+  margin: 0.6em 0;
+}
+
+/* --- Inline code: body size, no chip --- */
+
+.rich-text-editor.rich-text-editor--compact code {
+  font-size: 1em;
+  line-height: inherit;
+  padding: 0.05em 0.3em;
+  border-color: transparent;
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  /* Repo remotes and hostnames have no break opportunity; without this a
+     single token widens the card and forces a horizontal scrollbar. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* --- Code blocks --- */
+
+.rich-text-editor.rich-text-editor--compact pre {
+  margin: 0.45em 0;
+  padding: 0.5em 0.65em;
+  border-radius: var(--radius-sm);
+}
+
+.rich-text-editor.rich-text-editor--compact pre code {
+  font-size: 0.95em;
+  line-height: 1.5;
+  padding: 0;
+  background: none;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* --- Links: same wrap treatment as code, since bare URLs are common here --- */
+
+.rich-text-editor.rich-text-editor--compact a {
+  overflow-wrap: anywhere;
+}
+
+/* --- Tables --- */
+
+.rich-text-editor.rich-text-editor--compact .tableWrapper {
+  margin: 0.45em 0;
+}
+
+.rich-text-editor.rich-text-editor--compact th,
+.rich-text-editor.rich-text-editor--compact td {
+  padding: 0.3em 0.5em;
+  font-size: 1em;
+}
+
+/* --- Task lists --- */
+
+.rich-text-editor.rich-text-editor--compact ul.contains-task-list,
+.rich-text-editor.rich-text-editor--compact ul[data-type="taskList"] {
+  margin: 0.3em 0;
+}
+
+.rich-text-editor.rich-text-editor--compact input[type="checkbox"] {
+  width: 0.85em;
+  height: 0.85em;
+}
+
+.rich-text-editor.rich-text-editor--compact li.task-list-item .contains-task-list {
+  padding-inline-start: 1.25em;
+}

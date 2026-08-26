@@ -97,6 +97,8 @@
     "summary": "追加到工作区 Bootstrap 与 Delta Prompt 后的项目级指令。",
     "empty": "还没有项目指令。",
     "edit": "编辑",
+    "expand": "展开全部",
+    "collapse": "收起",
     "dialog_title": "编辑项目指令",
     "dialog_description": "使用 Markdown 编写项目级指引。",
     "inheritance_notice": "工作区指令始终生效；项目指令只会追加，不会覆盖工作区指令。",

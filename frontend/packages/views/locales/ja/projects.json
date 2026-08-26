@@ -97,6 +97,8 @@
     "summary": "ワークスペースの Bootstrap / Delta Prompt に追加するプロジェクト指示です。",
     "empty": "プロジェクト指示はまだありません。",
     "edit": "編集",
+    "expand": "すべて表示",
+    "collapse": "折りたたむ",
     "dialog_title": "プロジェクト指示を編集",
     "dialog_description": "プロジェクト全体のガイダンスを Markdown で記述します。",
     "inheritance_notice": "ワークスペース指示は常に有効です。プロジェクト指示は置換せず追加されます。",

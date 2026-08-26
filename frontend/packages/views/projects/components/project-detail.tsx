@@ -735,7 +735,7 @@ export function ProjectDetail({
         <h3 className="mb-2 text-xs font-medium">{t(($) => $.detail.section_description)}</h3>
         {isArchived ? (
           project.description
-            ? <ReadonlyContent content={project.description} className="text-xs text-muted-foreground" />
+            ? <ReadonlyContent content={project.description} density="compact" className="text-muted-foreground" />
             : <span className="text-xs text-muted-foreground">--</span>
         ) : project.description || descriptionEditing ? (
           <ContentEditor

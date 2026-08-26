@@ -348,17 +348,33 @@ interface ReadonlyContentProps {
    * timeline entry); a fresh array on every parent render busts the memo.
    */
   attachments?: Attachment[];
+  /**
+   * Typographic density.
+   *
+   * - `"default"` — 14px body with the full heading scale. Use for content
+   *   that *is* the surface: comment bodies, issue descriptions, wiki pages.
+   * - `"compact"` — 12px body, headings collapsed to near-body size and
+   *   separated by weight, inline code reduced to a tint that wraps long
+   *   tokens. Use when the Markdown is embedded in chrome (sidebar cards,
+   *   inline previews) whose own labels are `text-xs`; the default scale
+   *   renders larger than the card's heading there.
+   *
+   * All compact sizes are `em`-relative, so passing a font-size utility in
+   * `className` rescales the whole block instead of only the container.
+   */
+  density?: "default" | "compact";
 }
 
 // Memoized so a long timeline of comments (Inbox + IssueDetail) does not
 // re-run the full react-markdown + rehype-* + lowlight pipeline on every
-// parent re-render. Props are `content`/`className`/`attachments`, all
-// shallow-comparable; stability is the caller's responsibility for the
+// parent re-render. Props are `content`/`className`/`attachments`/`density`,
+// all shallow-comparable; stability is the caller's responsibility for the
 // array.
 export const ReadonlyContent = memo(function ReadonlyContent({
   content,
   className,
   attachments,
+  density = "default",
 }: ReadonlyContentProps) {
   const processed = useMemo(
     () => highlightToHtml(preprocessMarkdown(content)),
@@ -373,7 +389,16 @@ export const ReadonlyContent = memo(function ReadonlyContent({
 
   return (
     <AttachmentDownloadProvider attachments={attachments}>
-      <div ref={wrapperRef} className={cn("rich-text-editor readonly text-sm", className)}>
+      <div
+        ref={wrapperRef}
+        // Compact owns its own base font-size in CSS (em-relative children
+        // scale off it), so `text-sm` is omitted rather than merged away.
+        className={cn(
+          "rich-text-editor readonly",
+          density === "compact" ? "rich-text-editor--compact" : "text-sm",
+          className,
+        )}
+      >
         <ReactMarkdown
           remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
           rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}

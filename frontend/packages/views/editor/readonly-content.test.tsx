@@ -287,6 +287,58 @@ describe("ReadonlyContent code styling", () => {
   });
 });
 
+describe("ReadonlyContent density variant", () => {
+  it("defaults to the text-sm body scale", () => {
+    const { container } = render(<ReadonlyContent content="body" />);
+    const root = container.querySelector(".rich-text-editor");
+
+    expect(root).toHaveClass("text-sm");
+    expect(root).not.toHaveClass("rich-text-editor--compact");
+  });
+
+  // The compact variant sets its base size in CSS. Emitting `text-sm` too
+  // would leave the winner up to stylesheet order, so it must be absent.
+  it("swaps text-sm for the compact class when density is compact", () => {
+    const { container } = render(
+      <ReadonlyContent content="body" density="compact" className="text-muted-foreground" />,
+    );
+    const root = container.querySelector(".rich-text-editor");
+
+    expect(root).toHaveClass("rich-text-editor--compact");
+    expect(root).toHaveClass("text-muted-foreground");
+    expect(root).not.toHaveClass("text-sm");
+  });
+
+  // Guards the two regressions this variant exists for: headings rendering
+  // larger than the host card's own text-xs title, and repo remotes /
+  // hostnames in inline code widening the card instead of wrapping.
+  it("collapses headings toward body size and lets inline code wrap", () => {
+    const compactCss = readFileSync("editor/styles/compact.css", "utf8");
+    const scoped = ".rich-text-editor.rich-text-editor--compact";
+
+    expect(compactCss).toContain(`${scoped} {`);
+    expect(compactCss).toContain(`${scoped} h1 {`);
+    expect(compactCss).toContain(`${scoped} code {`);
+
+    const headingSizes = [...compactCss.matchAll(/h[1-6][^{]*\{[^}]*font-size:\s*([\d.]+)em/g)]
+      .map((match) => Number(match[1]));
+    expect(headingSizes.length).toBeGreaterThan(0);
+    expect(Math.max(...headingSizes)).toBeLessThanOrEqual(1.2);
+
+    const inlineCodeRule = compactCss.slice(compactCss.indexOf(`${scoped} code {`));
+    expect(inlineCodeRule.slice(0, inlineCodeRule.indexOf("}"))).toContain(
+      "overflow-wrap: anywhere",
+    );
+  });
+
+  it("keeps the default prose scale untouched", () => {
+    const proseCss = readFileSync("editor/styles/prose.css", "utf8");
+
+    expect(proseCss).toContain("font-size: 1.375rem;");
+    expect(proseCss).not.toContain("rich-text-editor--compact");
+  });
+});
+
 describe("ReadonlyContent Mermaid rendering", () => {
   it("renders mermaid code fences in a sized sandbox iframe with legacy rgb colors", async () => {
     const originalGetComputedStyle = window.getComputedStyle;

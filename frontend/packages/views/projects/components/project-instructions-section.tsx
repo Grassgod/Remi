@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { AlertTriangle, Loader2, Pencil, Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, ChevronDown, Loader2, Pencil, Save } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@multiremi/core/api";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -62,11 +62,7 @@ export function ProjectInstructionsSection({
 
       {hasInstructions ? (
         <div className="space-y-2">
-          {instructions.trim() && (
-            <div className="max-h-24 overflow-hidden">
-              <ReadonlyContent content={instructions} className="text-xs leading-relaxed text-muted-foreground" />
-            </div>
-          )}
+          {instructions.trim() && <InstructionsPreview content={instructions} />}
           {deltaInstructions.trim() && (
             <p className="text-[11px] text-muted-foreground">
               {t(($) => $.instructions.delta_configured, { count: [...deltaInstructions].length })}
@@ -99,6 +95,77 @@ export function ProjectInstructionsSection({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+// Collapsed height of the sidebar preview, in px. ~6 lines at the compact
+// 12px/1.6 rhythm — enough to show a heading plus the first bullets.
+const PREVIEW_COLLAPSED_HEIGHT = 112;
+
+// Slack below the clamp before the toggle appears. Without it a block that
+// overshoots by a couple of pixels (a trailing margin) offers an "expand"
+// that visibly reveals nothing.
+const PREVIEW_OVERFLOW_SLACK = 12;
+
+/**
+ * Markdown preview that clamps to a fixed height with a fade-out, rather than
+ * cutting the content mid-element. The toggle only renders when the content
+ * actually overflows, so short instructions look no different from before.
+ */
+function InstructionsPreview({ content }: { content: string }) {
+  const { t } = useT("projects");
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Markdown height is not knowable until it renders (and shifts again when
+  // the sidebar is resized or a Mermaid/KaTeX block settles), so measure the
+  // unclamped inner element instead of guessing from the source length.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const measure = () => {
+      setOverflowing(el.scrollHeight > PREVIEW_COLLAPSED_HEIGHT + PREVIEW_OVERFLOW_SLACK);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [content]);
+
+  const clamped = overflowing && !expanded;
+
+  return (
+    <div>
+      <div
+        className="relative overflow-hidden"
+        style={clamped ? { maxHeight: PREVIEW_COLLAPSED_HEIGHT } : undefined}
+      >
+        {/* The clamp lives on the wrapper so this element keeps its full
+            scrollHeight for the measurement above. */}
+        <div ref={contentRef}>
+          <ReadonlyContent content={content} density="compact" className="text-muted-foreground" />
+        </div>
+        {clamped && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-background"
+          />
+        )}
+      </div>
+      {overflowing && (
+        <button
+          type="button"
+          className="mt-1 flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? t(($) => $.instructions.collapse) : t(($) => $.instructions.expand)}
+          <ChevronDown className={cn("size-3 transition-transform", expanded && "rotate-180")} />
+        </button>
+      )}
+    </div>
   );
 }
 
