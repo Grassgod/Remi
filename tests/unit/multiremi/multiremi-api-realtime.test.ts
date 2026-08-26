@@ -2,11 +2,179 @@
 // privacy boundaries on chat/member/invitation events.
 import { afterEach, describe, expect, it } from "bun:test";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { authenticateBrowserWebSocket, createStore, db, expectNoWebSocketMessage, expectWebSocketRejected, nextWebSocketMessage, nextWebSocketMessages, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
+import { notifyBrowserWorkspaceEvent } from "../../../packages/server/src/api/realtime.js";
+import { authenticateBrowserWebSocket, createStore, db, expectNoWebSocketMessage, expectWebSocketRejected, nextWebSocketMessage, nextWebSocketMessages, resetMultiremiTestEnv, signTestJwt, waitWebSocketOpen } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — realtime websockets", () => {
+  it("selects a human or restricted workspace-event frame per browser recipient", () => {
+    const humanFrames: string[] = [];
+    const taskFrames: string[] = [];
+    const client = (frames: string[], accessToken: Record<string, unknown> | null) => ({
+      data: {
+        kind: "browser",
+        connectedAt: new Date().toISOString(),
+        workspaceId: "local",
+        authenticated: true,
+        userId: "local",
+        accessToken,
+        scopeSubscriptions: [],
+      },
+      sendText: (frame: string) => frames.push(frame),
+      close: () => {},
+    });
+    const human = client(humanFrames, { type: "pat" });
+    const task = client(taskFrames, { type: "task" });
+    const workspaceRegistry = new Map([["local", new Set([human, task])]]) as any;
+
+    notifyBrowserWorkspaceEvent(workspaceRegistry, new Map(), new Map(), {
+      type: "autopilot:updated",
+      workspaceId: "local",
+      payload: {
+        trigger: {
+          id: "apt_1",
+          webhookToken: "awt_camel_secret",
+          webhook_token: "awt_snake_secret",
+          webhookPath: "/api/webhooks/autopilots/awt_camel_secret",
+          webhook_path: "/api/webhooks/autopilots/awt_snake_secret",
+          webhookUrl: "https://example.test/camel",
+          webhook_url: "https://example.test/snake",
+          signingSecretHint: "secret-hint",
+          signing_secret_hint: "secret-hint",
+          signingSecretSet: true,
+          signing_secret_set: true,
+          issueCreationRestricted: true,
+          issue_creation_restricted: true,
+          issueCreationRestrictionReason: "restricted_task",
+          issue_creation_restriction_reason: "restricted_task",
+          issueCreationRestrictedByTaskId: "tsk_restricted",
+          issue_creation_restricted_by_task_id: "tsk_restricted",
+          label: "Webhook trigger",
+        },
+      },
+    });
+
+    const humanEvent = JSON.parse(humanFrames[0]!);
+    expect(humanEvent.payload.trigger).toMatchObject({
+      webhook_token: "awt_snake_secret",
+      webhook_path: "/api/webhooks/autopilots/awt_snake_secret",
+      signing_secret_hint: "secret-hint",
+      issue_creation_restricted: true,
+      issue_creation_restricted_by_task_id: "tsk_restricted",
+    });
+    const taskEvent = JSON.parse(taskFrames[0]!);
+    expect(taskEvent.payload.trigger).toEqual({ id: "apt_1", label: "Webhook trigger" });
+  });
+
+  it("keeps browser realtime human-only while preserving human Autopilot diagnostics", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({
+      workspaceId: "local",
+      userId: "local",
+      name: "Local owner",
+      role: "owner",
+    });
+    const worker = store.createAgent({ name: "Realtime worker", provider: "codex", workspaceId: "local" });
+    const restricted = store.createAgent({
+      name: "Restricted realtime worker",
+      provider: "codex",
+      workspaceId: "local",
+      issueCreationRequiresProposal: true,
+    });
+    const restrictedTask = store.createTask({
+      agentId: restricted.id,
+      workspaceId: "local",
+      prompt: "Verify browser realtime policy",
+    });
+    const taskToken = await store.createTaskAccessToken(restrictedTask, "local");
+    const humanToken = await store.createAccessToken({
+      name: "Realtime human",
+      type: "pat",
+      workspaceId: "local",
+      userId: "local",
+    });
+    const autopilot = store.createAutopilot({
+      title: "Human managed webhook",
+      assigneeId: worker.id,
+      executionMode: "run_only",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-secret",
+      port: 0,
+      hostname: "127.0.0.1",
+    });
+    const wsUrl = `ws://127.0.0.1:${server.port}/api/realtime/ws?workspace_id=local`;
+    const baseUrl = `http://127.0.0.1:${server.port}`;
+    const human = new WebSocket(wsUrl);
+    try {
+      const taskUpgrade = new WebSocket(wsUrl, {
+        headers: { Authorization: `Bearer ${taskToken.token}` },
+      } as any);
+      await expectWebSocketRejected(taskUpgrade);
+
+      const taskAuthFrame = new WebSocket(wsUrl);
+      await waitWebSocketOpen(taskAuthFrame);
+      taskAuthFrame.send(JSON.stringify({ type: "auth", payload: { token: taskToken.token } }));
+      expect(await nextWebSocketMessage(taskAuthFrame)).toEqual({ error: "forbidden for task token" });
+      taskAuthFrame.close();
+
+      await authenticateBrowserWebSocket(human, humanToken.token);
+      const createdEvent = nextWebSocketMessage(human);
+      const created = await fetch(`${baseUrl}/api/autopilots/${autopilot.id}/triggers`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${humanToken.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ kind: "webhook", label: "Human webhook" }),
+      });
+      expect(created.status).toBe(201);
+      const trigger = await created.json() as Record<string, any>;
+      expect(trigger.webhook_token).toStartWith("awt_");
+      expect(await createdEvent).toMatchObject({
+        type: "autopilot:updated",
+        payload: {
+          autopilot_id: autopilot.id,
+          trigger: {
+            id: trigger.id,
+            webhook_token: trigger.webhook_token,
+            webhook_path: trigger.webhook_path,
+            issue_creation_restricted: false,
+            issue_creation_restriction_reason: null,
+            issue_creation_restricted_by_task_id: null,
+          },
+        },
+      });
+
+      const signingEvent = nextWebSocketMessage(human);
+      const signed = await fetch(`${baseUrl}/api/autopilots/${autopilot.id}/triggers/${trigger.id}/signing-secret`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${humanToken.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ signing_secret: "0123456789abcdef" }),
+      });
+      expect(signed.status).toBe(200);
+      expect(await signingEvent).toMatchObject({
+        type: "autopilot:updated",
+        payload: {
+          trigger: {
+            id: trigger.id,
+            signing_secret_hint: "cdef",
+            issue_creation_restricted: false,
+          },
+        },
+      });
+    } finally {
+      human.close();
+      server.stop(true);
+    }
+  });
+
   it("serves daemon websocket upgrades and realtime health", async () => {
     const store = createStore();
     const workspaceEvents: any[] = [];
