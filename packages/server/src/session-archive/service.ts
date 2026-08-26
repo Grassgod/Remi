@@ -366,6 +366,40 @@ export class SessionArchiveService {
     }
   }
 
+  failUpload(
+    runtimeId: string,
+    issueId: string,
+    archiveId: string,
+    attemptCount: number,
+    error: string,
+  ): MultiremiSessionArchive {
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    archive = this.requireWritableArchive(archive, runtimeId);
+    this.assertCurrentAttempt(archive, attemptCount);
+    if (archive.status === "failed") return archive;
+    if (archive.status !== "pending" && archive.status !== "uploading") {
+      throw new SessionArchiveError(
+        `cannot fail archive upload in ${archive.status} state`,
+        409,
+        "session_archive_invalid_state",
+      );
+    }
+    const failed = this.store.markSessionArchiveFailedAttempt(
+      archive.id,
+      runtimeId,
+      attemptCount,
+      error,
+    );
+    if (!failed) {
+      throw new SessionArchiveError(
+        "session archive upload attempt was superseded",
+        409,
+        "session_archive_attempt_conflict",
+      );
+    }
+    return failed;
+  }
+
   async complete(
     runtimeId: string,
     issueId: string,

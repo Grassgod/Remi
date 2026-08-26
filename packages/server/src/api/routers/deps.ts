@@ -27,6 +27,7 @@ export interface RouterDeps {
   projectKnowledge: ProjectKnowledgeServiceContract;
   repositoryWiki: RepositoryWikiServiceContract;
   sessionArchives: SessionArchiveService;
+  daemonDirectBaseUrl: string | null;
   verifyScmConnection: ScmConnectionVerifier;
   issueRetitle: typeof retitleIssue;
 }

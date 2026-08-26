@@ -19,7 +19,7 @@ function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function fixture() {
+async function fixture(daemonDirectBaseUrl?: string | null) {
   const store = createStore();
   store.ensureLocalWorkspace();
   const daemonId = "dmn_archive";
@@ -55,6 +55,7 @@ async function fixture() {
     store,
     authToken: "root-secret",
     sessionArchives,
+    ...(daemonDirectBaseUrl === undefined ? {} : { daemonDirectBaseUrl }),
   });
   const daemonHeaders = {
     Authorization: `Bearer ${token.token}`,
@@ -108,6 +109,29 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<v
 }
 
 describe("Multiremi session archives", () => {
+  it("advertises a configured direct API origin and rejects malformed origins", async () => {
+    const { app, daemonHeaders, base } = await fixture("https://api-direct.example:7443");
+    const initialized = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({
+        source_revision: "direct-origin-v1",
+        sha256: sha256(Buffer.from("direct")),
+        size_bytes: 6,
+      }),
+    });
+
+    expect(initialized.status).toBe(201);
+    expect((await initialized.json() as any).upload_url).toStartWith(
+      `https://api-direct.example:7443${base}/`,
+    );
+
+    await expect(fixture("https://api-direct.example/prefixed"))
+      .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
+    await expect(fixture("file:///tmp/archive"))
+      .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
+  });
+
   it("reports pre-init preparation failures to the control plane and retries without forging ready", async () => {
     const { store, app, issue, daemonHeaders, base } = await fixture();
     const body = JSON.stringify({
@@ -247,6 +271,7 @@ describe("Multiremi session archives", () => {
     });
     expect(initialized.upload_attempt).toBe(1);
     expect(initialized.upload_url).toEndWith(`/${initialized.archive.id}/content?attempt=1`);
+    expect(initialized.upload_url).toStartWith("/");
 
     const idempotent = await app.request(`${base}/init`, {
       method: "POST",
@@ -336,6 +361,53 @@ describe("Multiremi session archives", () => {
       gc_ready: false,
     });
     expect(store.getSessionArchive(ready.id)?.metadata).toEqual({ providers: ["claude", "codex"] });
+  });
+
+  it("persists an upload failure against only the current claimed attempt", async () => {
+    const { store, app, daemonHeaders, base } = await fixture();
+    const init = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({
+        source_revision: "proxy-limit-v1",
+        sha256: sha256(Buffer.from("proxy-limit")),
+        size_bytes: 11,
+      }),
+    });
+    const initialized = await init.json() as any;
+    const failureUrl = `${base}/${initialized.archive.id}/failure?attempt=${initialized.upload_attempt}`;
+    const failed = await app.request(failureUrl, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({ error: "Direct archive upload is not configured" }),
+    });
+
+    expect(failed.status).toBe(200);
+    expect((await failed.json() as any).archive).toMatchObject({
+      status: "failed",
+      last_error: "Direct archive upload is not configured",
+    });
+    expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({
+      status: "failed",
+      lastError: "Direct archive upload is not configured",
+    });
+
+    const resumed = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({
+        source_revision: "proxy-limit-v1",
+        sha256: sha256(Buffer.from("proxy-limit")),
+        size_bytes: 11,
+      }),
+    });
+    expect((await resumed.json() as any).upload_attempt).toBe(initialized.upload_attempt + 1);
+    const stale = await app.request(failureUrl, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({ error: "stale failure" }),
+    });
+    expect(stale.status).toBe(409);
   });
 
   it("reclaims a crashed same-Runtime upload with a fenced attempt and removes its partial", async () => {

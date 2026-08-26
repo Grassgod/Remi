@@ -44,6 +44,10 @@ type FailureBody = {
   error?: unknown;
 };
 
+type UploadFailureBody = {
+  error?: unknown;
+};
+
 function archiveWire(archive: MultiremiSessionArchive | null): Record<string, unknown> | null {
   if (!archive) return null;
   return {
@@ -296,7 +300,9 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
       return c.json({
         archive: archiveWire(claimed.archive),
         upload_attempt: claimed.uploadAttempt,
-        upload_url: uploadUrl,
+        upload_url: uploadUrl && deps.daemonDirectBaseUrl
+          ? new URL(uploadUrl, deps.daemonDirectBaseUrl).toString()
+          : uploadUrl,
       }, initialized.created ? 201 : 200);
     } catch (error) {
       return archiveError(c, error);
@@ -357,6 +363,35 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
         c.req.param("archiveId"),
         requiredUploadAttempt(c),
         c.req.raw.body,
+      );
+      return c.json({ archive: archiveWire(archive) });
+    } catch (error) {
+      return archiveError(c, error);
+    }
+  });
+
+  app.post(`${daemonBase}/:archiveId/failure`, async (c) => {
+    const scope = requireDaemonArchiveScope(c, deps);
+    if (scope instanceof Response) return scope;
+    const body = await readJsonStrict<UploadFailureBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return c.json({ error: "invalid request body" }, 400);
+    }
+    if (Object.keys(body).some((key) => key !== "error")) {
+      return c.json({ error: "only error is allowed" }, 400);
+    }
+    const error = typeof body.error === "string" ? body.error.trim() : "";
+    if (!error || error.length > 2_000) {
+      return c.json({ error: "error must be between 1 and 2000 characters" }, 400);
+    }
+    try {
+      const archive = sessionArchives.failUpload(
+        scope.runtimeId,
+        scope.issueId,
+        c.req.param("archiveId"),
+        requiredUploadAttempt(c),
+        error,
       );
       return c.json({ archive: archiveWire(archive) });
     } catch (error) {
