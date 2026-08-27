@@ -134,9 +134,13 @@ and refuses redirects before attaching its Bearer token. An absolute URL is
 only a direct-route candidate: before PUT, the daemon sends an authenticated
 HEAD request to the same content URL. Only a `204` response carrying
 `X-Remi-Archive-Direct: 1` proves that Nginx selected the direct API location.
-The API intentionally does not emit this header, so a request forwarded by the
-Next.js compatibility rewrite cannot attest itself. Results are cached by
-target origin for the configured finite TTL.
+The direct Nginx location injects `X-Remi-Archive-Direct-Route: 1` into the
+upstream request. The API emits the response marker only when that route proof
+is present and the request `Host` authority (including a non-default port)
+matches `MULTIREMI_DAEMON_DIRECT_BASE_URL`. The Next.js compatibility rewrite
+does not inject the route proof, so it cannot attest itself even if it preserves
+the public `Host`; response-header passthrough therefore cannot create a false
+positive. Results are cached by target origin for the configured finite TTL.
 
 The 8 MiB fallback is deliberately fail-closed and is a compatibility change.
 Production history includes one 8.912 MiB archive that previously succeeded,
@@ -148,10 +152,10 @@ known failure size and is not recommended as a substitute for the direct route.
 
 Use [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf) in
 the public server block. It disables request/response buffering, allows bodies
-up to 1 GiB, gives a streaming upload 15 minutes, and adds the direct-route
-attestation header. Replace its sample `16120` upstream port with the host's
-effective `REMI_API_BIND_PORT`. Keep the API container bound to loopback; Nginx
-is the external network path.
+up to 1 GiB, gives a streaming upload 15 minutes, preserves the public `Host`,
+and injects the direct-route proof consumed by the API. Replace its sample
+`16120` upstream port with the host's effective `REMI_API_BIND_PORT`. Keep the
+API container bound to loopback; Nginx is the external network path.
 
 Audit the complete effective configuration with `nginx -T`. Ordinary prefix
 location order does not decide this match. A broader regex declared earlier can
@@ -182,6 +186,13 @@ following steps. This repository change does not perform them:
 6. Retry failed archives, then verify API access logs receive the content PUTs,
    Web/Next.js logs do not, and each archive becomes `ready` with its declared
    size and SHA-256. Check Web process memory/event-loop health during the run.
+
+`remi issue archive retry <issue> <archive-id>` (the compatibility alias of
+`remi session archive retry`) also accepts an exhausted failed archive. It
+resets the attempt count, error, backoff timestamp, and exhaustion timestamp,
+returning the row to `pending` with `retry_state=eligible`. Run it once per
+failed archive only after the direct route and API setting pass the HEAD check;
+the daemon will claim and upload the recovered attempt on its next archive run.
 
 Do not expose the API container port directly to the network and do not place
 daemon tokens in Nginx configuration or logs.
