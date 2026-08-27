@@ -69,6 +69,8 @@ describe("Multiremi API - workspace repositories", () => {
 
     const atlas = store.getAgentByWorkspaceAndName(workspace.id, "Atlas · LLM Wiki");
     expect(atlas).toMatchObject({ provider: "claude", model: "opus5", visibility: "workspace" });
+    expect(atlas!.instructions).toContain("MULTIREMI_SCM_REVISION");
+    expect(atlas!.instructions).not.toContain("remi wiki push --source-revision");
     expect(store.listAgentPluginBindings(atlas!.id)).toHaveLength(1);
     const automations = store.listAutopilots(workspace.id).filter((item) => item.assigneeId === atlas!.id);
     expect(automations.map((item) => item.title).sort()).toEqual([
@@ -84,10 +86,11 @@ describe("Multiremi API - workspace repositories", () => {
     expect(buildBody).toMatchObject({ status: "running" });
     expect(typeof buildBody.run_id).toBe("string");
     expect(typeof buildBody.task_id).toBe("string");
-    expect(store.getTask(buildBody.task_id)).toMatchObject({
-      workspaceId: workspace.id,
-      prompt: expect.stringContaining("repository LLM Wiki"),
-    });
+    const buildTask = store.getTask(buildBody.task_id);
+    expect(buildTask).toMatchObject({ workspaceId: workspace.id });
+    expect(buildTask!.prompt).toContain("repository LLM Wiki");
+    expect(buildTask!.prompt).toContain("remi wiki push");
+    expect(buildTask!.prompt).not.toContain("--source-revision");
   });
 
   it("dedupes repository Wiki builds and derives the per-repository build status", async () => {
