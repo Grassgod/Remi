@@ -27,7 +27,7 @@ import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multiremi/core/types";
 import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
-import { buildTimeline } from "../../common/task-transcript";
+import { toChatTimeline } from "../lib/chat-timeline";
 import { TaskStatusPill } from "./task-status-pill";
 import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
@@ -87,7 +87,7 @@ export function ChatMessageList({
     ...taskMessagesOptions(pendingTaskId ?? ""),
     enabled: canFetchLiveTimeline,
   });
-  const liveTimeline: ChatTimelineItem[] = buildTimeline(liveTaskMessages ?? []);
+  const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskMessages ?? []);
   const hasLive = showLiveTimeline && liveTimeline.length > 0;
   const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask;
 
@@ -231,7 +231,7 @@ function AssistantMessage({
     enabled: canFetchTaskMessages,
   });
 
-  const timeline: ChatTimelineItem[] = buildTimeline(taskMessages ?? []);
+  const timeline: ChatTimelineItem[] = toChatTimeline(taskMessages ?? []);
 
   // Failure bubble path: when the server's FailTask wrote a failure
   // chat_message (failure_reason set), render a destructive bubble with the

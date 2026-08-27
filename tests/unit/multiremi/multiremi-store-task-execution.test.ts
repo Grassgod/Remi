@@ -2,12 +2,52 @@
 // side effects (issue comments, realtime events), per-agent/per-runtime capacity,
 // and the runtime ownership + lifecycle analytics that gate claiming.
 import { afterEach, describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { createAdapter } from "@acp/index.js";
+import type { ProviderEvent } from "@shared/contracts/provider-types.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { createEventMapper } from "@multiremi/daemon.js";
 import { createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — task message ingress, completion, and capacity", () => {
+  it("replays a turn-ending compaction without replacing the task or issue reply", () => {
+    const frames = JSON.parse(readFileSync(
+      new URL("../../fixtures/acp/claude-compaction-tail-notifications-1787700000000.json", import.meta.url),
+      "utf-8",
+    )) as Array<{ params?: { update?: Record<string, unknown> } }>;
+    const map = createEventMapper(createAdapter("claude"));
+    const messages = frames.flatMap((frame) => frame.params?.update
+      ? map(frame.params.update as unknown as ProviderEvent)
+      : []);
+    const output = messages
+      .filter((message) => message.type === "text")
+      .map((message) => message.content ?? "")
+      .join("")
+      .trim();
+
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_compaction", name: "compaction", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Compaction Bot", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "Compaction tail", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "fix it" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.appendTaskMessages(task.id, messages.map((message, index) => ({ ...message, seq: index + 1 })));
+    store.completeTask(task.id, { output });
+
+    expect(messages.map((message) => message.type)).toEqual(["text", "compaction", "compaction"]);
+    expect(store.getTask(task.id)?.result).toBe("Implemented the fix and verified the targeted tests.");
+    expect(store.listIssueComments(issue.id).at(-1)?.body).toBe("Implemented the fix and verified the targeted tests.");
+    expect(store.getTask(task.id)?.result).not.toContain("Compacting");
+    expect(store.listIssueComments(issue.id).at(-1)?.body).not.toContain("Compacting");
+
+    const persisted = store.listTaskMessages(task.id);
+    const finalAnswer = [...persisted].reverse().find((message) => message.type === "text" && message.content?.trim());
+    expect(finalAnswer?.content).toBe("Implemented the fix and verified the targeted tests.");
+  });
+
   it("round-trips ACP tool-call semantics (tool_call_id/status/meta) and fires onTaskMessages", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_acp_semantics", name: "acp", provider: "claude", workspaceId: "local" });

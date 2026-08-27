@@ -54,6 +54,82 @@ const CLAUDE_BASH_COMPLETED = {
 };
 
 describe("daemon task-message mapper", () => {
+  it("classifies only standalone claude compaction status chunks", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    const statuses = [
+      "Compacting...",
+      "\n\nCompacting completed.",
+      "\n\nCompacting failed.",
+      "\n\nCompacting failed: context window unavailable",
+    ];
+
+    for (const text of statuses) {
+      expect(map(event({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
+      }))).toEqual([{ type: "compaction", content: text, meta: undefined }]);
+    }
+
+    const prose = "The logs say Compacting... but this sentence is the answer.";
+    expect(map(event({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: prose },
+    }))).toEqual([{ type: "text", content: prose, meta: undefined }]);
+
+    expect(map(event({
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Compacting..." },
+    }))).toEqual([{ type: "thinking", content: "Compacting...", meta: undefined }]);
+  });
+
+  /**
+   * codex-acp@1.1.14 has two compaction paths and only one is safe by
+   * construction. `thread/compacted` (dist/index.js:23726 → :24056) re-emits the
+   * banner as a bare `agent_message_chunk`, exactly the claude failure mode, so
+   * it needs the same classification; the `contextCompaction` thread item
+   * (:22924-22951) is a real `tool_call` and must keep rendering as a tool step.
+   */
+  it("classifies the codex compaction banner and leaves its tool-call path alone", () => {
+    const map = createEventMapper(createAdapter("codex"));
+    const banner = "*Context compacted to fit the model's context window.*\n\n";
+
+    expect(map(event({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: banner },
+    }))).toEqual([{ type: "compaction", content: banner, meta: undefined }]);
+
+    const prose = "I compacted the config: *Context compacted to fit the model's context window.* — see below.";
+    expect(map(event({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: prose },
+    }))).toEqual([{ type: "text", content: prose, meta: undefined }]);
+
+    const start = map(event({
+      sessionUpdate: "tool_call",
+      toolCallId: "item_compaction_1",
+      kind: "other",
+      title: "Context compacting",
+      status: "in_progress",
+      _meta: { contextCompaction: true },
+    }));
+    expect(start).toHaveLength(1);
+    expect(start[0]!.type).toBe("tool_use");
+    expect(start[0]!.tool).toBe("Context compacting");
+    // No `parent_tool_call_id`: the time-window heuristic is claude-only, so a
+    // compaction step never nests itself into an unrelated open tool call.
+    expect(start[0]!.meta?.parent_tool_call_id).toBeUndefined();
+
+    const done = map(event({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "item_compaction_1",
+      title: "Context compacted",
+      status: "completed",
+      _meta: { contextCompaction: true },
+    }));
+    expect(done.map((m) => m.type)).toEqual(["tool_result"]);
+    expect(done[0]!.status).toBe("completed");
+  });
+
   it("publishes late claude input while the call is running without repeating it on the result", () => {
     const map = createEventMapper(createAdapter("claude"));
 
