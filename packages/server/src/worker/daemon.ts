@@ -2151,7 +2151,7 @@ export class MultiremiDaemon {
         });
       }
       this.enqueueTaskReport(task.id, "start", {});
-      this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(), step: 1, total: 3 });
+      this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
