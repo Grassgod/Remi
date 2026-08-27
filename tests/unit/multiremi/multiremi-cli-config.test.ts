@@ -15,6 +15,7 @@ import {
   buildMultiremiDaemonServiceSpec,
   multiremiDaemonPaths,
   multiremiDaemonServicePath,
+  resolveDeviceName,
   runMultiremi,
 } from "../../../apps/remi/cli/multiremi.js";
 
@@ -35,6 +36,7 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
       workspace_id: "ws_1",
       token: "mul_secret",
       provider: "claude",
+      device_name: "Owner Laptop",
       daemon_id: "daemon-devbox",
     }, path);
 
@@ -43,6 +45,7 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
       workspace_id: "ws_1",
       token: "mul_secret",
       provider: "claude",
+      device_name: "Owner Laptop",
       daemon_id: "daemon-devbox",
     });
     expect(redactMultiremiConfig(loadMultiremiConfig(path))).toEqual({
@@ -50,8 +53,34 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
       workspace_id: "ws_1",
       token: "***",
       provider: "claude",
+      device_name: "Owner Laptop",
       daemon_id: "daemon-devbox",
     });
+  });
+
+  test("resolves device names in CLI, environment, config, runtime-name, fallback order", () => {
+    const environment = {
+      MULTIREMI_DEVICE_NAME: "Environment Device",
+      MULTIREMI_RUNTIME_NAME: undefined,
+      USER: "runner",
+    };
+    const config = {
+      device_name: "Config Device",
+      runtime_name: "Config Runtime",
+    };
+
+    expect(resolveDeviceName({ "device-name": "CLI Device", name: "CLI Runtime" }, config, environment, "host"))
+      .toBe("CLI Device");
+    expect(resolveDeviceName({ deviceName: "Camel Device", name: "CLI Runtime" }, config, environment, "host"))
+      .toBe("Camel Device");
+    expect(resolveDeviceName({ name: "CLI Runtime" }, config, environment, "host"))
+      .toBe("Environment Device");
+    expect(resolveDeviceName({ name: "CLI Runtime" }, config, { ...environment, MULTIREMI_DEVICE_NAME: undefined }, "host"))
+      .toBe("Config Device");
+    expect(resolveDeviceName({ name: "CLI Runtime" }, {}, { ...environment, MULTIREMI_DEVICE_NAME: undefined }, "host"))
+      .toBe("CLI Runtime");
+    expect(resolveDeviceName({}, {}, { MULTIREMI_DEVICE_NAME: undefined, MULTIREMI_RUNTIME_NAME: undefined, USER: "runner" }, "host"))
+      .toBe("host-runner");
   });
 
   test("builds background daemon launch spec without leaking token in argv", () => {
@@ -106,6 +135,7 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
       "workspace-id": "ws_2",
       "runtime-id": "rt_1",
       "daemon-id": "daemon-local",
+      "device-name": "Owner Laptop",
       "repo-cache-root": "/tmp/repos",
       token: "mul_secret",
     })).toEqual([
@@ -122,6 +152,8 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
       "daemon-local",
       "--repo-cache-root",
       "/tmp/repos",
+      "--device-name",
+      "Owner Laptop",
     ]);
     expect(multiremiDaemonPaths("/tmp/multiremi-state")).toEqual({
       stateDir: "/tmp/multiremi-state",

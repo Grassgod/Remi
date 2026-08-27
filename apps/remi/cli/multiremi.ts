@@ -173,6 +173,7 @@ function setup(options: CliOptions): void {
   const provider = stringOpt(options.provider, process.env.MULTIREMI_PROVIDER);
   const runtimeId = stringOpt(options.runtimeId ?? options["runtime-id"], process.env.MULTIREMI_RUNTIME_ID);
   const runtimeName = stringOpt(options.name ?? options["runtime-name"], process.env.MULTIREMI_RUNTIME_NAME);
+  const deviceName = stringOpt(options["device-name"] ?? options.deviceName, process.env.MULTIREMI_DEVICE_NAME);
   const daemonId = stringOpt(options.daemonId ?? options["daemon-id"], process.env.MULTIREMI_DAEMON_ID);
   const maxConcurrency = stringOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY);
 
@@ -182,6 +183,7 @@ function setup(options: CliOptions): void {
   if (provider) next.provider = provider;
   if (runtimeId) next.runtime_id = runtimeId;
   if (runtimeName) next.runtime_name = runtimeName;
+  if (deviceName) next.device_name = deviceName;
   if (daemonId) next.daemon_id = daemonId;
   if (maxConcurrency) {
     const n = parseInt(maxConcurrency, 10);
@@ -213,7 +215,7 @@ function setup(options: CliOptions): void {
     console.log("Token is not set. Run:");
     console.log("  remi login --token <YOUR_TOKEN>");
   }
-  console.log("Ready. Start the agent with:  remi start");
+  console.log("Ready. Start the agent with:  remi daemon start");
 }
 
 function login(options: CliOptions): void {
@@ -235,7 +237,7 @@ function configCommand(positional: string[], options: CliOptions): void {
   if (action === "set") {
     const key = positional[1] as keyof MultiremiCliConfig | undefined;
     const value = positional[2];
-    const allowed = ["server_url", "workspace_id", "token", "provider", "runtime_id", "runtime_name", "max_concurrency"];
+    const allowed = ["server_url", "workspace_id", "token", "provider", "runtime_id", "runtime_name", "device_name", "max_concurrency"];
     if (!key || !allowed.includes(key)) {
       throw new Error(`usage: multiremi config set <${allowed.join("|")}> <value>`);
     }
@@ -339,7 +341,7 @@ export async function resolveWorkerDaemons(
   // host's providers into ONE card and single→multi provider never orphans it —
   // and the card title; the server derives each row label as
   // `<provider> (<deviceName>)`.
-  const deviceName = runtimeName ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
+  const deviceName = resolveDeviceName(options, config);
   // 0 = "unset" → the daemon defaults to CPU-1 (resolveDaemonConcurrency).
   const maxConcurrency = numberOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY, config.max_concurrency ?? 0);
   const baseDaemonPort = daemonPortFromOptions(options);
@@ -1097,6 +1099,21 @@ async function followLog(logPath: string, lines: number): Promise<void> {
 
 function formatRuntimeName(baseName: string | undefined, provider: string): string {
   return `${baseName ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`}-${provider}`;
+}
+
+export function resolveDeviceName(
+  options: CliOptions,
+  config: MultiremiCliConfig,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  fallbackHostname = hostname(),
+): string {
+  const runtimeName = stringOpt(options.name, environment.MULTIREMI_RUNTIME_NAME)
+    ?? config.runtime_name
+    ?? undefined;
+  return stringOpt(options["device-name"] ?? options.deviceName, environment.MULTIREMI_DEVICE_NAME)
+    ?? config.device_name
+    ?? runtimeName
+    ?? `${fallbackHostname}-${environment.USER ?? "local"}`;
 }
 
 function formatListenUrls(host: string, port: number): string[] {

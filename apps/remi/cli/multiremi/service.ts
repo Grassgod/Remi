@@ -128,6 +128,7 @@ export function buildDaemonForegroundArgs(options: CliOptions = {}): string[] {
   pushStringOption(args, "--daemon-port", options.daemonPort ?? options["daemon-port"]);
   pushStringOption(args, "--repo-cache-root", options.repoCacheRoot ?? options["repo-cache-root"]);
   pushStringOption(args, "--name", options.name ?? options["runtime-name"]);
+  pushStringOption(args, "--device-name", options["device-name"] ?? options.deviceName);
   pushStringOption(args, "--max-concurrency", options["max-concurrency"] ?? options.maxConcurrency);
   pushStringOption(args, "--log-level", options.logLevel ?? options["log-level"]);
   return args;
