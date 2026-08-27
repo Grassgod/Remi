@@ -31,6 +31,7 @@ import { IssueSharesEndpoints } from "./endpoints/issue-shares";
 import { SessionArchivesEndpoints } from "./endpoints/session-archives";
 import { ScmEndpoints } from "./endpoints/scm";
 import { PlatformEndpoints } from "./endpoints/platform";
+import { FeishuEndpoints } from "./endpoints/feishu";
 
 export { ApiError, PreviewTooLargeError, PreviewUnsupportedError } from "./http";
 export type { ApiClientIdentity, ApiClientOptions } from "./http";
@@ -85,6 +86,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new SessionArchivesEndpoints(http),
   (http: HttpClient) => new ScmEndpoints(http),
   (http: HttpClient) => new PlatformEndpoints(http),
+  (http: HttpClient) => new FeishuEndpoints(http),
 ];
 
 // Declaration merging: the facade's type is the union of every endpoint
@@ -129,7 +131,8 @@ export interface ApiClient extends
     IssueSharesEndpoints,
     SessionArchivesEndpoints,
     ScmEndpoints,
-    PlatformEndpoints {}
+    PlatformEndpoints,
+    FeishuEndpoints {}
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- see the interface above
 export class ApiClient {
