@@ -1,10 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { BarChart3, ChevronRight, AlertCircle } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, AlertCircle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Button } from "@multiremi/ui/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@multiremi/ui/components/ui/collapsible";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { agentListOptions } from "@multiremi/core/workspace/queries";
 import type { RuntimeUsage, AgentRuntime } from "@multiremi/core/types";
@@ -13,6 +18,7 @@ import {
   runtimeUsageByAgentOptions,
 } from "@multiremi/core/runtimes/queries";
 import { useCustomPricingStore } from "@multiremi/core/runtimes/custom-pricing-store";
+import { useUsageDiagnosticsStore } from "@multiremi/core/runtimes/usage-diagnostics-store";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import {
   formatTokens,
@@ -265,7 +271,7 @@ export function UsageSection({ runtime }: { runtime: AgentRuntime }) {
           the chart would render normally and the unmapped tokens would silently
           contribute $0 to totals. Total-only rows are excluded: the dialog's
           CTA cannot make them priceable. */}
-      <UnmappedPricingNotice usage={splitFiltered} />
+      <UsageDiagnosticsNotice usage={splitFiltered} />
 
       <div className="grid grid-cols-3 divide-x rounded-lg border bg-card">
         <KpiCard
@@ -569,7 +575,7 @@ function EmptyChartState({ usage }: { usage: RuntimeUsage[] }) {
           {t(($) => $.usage.empty_no_usage)}
         </p>
       ) : unmapped.length > 0 ? (
-        // CTA lives in the page-level UnmappedPricingNotice above. Keep the
+        // CTA lives in the page-level UsageDiagnosticsNotice above. Keep the
         // chart-area copy descriptive only so the two surfaces don't bicker.
         <>
           <p className="text-xs text-muted-foreground">
@@ -592,15 +598,33 @@ function EmptyChartState({ usage }: { usage: RuntimeUsage[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// UnmappedPricingNotice — always-visible banner shown above the KPI grid
-// whenever the selected window contains any model that isn't priced. Covers
-// the partial-unmapping case where the chart still renders (so EmptyChartState
-// never fires) but some tokens are silently contributing $0 to totals.
+// UsageDiagnosticsNotice — the single "why are some tokens missing from the
+// cost total?" strip shown above the KPI grid. It merges the two reasons a
+// token can be counted but not costed:
+//
+//   * the model has no maintained rate (fixable — the custom-pricing dialog
+//     lives here), and
+//   * the row is pre-0.2.49 total-only history with no input/output split
+//     (not fixable, and therefore permanent — that notice would never clear
+//     on its own).
+//
+// Both reasons are long-lived, so rendering them as two stacked open banners
+// left the usage dashboard's first screen permanently two-thirds diagnostic
+// (MUL-168). Collapsed, the header still names both reasons and is itself
+// the entry point to the full explanation; the open/closed choice persists
+// across refreshes via useUsageDiagnosticsStore.
+//
+// Covers the partial-unmapping case where the chart still renders (so
+// EmptyChartState never fires) but some tokens are silently contributing $0
+// to totals.
 //
 // Exported for the workspace dashboard, which prices the same per-(date,
-// model) shape client-side and has the same silent-$0 failure mode. The prop
-// is the minimal priceable row, so both RuntimeUsage and DashboardUsageDaily
-// rows fit.
+// model) shape client-side and has the same silent-$0 failure mode. The
+// `usage` prop is the minimal priceable row, so both RuntimeUsage and
+// DashboardUsageDaily rows fit. `totalOnly` is optional because the runtime
+// detail view has no total-only aggregate to report; its `description`
+// arrives already translated so the sentence stays in the `usage` namespace
+// that owns it.
 // ---------------------------------------------------------------------------
 
 type PriceableUsageRow = Pick<
@@ -608,40 +632,94 @@ type PriceableUsageRow = Pick<
   "model" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens"
 >;
 
-export function UnmappedPricingNotice({ usage }: { usage: readonly PriceableUsageRow[] }) {
+export function UsageDiagnosticsNotice({
+  usage,
+  totalOnly,
+}: {
+  usage: readonly PriceableUsageRow[];
+  totalOnly?: { tokens: number; description: string };
+}) {
   const { t } = useT("runtimes");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const expanded = useUsageDiagnosticsStore((s) => s.expanded);
+  const setExpanded = useUsageDiagnosticsStore((s) => s.setExpanded);
+
   const unmapped = collectUnmappedModels(usage);
-  if (unmapped.length === 0) return null;
+  const totalOnlyGap = totalOnly && totalOnly.tokens > 0 ? totalOnly : undefined;
+  if (unmapped.length === 0 && !totalOnlyGap) return null;
+
+  // One summary line, one clause per cause. Joined here rather than in the
+  // bundle so no locale needs a key per combination of the two.
+  const reasons: string[] = [];
+  if (unmapped.length > 0) {
+    reasons.push(
+      t(($) => $.usage.diagnostics.reason_unpriced, { count: unmapped.length }),
+    );
+  }
+  if (totalOnlyGap) {
+    reasons.push(
+      t(($) => $.usage.diagnostics.reason_total_only, {
+        tokens: formatTokens(totalOnlyGap.tokens),
+      }),
+    );
+  }
 
   return (
-    <div
-      role="alert"
-      className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs"
-    >
-      <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
-      <div className="min-w-0 flex-1 space-y-0.5">
-        <p className="text-foreground">
-          {t(($) => $.usage.unmapped_notice, { count: unmapped.length })}
-        </p>
-        <p className="truncate font-mono text-[11px] text-muted-foreground">
-          {unmapped.join(", ")}
-        </p>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => setDialogOpen(true)}
+    <Collapsible open={expanded} onOpenChange={setExpanded}>
+      <div
+        role="alert"
+        className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs"
       >
-        {t(($) => $.usage.custom_pricing.open_button)}
-      </Button>
+        <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-3 text-left">
+          <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+          <span className="min-w-0 flex-1 truncate text-foreground">
+            {t(($) => $.usage.diagnostics.summary, { reasons: reasons.join(" · ") })}
+          </span>
+          <span className="shrink-0 text-muted-foreground">
+            {expanded
+              ? t(($) => $.usage.diagnostics.hide_detail)
+              : t(($) => $.usage.diagnostics.show_detail)}
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+              expanded ? "rotate-180" : ""
+            }`}
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="space-y-3 pt-2 pl-7">
+            {unmapped.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-foreground">
+                  {t(($) => $.usage.unmapped_notice, { count: unmapped.length })}
+                </p>
+                <p className="break-all font-mono text-[11px] text-muted-foreground">
+                  {unmapped.join(", ")}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDialogOpen(true)}
+                >
+                  {t(($) => $.usage.custom_pricing.open_button)}
+                </Button>
+              </div>
+            )}
+            {totalOnlyGap && (
+              <p className="text-foreground">{totalOnlyGap.description}</p>
+            )}
+          </div>
+        </CollapsibleContent>
+      </div>
+      {/* Sibling of the panel, not a child: collapsing the strip must not
+          unmount an open pricing dialog. */}
       <CustomPricingDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         unmappedModels={unmapped}
       />
-    </div>
+    </Collapsible>
   );
 }
 

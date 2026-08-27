@@ -122,7 +122,7 @@ export function isVersionNewer(latest: string, current: string): boolean {
 // or adjust prices.
 //
 //   Anthropic: https://platform.claude.com/docs/en/about-claude/pricing
-//   OpenAI:    https://openai.com/api/pricing
+//   OpenAI:    https://developers.openai.com/api/docs/pricing
 //   DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
 //   Moonshot:  https://www.kimi.com/resources/kimi-k2-6-pricing
 //   Zhipu:     https://docs.z.ai/guides/overview/pricing
@@ -181,21 +181,30 @@ const MODEL_PRICING: Record<
   //
   //    GPT-5.6 ships three named tiers (Sol / Terra / Luna) rather than the
   //    -mini / -nano suffixes of earlier generations, so each needs its own
-  //    row. Priced at the standard short-context meter (≤272K input): Sol is
-  //    currently discounted to $4/$20 through 2026-11-21 and OpenRouter
-  //    resells it lower still, but we carry the $5/$30 sticker for the same
-  //    reason the DeepSeek and Sonnet 5 rows do — a brief over-estimate beats
-  //    the dashboard falling off a cliff the day a promo ends. The >272K
-  //    long-context meter (2× input, 1.5× output) is not modelled: aggregated
-  //    rows carry no per-request prompt sizes, matching the `[1m]` handling
-  //    in `resolvePricing` below.
-  "gpt-5.6-sol":        { input: 5,    output: 30,   cacheRead: 0.50,  cacheWrite: 6.25 },
+  //    row. Priced at the standard short-context meter (≤272K input). The
+  //    >272K long-context meter (2× input, 1.5× output) is not modelled:
+  //    aggregated rows carry no per-request prompt sizes, matching the `[1m]`
+  //    handling in `resolvePricing` below.
+  //
+  //    Sol carries the promotional $4/$20 the pricing page shows today, not
+  //    the $5/$30 sticker. That reads like the DeepSeek row's inverse, but
+  //    the two cases differ in what is knowable: DeepSeek's discount keys off
+  //    request time-of-day, which a daily aggregate row cannot recover, so
+  //    the peak rate is the only defensible read. Sol's promo keys off the
+  //    date, which every row carries, and it covers every row we have — so
+  //    $5/$30 would over-state today's real spend by 25-50%, not hedge it.
+  //    The promo runs at least through 2026-11-21; revisit then.
+  "gpt-5.6-sol":        { input: 4,    output: 20,   cacheRead: 0.40,  cacheWrite: 5 },
   "gpt-5.6-terra":      { input: 2,    output: 12,   cacheRead: 0.20,  cacheWrite: 2.50 },
   "gpt-5.6-luna":       { input: 0.20, output: 1.20, cacheRead: 0.02,  cacheWrite: 0.25 },
   "gpt-5.5":            { input: 5,    output: 30,   cacheRead: 0.50,  cacheWrite: 5 },
   "gpt-5.4-mini":       { input: 0.75, output: 4.50, cacheRead: 0.075, cacheWrite: 0.75 },
   "gpt-5.4":            { input: 2.50, output: 15,   cacheRead: 0.25,  cacheWrite: 2.50 },
   "gpt-5.3-codex":      { input: 1.75, output: 14,   cacheRead: 0.175, cacheWrite: 1.75 },
+  //    gpt-5.2 publishes no cache-write meter (the column reads "-"), so it
+  //    falls back to input, the same convention the rest of the OpenAI block
+  //    uses for SKUs without a published cache-write rate.
+  "gpt-5.2":            { input: 1.75, output: 14,   cacheRead: 0.175, cacheWrite: 1.75 },
 
   // -- OpenAI: GPT-5 family (Codex CLI's default is gpt-5-codex; -codex/-mini/-nano variants priced per OpenAI tiers) --
   "gpt-5-codex":        { input: 1.25, output: 10,   cacheRead: 0.125, cacheWrite: 1.25 },
@@ -248,6 +257,24 @@ const MODEL_PRICING: Record<
   "glm-4.5-flash":      { input: 0,    output: 0,    cacheRead: 0,      cacheWrite: 0 },
 };
 
+// Claude Code's short model aliases. Runtimes report whatever string the
+// user selected, and `sonnet` / `opus` / `haiku` (plus their `[1m]` context
+// variants, which tolerance 4 folds down to the bare alias) are valid
+// selections — so without this table a plain Claude Code runtime lands in
+// the unpriced diagnostic even though the SKU behind the alias is priced
+// above. Mapped to the SKU instead of getting their own MODEL_PRICING rows
+// so a price stays one row: the aliases float forward each generation, and
+// when they move only this table changes.
+//
+// Targets as of 2026-08, per Anthropic's model overview
+// (https://platform.claude.com/docs/en/about-claude/models/overview).
+// Revisit whenever a new Opus / Sonnet / Haiku generation ships.
+const CLAUDE_ALIASES: Record<string, string> = {
+  opus: "claude-opus-5",
+  sonnet: "claude-sonnet-5",
+  haiku: "claude-haiku-4-5",
+};
+
 // Resolve a model string to its pricing tier. Exact match, with four
 // tolerances applied in order:
 //
@@ -268,6 +295,10 @@ const MODEL_PRICING: Record<
 //     usage rows don't carry per-request prompt sizes, so we price the
 //     bracketed variant at the standard tier. Slight under-estimate
 //     beats the previous behaviour of dropping the row entirely.
+//  5. Claude Code short aliases (`sonnet`, `opus[1m]`, `haiku`) — resolved
+//     through CLAUDE_ALIASES to the SKU they currently point at. Applied
+//     after tolerances 1-4 so the bracketed and provider-prefixed spellings
+//     reach the same entry.
 //
 // Anything still unmapped falls back to the user-supplied custom pricing
 // store. No startsWith fallback: variants like `gpt-5.5-mini` must have
@@ -321,6 +352,10 @@ function canonicalCandidates(model: string): string[] {
   push(noProvider);
   push(dashed);
   push(noTag);
+  // Aliases are bare words, so the de-prefixed / de-tagged form is the only
+  // spelling that can match — one lookup covers `sonnet`, `sonnet[1m]` and
+  // `anthropic/sonnet` alike.
+  push(CLAUDE_ALIASES[noTag] ?? "");
   push(stripDate(raw));
   push(stripDate(noProvider));
   push(stripDate(dashed));
