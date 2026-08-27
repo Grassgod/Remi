@@ -1246,6 +1246,8 @@ export interface MultiremiTask {
   trigger_author_type?: string | null;
   triggerAuthorName?: string | null;
   trigger_author_name?: string | null;
+  triggerCommentAttachments?: unknown[];
+  trigger_comment_attachments?: unknown[];
   newCommentCount?: number | null;
   new_comment_count?: number | null;
   newCommentsSince?: string | null;
@@ -1569,6 +1571,8 @@ export interface MultiremiIssue {
   contextRefs: unknown[];
   metadata: Record<string, string | number | boolean>;
   labels: MultiremiLabel[];
+  /** Included on daemon task claims so prompts can make issue attachments directly discoverable. */
+  attachments?: MultiremiAttachment[];
   createdBy: string | null;
   completedAt: string | null;
   archivedAt: string | null;

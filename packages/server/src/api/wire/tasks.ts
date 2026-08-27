@@ -39,6 +39,7 @@ import { readWorkspacePromptSettings } from "../../prompts/workspace-settings.js
 import { resolveAtlasRepositoryWikiAutopilot } from "../../repository-wiki/atlas.js";
 import { daemonClaimAgentResponse } from "./agents.js";
 import { issueCompatibilityResponse } from "./issues.js";
+import { attachmentCompatibilityResponse } from "./attachments.js";
 import {
   projectCompatibilityResponse,
   projectDocCompatibilityResponse,
@@ -308,7 +309,16 @@ export function daemonTaskClaimResponse(
   if (task.branchName) response.branch_name = task.branchName;
   if (task.workDir) response.prior_work_dir = task.workDir;
   if (task.agent) response.agent = daemonClaimAgentResponse(task.agent);
-  if (task.issue) response.issue = issueCompatibilityResponse(task.issue, { includeLabels: true });
+  if (task.issue) {
+    response.issue = {
+      ...issueCompatibilityResponse(task.issue, { includeLabels: true }),
+      attachments: store.listAttachmentsForIssue(task.issue.id).map(attachmentCompatibilityResponse),
+    };
+  }
+  if (task.triggerCommentId && store.getIssueComment(task.triggerCommentId)) {
+    response.trigger_comment_attachments = store.listAttachmentsForComment(task.triggerCommentId)
+      .map(attachmentCompatibilityResponse);
+  }
   if (task.issueSessionId) {
     const issueSession = store.getIssueSession(task.issueSessionId);
     if (issueSession) {

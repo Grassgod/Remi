@@ -6,8 +6,8 @@ table against that manifest.
 
 ## Canonical command tree
 
-The canonical tree has 32 top-level resources. Attachment is the 33rd API domain
-and is exposed below Issue and Comment rather than as another top-level resource.
+The canonical tree includes a focused top-level Attachment download command;
+Issue and Comment keep their scoped attachment listing and management commands.
 
 ```text
 remi context
@@ -26,6 +26,7 @@ remi comment
 remi session
 remi share
 remi label
+remi attachment download
 
 remi chat
 remi task
@@ -112,7 +113,7 @@ remove any alias.
 | `remi issue archive status` | `remi session archive status` | One-release compatibility alias |
 | `remi issue archive verify` | `remi session archive verify` | One-release compatibility alias |
 | `remi issue archive retry` | `remi session archive retry` | One-release compatibility alias |
-| `remi attachment download` | `remi issue attachment download` | One-release compatibility alias |
+| `remi issue attachment download` | `remi attachment download` | One-release compatibility alias |
 | `remi task messages` | `remi task message list` | One-release compatibility alias |
 | `remi multiremi agent list` | `remi agent list` | One-release compatibility alias |
 | `remi multiremi agent get` | `remi agent get` | One-release compatibility alias |

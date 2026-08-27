@@ -270,6 +270,98 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(normalized?.authToken).toStartWith("mat_");
   });
 
+  it("carries issue and trigger comment attachments into actionable prompts", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_attachment_prompt",
+      name: "Attachment prompt runtime",
+      provider: "codex",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({
+      id: "agt_attachment_prompt",
+      name: "Attachment prompt agent",
+      provider: "codex",
+      runtimeId: runtime.id,
+    });
+    store.createAttachment({
+      id: "att_issue_prompt",
+      filename: "issue.png",
+      url: "/api/attachments/att_issue_prompt/content",
+      contentType: "image/png",
+      sizeBytes: 123,
+    });
+    const issue = store.createIssue({
+      title: "Read the screenshots",
+      description: "![issue](/api/attachments/att_issue_prompt/content)",
+    });
+    const commentAttachment = store.createAttachment({
+      id: "att_comment_prompt",
+      filename: "comment.jpg",
+      url: "/api/attachments/att_comment_prompt/content",
+      contentType: "image/jpeg",
+      sizeBytes: 456,
+    });
+    const trigger = store.createIssueComment(issue.id, {
+      body: "The second screenshot has the failing state.",
+      attachmentIds: [commentAttachment.id],
+    });
+    const task = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      triggerCommentId: trigger.id,
+      prompt: "Inspect both screenshots",
+    });
+    const app = createMultiremiApp({ store });
+    mockFetch((url, init) => {
+      const parsed = new URL(url);
+      return app.request(`${parsed.pathname}${parsed.search}`, init);
+    });
+
+    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+
+    expect(claimed?.id).toBe(task.id);
+    expect(claimed?.issue?.attachments).toEqual([
+      expect.objectContaining({
+        id: "att_issue_prompt",
+        filename: "issue.png",
+        contentType: "image/png",
+        sizeBytes: 123,
+      }),
+    ]);
+    expect(claimed?.triggerCommentAttachments).toEqual([
+      expect.objectContaining({
+        id: "att_comment_prompt",
+        filename: "comment.jpg",
+        contentType: "image/jpeg",
+        sizeBytes: 456,
+      }),
+    ]);
+
+    const prompt = buildTaskPrompt({
+      ...claimed!,
+      issue: {
+        ...claimed!.issue!,
+        description: `${claimed!.issue!.description}\n![fallback](/api/attachments/att_unlinked_fallback/content)`,
+      },
+      chatMessage: "A chat attachment is also available.",
+      chatBootstrapTranscript: "[user]\nA chat attachment is also available.",
+      chatMessageAttachments: [{
+        id: "att_chat_prompt",
+        filename: "chat.txt",
+        content_type: "text/plain",
+        size_bytes: 789,
+      }],
+    } as any);
+    expect(prompt).toContain("id: att_issue_prompt; filename: issue.png; content-type: image/png; size: 123 bytes");
+    expect(prompt).toContain("remi attachment download att_issue_prompt --output-dir <dir>");
+    expect(prompt).toContain("id: att_comment_prompt; filename: comment.jpg; content-type: image/jpeg; size: 456 bytes");
+    expect(prompt).toContain("remi attachment download att_comment_prompt --output-dir <dir>");
+    expect(prompt).toContain("id: att_unlinked_fallback; filename: unavailable; content-type: unavailable; size: unavailable");
+    expect(prompt).toContain("remi attachment download att_unlinked_fallback --output-dir <dir>");
+    expect(prompt).toContain("id: att_chat_prompt; filename: chat.txt; content-type: text/plain; size: 789 bytes");
+  });
+
   it("uses the latest Project Instructions when a queued task is first claimed", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({

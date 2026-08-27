@@ -369,9 +369,7 @@ function issueAttachmentSpecs(): CommandSpec[] {
     nativeSpec("issue.attachment.get", ["issue", "attachment", "get"], "Get attachment metadata", "read", HUMAN_TASK, [refPositional("attachment")], [], async (invocation) => {
       await getAndRender(invocation, `/api/attachments/${encodePath(positional(invocation, 0, "attachment"))}`);
     }),
-    legacySpec("issue.attachment.download", ["issue", "attachment", "download"], "Download an attachment", "read", HUMAN_TASK, [refPositional("attachment")], [
-      { name: "output-dir", type: "string", valueName: "dir", description: "Destination directory" },
-    ], ["attachment", "download"], [compatAlias(["attachment", "download"], "remi issue attachment download")]),
+    attachmentDownloadSpec(),
     legacySpec("issue.attachment.upload", ["issue", "attachment", "upload"], "Upload issue attachments", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "attachment", type: "string", valueName: "path", repeatable: true, description: "Attachment file" },
     ], [], [], uploadIssueAttachments),
@@ -380,6 +378,42 @@ function issueAttachmentSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "DELETE", `/api/attachments/${encodePath(positional(invocation, 0, "attachment"))}`);
     }),
   ];
+}
+
+function attachmentDownloadSpec(): CommandSpec {
+  const options = commandOptions(PAGE_OPTIONS, [{
+    name: "output-dir",
+    type: "string",
+    valueName: "dir",
+    description: "Destination directory",
+    conflictsWith: ["output"],
+  }])
+    .filter((option) => option.name !== "json")
+    .map((option) => option.name === "output"
+      ? {
+          name: "output",
+          type: "string" as const,
+          valueName: "file",
+          description: "Exact destination file",
+          conflictsWith: ["output-dir"],
+        }
+      : option);
+  return {
+    id: "issue.attachment.download",
+    path: ["attachment", "download"],
+    description: "Download an attachment",
+    capability: "issue.attachment.download",
+    auth: HUMAN_TASK,
+    mutation: "read",
+    outputs: ["table", "json", "jsonl"],
+    positionals: [refPositional("attachment")],
+    options,
+    aliases: [compatAlias(["issue", "attachment", "download"], "remi attachment download")],
+    run: async (invocation) => {
+      const { runMultiremi } = await import("../multiremi.js");
+      await runMultiremi(["attachment", "download", ...invocation.rawArgs], { programName: "remi multiremi" });
+    },
+  };
 }
 
 function shareCommandSpecs(): CommandSpec[] {

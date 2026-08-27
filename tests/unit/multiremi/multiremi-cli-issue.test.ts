@@ -369,7 +369,10 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
         "--attachment",
         commentAttachmentB,
       ], { programName: "multiremi" });
-      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output-dir", tmp], { programName: "multiremi" });
+      const missingOutputDir = join(tmp, "missing", "downloads");
+      const exactOutput = join(tmp, "renamed", "custom-name.bin");
+      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output-dir", missingOutputDir], { programName: "multiremi" });
+      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output", exactOutput], { programName: "multiremi" });
 
       expect(uploads.map((upload) => [upload.issueId, upload.filename, upload.text])).toEqual([
         ["iss_created", "issue-note.txt", "issue file"],
@@ -387,8 +390,9 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       expect(errors).toContain(`Uploaded ${commentAttachmentA}`);
       expect(errors).toContain(`Uploaded ${commentAttachmentB}`);
       expect(errors.some((line) => line.includes("URLs are not supported"))).toBe(true);
-      expect(readFileSync(join(tmp, "download.txt"), "utf8")).toBe("downloaded!");
-      expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({ id: "att_1", filename: "download.txt", path: join(tmp, "download.txt") });
+      expect(readFileSync(join(missingOutputDir, "download.txt"), "utf8")).toBe("downloaded!");
+      expect(readFileSync(exactOutput, "utf8")).toBe("downloaded!");
+      expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({ id: "att_1", filename: "custom-name.bin", path: exactOutput });
     } finally {
       console.log = originalLog;
       console.error = originalError;

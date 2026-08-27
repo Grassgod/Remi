@@ -107,6 +107,13 @@ describe("remi CLI dispatcher", () => {
       .toMatchObject({ hidden: true, id: "legacy.multiremi" });
     expect(inventory.find((entry) => entry.id === "memory.search")?.aliases)
       .toContainEqual(expect.objectContaining({ path: ["memory", "recall"], deprecatedSince: "0.3.0" }));
+    expect(inventory.find((entry) => entry.id === "issue.attachment.download")).toMatchObject({
+      path: ["attachment", "download"],
+      aliases: [expect.objectContaining({
+        path: ["issue", "attachment", "download"],
+        replacement: "remi attachment download",
+      })],
+    });
   });
 
   it("routes `remi project` into the native resource group", async () => {
