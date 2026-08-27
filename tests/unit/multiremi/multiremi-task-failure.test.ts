@@ -59,7 +59,12 @@ describe("Multiremi task failure classification", () => {
     expect(classifyPoisonedOutput("\n\nCompacting completed.")).toBe(TaskFailureReason.AgentFallbackMessage);
     expect(classifyPoisonedOutput("Compacting...\n\nCompacting failed: context window unavailable"))
       .toBe(TaskFailureReason.AgentFallbackMessage);
+    // codex-acp's `thread/compacted` banner — same failure mode, different bridge.
+    expect(classifyPoisonedOutput("*Context compacted to fit the model's context window.*\n\n"))
+      .toBe(TaskFailureReason.AgentFallbackMessage);
     expect(classifyPoisonedOutput("The final answer mentions Compacting... as diagnostic context.")).toBeNull();
+    expect(classifyPoisonedOutput("Note: *Context compacted to fit the model's context window.* happened mid-run, but the fix landed."))
+      .toBeNull();
     expect(classifyPoisonedOutput("Fixed the bug and added tests.")).toBeNull();
     expect(classifyPoisonedOutput("Fixed it. ".repeat(60) + "I reached the iteration limit earlier.")).toBeNull();
 
