@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent as rtlFireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
+import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 
@@ -62,11 +64,13 @@ vi.mock("../../common/task-transcript", async () => {
   const buildTimeline = vi.fn().mockReturnValue([]);
   const coalesceTimelineItems = vi.fn((items) => items);
   const appendTimelineItem = vi.fn((items, item) => [...items, item]);
+  const countToolCalls = vi.fn((items) => items.filter((item: { type: string }) => item.type === "tool_use").length);
   return {
     TranscriptButton: () => <button data-testid="transcript-button">transcript</button>,
     appendTimelineItem,
     buildTimeline,
     coalesceTimelineItems,
+    countToolCalls,
   };
 });
 
@@ -133,11 +137,25 @@ function fireEvent(event: string, payload: unknown) {
 }
 
 function renderCard(issueId = "issue-1", issueSessionId?: string) {
-  return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <AgentLiveCard issueId={issueId} issueSessionId={issueSessionId} />
-    </I18nProvider>,
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={qc}>
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <AgentLiveCard issueId={issueId} issueSessionId={issueSessionId} />
+      </I18nProvider>
+    </QueryClientProvider>,
   );
+  return { ...view, qc };
+}
+
+function taskMessage(seq: number): TaskMessagePayload {
+  return {
+    task_id: "task-1",
+    issue_id: "issue-1",
+    seq,
+    type: "tool_use",
+    tool: "Bash",
+  };
 }
 
 beforeEach(() => {
@@ -154,6 +172,30 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("AgentLiveCard reconcile race", () => {
+  it("publishes hydrated history plus in-flight WS frames to the shared cache", async () => {
+    const hydration = deferred<TaskMessagePayload[]>();
+    mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [makeTask("task-1")] });
+    mockApi.listTaskMessages.mockReturnValue(hydration.promise);
+
+    const { qc } = renderCard();
+    await waitFor(() => expect(mockApi.listTaskMessages).toHaveBeenCalledWith("task-1"));
+
+    act(() => {
+      fireEvent("task:message", taskMessage(3));
+    });
+    await act(async () => {
+      hydration.resolve([taskMessage(1), taskMessage(2)]);
+    });
+
+    await waitFor(() => {
+      expect(qc.getQueryData<TaskMessagePayload[]>(["task-messages", "task-1"])?.map((item) => item.seq)).toEqual([
+        1,
+        2,
+        3,
+      ]);
+    });
+  });
+
   it("does not re-add a banner when an older active-task response resolves after a newer empty one", async () => {
     const mountFetch = deferred<{ tasks: AgentTask[] }>();
     const queuedFetch = deferred<{ tasks: AgentTask[] }>();

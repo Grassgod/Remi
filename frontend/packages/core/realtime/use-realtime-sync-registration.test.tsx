@@ -355,6 +355,7 @@ describe("useRealtimeSync — registration / teardown parity", () => {
   it("flushes buffered task:message frames on unmount", () => {
     vi.useFakeTimers();
     const mock = createRecordingWs();
+    qc.setQueryData(["task-messages", "task-1"], []);
     const { unmount } = renderHook(() => useRealtimeSync(mock.ws, stores), {
       wrapper: createWrapper(qc),
     });
@@ -366,7 +367,7 @@ describe("useRealtimeSync — registration / teardown parity", () => {
       content: "hello",
     });
     // Still buffered — the 80ms coalescing window has not elapsed.
-    expect(qc.getQueryData(["task-messages", "task-1"])).toBeUndefined();
+    expect(qc.getQueryData(["task-messages", "task-1"])).toEqual([]);
 
     unmount();
 

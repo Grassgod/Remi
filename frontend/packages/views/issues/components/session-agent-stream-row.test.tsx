@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { AgentTask } from "@multiremi/core/types/agent";
@@ -55,6 +55,24 @@ function message(over: Partial<TaskMessagePayload>): TaskMessagePayload {
   return { task_id: "tsk_abc123", issue_id: "issue-1", seq: 1, type: "tool_use", ...over } as TaskMessagePayload;
 }
 
+function productionMessages(): TaskMessagePayload[] {
+  const types: Array<[TaskMessagePayload["type"], number]> = [
+    ["tool_use", 61],
+    ["tool_result", 60],
+    ["usage", 137],
+    ["plan", 11],
+    ["text", 19],
+  ];
+  let seq = 0;
+  return types.flatMap(([type, count]) =>
+    Array.from({ length: count }, () => message({
+      seq: ++seq,
+      type,
+      tool: type === "tool_use" ? "Bash" : undefined,
+    })),
+  );
+}
+
 function renderRow() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const view = render(
@@ -73,6 +91,19 @@ beforeEach(() => {
 });
 
 describe("session agent stream row", () => {
+  it("fetches the full 288-message history and shows all 61 tool calls", async () => {
+    listTasksByIssue.mockResolvedValue([task()]);
+    listTaskMessages.mockResolvedValue(productionMessages());
+
+    renderRow();
+
+    const row = await screen.findByText("Agent a1 is working");
+    await waitFor(() => expect(listTaskMessages).toHaveBeenCalledWith("tsk_abc123"));
+    fireEvent.click(row.closest("button")!);
+
+    expect(await screen.findByText("61 tool calls")).toBeInTheDocument();
+  });
+
   it("announces the working agent with its current step", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
     listTaskMessages.mockResolvedValue([

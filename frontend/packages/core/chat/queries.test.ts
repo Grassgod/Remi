@@ -1,12 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TaskMessagePayload } from "../types";
+
+const listTaskMessages = vi.hoisted(() => vi.fn());
+
+vi.mock("../api", () => ({
+  api: { listTaskMessages },
+}));
 
 import {
   CHAT_PENDING_REFETCH_INTERVAL_MS,
   isTaskMessageTaskId,
   pendingChatTaskRefetchInterval,
   pendingChatTasksRefetchInterval,
+  chatKeys,
   taskMessagesOptions,
 } from "./queries";
+
+function message(seq: number, content: string): TaskMessagePayload {
+  return {
+    task_id: "tsk_yp54h63yc7wx",
+    issue_id: "issue-1",
+    seq,
+    type: "text",
+    content,
+  };
+}
+
+beforeEach(() => {
+  listTaskMessages.mockReset();
+});
 
 describe("taskMessagesOptions", () => {
   it("fetches task messages for persisted UUID task ids", () => {
@@ -28,6 +51,32 @@ describe("taskMessagesOptions", () => {
 
     expect(isTaskMessageTaskId(taskId)).toBe(true);
     expect(taskMessagesOptions(taskId).enabled).toBe(true);
+  });
+
+  it("merges fetched history with WS frames already in the cache", async () => {
+    const taskId = "tsk_yp54h63yc7wx";
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const key = chatKeys.taskMessages(taskId);
+    qc.setQueryData<TaskMessagePayload[]>(key, [
+      message(2, "cached two"),
+      message(3, "cached three"),
+    ], { updatedAt: 1 });
+    listTaskMessages.mockResolvedValue([
+      message(1, "fetched one"),
+      message(3, "stale fetched three"),
+    ]);
+
+    const result = await qc.fetchQuery({
+      ...taskMessagesOptions(taskId),
+      staleTime: 0,
+    });
+
+    expect(listTaskMessages).toHaveBeenCalledWith(taskId);
+    expect(result.map((item) => [item.seq, item.content])).toEqual([
+      [1, "fetched one"],
+      [2, "cached two"],
+      [3, "cached three"],
+    ]);
   });
 });
 
