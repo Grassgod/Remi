@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -19,7 +20,7 @@ function sha256(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function fixture() {
+async function fixture(daemonDirectBaseUrl?: string | null, maxBytes = 1024 * 1024) {
   const store = createStore();
   store.ensureLocalWorkspace();
   const daemonId = "dmn_archive";
@@ -48,13 +49,14 @@ async function fixture() {
   archiveRoot = mkdtempSync(join(tmpdir(), "multiremi-session-archives-"));
   const sessionArchives = new SessionArchiveService(store, {
     root: archiveRoot,
-    maxBytes: 1024 * 1024,
+    maxBytes,
     minFreeBytes: 0,
   });
   const app = createMultiremiApp({
     store,
     authToken: "root-secret",
     sessionArchives,
+    ...(daemonDirectBaseUrl === undefined ? {} : { daemonDirectBaseUrl }),
   });
   const daemonHeaders = {
     Authorization: `Bearer ${token.token}`,
@@ -127,6 +129,81 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<v
 }
 
 describe("Multiremi session archives", () => {
+  it("advertises a configured direct API origin and rejects malformed origins", async () => {
+    const { app, daemonHeaders, base } = await fixture("https://api-direct.example:7443");
+    const initialized = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({
+        source_revision: "direct-origin-v1",
+        sha256: sha256(Buffer.from("direct")),
+        size_bytes: 6,
+      }),
+    });
+
+    expect(initialized.status).toBe(201);
+    expect((await initialized.json() as any).upload_url).toStartWith(
+      `https://api-direct.example:7443${base}/`,
+    );
+
+    await expect(fixture("https://api-direct.example/prefixed"))
+      .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
+    await expect(fixture("file:///tmp/archive"))
+      .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
+  });
+
+  it("streams a 12 MiB daemon upload directly into the API and completes SHA-256 verification", async () => {
+    const { store, app, issue, runtime, token } = await fixture(null, 64 * 1024 * 1024);
+    const archivePath = join(archiveRoot!, "daemon-source.tar.gz");
+    const bytes = Buffer.alloc(12 * 1024 * 1024 + 29, 0x41);
+    const digest = sha256(bytes);
+    writeFileSync(archivePath, bytes);
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (request) => {
+        const response = await app.fetch(request);
+        if (request.method !== "HEAD") return response;
+        const headers = new Headers(response.headers);
+        headers.set("X-Remi-Archive-Direct", "1");
+        return new Response(null, { status: response.status, headers });
+      },
+    });
+    try {
+      const origin = `http://127.0.0.1:${server.port}`;
+      const client = new MultiremiDaemonClient(origin, token.token, {
+        sessionArchiveUploadBaseUrl: origin,
+      });
+      const initialized = await client.initIssueSessionArchive(runtime.id, issue.id, {
+        sourceRevision: "api-stream-v1",
+        sha256: digest,
+        sizeBytes: bytes.byteLength,
+        fileCount: 1,
+      });
+      const uploaded = await client.uploadIssueSessionArchive(
+        runtime.id,
+        issue.id,
+        initialized.archive.id,
+        archivePath,
+      );
+      const completed = await client.completeIssueSessionArchive(
+        runtime.id,
+        issue.id,
+        initialized.archive.id,
+      );
+
+      expect(uploaded).toMatchObject({ status: "uploading", size_bytes: bytes.byteLength });
+      expect(completed).toMatchObject({ status: "ready", sha256: digest, size_bytes: bytes.byteLength });
+      expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({
+        status: "ready",
+        sha256: digest,
+        uploadedSizeBytes: bytes.byteLength,
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("reports pre-init preparation failures to the control plane and retries without forging ready", async () => {
     const { store, app, issue, daemonHeaders, base } = await fixture();
     const body = JSON.stringify({
@@ -266,6 +343,15 @@ describe("Multiremi session archives", () => {
     });
     expect(initialized.upload_attempt).toBe(1);
     expect(initialized.upload_url).toEndWith(`/${initialized.archive.id}/content?attempt=1`);
+    expect(initialized.upload_url).toStartWith("/");
+
+    const preflight = await app.request(initialized.upload_url, {
+      method: "HEAD",
+      headers: { Authorization: daemonHeaders.Authorization },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("X-Remi-Archive-Direct")).toBeNull();
+    expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({ status: "pending", attemptCount: 1 });
 
     const idempotent = await app.request(`${base}/init`, {
       method: "POST",
@@ -355,6 +441,53 @@ describe("Multiremi session archives", () => {
       gc_ready: false,
     });
     expect(store.getSessionArchive(ready.id)?.metadata).toEqual({ providers: ["claude", "codex"] });
+  });
+
+  it("persists an upload failure against only the current claimed attempt", async () => {
+    const { store, app, daemonHeaders, base } = await fixture();
+    const init = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({
+        source_revision: "proxy-limit-v1",
+        sha256: sha256(Buffer.from("proxy-limit")),
+        size_bytes: 11,
+      }),
+    });
+    const initialized = await init.json() as any;
+    const failureUrl = `${base}/${initialized.archive.id}/failure?attempt=${initialized.upload_attempt}`;
+    const failed = await app.request(failureUrl, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({ error: "Direct archive upload is not configured" }),
+    });
+
+    expect(failed.status).toBe(200);
+    expect((await failed.json() as any).archive).toMatchObject({
+      status: "failed",
+      last_error: "Direct archive upload is not configured",
+    });
+    expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({
+      status: "failed",
+      lastError: "Direct archive upload is not configured",
+    });
+
+    const resumed = await app.request(`${base}/init`, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({
+        source_revision: "proxy-limit-v1",
+        sha256: sha256(Buffer.from("proxy-limit")),
+        size_bytes: 11,
+      }),
+    });
+    expect((await resumed.json() as any).upload_attempt).toBe(initialized.upload_attempt + 1);
+    const stale = await app.request(failureUrl, {
+      method: "POST",
+      headers: daemonHeaders,
+      body: JSON.stringify({ error: "stale failure" }),
+    });
+    expect(stale.status).toBe(409);
   });
 
   it("reclaims a crashed same-Runtime upload with a fenced attempt and removes its partial", async () => {

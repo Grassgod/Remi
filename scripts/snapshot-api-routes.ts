@@ -820,6 +820,8 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       return "agent";
     case "participantId":
       return refs.agentId;
+    case "archiveId":
+      return "sar_snapshot";
     case "requestId":
       if (pattern.includes("/human-requests/")) return refs.humanRequestId;
       if (pattern.includes("/commands/")) return refs.runtimeCommandRequestId;

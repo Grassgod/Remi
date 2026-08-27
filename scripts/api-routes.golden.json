@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 621,
+    "routeCount": 623,
     "routeCountByPrefix": {
       "native": 204,
-      "compat": 404,
+      "compat": 406,
       "root": 13
     },
-    "getRoutes": 268,
-    "getRoutesWithBody": 265,
+    "getRoutes": 269,
+    "getRoutesWithBody": 266,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 353,
+    "mutationRoutes": 354,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -168,6 +168,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
@@ -458,6 +459,7 @@
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
@@ -782,6 +784,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
@@ -11299,6 +11302,15 @@
         "runtime_id": "rt_snapshot",
         "revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
         "plugins": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "route": "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "path": "/api/daemon/runtimes/rt_snapshot/issues/iss_snapshot/session-archives/sar_snapshot/content",
+      "status": 405,
+      "body": {
+        "error": "method not allowed"
       }
     },
     {

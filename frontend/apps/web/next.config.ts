@@ -48,6 +48,9 @@ const nextConfig: NextConfig = {
         },
       ],
       afterFiles: [
+        // Keep this compatibility fallback for normal API traffic. The edge
+        // proxy must intercept Session Archive content PUTs and route them
+        // directly to the API; large binary bodies must not traverse Next.js.
         {
           source: "/api/:path*",
           destination: `${remoteApiUrl}/api/:path*`,
