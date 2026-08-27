@@ -1108,7 +1108,15 @@ export function resolveSetupConfig(
   if (deviceName && !next.daemon_id) {
     // Pin the machine's existing identity before the display name changes,
     // otherwise the daemon re-registers under a new id and orphans its old card.
-    next.daemon_id = resolveDeviceName({}, current, environment, fallbackHostname);
+    // MULTIREMI_DEVICE_NAME is dropped here: when the rename arrives through
+    // that env var, keeping it would resolve the "before" identity to the new
+    // name and defeat the pin.
+    next.daemon_id = resolveDeviceName(
+      {},
+      current,
+      { ...environment, MULTIREMI_DEVICE_NAME: undefined },
+      fallbackHostname,
+    );
   }
   if (deviceName) next.device_name = deviceName;
   if (maxConcurrency) {

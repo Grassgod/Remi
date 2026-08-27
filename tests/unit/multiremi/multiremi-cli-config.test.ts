@@ -96,6 +96,18 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
     expect(next.daemon_id).toBe("host-runner");
   });
 
+  test("pins the pre-rename identity when the device name arrives via environment", () => {
+    const next = resolveSetupConfig(
+      { server_url: "https://example.test", workspace_id: "ws_1" },
+      {},
+      { MULTIREMI_DEVICE_NAME: "New name", MULTIREMI_RUNTIME_NAME: undefined, USER: "runner" },
+      "host",
+    );
+
+    expect(next.device_name).toBe("New name");
+    expect(next.daemon_id).toBe("host-runner");
+  });
+
   test("keeps an explicit daemon id when adding a device name", () => {
     const next = resolveSetupConfig(
       {},
