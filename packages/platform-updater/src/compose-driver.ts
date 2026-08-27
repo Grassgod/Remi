@@ -79,7 +79,8 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
       if (drain) await drain.waitUntilDrained(report);
       await report({ status: "switching", previousRelease: previous, progress: { message: "Applying image digests" } });
       await this.mustCompose(["up", "-d", "--no-deps", "api", "web", "ssh-mesh-control-plane"]);
-      await report({ status: "verifying", previousRelease: previous, progress: { message: "Verifying services" } });
+      // Do not call the control API between switching containers and verifying
+      // them. A broken API image must not be able to block the local rollback.
       await this.verify();
       const release = toRelease(manifest);
       await this.writeRelease(release);
@@ -93,10 +94,12 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
         throw error;
       }
       if (previous?.apiImage && previous.webImage) {
-        await report({ status: "rolling_back", previousRelease: previous, error: errorMessage(error) });
+        // Restore the host first. Reporting through the newly switched API can
+        // fail for the same reason that triggered this rollback.
         await this.writeImageEnv(originalEnv, previous.apiImage, previous.webImage);
         await this.mustCompose(["up", "-d", "--no-deps", "api", "web", "ssh-mesh-control-plane"]);
         await this.verify();
+        await report({ status: "rolling_back", previousRelease: previous, error: errorMessage(error) });
       }
       throw error;
     }

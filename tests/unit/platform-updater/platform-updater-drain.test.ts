@@ -3,7 +3,7 @@
 // file is restored, and the drain is released; the lease is re-acquired if
 // lost mid-wait; on the happy path the switch only runs after ready.
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MultiremiPlatformOperation, ReportPlatformOperationInput } from "@multiremi/contracts";
@@ -25,6 +25,8 @@ afterEach(() => {
 
 const DIGEST = `ghcr.io/grassgod/remi-api@sha256:${"a".repeat(64)}`;
 const WEB_DIGEST = `ghcr.io/grassgod/remi-web@sha256:${"b".repeat(64)}`;
+const OLD_DIGEST = `ghcr.io/grassgod/remi-api@sha256:${"c".repeat(64)}`;
+const OLD_WEB_DIGEST = `ghcr.io/grassgod/remi-web@sha256:${"d".repeat(64)}`;
 
 function operation(kind: "update" | "rollback" = "update"): MultiremiPlatformOperation {
   return {
@@ -155,28 +157,49 @@ describe("PlatformDrainCoordinator", () => {
 });
 
 describe("DockerComposeDriver drain gating", () => {
-  function driverBed(): { driver: DockerComposeDriver; commands: string[][]; envFile: string; stateDir: string } {
+  function driverBed(options: { failFirstSwitch?: boolean } = {}): {
+    driver: DockerComposeDriver;
+    commands: string[][];
+    envFile: string;
+    stateDir: string;
+  } {
     const root = mkdtempSync(join(tmpdir(), "compose-drain-"));
     tempDirs.push(root);
     const envFile = join(root, "platform.env");
-    writeFileSync(envFile, "REMI_API_IMAGE=old-api\nREMI_WEB_IMAGE=old-web\n");
+    writeFileSync(envFile, `REMI_API_IMAGE=${OLD_DIGEST}\nREMI_WEB_IMAGE=${OLD_WEB_DIGEST}\n`);
     const composeFile = join(root, "compose.yaml");
     writeFileSync(composeFile, "services: {}\n");
+    const stateDir = join(root, "state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "current-release.json"), JSON.stringify({
+      version: "1.2.2",
+      ref: "previous-ref",
+      publishedAt: new Date(0).toISOString(),
+      apiImage: OLD_DIGEST,
+      webImage: OLD_WEB_DIGEST,
+    }));
     const commands: string[][] = [];
+    let switches = 0;
     const runner: CommandRunner = {
       async run(command, args) {
         commands.push([command, ...args]);
+        if (args.includes("up")) {
+          switches += 1;
+          if (options.failFirstSwitch && switches === 1) {
+            return { exitCode: 1, stdout: "", stderr: "simulated switch failure" };
+          }
+        }
         return { exitCode: 0, stdout: "", stderr: "" };
       },
     };
     const driver = new DockerComposeDriver({
       composeFile,
       envFile,
-      stateDir: join(root, "state"),
+      stateDir,
       apiHealthUrl: "http://127.0.0.1:1/readyz",
       webHealthUrl: "http://127.0.0.1:1/login",
     }, runner);
-    return { driver, commands, envFile, stateDir: join(root, "state") };
+    return { driver, commands, envFile, stateDir };
   }
 
   it("drain timeout aborts before the switch: pull ran, up never did, env restored, no rollback recreate", async () => {
@@ -236,6 +259,28 @@ describe("DockerComposeDriver drain gating", () => {
       const upIndex = joined.findIndex((line) => line.includes("up -d"));
       expect(pullIndex).toBeGreaterThanOrEqual(0);
       expect(upIndex).toBeGreaterThan(pullIndex);
+    } finally {
+      health.stop(true);
+    }
+  });
+
+  it("restores the previous images before reporting a failed switch", async () => {
+    const { driver, commands, envFile } = driverBed({ failFirstSwitch: true });
+    const originalEnv = readFileSync(envFile, "utf8");
+    const health = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") });
+    const reports: ReportPlatformOperationInput[] = [];
+    try {
+      const bed = driver as unknown as { config: { apiHealthUrl: string; webHealthUrl: string } };
+      bed.config.apiHealthUrl = `http://127.0.0.1:${health.port}/readyz`;
+      bed.config.webHealthUrl = `http://127.0.0.1:${health.port}/login`;
+      await expect(driver.execute(operation(), async (input) => {
+        if (input.status === "rolling_back") {
+          expect(commands.filter((args) => args.includes("up"))).toHaveLength(2);
+          expect(readFileSync(envFile, "utf8")).toBe(originalEnv);
+        }
+        reports.push(input);
+      })).rejects.toThrow("simulated switch failure");
+      expect(reports.map((report) => report.status)).toEqual(["pulling", "switching", "rolling_back"]);
     } finally {
       health.stop(true);
     }

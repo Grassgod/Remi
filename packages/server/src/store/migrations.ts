@@ -3132,14 +3132,11 @@ function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
              ELSE last_error
            END,
            next_retry_at = COALESCE(next_retry_at, ?),
-           retry_exhausted_at = CASE
-             WHEN ? IS NOT NULL THEN COALESCE(retry_exhausted_at, ?)
-             ELSE retry_exhausted_at
-           END,
+           retry_exhausted_at = COALESCE(retry_exhausted_at, ?),
            updated_at = CASE WHEN status = 'uploading' THEN ? ELSE updated_at END,
            completed_at = NULL
        WHERE id = ?`,
-      [nextRetryAt, exhausted ? nowIso : null, nowIso, nowIso, row.id],
+      [nextRetryAt, exhausted ? nowIso : null, nowIso, row.id],
     );
   }
 }
