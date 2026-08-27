@@ -54,7 +54,12 @@ import {
   repoCacheTimeoutOverrides,
   type MultiremiRepoSyncResult,
 } from "@multiremi/repo-cache.js";
-import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
+import {
+  classifyDaemonTaskFailure,
+  classifyPoisonedOutput,
+  TaskFailureReason,
+  type TaskFailureReasonValue,
+} from "./task-failure.js";
 import { executeRuntimeCommand } from "./runtime-command.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
@@ -410,6 +415,7 @@ interface RunSummary {
   sessionId: string | null;
   workDir: string | null;
   usage: TaskUsageEntry[];
+  failureReason?: TaskFailureReasonValue;
   /** True when the run loop already finalized the task server-side (progress,
    *  usage and completeTask) — done inside runAgent so a steer racing
    *  completion can still be injected while the provider session is open. */
@@ -2109,18 +2115,18 @@ export class MultiremiDaemon {
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
-        // The run loop only leaves a task unfinalized when the output was
-        // classified as poisoned (see runAgent's finalize path).
-        const poisonedReason = classifyPoisonedOutput(summary.output) ?? "agent_fallback_message";
+        const failureReason = summary.failureReason
+          ?? classifyPoisonedOutput(summary.output)
+          ?? TaskFailureReason.AgentFallbackMessage;
         if (summary.usage.length) this.enqueueTaskReport(task.id, "usage", { usage: summary.usage });
         this.enqueueTaskReport(task.id, "fail", {
           error: summary.output,
           sessionId: summary.sessionId,
           workDir: summary.workDir,
-          failureReason: poisonedReason,
+          failureReason,
         });
-        log.warn(`Failed task ${task.id} with poisoned output: ${poisonedReason}`);
-        this.finalizeTaskProgress(progressSummarizer, "failed", poisonedReason);
+        log.warn(`Failed task ${task.id} with unusable output: ${failureReason}`);
+        this.finalizeTaskProgress(progressSummarizer, "failed", failureReason);
         await this.awaitTaskReportDrain(task.id);
         return;
       }
@@ -2718,6 +2724,7 @@ export class MultiremiDaemon {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
     let output = "";
+    let sawCompaction = false;
     let seq = 1;
     const nextSeq = () => seq++;
     const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, nextSeq);
@@ -2816,6 +2823,7 @@ export class MultiremiDaemon {
             // tool_use + tool_result). Each gets its own seq so none collides.
             const emitted = toMessages(event).map((m) => ({ ...m, seq: nextSeq() }));
             for (const message of emitted) {
+              if (message.type === "compaction") sawCompaction = true;
               // Assistant text becomes the task result / issue activity body.
               if (message.type === "text" && message.content) output += message.content;
             }
@@ -2866,6 +2874,17 @@ export class MultiremiDaemon {
         // Finalize while the provider session is still open, so a steer that
         // races completion (completeTask steer barrier → 409 steer_pending)
         // can still be injected as another turn instead of failing the run.
+        if (!output.trim() && !(last?.text ?? "").trim() && sawCompaction) {
+          await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+          return {
+            output: "Agent returned empty output after compaction.",
+            sessionId: finalSessionId,
+            workDir,
+            usage,
+            completed: false,
+            failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
+          };
+        }
         const candidate = output.trim() || last?.text || "Task completed.";
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);

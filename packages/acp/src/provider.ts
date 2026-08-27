@@ -14,6 +14,7 @@ import type {
   ProviderEvent,
 } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
+import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { AcpClient } from "./client.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import type {
@@ -530,7 +531,8 @@ export class AcpProvider implements Provider {
         accumulateUsage(entry.promptState, update);
       }
       if (update.sessionUpdate === "agent_message_chunk") {
-        entry.promptState.text += extractChunkText((update as Record<string, any>).content);
+        const text = extractChunkText((update as Record<string, any>).content);
+        if (!isCompactionChunk(text)) entry.promptState.text += text;
       }
       if (update.sessionUpdate === "tool_call_update") {
         const status = (update as any).status;
