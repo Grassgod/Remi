@@ -4,25 +4,14 @@ export const promptsBlock: CapabilityBlock = {
   name: "prompts",
 
   persistent(ctx: PersistentContext) {
-    const { message, groupConfig, memory } = ctx;
-
-    const chatMeta = groupConfig?.injectChatContext
-      ? `\n[chat_context] chatId=${message.chatId} sender=${message.sender} senderOpenId=${message.metadata?.senderOpenId ?? "unknown"}`
-      : "";
-
-    const memoryContext = memory.readMemory().trim();
-
-    const promptParts = [
-      memoryContext ? `# Memory\n${memoryContext}` : "",
-      groupConfig?.systemPrompt ?? "",
-      chatMeta,
-    ].filter(Boolean);
-
-    const systemPrompt = promptParts.length ? promptParts.join("\n\n") : undefined;
-
+    const instructions = ctx.agent.instructions.trim();
+    const memoryCapability = [
+      "# Multiremi memory",
+      "Project memory is authoritative in Multiremi, not in ~/.remi/memory.",
+      "Use `remi memory search` before relying on remembered facts, `remi memory get` to read a hit, and `remi memory create|update` to persist durable knowledge.",
+    ].join("\n");
     return {
-      systemPrompt,
-      context: memoryContext || undefined,
+      systemPrompt: [instructions, memoryCapability].filter(Boolean).join("\n\n"),
     };
   },
 };

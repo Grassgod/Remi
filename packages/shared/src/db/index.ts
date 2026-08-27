@@ -1,5 +1,5 @@
 /**
- * SQLite singleton with sqlite-vec extension.
+ * SQLite singleton for Remi's local connector/session state.
  * DB file: ~/.remi/remi.db
  *
  * NOTE: macOS SQLite swap (setCustomSQLite) lives in ./sqlite-custom.ts
@@ -10,13 +10,6 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-
-let sqliteVec: { load: (db: Database) => void } | null = null;
-try {
-  sqliteVec = require("sqlite-vec");
-} catch {
-  // sqlite-vec native binary not available — vector features disabled
-}
 
 const DB_PATH = join(homedir(), ".remi", "remi.db");
 
@@ -35,7 +28,7 @@ export function setDbPath(path: string): void {
 }
 
 /**
- * Get or create the singleton SQLite database with sqlite-vec loaded.
+ * Get or create the singleton SQLite database.
  */
 export function getDb(): Database {
   if (_db) return _db;
@@ -47,30 +40,12 @@ export function getDb(): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
-  // Load sqlite-vec extension (graceful degradation if unsupported)
-  let vecEnabled = false;
-  if (sqliteVec) {
-    try {
-      sqliteVec.load(db);
-      vecEnabled = true;
-    } catch (err) {
-      console.warn(`[db] sqlite-vec load failed (vector search disabled): ${(err as Error).message}`);
-    }
-  }
-
   // Create tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS kv (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS embeddings (
-      id TEXT PRIMARY KEY,
-      content_hash TEXT NOT NULL,
-      metadata TEXT,
-      embedded_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS conversations (
@@ -123,23 +98,6 @@ export function getDb(): Database {
 
     CREATE INDEX IF NOT EXISTS idx_projects_init_status ON projects(init_status);
 
-    -- Group configs (per-group settings, replaces toml bots/allowed_groups/monitor_groups)
-    CREATE TABLE IF NOT EXISTS group_configs (
-      chat_id TEXT PRIMARY KEY,
-      project_id TEXT DEFAULT 'global',
-      name TEXT DEFAULT '',
-      monitor INTEGER DEFAULT 0,
-      reply_mode TEXT DEFAULT 'thread',
-      system_prompt TEXT DEFAULT '',
-      allowed_tools TEXT DEFAULT '[]',
-      add_dirs TEXT DEFAULT '[]',
-      provider TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_gc_project ON group_configs(project_id);
-
     -- Session registry (replaces sessions.json)
     CREATE TABLE IF NOT EXISTS sessions (
       session_key   TEXT PRIMARY KEY,
@@ -163,14 +121,17 @@ export function getDb(): Database {
     );
   `);
 
-  // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)
-  if (vecEnabled) {
-    const exists = db.query(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_items'"
-    ).get();
-    if (!exists) {
-      db.exec("CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[1024])");
-    }
+  // These local configuration/memory stores were replaced atomically by the
+  // Multiremi agent row and project memory. Remove their persisted schema too;
+  // merely stopping new writes would leave misleading live-looking tables.
+  db.exec("DROP TABLE IF EXISTS group_configs");
+  db.exec("DROP TABLE IF EXISTS embeddings");
+  db.run("DELETE FROM remi_config WHERE section IN ('provider', 'mcp')");
+  try {
+    db.exec("DROP TABLE IF EXISTS vec_items");
+  } catch {
+    // Old vec0 virtual tables may require the removed sqlite-vec module to run
+    // their DROP hook. The manual migration document covers that rare cleanup.
   }
 
   // ── Migrations: add new columns to conversations if missing ──
@@ -201,18 +162,6 @@ export function getDb(): Database {
     db.exec("ALTER TABLE conversations ADD COLUMN session_key TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_conv_session_key ON conversations(session_key)");
   }
-
-  // group_configs migrations — add new columns
-  try {
-    const gcCols = db.query("PRAGMA table_info(group_configs)").all() as Array<{ name: string }>;
-    const gcColNames = new Set(gcCols.map((c) => c.name));
-    if (gcColNames.size > 0) {
-      if (!gcColNames.has("allowed_mcps")) db.exec("ALTER TABLE group_configs ADD COLUMN allowed_mcps TEXT DEFAULT '[]'");
-      if (!gcColNames.has("cwd")) db.exec("ALTER TABLE group_configs ADD COLUMN cwd TEXT");
-      if (!gcColNames.has("launch_command")) db.exec("ALTER TABLE group_configs ADD COLUMN launch_command TEXT");
-      if (!gcColNames.has("inject_chat_context")) db.exec("ALTER TABLE group_configs ADD COLUMN inject_chat_context INTEGER DEFAULT 0");
-    }
-  } catch {}
 
   // Projects table migration — add deleted column
   try {

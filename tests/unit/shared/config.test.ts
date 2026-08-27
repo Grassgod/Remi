@@ -14,7 +14,7 @@ function makeTmpDir(): string {
 describe("Config", () => {
   let tmpDir: string;
   const savedEnv: Record<string, string | undefined> = {};
-  const envKeys = ["REMI_PROVIDER", "REMI_MODEL", "REMI_TIMEOUT"];
+  const envKeys = ["FEISHU_PORT", "REMI_LOG_LEVEL"];
 
   beforeEach(() => {
     tmpDir = makeTmpDir();
@@ -43,49 +43,44 @@ describe("Config", () => {
     const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const config = store.load();
-    expect(config.provider.default).toBe("claude");
-    expect(config.provider.claude.timeout).toBe(300);
-    expect(config.provider.claude.allowedTools).toEqual([]);
+    expect(config.feishu.port).toBe(9000);
+    expect(config.logLevel).toBe("INFO");
   });
 
   it("respects env overrides", () => {
-    process.env.REMI_PROVIDER = "codex";
-    process.env.REMI_TIMEOUT = "60";
+    process.env.FEISHU_PORT = "9010";
+    process.env.REMI_LOG_LEVEL = "DEBUG";
 
     const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const config = store.load();
-    expect(config.provider.default).toBe("codex");
-    expect(config.provider.claude.timeout).toBe(60);
+    expect(config.feishu.port).toBe(9010);
+    expect(config.logLevel).toBe("DEBUG");
   });
 
   it("round-trips through save/load", () => {
     const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const original = defaultRemiConfig();
-    original.provider.default = "codex";
-    original.provider.claude.timeout = 120;
     original.feishu.appId = "test-app";
     original.feishu.port = 8080;
 
     store.save(original);
     const loaded = store.load();
-    expect(loaded.provider.default).toBe("codex");
-    expect(loaded.provider.claude.timeout).toBe(120);
     expect(loaded.feishu.appId).toBe("test-app");
     expect(loaded.feishu.port).toBe(8080);
   });
 
   it("env overrides DB values", () => {
-    process.env.REMI_PROVIDER = "codex";
+    process.env.REMI_LOG_LEVEL = "DEBUG";
 
     const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const original = defaultRemiConfig();
-    original.provider.default = "claude";
+    original.logLevel = "WARN";
     store.save(original);
 
     const config = store.load();
-    expect(config.provider.default).toBe("codex");
+    expect(config.logLevel).toBe("DEBUG");
   });
 });

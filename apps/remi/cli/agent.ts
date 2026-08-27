@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@shared/logger.js";
+import type { MultiremiAgent } from "@multiremi/contracts/types.js";
 
 const log = createLogger("agent");
 
@@ -45,11 +46,11 @@ export interface FeishuChannelHandle {
  * `null` when Feishu is not configured. Remi is loaded via dynamic import so the
  * worker/server paths don't eagerly pull in the monolith.
  */
-export async function bootFeishuChannel(): Promise<FeishuChannelHandle | null> {
+export async function bootFeishuChannel(agent: MultiremiAgent): Promise<FeishuChannelHandle | null> {
   if (!feishuConfigured()) return null;
   const { Remi } = await import("@remi/core.js");
   const { loadConfig } = await import("@shared/config.js");
-  const remi = Remi.boot(loadConfig());
+  const remi = Remi.boot(loadConfig(), agent);
   log.info("Starting Feishu channel");
   return { start: remi.start(), stop: () => remi.stop() };
 }

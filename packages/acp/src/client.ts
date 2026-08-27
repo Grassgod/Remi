@@ -38,6 +38,8 @@ import type {
 export interface AcpClientOptions {
   /** Path to ACP agent executable (default: searches for claude-agent-acp binary). */
   executable?: string;
+  /** Arguments placed after the ACP executable. */
+  args?: string[];
   /** Agent flavor ("claude" | "codex"); gates claude-only client capabilities. */
   agentType?: string;
   /** Working directory for the agent process. */
@@ -129,7 +131,7 @@ export class AcpClient {
 
     this._log("spawning", executable, "cwd:", cwd);
 
-    this._process = Bun.spawn([executable], {
+    this._process = Bun.spawn([executable, ...(this._options.args ?? [])], {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",

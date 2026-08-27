@@ -87,6 +87,79 @@ describe("MultiremiDaemonClient HTTP failures", () => {
   });
 });
 
+describe("MultiremiDaemonClient bot agent wire", () => {
+  it("requests and normalizes the configured bot agent on register and heartbeat", async () => {
+    const requestBodies: Record<string, unknown>[] = [];
+    const wireAgent = {
+      id: "agt_bot",
+      name: "Bot",
+      description: "",
+      avatar_url: null,
+      provider: "codex",
+      workspace_id: "local",
+      owner_id: "owner",
+      visibility: "workspace",
+      runtime_id: null,
+      instructions: "Bot instructions",
+      skills: [],
+      max_concurrent_tasks: 7,
+      cwd: "/srv/bot",
+      executable: "/bin/codex-acp",
+      model: "gpt-bot",
+      allowed_tools: ["Read"],
+      custom_env: { BOT_MODE: "yes" },
+      custom_args: ["--bot"],
+      mcp_config: { mcpServers: {} },
+      thinking_level: "high",
+      issue_creation_requires_proposal: false,
+      supervisor: false,
+      archived_at: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (String(input).endsWith("/api/daemon/register")) {
+        return Response.json({
+          workspace_id: "local",
+          repos: [],
+          repos_version: "none",
+          runtimes: [{ id: "rt_bot", provider: "codex" }],
+          bot_agent: wireAgent,
+        });
+      }
+      return Response.json({ status: "ok", bot_agent: wireAgent });
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    const registered = await client.registerDaemonRuntime({
+      workspaceId: "local",
+      daemonId: "daemon-bot",
+      botAgentId: "agt_bot",
+      runtime: { name: "", type: "codex", version: "1.0.0" },
+    });
+    const heartbeat = await client.heartbeatRuntime("rt_bot", undefined, undefined, "agt_bot");
+
+    expect(requestBodies[0]).toMatchObject({ workspace_id: "local", bot_agent_id: "agt_bot" });
+    expect(requestBodies[1]).toMatchObject({ runtime_id: "rt_bot", bot_agent_id: "agt_bot" });
+    for (const resolved of [registered.botAgent, heartbeat.botAgent]) {
+      expect(resolved).toMatchObject({
+        id: "agt_bot",
+        workspaceId: "local",
+        provider: "codex",
+        maxConcurrentTasks: 7,
+        cwd: "/srv/bot",
+        executable: "/bin/codex-acp",
+        allowedTools: ["Read"],
+        customEnv: { BOT_MODE: "yes" },
+        customArgs: ["--bot"],
+        mcpConfig: { mcpServers: {} },
+        thinkingLevel: "high",
+      });
+    }
+  });
+});
+
 describe("MultiremiDaemonClient SSH Mesh wire", () => {
   it("advertises the protocol and reports machine state on heartbeat", async () => {
     let requestBody: Record<string, unknown> | null = null;

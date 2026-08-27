@@ -1,6 +1,9 @@
 # 记忆系统 v2 设计文档
 
-> **历史文档**:文中的 `src/memory/*` 现为 `packages/memory/src/*`。当前实现见 `CLAUDE.md` 的 Memory 段。
+> **已退役的历史设计（MUL-69 W2）**：本文描述的本地 `MemoryStore`、memory MCP server、
+> embeddings/vector store 与自动 prompt 注入已从运行时代码删除。当前权威实现是
+> Multiremi project memory，通过 `remi memory` 访问。现有 `~/.remi/memory/` 数据不会被
+> 自动读取或删除；手工迁移见 `docs/migrations/remi-memory-to-multiremi.md`。
 
 > 状态：草稿 v2.2（评审修订版）
 > 作者：Jack Ho + Claude

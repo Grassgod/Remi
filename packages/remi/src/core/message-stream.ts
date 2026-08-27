@@ -71,10 +71,8 @@ export async function handleMessageStream(
 
   try {
     const existingDisplayName = sessDb.getDisplayName(sessionKey);
-    const groupConfig = remi._getGroupConfig(msg.chatId);
     const sessRow = sessDb.getSession(sessionKey);
-    const providerName = groupConfig?.provider ?? sessRow?.provider ?? null;
-    const provider = remi._getProvider(providerName);
+    const provider = remi._getProvider();
     const setPermHandler = typeof (provider as any).setPermissionHandler === "function"
       ? (handler: any) => (provider as any).setPermissionHandler(handler, sessionKey)
       : undefined;
@@ -129,10 +127,9 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
   }
 
   const sessionKey = remi._resolveSessionKey(msg);
-  const groupConfig = remi._getGroupConfig(msg.chatId);
   const sessRow = sessDb.getSession(sessionKey);
   const existingSessionId = sessRow?.session_id || undefined;
-  _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}`);
+  _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}`);
 
   // AbortController for /esc — allows immediate readline interruption
   const abortController = new AbortController();
@@ -142,9 +139,7 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
   const runtimeCtx: import("@daemon/agent-runtime/types.js").PersistentContext = {
     kind: "persistent",
     message: msg,
-    config: remi.config,
-    groupConfig,
-    memory: remi.memory,
+    agent: remi.agent,
     sessionRow: sessRow,
     sessionKey,
   };
@@ -152,12 +147,7 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
 
   const cwd = sessionConfig.cwd;
 
-  // Provider selection: group config (DB) → session provider → default
-  const providerName =
-    groupConfig?.provider                              // group-level config (DB)
-    ?? sessRow?.provider                               // P2P user choice
-    ?? null;                                           // fall through to default
-  const provider = remi._getProvider(providerName);
+  const provider = remi._getProvider();
 
   if (typeof provider.sendStream !== "function") {
     throw new Error(`Provider "${provider.name}" does not support streaming`);
@@ -277,16 +267,12 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
     providerSpan?.end();
   }
 
-  // Update session + daily notes
+  // Update the persistent ACP session mapping.
   if (resultResponse) {
     if (resultResponse.sessionId) {
       const displayName = sessDb.upsertSession(sessionKey, resultResponse.sessionId);
       _log.debug(`session stored: key="${sessionKey}" → "${resultResponse.sessionId.slice(0, 12)}..." (${displayName})`);
     }
-    remi.memory.appendDaily(
-      `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
-    );
-
     // Record token metrics
     if (resultResponse.inputTokens || resultResponse.outputTokens) {
       remi.metrics.record({
@@ -309,9 +295,6 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
     // CLI JSONL (~/.claude/projects/) is the full trace; this table is the index.
     try {
       const spans: Array<Record<string, unknown>> = [];
-
-      // Memory assembly span (duration not available from Span interface)
-      spans.push({ op: "memory.assemble" });
 
       // Provider chat span
       spans.push({
@@ -350,4 +333,3 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
 
   return resultResponse;
 }
-

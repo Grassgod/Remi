@@ -1,17 +1,13 @@
-import { homedir } from "node:os";
 import type { CapabilityBlock, PersistentContext, EphemeralContext } from "../types.js";
 
 export const workspaceBlock: CapabilityBlock = {
   name: "workspace",
 
   persistent(ctx: PersistentContext) {
-    const { message, groupConfig, sessionRow } = ctx;
-    const cwd =
-      groupConfig?.cwd ||
-      groupConfig?.projectCwd ||
-      sessionRow?.cwd ||
-      (message.metadata?.cwd as string) ||
-      homedir();
+    const cwd = ctx.agent.cwd?.trim() || ctx.sessionRow?.cwd?.trim();
+    if (!cwd) {
+      throw new Error(`Bot agent ${ctx.agent.id} has no cwd configured`);
+    }
     return { cwd };
   },
 

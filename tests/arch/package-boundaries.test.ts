@@ -61,7 +61,6 @@ const BOUNDED_PACKAGES = [
   "daemon",
   "shared",
   "acp",
-  "memory",
   "auth",
   "connectors",
   "contracts",
@@ -135,7 +134,6 @@ const WORKSPACE_ALIAS_PREFIXES = [
   "@shared/contracts/",
   "@shared/",
   "@acp/",
-  "@memory/",
   "@connectors/",
   "@auth/",
   "@daemon/",
@@ -165,7 +163,7 @@ function aliasPrefixOf(spec: string): string | null {
  *   @connectors/          outbound notification adapters (Feishu)
  *
  * Notably absent and expected to stay absent: @remi/ (the other product core),
- * @memory/ and @auth/.
+ * @auth/.
  */
 const SERVER_ALLOWED_ALIASES = new Set([
   "@multiremi/",

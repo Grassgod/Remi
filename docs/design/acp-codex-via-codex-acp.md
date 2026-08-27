@@ -1,9 +1,9 @@
 # Remi ACP Codex via codex-acp
 
-> **历史文档**:已实现。文中的 `src/core.ts` 现为 `packages/remi/src/core.ts`,
-> `src/providers/acp/` 现为 `packages/acp/src/`,`bun run src/main.ts serve` 现为
-> `bun run apps/remi/main.ts serve`(且勿用 `REMI_DEBUG`,见 `CLAUDE.md`);配置已从 `remi.toml`
-> 迁到 `~/.remi/remi.db` 的 `remi_config` 表,`remi.toml.example` 不再存在。
+> **历史文档**：本文记录旧 ACP Codex 接入。当前启动命令是
+> `bun run apps/remi/main.ts start`；旧顶层 `serve` 命令已删除。provider/model/cwd/MCP 等
+> 执行配置来自 `MULTIREMI_BOT_AGENT_ID` 指定的 `multiremi_agents` 行，而不是本地
+> `remi_config`。下文命令和 `/switch` 描述仅作历史参考，不可直接执行。
 
 ## Goal
 
@@ -208,7 +208,7 @@ bun test tests/feishu-card.test.ts
 Manual smoke:
 
 ```bash
-REMI_PROVIDER=acp:codex REMI_DEBUG=1 bun run src/main.ts serve
+# Historical invocation removed. Configure the Multiremi agent row, then run `remi start`.
 ```
 
 Then test from Feishu:

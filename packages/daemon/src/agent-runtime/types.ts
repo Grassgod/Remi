@@ -1,10 +1,8 @@
 import type { IncomingMessage } from "@connectors/base.js";
 import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
-import type { RemiConfig } from "@shared/config.js";
 import type { SessionRow } from "@shared/db/sessions.js";
-import type { GroupConfig } from "@shared/group-config.js";
-import type { MemoryStore } from "@memory/store.js";
+import type { MultiremiAgent } from "@multiremi/contracts/types.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { LocalPathLocker } from "./workspace/ephemeral.js";
 import type { AcpMcpServer } from "./mcp/ephemeral.js";
@@ -16,6 +14,7 @@ import type { IssueSessionProviderHome } from "./workspace/session-home.js";
 export interface AgentSessionConfig {
   agentType: string;
   executable?: string;
+  customArgs?: string[];
   model?: string | null;
   /** Reasoning effort for this turn (agent `thinking_level`); undefined = leave the agent's default. */
   effort?: string | null;
@@ -58,9 +57,7 @@ export interface RecoveryConfig {
 export interface PersistentContext {
   kind: "persistent";
   message: IncomingMessage;
-  config: RemiConfig;
-  groupConfig?: GroupConfig | null;
-  memory: MemoryStore;
+  agent: MultiremiAgent;
   sessionRow?: SessionRow | null;
   sessionKey: string;
 }

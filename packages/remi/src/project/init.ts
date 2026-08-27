@@ -19,7 +19,6 @@ import { homedir } from "node:os";
 import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat } from "@connectors/feishu/sdk.js";
-import { GroupConfigStore } from "../group/store.js";
 import { loadConfig } from "@shared/config.js";
 
 /** Resolve the project owner's Feishu open_id from config. */
@@ -117,15 +116,6 @@ export async function runProjectInit(
       chatId = await createProjectChat(loadConfig().feishu, input.name, ownerOpenId);
       store.updateField(projectId, "chat_id", chatId);
     }
-
-    // Register in group_configs for DB-based filtering (idempotent upsert)
-    const gcStore = new GroupConfigStore();
-    gcStore.upsert({
-      chatId: chatId,
-      projectId: projectId,
-      monitor: true,           // project groups auto-reply by default
-      replyMode: "thread",
-    });
 
     return chatId;
   });

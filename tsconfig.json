@@ -20,7 +20,6 @@
       "@shared/contracts/*": ["./packages/contracts/src/*"],
       "@shared/*": ["./packages/shared/src/*"],
       "@acp/*": ["./packages/acp/src/*"],
-      "@memory/*": ["./packages/memory/src/*"],
       "@connectors/*": ["./packages/connectors/src/*"],
       "@auth/*": ["./packages/auth/src/*"],
       "@daemon/*": ["./packages/daemon/src/*"],

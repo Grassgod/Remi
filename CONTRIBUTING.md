@@ -27,11 +27,9 @@ packages/
   contracts/          L0 — pure shared types (API, ACP protocol, provider payloads)
   acp/                L1 — AcpProvider + adapters/{claude-code,codex}
   connectors/         L1 — base.ts (Connector interface) + feishu/
-  memory/             L1 — Markdown memory store, link graph, MCP server
   auth/               L1 — 1Passport: Feishu OAuth, token sync
-  queue/              L1 — BunQueue `remi:cron` queue + handlers
   daemon/             L2 — agent runtime, orchestrator, autopilot scheduler
-  remi/               L3 — core.ts hub, admin dashboard API, group/project stores
+  remi/               L3 — persistent chat core and project/session integration
   server/             L3 — Multiremi: api/ (routers + wire), store/ (repos), worker/, relay/
   plugin-sdk/         Public plugin contract (@remi/plugin-sdk)
 frontend/             Nested workspace — Next.js dashboard
@@ -41,8 +39,8 @@ frontend/             Nested workspace — Next.js dashboard
 tests/                bun:test — unit/, integration/, manual/, arch/, fixtures/
 ```
 
-Imports use the tsconfig path aliases (`@shared/*`, `@acp/*`, `@connectors/*`, `@memory/*`,
-`@queue/*`, `@auth/*`, `@daemon/*`, `@remi/*`, `@multiremi/*`), never deep relative paths across
+Imports use the tsconfig path aliases (`@shared/*`, `@acp/*`, `@connectors/*`, `@auth/*`,
+`@daemon/*`, `@remi/*`, `@multiremi/*`), never deep relative paths across
 packages. A lower layer must never import upward. `tests/arch/package-boundaries.test.ts` is the
 machine-checked part of that rule and fails `bun test` if you break it: `packages/contracts` stays
 free of `bun:`/`node:`/`process.`, no `packages/*` may import the application core
@@ -67,9 +65,9 @@ cd frontend && bun run test && bun run typecheck && cd ..
 git checkout -b feat/your-feature
 
 # 4. Iterate
-bun test tests/unit/memory/memory.test.ts   # single file
+bun test tests/unit/daemon/agent-runtime-send-options.test.ts  # single file
 bun test --watch                            # watch mode
-bun run apps/remi/main.ts serve             # Feishu daemon (connectors + cron queue + admin API)
+bun run apps/remi/main.ts start             # Multiremi daemon + configured Feishu channel
 bun run scripts/snapshot-api-routes.ts --check   # API route surface unchanged?
 bun run build:multiremi                     # release archives (binary + ACP wrapper)
 ```
@@ -100,10 +98,10 @@ include a test plan. Keep PRs focused — refactors and feature work go in separ
 ## Code style
 
 - **TypeScript strict mode.** Do not weaken `tsconfig.json`. Prefer narrow types over `any`.
-- **Async/await throughout.** Never block the event loop in an async path. `Bun.spawn()` for
-  subprocesses; `node:fs` sync APIs only inside the memory store.
+- **Async/await throughout.** Never block the event loop in an async path. Use `Bun.spawn()` for
+  subprocesses.
 - **Interfaces over inheritance.** New backends implement an existing interface (`Provider`,
-  `Connector`, cron handler) rather than extend a base class.
+  `Connector`) rather than extend a base class.
 - **Plain data objects.** Message payloads, configs, and tool definitions are interfaces —
   no constructors, no classes for data.
 - **Comments are rare.** Names explain *what*; comments are reserved for non-obvious *why*.
@@ -120,7 +118,7 @@ There is no separate formatter step; match the surrounding style.
 
 ```
 feat(connectors): add Slack connector with thread support
-fix(memory): handle missing frontmatter in legacy notes
+fix(daemon): reject an archived bot agent
 refactor(api): split routers by domain
 ```
 
@@ -131,8 +129,7 @@ refactor(api): split routers by domain
 - Backend tests are **centralized** under `tests/` — `bunfig.toml` sets `[test] root = "tests"`,
   so only `tests/**/*.test.ts` is discovered.
   - `tests/unit/<area>/` — pure logic and interface-level tests, no external services. Areas
-    mirror the packages: `acp/`, `connectors/`, `daemon/`, `memory/`, `multiremi/`, `remi/`,
-    `shared/`.
+    mirror the packages: `acp/`, `connectors/`, `daemon/`, `multiremi/`, `remi/`, `shared/`.
   - `tests/integration/` — cross-component and full-stack harnesses. Anything needing a real
     provider, browser, or Postgres is a plain `*.ts` (not `*.test.ts`) so `bun test` skips it,
     **and must get a `package.json` script entry** or it becomes an orphan nobody runs.
@@ -195,20 +192,20 @@ backend has an ACP bridge, do not write a provider: write an adapter.**
 1. Create `packages/acp/src/adapters/<agent>/index.ts` implementing `AgentAdapter`
    (`packages/contracts/src/acp-protocol.ts`).
 2. Register it in the `registry` map in `packages/acp/src/adapters/index.ts`.
-3. Teach `Remi._buildProvider()` (`packages/remi/src/core.ts`) the new agent type so
-   `acp:<agent>` resolves, and extend `ProviderConfig` in `packages/shared/src/config.ts`.
+3. Teach the ACP adapter registry and `Remi._buildProvider()` (`packages/remi/src/core.ts`) the
+   new provider name. Runtime selection and options stay in `multiremi_agents`; do not add a local
+   provider config.
 4. Test against a recorded fixture: drop a recording in `tests/fixtures/acp/` and check coverage
    with `bun run replay:coverage`. `tests/unit/acp/` holds the adapter-level tests.
 
 Write a fresh `Provider` implementation only for a backend that has no ACP bridge at all.
 
-### Add a cron handler
+### Add scheduled work
 
-Scheduled work runs on the `remi:cron` BunQueue. Handlers are registered in
-`packages/queue/src/handlers/cron-bridge.ts` — see `builtin:heartbeat`, `builtin:pulse`, and
-`skill:gen` / `skill:push` / `skill:run`. Add yours to the `handlers` map, then reference it from
-the `cronJobs` config section (`id`, `handler`, one of `cron` / `every` / `at`, `handlerConfig`).
-Run records land in `~/.remi/cron/runs/<jobId>.jsonl`.
+Scheduled platform work belongs in Multiremi autopilots and
+`packages/daemon/src/scheduler.ts`. Do not add a second local queue or cron config to Remi. A
+connector-local timer is appropriate only when the work must access a live connector instance in
+the same process; keep that lifecycle next to the co-resident daemon startup and test shutdown.
 
 ### Add a plugin
 
@@ -217,11 +214,12 @@ External drop-in plugins live under `~/.remi/plugins/<id>/` and are loaded throu
 auth adapters. `tests/arch/package-boundaries.test.ts` includes a type-mirror probe that keeps the
 SDK's public types in sync with `packages/auth` — if you change one, change both.
 
-### Add an MCP tool
+### Add MCP configuration
 
-The memory MCP server is `packages/memory/src/mcp-server.ts` (`recall`, `remember`, `backlinks`).
-Register a new tool in its tool list and implement the handler. Tools should be small,
-composable, and idempotent — the agent may call them many times in a single turn.
+MCP servers used by Remi are configured on the selected `multiremi_agents.mcp_config` row and are
+passed through ACP `session/new`. Durable project knowledge uses the canonical `remi memory`
+commands rather than a local memory MCP server. Add a server implementation only when it owns a
+distinct external capability, then configure it on the agent row and add runtime assembly tests.
 
 ## Filing issues
 

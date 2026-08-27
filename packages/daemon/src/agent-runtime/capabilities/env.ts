@@ -1,8 +1,12 @@
-import type { CapabilityBlock, EphemeralContext } from "../types.js";
+import type { CapabilityBlock, EphemeralContext, PersistentContext } from "../types.js";
 import { buildTaskEnv } from "../env/injector.js";
 
 export const envBlock: CapabilityBlock = {
   name: "env",
+
+  persistent(ctx: PersistentContext) {
+    return { env: { ...ctx.agent.customEnv } };
+  },
 
   ephemeral(ctx: EphemeralContext) {
     const { task, daemonOptions } = ctx;

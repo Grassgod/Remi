@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type {
   MultiremiDaemonHeartbeatAck,
+  MultiremiAgent,
   MultiremiProjectDocIndexEntry,
   MultiremiRepoData,
   MultiremiRuntimeDirectoryCandidate,
@@ -43,6 +44,7 @@ export interface MultiremiDaemonRegisterRuntimeInput {
   launchedBy?: string | null;
   agentPluginProtocol?: number;
   sshMeshProtocol?: number;
+  botAgentId?: string | null;
   runtime: {
     name: string;
     type: string;
@@ -72,11 +74,13 @@ export interface MultiremiDaemonRegisterResponse {
   settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
   runtimes: Array<{ id: string; provider?: string; type?: string }>;
+  botAgent?: MultiremiAgent | null;
 }
 
 export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonHeartbeatAck {
   workspace_settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
+  botAgent?: MultiremiAgent | null;
 }
 
 export interface MultiremiDaemonGcStatus {
@@ -198,18 +202,24 @@ export class MultiremiDaemonClient {
   }
 
   async registerDaemonRuntime(input: MultiremiDaemonRegisterRuntimeInput): Promise<MultiremiDaemonRegisterResponse> {
-    return this.post("/api/daemon/register", {
+    const response = await this.post<MultiremiDaemonRegisterResponse & { bot_agent?: unknown }>("/api/daemon/register", {
       workspace_id: input.workspaceId,
       daemon_id: input.daemonId,
       device_name: input.deviceName ?? "",
       cli_version: input.cliVersion ?? "",
       launched_by: input.launchedBy ?? "",
+      ...(input.botAgentId ? { bot_agent_id: input.botAgentId } : {}),
       capabilities: {
         agent_plugins: input.agentPluginProtocol ?? MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         ssh_mesh: input.sshMeshProtocol ?? MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
       },
       runtimes: [input.runtime],
     });
+    const botAgent = normalizeDaemonAgent(response.bot_agent);
+    return {
+      ...response,
+      ...(botAgent ? { botAgent } : {}),
+    };
   }
 
   async recoverOrphans(runtimeId: string): Promise<MultiremiRecoverOrphansResult> {
@@ -225,6 +235,7 @@ export class MultiremiDaemonClient {
     runtimeId: string,
     sshMeshStatus?: MultiremiDaemonSshMeshStatus,
     drainStatus?: { ackGeneration: number; activeTaskCount: number },
+    botAgentId?: string | null,
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
     let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
@@ -241,6 +252,7 @@ export class MultiremiDaemonClient {
               active_task_count: drainStatus.activeTaskCount,
             }
           : {}),
+        ...(botAgentId ? { bot_agent_id: botAgentId } : {}),
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
@@ -248,10 +260,12 @@ export class MultiremiDaemonClient {
       }
       throw error;
     }
+    const botAgent = normalizeDaemonAgent((resp as Record<string, unknown>).bot_agent);
     return {
       runtime_id: runtimeId,
       status: resp.status ?? "ok",
       ...resp,
+      ...(botAgent ? { botAgent } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
   }
 
@@ -979,7 +993,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     completedAt: stringOrNull(raw.completed_at ?? raw.completedAt),
     failedAt: stringOrNull(raw.failed_at ?? raw.failedAt),
     cancelledAt: stringOrNull(raw.cancelled_at ?? raw.cancelledAt),
-    agent: normalizeDaemonClaimAgent(raw.agent),
+    agent: normalizeDaemonAgent(raw.agent),
     issue: normalizeDaemonClaimIssue(raw.issue),
     issueSession: raw.issue_session ?? raw.issueSession ?? null,
     sessionProjection: raw.session_projection ?? raw.sessionProjection ?? null,
@@ -1019,10 +1033,11 @@ function normalizeDaemonClaimSquadContext(raw: any): any | null {
   };
 }
 
-function normalizeDaemonClaimAgent(raw: any): MultiremiTaskWithAgent["agent"] {
+export function normalizeDaemonAgent(raw: any): MultiremiAgent | null {
   if (!raw || typeof raw !== "object") return null;
   return {
     ...raw,
+    avatarUrl: stringOrNull(raw.avatar_url ?? raw.avatarUrl),
     workspaceId: stringOrNull(raw.workspace_id ?? raw.workspaceId) ?? "",
     ownerId: stringOrNull(raw.owner_id ?? raw.ownerId) ?? "",
     runtimeId: stringOrNull(raw.runtime_id ?? raw.runtimeId),
@@ -1032,6 +1047,10 @@ function normalizeDaemonClaimAgent(raw: any): MultiremiTaskWithAgent["agent"] {
     customArgs: Array.isArray(raw.custom_args) ? raw.custom_args : Array.isArray(raw.customArgs) ? raw.customArgs : [],
     mcpConfig: raw.mcp_config ?? raw.mcpConfig ?? null,
     thinkingLevel: stringOrNull(raw.thinking_level ?? raw.thinkingLevel),
+    issueCreationRequiresProposal: Boolean(
+      raw.issue_creation_requires_proposal ?? raw.issueCreationRequiresProposal,
+    ),
+    supervisor: raw.supervisor === true,
     archivedAt: stringOrNull(raw.archived_at ?? raw.archivedAt),
     createdAt: stringOrNull(raw.created_at ?? raw.createdAt) ?? "",
     updatedAt: stringOrNull(raw.updated_at ?? raw.updatedAt) ?? "",

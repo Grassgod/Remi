@@ -5,34 +5,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const REMI_HOME = join(homedir(), ".remi");
+export const REMI_HOME = join(homedir(), ".remi");
 
-export const MEMORY_DIR = join(REMI_HOME, "memory");
 export const SESSIONS_FILE = join(REMI_HOME, "sessions.json");
 export const PID_FILE = join(REMI_HOME, "remi.pid");
-
-/** Per-agent ACP configuration. */
-export interface AcpAgentConfig {
-  /** ACP agent executable path. Auto-detected if omitted. */
-  executable?: string;
-  /** Model override passed to the agent. */
-  model?: string;
-  /** Request timeout in seconds (default: 300). */
-  timeout: number;
-  /** Tool allowlist passed to the agent. */
-  allowedTools: string[];
-  /** Optional API key forwarded to compatible ACP wrappers. */
-  apiKey?: string | null;
-  /** Optional API base URL forwarded to compatible ACP wrappers. */
-  baseUrl?: string | null;
-}
-
-export interface ProviderConfig {
-  /** Default agent to use: "claude" | "codex". */
-  default: "claude" | "codex";
-  claude: AcpAgentConfig;
-  codex: AcpAgentConfig;
-}
 
 export interface FeishuConfig {
   appId: string;
@@ -135,24 +111,9 @@ export interface ProxyConfig {
   noProxy: string;
 }
 
-export interface EmbeddingConfig {
-  provider: string;
-  apiKey: string;
-  model?: string;
-  dimensions?: number;
-}
-
 export interface GoogleConfig {
   apiKey: string;
   model: string;
-}
-
-export interface McpServerEntry {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  agents?: string[];
 }
 
 export interface TracingConfig {
@@ -163,7 +124,6 @@ export interface TracingConfig {
 }
 
 export interface RemiConfig {
-  provider: ProviderConfig;
   feishu: FeishuConfig;
   /** Plugin system settings. */
   plugins: PluginsConfig;
@@ -177,26 +137,10 @@ export interface RemiConfig {
   botMenu: BotMenuConfig;
   /** Proxy settings for outbound HTTP requests. */
   proxy: ProxyConfig;
-  /** Embedding config for vector search (optional). */
-  embedding?: EmbeddingConfig;
   /** Google API config for Gemini image generation (optional). */
   google?: GoogleConfig;
-  /** MCP servers to inject into ACP sessions. */
-  mcp: McpServerEntry[];
   tracing: TracingConfig;
   logLevel: string;
-}
-
-function defaultAgentConfig(): AcpAgentConfig {
-  return { timeout: 300, allowedTools: [], apiKey: null, baseUrl: null };
-}
-
-function defaultProviderConfig(): ProviderConfig {
-  return {
-    default: "claude",
-    claude: defaultAgentConfig(),
-    codex: defaultAgentConfig(),
-  };
 }
 
 function defaultFeishuConfig(): FeishuConfig {
@@ -215,7 +159,6 @@ function defaultFeishuConfig(): FeishuConfig {
 
 export function defaultRemiConfig(): RemiConfig {
   return {
-    provider: defaultProviderConfig(),
     feishu: defaultFeishuConfig(),
     tokenSync: [],
     botMenu: {},
@@ -223,7 +166,6 @@ export function defaultRemiConfig(): RemiConfig {
     plugins: { dir: join(homedir(), ".remi", "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
     auth: { adminEmails: [] },
-    mcp: [],
     tracing: {
       enabled: true,
       logsDir: join(REMI_HOME, "logs"),

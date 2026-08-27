@@ -44,24 +44,41 @@ function ephemeralContext(agent: Partial<NonNullable<AgentTask["agent"]>>, task:
   };
 }
 
-function persistentContext(overrides: { model?: string; provider?: string; sessionProvider?: string } = {}): PersistentContext {
+function persistentContext(overrides: { model?: string; provider?: string; sessionProvider?: string; cwd?: string | null } = {}): PersistentContext {
+  const provider = overrides.provider ?? "claude";
   return {
     kind: "persistent",
     message: { chatId: "c1", text: "hi", metadata: {} } as any,
-    config: {
-      provider: {
-        default: "claude",
-        claude: { timeout: 300, allowedTools: [], model: overrides.model },
-        codex: { timeout: 300, allowedTools: [], model: "gpt-codex-cfg" },
-      },
-      mcp: [
-        { name: "recall", command: "/bin/recall", args: ["--stdio"], env: { TOKEN: "t" } },
-        { name: "bare", command: "/bin/bare" },
-        { name: "codex-only", command: "/bin/codex-mcp", agents: ["codex"] },
-      ],
-    } as any,
-    groupConfig: overrides.provider ? ({ provider: overrides.provider, systemPrompt: "group rules" } as any) : null,
-    memory: { readMemory: () => "remembered facts" } as any,
+    agent: {
+      id: "agt_bot",
+      name: "Bot",
+      description: "",
+      avatarUrl: null,
+      provider,
+      workspaceId: "local",
+      ownerId: "owner",
+      visibility: "workspace",
+      runtimeId: null,
+      instructions: "agent row rules",
+      skills: [],
+      maxConcurrentTasks: 4,
+      cwd: overrides.cwd === undefined ? "/agent/work" : overrides.cwd,
+      executable: "/bin/agent-acp",
+      model: overrides.model ?? (provider === "codex" ? "gpt-codex-agent" : "claude-agent"),
+      allowedTools: ["Read"],
+      customEnv: { AGENT_ENV: "yes" },
+      customArgs: ["--agent-flag"],
+      mcpConfig: { mcpServers: {
+        recall: { command: "/bin/recall", args: ["--stdio"], env: { TOKEN: "t" } },
+        bare: { command: "/bin/bare" },
+      } },
+      thinkingLevel: "high",
+      issueCreationRequiresProposal: false,
+      supervisor: false,
+      archivedAt: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
     sessionRow: overrides.sessionProvider ? ({ provider: overrides.sessionProvider } as any) : null,
     sessionKey: "c1",
   };
@@ -101,15 +118,15 @@ test('ephemeral identity treats an empty/absent thinking_level as "no override"'
   expect(new AgentRuntime().assemble(ephemeralContext({})).effort).toBeNull();
 });
 
-test("persistent identity resolves the model of the provider that will run the turn", () => {
+test("persistent identity uses the Multiremi agent row as its sole provider config", () => {
   expect(new AgentRuntime().assemble(persistentContext({ model: "claude-cfg" })).model).toBe("claude-cfg");
-  // Group config and the session's own P2P choice both steer which agent runs,
-  // so the assembled model has to follow them instead of the global default.
-  expect(new AgentRuntime().assemble(persistentContext({ provider: "codex" })).model).toBe("gpt-codex-cfg");
-  expect(new AgentRuntime().assemble(persistentContext({ sessionProvider: "codex" })).model).toBe("gpt-codex-cfg");
+  expect(new AgentRuntime().assemble(persistentContext({ provider: "codex" })).model).toBe("gpt-codex-agent");
+  expect(new AgentRuntime().assemble(persistentContext({ sessionProvider: "codex" })).agentType).toBe("claude");
+  expect(new AgentRuntime().assemble(persistentContext()).customArgs).toEqual(["--agent-flag"]);
+  expect(new AgentRuntime().assemble(persistentContext()).env).toEqual({ AGENT_ENV: "yes" });
 });
 
-test("persistent mcp block emits the ACP McpServerStdio wire shape from remi.toml", () => {
+test("persistent mcp block emits the ACP wire shape from agent.mcp_config", () => {
   const config = new AgentRuntime().assemble(persistentContext());
   // args + env are required and env is an EnvVariable[]; a Record env or a
   // missing args key is dropped silently by both bridges (vecSkipError).
@@ -181,10 +198,15 @@ test("ephemeral stale sessions report once and never replay inside the daemon", 
   expect(clears).toBe(0);
 });
 
-test("AgentSession forwards the assembled system prompt and memory context", async () => {
-  const config = new AgentRuntime().assemble(persistentContext({ provider: "claude" }));
+test("persistent prompts use agent instructions and the Multiremi memory CLI", async () => {
+  const config = new AgentRuntime().assemble(persistentContext());
   const options = await runOnce(config);
-  expect(options.systemPrompt).toContain("group rules");
-  expect(options.systemPrompt).toContain("remembered facts");
-  expect(options.context).toBe("remembered facts");
+  expect(options.systemPrompt).toContain("agent row rules");
+  expect(options.systemPrompt).toContain("remi memory search");
+  expect(options.context).toBeUndefined();
+});
+
+test("persistent workspace fails loudly instead of falling back to the home directory", () => {
+  expect(() => new AgentRuntime().assemble(persistentContext({ cwd: null })))
+    .toThrow("Bot agent agt_bot has no cwd configured");
 });

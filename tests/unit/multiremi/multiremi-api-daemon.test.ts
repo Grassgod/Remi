@@ -8,6 +8,97 @@ import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./h
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — daemon endpoints", () => {
+  it("returns only the configured active bot agent from the daemon workspace", async () => {
+    const store = createStore();
+    store.createWorkspace({ id: "other", name: "Other" });
+    const agent = store.createAgent({
+      id: "agt_bot_runtime",
+      name: "Workspace bot",
+      provider: "codex",
+      workspaceId: "local",
+      instructions: "Operate as the workspace concierge.",
+      cwd: "/srv/remi-bot",
+      executable: "/usr/local/bin/codex-acp",
+      model: "gpt-bot",
+      maxConcurrentTasks: 9,
+      allowedTools: ["Read", "Bash"],
+      customEnv: { BOT_MODE: "concierge" },
+      customArgs: ["--profile", "bot"],
+      mcpConfig: { mcpServers: { platform: { command: "remi", args: ["mcp"] } } },
+      thinkingLevel: "high",
+    });
+    const otherAgent = store.createAgent({
+      id: "agt_other_workspace",
+      name: "Other bot",
+      provider: "claude",
+      workspaceId: "other",
+      cwd: "/srv/other",
+    });
+    const archivedAgent = store.createAgent({
+      id: "agt_archived_bot",
+      name: "Archived bot",
+      provider: "claude",
+      workspaceId: "local",
+      cwd: "/srv/archived",
+    });
+    store.archiveAgent(archivedAgent.id);
+    const app = createMultiremiApp({ store });
+
+    const register = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-bot-config",
+        bot_agent_id: agent.id,
+        runtimes: [{ type: "codex", version: "1.0.0" }],
+      }),
+    });
+    expect(register.status).toBe(200);
+    expect(register.headers.get("cache-control")).toBe("no-store");
+    const registerBody = await register.json();
+    expect(registerBody.bot_agent).toMatchObject({
+      id: agent.id,
+      workspace_id: "local",
+      provider: "codex",
+      instructions: "Operate as the workspace concierge.",
+      cwd: "/srv/remi-bot",
+      executable: "/usr/local/bin/codex-acp",
+      model: "gpt-bot",
+      max_concurrent_tasks: 9,
+      allowed_tools: ["Read", "Bash"],
+      custom_env: { BOT_MODE: "concierge" },
+      custom_args: ["--profile", "bot"],
+      thinking_level: "high",
+    });
+
+    const heartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: registerBody.runtimes[0].id,
+        bot_agent_id: agent.id,
+      }),
+    });
+    expect(heartbeat.status).toBe(200);
+    expect((await heartbeat.json()).bot_agent.id).toBe(agent.id);
+
+    for (const botAgentId of ["agt_missing", otherAgent.id, archivedAgent.id]) {
+      const rejected = await app.request("/api/daemon/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: "local",
+          daemon_id: `daemon-rejected-${botAgentId}`,
+          bot_agent_id: botAgentId,
+          runtimes: [{ type: "claude" }],
+        }),
+      });
+      expect(rejected.status).toBe(404);
+      expect(await rejected.json()).toEqual({ error: "bot agent not found in runtime workspace" });
+    }
+  });
+
   it("reports an Issue code workspace and exposes it to the Issue sidebar", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({

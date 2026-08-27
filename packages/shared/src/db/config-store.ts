@@ -10,9 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
   RemiConfig,
-  ProviderConfig,
   FeishuConfig,
-  AcpAgentConfig,
   PluginsConfig,
   AuthConfig,
   ProxyConfig,
@@ -23,9 +21,9 @@ import { defaultRemiConfig } from "../config.js";
 const REMI_HOME = join(homedir(), ".remi");
 
 const SECTIONS = [
-  "provider", "feishu", "plugins", "pluginConfigs", "auth",
+  "feishu", "plugins", "pluginConfigs", "auth",
   "tokenSync", "botMenu", "proxy",
-  "embedding", "google", "mcp", "tracing", "logLevel",
+  "google", "tracing", "logLevel",
 ] as const;
 
 type Section = (typeof SECTIONS)[number];
@@ -82,16 +80,7 @@ export class ConfigStore {
 
     const env = process.env;
 
-    const provider = (data.provider ?? defaults.provider) as ProviderConfig;
     const feishu = (data.feishu ?? defaults.feishu) as FeishuConfig;
-
-    if (env.REMI_PROVIDER) {
-      provider.default = env.REMI_PROVIDER as "claude" | "codex";
-    }
-    if (env.REMI_MODEL) provider.claude.model = env.REMI_MODEL;
-    if (env.REMI_TIMEOUT) provider.claude.timeout = parseInt(env.REMI_TIMEOUT, 10);
-    if (env.REMI_API_KEY) provider.claude.apiKey = env.REMI_API_KEY;
-    if (env.REMI_BASE_URL) provider.claude.baseUrl = env.REMI_BASE_URL;
 
     if (env.FEISHU_APP_ID) feishu.appId = env.FEISHU_APP_ID;
     if (env.FEISHU_APP_SECRET) feishu.appSecret = env.FEISHU_APP_SECRET;
@@ -105,7 +94,6 @@ export class ConfigStore {
     if (google && env.GOOGLE_API_KEY) google.apiKey = env.GOOGLE_API_KEY;
 
     return {
-      provider,
       feishu,
       plugins: (data.plugins ?? defaults.plugins) as PluginsConfig,
       pluginConfigs: (data.pluginConfigs ?? defaults.pluginConfigs) as Record<string, Record<string, unknown>>,
@@ -113,9 +101,7 @@ export class ConfigStore {
       tokenSync: (data.tokenSync ?? defaults.tokenSync) as RemiConfig["tokenSync"],
       botMenu: (data.botMenu ?? defaults.botMenu) as RemiConfig["botMenu"],
       proxy: (data.proxy ?? defaults.proxy) as ProxyConfig,
-      embedding: (data.embedding as RemiConfig["embedding"]) ?? defaults.embedding,
       google,
-      mcp: (data.mcp ?? defaults.mcp) as RemiConfig["mcp"],
       tracing: (data.tracing ?? defaults.tracing) as TracingConfig,
       logLevel: env.REMI_LOG_LEVEL ?? (data.logLevel as string) ?? defaults.logLevel,
     };

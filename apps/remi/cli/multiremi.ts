@@ -17,6 +17,7 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
+import type { MultiremiAgent } from "@multiremi/contracts/types.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
 import { setLogLevel } from "@shared/logger.js";
 import { multiremiVersion } from "@multiremi/version.js";
@@ -27,7 +28,7 @@ import {
   saveMultiremiConfig,
   type MultiremiCliConfig,
 } from "@multiremi/config.js";
-import { bootFeishuChannel } from "./agent.js";
+import { bootFeishuChannel, feishuConfigured } from "./agent.js";
 import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 import {
@@ -280,6 +281,8 @@ export interface WorkerDaemonSupervisorOptions {
   workspacesRoot?: string;
   workspaceRootFence?: () => void;
   onRestartRequested?: () => void;
+  botAgentId?: string | null;
+  onBotAgentResolved?: (agent: MultiremiAgent) => void;
 }
 
 export async function resolveWorkerDaemons(
@@ -344,6 +347,8 @@ export async function resolveWorkerDaemons(
     workspaceId: stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)
       ?? config.workspace_id
       ?? "local",
+    botAgentId: supervisor.botAgentId,
+    onBotAgentResolved: supervisor.onBotAgentResolved,
     daemonPort: providers.length > 1 && baseDaemonPort !== 0 ? baseDaemonPort + providers.indexOf(provider) : baseDaemonPort,
     workspacesRoot: supervisor.workspacesRoot,
     workspaceRootFence: supervisor.workspaceRootFence,
@@ -402,20 +407,34 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
   let ownershipFailure: unknown = null;
   let restartRequested = false;
   try {
+    const shouldStartFeishu = !Boolean(options.once) && feishuConfigured();
+    const botAgentId = String(process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim();
+    if (shouldStartFeishu && !botAgentId) {
+      throw new Error("MULTIREMI_BOT_AGENT_ID is required when the Feishu channel is configured");
+    }
+    let resolveBotAgent!: (agent: MultiremiAgent) => void;
+    const botAgentReady = new Promise<MultiremiAgent>((resolve) => { resolveBotAgent = resolve; });
+    let resolvedBotAgentId: string | null = null;
     daemons = await resolveWorkerDaemons(options, {
       workspacesRoot: workspaceSupervisor.workspaceRoot,
       workspaceRootFence: () => workspaceSupervisor?.assertOwner(),
       // Provider updates must stop the whole supervisor, including Feishu.
       onRestartRequested: () => stopAll(),
+      botAgentId: shouldStartFeishu ? botAgentId : null,
+      onBotAgentResolved: (agent) => {
+        if (resolvedBotAgentId) return;
+        resolvedBotAgentId = agent.id;
+        resolveBotAgent(agent);
+      },
     });
-    // Co-resident Feishu channel: a long-running agent process also brings up
-    // Feishu when configured. One-shot workers never start it.
-    feishu = Boolean(options.once) ? null : await bootFeishuChannel();
     if (daemons.length === 0) {
       workspaceSupervisor.release();
       workspaceSupervisor = null;
     }
-    if (daemons.length === 0 && !feishu) {
+    if (daemons.length === 0) {
+      if (shouldStartFeishu) {
+        throw new Error("Cannot start Feishu: no healthy Multiremi daemon is available to resolve its agent");
+      }
       throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
     }
 
@@ -443,10 +462,18 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     }
 
     const providerRuns = daemons.map((runtimeDaemon) => runtimeDaemon.start());
-    stopChannelWhenProvidersFinish(providerRuns, feishu);
     const running: Promise<void>[] = [...providerRuns];
-    if (feishu) running.push(feishu.start);
     try {
+      if (shouldStartFeishu) {
+        const providerExitedBeforeAgent = Promise.race(providerRuns.map((run) => run.then(() => {
+          throw new Error("Multiremi daemon exited before resolving the configured bot agent");
+        })));
+        const botAgent = await Promise.race([botAgentReady, providerExitedBeforeAgent]);
+        feishu = await bootFeishuChannel(botAgent);
+        if (!feishu) throw new Error("Feishu configuration disappeared during daemon startup");
+        running.push(feishu.start);
+      }
+      stopChannelWhenProvidersFinish(providerRuns, feishu);
       await Promise.all(running);
     } catch (error) {
       // Promise.all returns on the first provider failure. Keep ownership until

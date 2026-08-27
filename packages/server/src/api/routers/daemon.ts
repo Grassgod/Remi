@@ -33,6 +33,7 @@ import {
   currentAccessToken,
   currentRequestUserId,
   currentWorkspaceRoleStrict,
+  daemonBotAgentResponse,
   daemonHeartbeatHttpResponse,
   daemonTaskClaimResponse,
   daemonTaskMessageWireResponse,
@@ -281,6 +282,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyDaemonTokenWorkspace(c, body.workspace_id);
     if (denied) return denied;
     const registerWorkspace = String(body.workspace_id ?? "").trim() || "local";
+    const botAgent = resolveBotAgent(store, registerWorkspace, body.bot_agent_id);
+    if ("error" in botAgent) return c.json({ error: botAgent.error }, botAgent.status);
     const registerDaemonId = String(body.daemon_id ?? "").trim();
     if (registerDaemonId && store.isDaemonRetired(registerWorkspace, registerDaemonId)) {
       return c.json({ error: "daemon has been retired", code: "daemon_retired" }, 410);
@@ -315,7 +318,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         currentAccessToken(c)?.type !== "daemon" && (!authToken || usesMasterToken),
     });
     if ("error" in result) return c.json({ error: result.error }, result.status);
-    return c.json(result);
+    if (botAgent.agent) c.header("Cache-Control", "no-store");
+    return c.json({
+      ...result,
+      ...(botAgent.agent ? { bot_agent: daemonBotAgentResponse(botAgent.agent) } : {}),
+    });
   });
   app.post("/api/daemon/deregister", async (c) => {
     const body = await readJsonStrict<{ runtime_ids?: string[] }>(c);
@@ -335,6 +342,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
       drain_ack_generation?: number;
       active_task_count?: number;
+      bot_agent_id?: string;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -384,6 +392,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const response = daemonHeartbeatHttpResponse(ack);
     const runtime = store.getRuntime(runtimeId);
     const workspaceId = runtime?.workspaceId ?? "local";
+    const botAgent = resolveBotAgent(store, workspaceId, body.bot_agent_id);
+    if ("error" in botAgent) return c.json({ error: botAgent.error }, botAgent.status);
     const workspaceConfig = workspaceReposResponse(
       store,
       workspaceId,
@@ -392,6 +402,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceConfig) {
       response.workspace_settings = workspaceConfig.settings ?? {};
       if (callerCanReceiveRelay(c, store, workspaceId)) response.relay = workspaceConfig.relay;
+    }
+    if (botAgent.agent) {
+      response.bot_agent = daemonBotAgentResponse(botAgent.agent);
+      c.header("Cache-Control", "no-store");
     }
     return c.json(response);
   });
@@ -853,6 +867,20 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status, completed_at: task.completedAt });
   });
+}
+
+function resolveBotAgent(
+  store: RouterDeps["store"],
+  workspaceId: string,
+  requestedAgentId?: string,
+): { agent: NonNullable<ReturnType<RouterDeps["store"]["getAgent"]>> | null } | { error: string; status: 404 } {
+  const agentId = String(requestedAgentId ?? "").trim();
+  if (!agentId) return { agent: null };
+  const agent = store.getAgent(agentId);
+  if (!agent || agent.archivedAt || agent.workspaceId !== workspaceId) {
+    return { error: "bot agent not found in runtime workspace", status: 404 };
+  }
+  return { agent };
 }
 
 function safeProjectKnowledgeError(error: unknown): string {

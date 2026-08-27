@@ -38,6 +38,7 @@ import { MULTIREMI_INSTALL_SCRIPT, MULTIREMI_RELEASE_REPO } from "./integrations
 
 export type DaemonRegisterRequestBody = {
   workspace_id?: string;
+  bot_agent_id?: string;
   daemon_id?: string;
   legacy_daemon_ids?: string[];
   device_name?: string;

@@ -5,32 +5,30 @@
  * 1. Receive messages from any connector (IncomingMessage)
  * 2. Lane Queue — serialize per chatId to prevent race conditions
  * 3. Session management — chatId → sessionId mapping
- * 4. Memory injection — assemble context before calling provider
- * 5. Provider routing — select provider + fallback
+ * 4. Assemble the Multiremi agent row into an ACP session
+ * 5. Run the configured provider
  * 6. Response dispatch — return AgentResponse via originating connector
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import type { RemiConfig } from "@shared/config.js";
-import { MEMORY_DIR, SESSIONS_FILE } from "@shared/config.js";
-import { GroupConfigStore } from "./group/store.js";
-import type { GroupConfig } from "./group/model.js";
+import { REMI_HOME, SESSIONS_FILE } from "@shared/config.js";
+import type { MultiremiAgent } from "@multiremi/contracts/types.js";
 import type { Connector, IncomingMessage } from "@connectors/base.js";
 import { LaneScheduler, resolveSessionKey } from "@daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
 import { AcpProvider } from "@acp/index.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
+import { buildAgentMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
 import { FeishuConnector } from "@connectors/feishu/index.js";
 import { MenuSyncer } from "@connectors/feishu/sdk.js";
 
 import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
 import type { TokenSyncRule } from "@auth/token-sync.js";
 import { PluginRegistry } from "@daemon/agent-runtime/plugins/registry.js";
-import { MemoryStore } from "@memory/store.js";
 import { MetricsCollector } from "@shared/metrics/collector.js";
-import { getDb } from "@shared/db/index.js";
 import * as sessDb from "@shared/db/sessions.js";
 import { createLogger, flushLogs } from "@shared/logger.js";
 import { TraceCollector } from "@shared/tracing.js";
@@ -41,12 +39,9 @@ const log = createLogger("core");
 
 // AsyncLock + resolveSessionKey extracted to daemon/orchestrator.ts in D6.
 
-// System prompt now lives in ~/.remi/soul.md (symlinked to ~/.claude/CLAUDE.md)
-// Claude CLI loads it automatically — no need to inject via --append-system-prompt
-
 export class Remi {
   config: RemiConfig;
-  memory: MemoryStore;
+  readonly agent: MultiremiAgent;
   metrics: MetricsCollector;
   traceCollector: TraceCollector;
   authStore: AuthStore | null = null;
@@ -56,22 +51,17 @@ export class Remi {
   // Per-lane (per session-key) serialization. Unbounded by default, matching the
   // monolith's historical behavior; the shared LaneScheduler also caps total
   // concurrency, which is what the multiremi daemon uses via its SQL queue.
-  readonly _scheduler = new LaneScheduler();
+  readonly _scheduler: LaneScheduler;
   readonly _activeAborts = new Map<string, AbortController>();
   readonly _runtime = new AgentRuntime();
 
-  constructor(config: RemiConfig) {
+  constructor(config: RemiConfig, agent: MultiremiAgent) {
     this.config = config;
-    // Initialize VectorStore if embedding config is available
-    let vectorStore: InstanceType<typeof import("@shared/db/vector-store.js").VectorStore> | null = null;
-    if (config.embedding?.apiKey) {
-      try {
-        const { VectorStore } = require("@shared/db/vector-store.js");
-        vectorStore = new VectorStore(config.embedding);
-      } catch { /* vector search unavailable */ }
-    }
-    this.memory = new MemoryStore(MEMORY_DIR, vectorStore);
-    this.metrics = new MetricsCollector(dirname(MEMORY_DIR));
+    this.agent = agent;
+    if (!agent.cwd?.trim()) throw new Error(`Bot agent ${agent.id} has no cwd configured`);
+    if (agent.archivedAt) throw new Error(`Bot agent ${agent.id} is archived`);
+    this._scheduler = new LaneScheduler({ maxConcurrency: agent.maxConcurrentTasks });
+    this.metrics = new MetricsCollector(REMI_HOME);
     this.traceCollector = new TraceCollector();
     this._migrateSessionsJson();
   }
@@ -83,7 +73,7 @@ export class Remi {
   }
 
   _getProvider(name?: string | null): Provider {
-    const n = name ?? `acp:${this.config.provider.default}`;
+    const n = name ?? `acp:${this.agent.provider}`;
     let provider = this._providers.get(n);
     if (!provider) {
       // "acp" → match first "acp:*" variant
@@ -127,18 +117,6 @@ export class Remi {
    */
   _resolveSessionKey(msg: IncomingMessage): string {
     return resolveSessionKey(msg);
-  }
-
-  // ── Group config resolution ──────────────────────────────
-
-  /** Look up group config from DB by chatId. Returns all routing info in one query. */
-  _getGroupConfig(chatId: string): GroupConfig | null {
-    try {
-      const store = new GroupConfigStore();
-      return store.getByChatId(chatId);
-    } catch {
-      return null;
-    }
   }
 
   // ── Message handling (the core loop) ─────────────────────
@@ -192,8 +170,8 @@ export class Remi {
    * Build a fully-wired Remi instance from config.
    * Replaces the old RemiDaemon._buildRemi() — all component assembly in one place.
    */
-  static boot(config: RemiConfig): Remi {
-    const remi = new Remi(config);
+  static boot(config: RemiConfig, agent: MultiremiAgent): Remi {
+    const remi = new Remi(config, agent);
 
     // 1. AuthStore (1Passport) with token sync rules
     const syncRules: TokenSyncRule[] | undefined =
@@ -223,29 +201,14 @@ export class Remi {
       log.warn("Plugin core dispatch failed:", e);
     }
 
-    // 2. Providers — register primary + both ACP agents
-    const provider = Remi._buildProvider(config);
+    // 2. Provider — one Multiremi agent row is the sole execution config.
+    const provider = Remi._buildProvider(agent);
     remi.addProvider(provider);
-
-    // Register both configured ACP agents for group-level provider routing.
-    const otherType = config.provider.default === "claude" ? "codex" : "claude";
-    if (!remi._providers.has(`acp:${otherType}`)) {
-      try {
-        remi.addProvider(Remi._buildProvider(config, otherType));
-      } catch (e) {
-        log.warn(`Failed to build acp:${otherType} provider:`, e);
-      }
-    }
 
     // 3. Feishu connector
     if (hasFeishuCreds) {
       const feishuConfig = { ...config.feishu };
-      // Inject the group-policy lookup so the connector (L1) never imports the
-      // remi-product GroupConfigStore (L3) itself.
-      const gcStore = new GroupConfigStore();
-      const feishu = new FeishuConnector(feishuConfig, {
-        getByChatId: (chatId) => gcStore.getByChatId(chatId),
-      });
+      const feishu = new FeishuConnector(feishuConfig);
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
       // Wire /esc abort: (1) signal abort to unblock readline, (2) kill CLI process
       feishu.setAbortHandler(async (chatId: string) => {
@@ -278,30 +241,21 @@ export class Remi {
     return remi;
   }
 
-  private static _buildProvider(config: RemiConfig, agentType?: string) {
-    const rawType = agentType ?? config.provider.default;
+  private static _buildProvider(agent: MultiremiAgent) {
+    const rawType = agent.provider;
     const type = rawType.startsWith("acp:") ? rawType.slice("acp:".length) : rawType;
     if (type !== "claude" && type !== "codex") {
       throw new Error(`Unknown ACP provider: ${rawType}`);
     }
-    const agentCfg = config.provider[type] ?? config.provider.claude;
     return new AcpProvider({
       agentType: type,
-      model: agentCfg.model,
-      timeout: agentCfg.timeout,
-      allowedTools: agentCfg.allowedTools,
-      cwd: homedir(),
-      executable: agentCfg.executable,
-      // ACP wire shape: `args`/`env` are required and `env` is an
-      // EnvVariable[] — a Record env makes the agent drop the server silently.
-      getMcpServers: () => config.mcp
-        .filter((e) => !e.agents || e.agents.includes(type))
-        .map((e) => ({
-          name: e.name,
-          command: e.command,
-          args: e.args ?? [],
-          env: Object.entries(e.env ?? {}).map(([name, value]) => ({ name, value })),
-        })),
+      model: agent.model,
+      allowedTools: agent.allowedTools,
+      cwd: agent.cwd!,
+      executable: agent.executable ?? undefined,
+      args: agent.customArgs,
+      env: agent.customEnv,
+      getMcpServers: () => buildAgentMcpServers(agent.mcpConfig),
     });
   }
 

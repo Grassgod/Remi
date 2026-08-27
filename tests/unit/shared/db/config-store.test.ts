@@ -32,7 +32,6 @@ describe("ConfigStore", () => {
 
   it("save + load round-trips a config", () => {
     const config = defaultRemiConfig();
-    config.provider.default = "codex";
     config.feishu.appId = "test-app-id";
     config.logLevel = "DEBUG";
 
@@ -41,15 +40,14 @@ describe("ConfigStore", () => {
     expect(store.isEmpty()).toBe(false);
 
     const loaded = store.load();
-    expect(loaded.provider.default).toBe("codex");
     expect(loaded.feishu.appId).toBe("test-app-id");
     expect(loaded.logLevel).toBe("DEBUG");
   });
 
   it("getSection / setSection work independently", () => {
-    store.setSection("provider", { default: "claude", claude: {}, codex: {} });
-    const result = store.getSection("provider") as any;
-    expect(result.default).toBe("claude");
+    store.setSection("proxy", { http: "http://proxy.test", noProxy: "localhost" });
+    const result = store.getSection("proxy") as any;
+    expect(result.http).toBe("http://proxy.test");
   });
 
   it("setSection upserts on conflict", () => {
@@ -62,27 +60,26 @@ describe("ConfigStore", () => {
     store.setSection("logLevel", "WARN");
     const loaded = store.load();
     expect(loaded.logLevel).toBe("WARN");
-    expect(loaded.provider.default).toBe("claude");
     expect(loaded.feishu.port).toBe(9000);
   });
 
-  it("respects env overrides on load", () => {
+  it("respects connector env overrides on load", () => {
     store.save(defaultRemiConfig());
-    process.env.REMI_PROVIDER = "codex";
+    process.env.FEISHU_PORT = "9010";
     try {
       const loaded = store.load();
-      expect(loaded.provider.default).toBe("codex");
+      expect(loaded.feishu.port).toBe(9010);
     } finally {
-      delete process.env.REMI_PROVIDER;
+      delete process.env.FEISHU_PORT;
     }
   });
 
   it("save preserves all sections", () => {
     const config = defaultRemiConfig();
-    config.mcp = [{ name: "test", command: "echo" }];
+    config.pluginConfigs = { sample: { enabled: true } };
     store.save(config);
 
     const loaded = store.load();
-    expect(loaded.mcp).toEqual([{ name: "test", command: "echo" }]);
+    expect(loaded.pluginConfigs).toEqual({ sample: { enabled: true } });
   });
 });

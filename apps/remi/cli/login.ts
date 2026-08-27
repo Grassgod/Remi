@@ -1,12 +1,11 @@
 /**
- * `remi login` — Interactive 6-step setup wizard.
+ * `remi login` — Interactive 5-step setup wizard.
  *
  * 1. Claude Code login
  * 2. Feishu Bot auto-creation (Device Flow)
  * 3. Feishu permission check
  * 4. Feishu User OAuth (Device Authorization Flow)
  * 5. Gemini API Key (optional)
- * 6. Embedding API Key (optional)
  */
 
 import { execSync } from "node:child_process";
@@ -19,7 +18,7 @@ import { createBot, authorizeUser, DEFAULT_SCOPES } from "./feishu-bot-creator.j
 import { ensureConfigFile, setConfigValue, getConfigValue, getConfigPath } from "./config-writer.js";
 import * as ui from "./ui.js";
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 5;
 const AUTH_DIR = join(homedir(), ".remi", "auth");
 
 // ── Step 1: Claude Code Login ────────────────────────────────
@@ -232,29 +231,6 @@ async function stepGeminiApiKey(): Promise<boolean> {
   return true;
 }
 
-// ── Step 6: Embedding API Key (optional) ─────────────────────
-
-async function stepEmbeddingApiKey(): Promise<boolean> {
-  ui.step(6, TOTAL_STEPS, "Embedding API Key (optional — vector search)");
-
-  const existing = getConfigValue("embedding", "apiKey");
-  if (existing && existing.length > 0) {
-    ui.pass("Embedding API key already configured.");
-    return true;
-  }
-
-  const key = await ui.prompt("  Enter Embedding API key (press Enter to skip):");
-  if (key) {
-    setConfigValue("embedding", "provider", "voyage");
-    setConfigValue("embedding", "apiKey", key);
-    ui.pass("Embedding API key saved.");
-  } else {
-    ui.warn("Skipped. Vector search (L2) will be disabled; text search (L1) still works.");
-    ui.info("You can add it later via: remi login");
-  }
-  return true;
-}
-
 // ── Main ─────────────────────────────────────────────────────
 
 export async function runLogin(_args: string[]): Promise<void> {
@@ -267,7 +243,6 @@ export async function runLogin(_args: string[]): Promise<void> {
     stepFeishuPermissionCheck,
     stepFeishuUserOAuth,
     stepGeminiApiKey,
-    stepEmbeddingApiKey,
   ];
 
   for (const step of steps) {

@@ -24,7 +24,4 @@ export { AcpProvider } from "@acp/index.js";
 // Connectors
 export { type Connector, type IncomingMessage, type MessageHandler } from "@connectors/base.js";
 
-// Memory
-export { MemoryStore } from "@memory/store.js";
-
 // Queue (replaced CronTimer)

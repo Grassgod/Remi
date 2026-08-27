@@ -155,19 +155,6 @@ function checkGeminiKey(): CheckResult {
   return { status: "warn", message: "Gemini API key not configured (image generation disabled)" };
 }
 
-function checkEmbeddingKey(): CheckResult {
-  try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const embedding = store.getSection("embedding") as Record<string, unknown> | undefined;
-    if (embedding?.apiKey) {
-      return { status: "pass", message: "Embedding API key configured" };
-    }
-  } catch {}
-  return { status: "warn", message: "Embedding API key not configured (vector search disabled)" };
-}
-
 // ── Storage Checks ───────────────────────────────────────────
 
 function checkStorage(): CheckResult {
@@ -215,7 +202,6 @@ export async function runDoctor(_args: string[]): Promise<void> {
   render(check(checkClaudeAuth));
   render(check(checkFeishuTokens));
   render(check(checkGeminiKey));
-  render(check(checkEmbeddingKey));
 
   // Storage
   ui.header("Storage");
