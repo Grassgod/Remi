@@ -99,6 +99,25 @@ async function createPhysicalReadyArchive(
   return { archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 };
 }
 
+function pendingPurgeReceipts(): string[] {
+  return readdirSync(join(archiveRoot!, ".issue-purge-outbox"))
+    .filter((name) => name.endsWith(".json"));
+}
+
+/**
+ * A recovery pass deletes the archive directory before it unlinks the receipt,
+ * so waiting only on the archive path can observe a half-consumed receipt.
+ * Wait for the receipt too, then let any in-flight pass settle.
+ */
+async function settlePurgeRecovery(
+  sessionArchives: { stopIssueArchivePurgeRecovery(): void; whenIssueArchivePurgeRecoveryIdle(): Promise<void> },
+  predicate: () => boolean,
+): Promise<void> {
+  await waitUntil(() => predicate() && pendingPurgeReceipts().length === 0);
+  sessionArchives.stopIssueArchivePurgeRecovery();
+  await sessionArchives.whenIssueArchivePurgeRecoveryIdle();
+}
+
 async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -854,10 +873,8 @@ describe("Multiremi session archives", () => {
 
     internal.purgeArchivePaths = originalPurge;
     sessionArchives.startIssueArchivePurgeRecovery(10);
-    await waitUntil(() => !existsSync(firstPath));
-    sessionArchives.stopIssueArchivePurgeRecovery();
-    expect(readdirSync(join(archiveRoot!, ".issue-purge-outbox"))
-      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await settlePurgeRecovery(sessionArchives, () => !existsSync(firstPath));
+    expect(pendingPurgeReceipts()).toEqual([]);
   });
 
   it("discovers purge receipts published by another Server after an empty recovery pass", async () => {
@@ -886,10 +903,8 @@ describe("Multiremi session archives", () => {
     await otherServer.prepareIssueArchivePurge(issue.id);
     expect(store.deleteIssuesAtomically([issue.id])).toEqual({ deleted: 1 });
 
-    await waitUntil(() => !existsSync(storedPath));
-    sessionArchives.stopIssueArchivePurgeRecovery();
-    expect(readdirSync(join(archiveRoot!, ".issue-purge-outbox"))
-      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await settlePurgeRecovery(sessionArchives, () => !existsSync(storedPath));
+    expect(pendingPurgeReceipts()).toEqual([]);
   });
 
   it("fails closed when a materialized Issue is missing its workspace cleanup record", async () => {
