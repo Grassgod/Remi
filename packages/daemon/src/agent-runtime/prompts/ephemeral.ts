@@ -532,6 +532,8 @@ function appendProjectKnowledgeSections(sections: string[], projectId: string): 
   sections.push("");
   sections.push("Project Wiki is materialized in `./wiki`. Repository code facts are materialized in `./wiki/repositories/<repository>/`. Edit files only below `./wiki`; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
   sections.push("Repository Wiki is shared by every Project that references the same repository. Keep code-level facts there; keep cross-repository decisions and synthesis in the Project Wiki.");
+  sections.push("Organize new Wiki pages by functional domain in directories no deeper than five levels. Put each new page in the best existing directory, maintain an `overview.md` index for every functional directory, and keep directory prefixes out of page titles.");
+  sections.push("Search before creating a page. When facts overlap across pages, merge them into the authoritative page with all source references preserved instead of adding another near-duplicate page.");
   sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
   sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory create|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
 }

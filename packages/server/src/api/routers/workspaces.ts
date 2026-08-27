@@ -91,6 +91,7 @@ import {
 import {
   ATLAS_AGENT_NAME,
   ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
+  ATLAS_WIKI_LIBRARIAN_AUTOPILOT_TITLE,
   resolveAtlasRepositoryWikiAutopilot,
 } from "@multiremi/repository-wiki/atlas.js";
 
@@ -419,7 +420,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       workspaceId,
       agentId: agent.id,
       title: ATLAS_PROJECT_AUTOPILOT_TITLE,
-      description: "When an Issue is completed, inspect its sessions and code evidence, then maintain durable Project Wiki and Memory with the remi CLI.",
+      description: "When an Issue is completed, inspect its sessions and code evidence, maintain durable Project Wiki and Memory with the remi CLI, then run remi wiki lint --output json and resolve supported findings.",
       executionMode: "trigger_issue",
       createdById,
     });
@@ -429,11 +430,21 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       conditions: [{ field: "status", operator: "becomes", value: "done" }],
     });
 
+    const librarianAutopilot = ensureAtlasAutopilot(store, {
+      workspaceId,
+      agentId: agent.id,
+      title: ATLAS_WIKI_LIBRARIAN_AUTOPILOT_TITLE,
+      description: "Daily Wiki librarian: list every workspace project, run remi wiki lint --project <project> --output json across its Project and Repository Wikis, repair broken links and supported contradictions, and merge duplicates only when one authoritative page is established. Preserve every source reference and never delete without the explicit remi wiki merge --yes workflow.",
+      executionMode: "run_only",
+      createdById,
+    });
+    ensureAtlasScheduleTrigger(store, librarianAutopilot.id);
+
     const repositoryAutopilot = ensureAtlasAutopilot(store, {
       workspaceId,
       agentId: agent.id,
       title: ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
-      description: "Use the canonical SCM event, checked-out target repository, and existing Repo Wiki to perform an incremental repository Wiki update with the remi CLI.",
+      description: "Use the canonical SCM event, checked-out target repository, and existing Repo Wiki to perform an incremental repository Wiki update with the remi CLI, then run remi wiki lint --output json.",
       executionMode: "run_only",
       createdById,
     });
@@ -503,7 +514,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     }
     const run = store.runAutopilot(autopilotId, {
       source: "api",
-      prompt: "Bootstrap or refresh the target repository LLM Wiki from its checked-out default branch. Use the code-to-wiki plugin for analysis, preserve durable repository facts, resolve the checked-out HEAD revision, and publish changes with remi wiki push --source-revision <sha>.",
+      prompt: "Bootstrap or refresh the target repository LLM Wiki from its checked-out default branch. Use the code-to-wiki plugin for analysis, preserve durable repository facts, resolve the checked-out HEAD revision, publish changes with remi wiki push --source-revision <sha>, then run remi wiki lint --output json and resolve supported findings.",
       payload: { atlas_repository_id: repositoryId, atlas_mode: "bootstrap_repository" },
       repositoryId,
       dedupeKey: repositoryWikiBuildDedupeKey(repositoryId, "bootstrap_repository", null),
@@ -983,20 +994,24 @@ function atlasSetupStatus(store: RouterDeps["store"], workspaceId: string): Reco
     store.listAgents(),
     store.listAutopilots(workspaceId),
   );
+  const librarianAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_WIKI_LIBRARIAN_AUTOPILOT_TITLE) ?? null;
   const projectTrigger = projectAutopilot
     ? store.listAutopilotTriggers(projectAutopilot.id).find((trigger) => trigger.kind === "system_event" && trigger.enabled) ?? null
     : null;
   const repositoryTrigger = repositoryAutopilot
     ? store.listAutopilotTriggers(repositoryAutopilot.id).find((trigger) => trigger.kind === "scm_event" && trigger.enabled) ?? null
     : null;
-  const configured = Boolean(agent && pluginBinding && projectTrigger && repositoryTrigger);
+  const librarianTrigger = librarianAutopilot
+    ? store.listAutopilotTriggers(librarianAutopilot.id).find((trigger) => trigger.kind === "schedule" && trigger.enabled) ?? null
+    : null;
+  const configured = Boolean(agent && pluginBinding && projectTrigger && repositoryTrigger && librarianTrigger);
   const state = !plugin
     ? "plugin_required"
     : !agent
       ? "not_configured"
       : !repositoryTrigger
         ? "scm_connection_required"
-        : !projectTrigger || !pluginBinding
+        : !projectTrigger || !librarianTrigger || !pluginBinding
           ? "incomplete"
           : "ready";
   return {
@@ -1010,6 +1025,8 @@ function atlasSetupStatus(store: RouterDeps["store"], workspaceId: string): Reco
     repository_trigger_id: repositoryTrigger?.id ?? null,
     project_autopilot_id: projectAutopilot?.id ?? null,
     project_trigger_id: projectTrigger?.id ?? null,
+    librarian_autopilot_id: librarianAutopilot?.id ?? null,
+    librarian_trigger_id: librarianTrigger?.id ?? null,
   };
 }
 
@@ -1061,6 +1078,21 @@ function ensureAtlasTrigger(
     return;
   }
   store.createAutopilotTrigger(autopilotId, { kind, enabled: true, eventConfig });
+}
+
+function ensureAtlasScheduleTrigger(store: RouterDeps["store"], autopilotId: string): void {
+  const input = {
+    enabled: true,
+    cronExpression: "0 3 * * *",
+    timezone: "UTC",
+    label: "Daily Wiki librarian",
+  } as const;
+  const existing = store.listAutopilotTriggers(autopilotId).find((trigger) => trigger.kind === "schedule");
+  if (existing) {
+    store.updateAutopilotTrigger(autopilotId, existing.id, input);
+    return;
+  }
+  store.createAutopilotTrigger(autopilotId, { kind: "schedule", ...input });
 }
 
 function hasOwn(value: unknown, key: string): boolean {

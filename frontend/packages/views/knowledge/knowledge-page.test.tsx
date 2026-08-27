@@ -41,6 +41,8 @@ vi.mock("@tanstack/react-query", () => ({
             repository_trigger_id: "trigger-repo",
             project_autopilot_id: "auto-project",
             project_trigger_id: "trigger-project",
+            librarian_autopilot_id: "auto-librarian",
+            librarian_trigger_id: "trigger-librarian",
           },
           isPending: false,
           isError: false,

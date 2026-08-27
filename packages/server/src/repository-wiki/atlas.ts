@@ -2,6 +2,7 @@ import type { MultiremiAgent, MultiremiAutopilot } from "@multiremi/contracts/ty
 
 export const ATLAS_AGENT_NAME = "Atlas · LLM Wiki";
 export const ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
+export const ATLAS_WIKI_LIBRARIAN_AUTOPILOT_TITLE = "Atlas · Wiki Librarian";
 
 /**
  * Resolve the server-owned Repository Wiki automation. Its identity is the

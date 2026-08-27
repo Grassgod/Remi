@@ -428,6 +428,8 @@ describe("Bun Multiremi project docs", () => {
     expect(schema.version).toBe(1);
     expect(schema.body).toContain("# Wiki Schema");
     expect(schema.body).toContain("能 update 就不要 create");
+    expect(schema.body).toContain("overview.md");
+    expect(schema.body).toContain("目录深度不超过 5 层");
 
     // A second doc reuses the seeded one instead of seeding again.
     store.createProjectDoc(project.id, { kind: "wiki", title: "Second page" });

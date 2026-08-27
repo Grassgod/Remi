@@ -78,7 +78,10 @@ export const PROJECT_DOC_SCHEMA_TEMPLATE = `# Wiki Schema（本项目知识库�
 - memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。
 
 ## 维护纪律
-- 写入前先 \`doc search\` / \`doc get\` 查已有条目；能 update 就不要 create。
+- 按功能域建立目录，目录深度不超过 5 层；新页面必须放到最合适的目录，不要把目录前缀重复写进页面标题。
+- 每个功能目录维护 \`overview.md\` 作为入口，链接该目录的主要页面；根级只保留跨域导航和确实无法分类的页面。
+- 写入前先用 \`remi wiki search\` / \`remi wiki get\` 查已有条目；能 update 就不要 create。
+- 发现跨页重复时，把内容和全部 \`--ref\` 来源合并到权威页面，再显式移除冗余页，不要继续创建近似页面。
 - 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。
 - 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。
 - 一次性细节、只对当前 issue 有效的信息不要入库。
