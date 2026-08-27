@@ -5,8 +5,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { Archive, MessageSquare } from "lucide-react";
 import { isFeishuInboxType } from "@multiremi/core/feishu/inbox";
 import type { InboxItem } from "@multiremi/core/types";
-import { InboxDetailLabel } from "./inbox-detail-label";
-import { getInboxDisplayTitle } from "./inbox-display";
+import { InboxDetailLabel, useInboxTitle } from "./inbox-detail-label";
 import { useT } from "../../i18n";
 
 // Hook returning a localized relative-time formatter — the i18n equivalent
@@ -39,7 +38,8 @@ export function InboxListItem({
 }) {
   const { t } = useT("inbox");
   const timeAgo = useTimeAgo();
-  const displayTitle = getInboxDisplayTitle(item);
+  const inboxTitle = useInboxTitle();
+  const displayTitle = inboxTitle(item, "row");
 
   return (
     <button

@@ -65,8 +65,7 @@ import {
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
 import { InboxListItem, useTimeAgo } from "./inbox-list-item";
-import { useTypeLabels } from "./inbox-detail-label";
-import { getInboxDisplayTitle } from "./inbox-display";
+import { useInboxTitle, useTypeLabels } from "./inbox-detail-label";
 import { useT } from "../../i18n";
 
 // A failed inbox fetch resolves to an empty list, and an empty list renders
@@ -232,6 +231,7 @@ export function InboxPage() {
   const markGroupReadMutation = useMarkInboxItemsRead();
   const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
+  const inboxTitle = useInboxTitle();
 
 
   // Auto-mark-read whenever a selected item is unread — covers both click-
@@ -518,7 +518,7 @@ export function InboxPage() {
     </ErrorBoundary>
   ) : selected ? (
     <div className="p-6">
-      <h2 className="text-lg font-semibold">{getInboxDisplayTitle(selected)}</h2>
+      <h2 className="text-lg font-semibold">{inboxTitle(selected, "detail")}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         {typeLabels[selected.type]} · {timeAgo(selected.created_at)}
       </p>

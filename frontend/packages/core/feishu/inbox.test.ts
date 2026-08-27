@@ -3,6 +3,7 @@ import type { InboxItem } from "../types";
 import {
   feishuInboxActions,
   feishuInboxContext,
+  feishuInboxOrigin,
   isFeishuInboxType,
   safeFeishuAppLink,
 } from "./inbox";
@@ -84,6 +85,14 @@ describe("feishuInboxContext", () => {
     expect(context?.appLink).toBeNull();
   });
 
+  it("reads the chat name the ingestion pipeline copies into details", () => {
+    const context = feishuInboxContext(
+      item({ details: { message_id: "msg-1", chat_id: "chat-1", chat_name: "研发群" } } as Partial<InboxItem>),
+    );
+    expect(context?.chatName).toBe("研发群");
+    expect(feishuInboxContext(item({ details: { chat_id: "chat-1" } } as Partial<InboxItem>))?.chatName).toBeNull();
+  });
+
   it("coerces consecutive_failures whether it arrives as a number or a string", () => {
     const asNumber = feishuInboxContext(
       item({
@@ -126,6 +135,29 @@ describe("feishuInboxContext", () => {
   it("does not invent a proposal title for other row kinds", () => {
     const context = feishuInboxContext(item({ body: "just a message" }));
     expect(context?.proposedTitle).toBeNull();
+  });
+});
+
+describe("feishuInboxOrigin", () => {
+  it("names the chat for an ingested message and the source for an alert", () => {
+    const message = feishuInboxContext(
+      item({ details: { message_id: "msg-1", chat_name: "研发群" } } as Partial<InboxItem>),
+    );
+    expect(message && feishuInboxOrigin(message)).toBe("研发群");
+
+    const alert = feishuInboxContext(
+      item({
+        type: "feishu_ingest_connection_alert",
+        // The alert has no chat — it is about the source itself.
+        details: { source_id: "src-1", source_name: "personal", chat_name: "研发群" },
+      } as Partial<InboxItem>),
+    );
+    expect(alert && feishuInboxOrigin(alert)).toBe("personal");
+  });
+
+  it("returns null when the row carries no origin to show", () => {
+    const context = feishuInboxContext(item({ details: { message_id: "msg-1" } } as Partial<InboxItem>));
+    expect(context && feishuInboxOrigin(context)).toBeNull();
   });
 });
 

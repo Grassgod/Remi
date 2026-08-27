@@ -28,6 +28,7 @@ export interface FeishuInboxContext {
   messageId: string | null;
   sourceId: string | null;
   chatId: string | null;
+  chatName: string | null;
   /** Only ever an `https:` URL — see `safeFeishuAppLink`. */
   appLink: string | null;
   proposalId: string | null;
@@ -94,6 +95,7 @@ export function feishuInboxContext(item: InboxItem): FeishuInboxContext | null {
     messageId: detailString(item, "message_id"),
     sourceId: detailString(item, "source_id"),
     chatId: detailString(item, "chat_id"),
+    chatName: detailString(item, "chat_name"),
     appLink: safeFeishuAppLink(detailString(item, "message_app_link")),
     proposalId: detailString(item, "proposal_id"),
     proposedTitle: item.type === "feishu_issue_proposal" ? proposedIssueTitle(item) : null,
@@ -101,6 +103,19 @@ export function feishuInboxContext(item: InboxItem): FeishuInboxContext | null {
     errorCode: detailString(item, "error_code"),
     consecutiveFailures: detailCount(item, "consecutive_failures"),
   };
+}
+
+/**
+ * Where the row came from, for the title line: the chat for an ingested
+ * message, the source for a connection alert. The server writes `title` in one
+ * hardcoded language and the proposal row's title ("建议创建 Issue") does not
+ * name Feishu at all, so the inbox composes its own line from the localized
+ * type label plus this — an ingested message is then always recognisable in a
+ * mixed stream.
+ */
+export function feishuInboxOrigin(context: FeishuInboxContext): string | null {
+  if (context.kind === "feishu_ingest_connection_alert") return context.sourceName;
+  return context.chatName;
 }
 
 /** Which buttons a row gets. The connection alert is a ledger row with nothing

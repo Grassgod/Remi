@@ -917,6 +917,10 @@ export class FeishuIngestRepo {
           message_id: message.messageId,
           source_id: message.sourceId,
           chat_id: message.chatId,
+          // The chat name is repeated as a field, like `source_name` on the
+          // connection alert, so the inbox row can say which chat a message
+          // came from without resolving the id against the chat list.
+          chat_name: message.chatName,
           message_app_link: message.messageAppLink,
           outcome_kind: outcomeKind,
         },
@@ -1044,6 +1048,7 @@ export class FeishuIngestRepo {
           message_id: message.messageId,
           source_id: message.sourceId,
           chat_id: message.chatId,
+          chat_name: message.chatName,
           message_app_link: message.messageAppLink,
           outcome_kind: "issue_proposed",
         },
