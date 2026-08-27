@@ -124,11 +124,11 @@ export class SessionArchivesRepo {
            uploaded_size_bytes = 0,
            file_count = NULL,
            metadata = excluded.metadata,
-           attempt_count = attempt_count + 1,
+           attempt_count = multiremi_session_archives.attempt_count + 1,
            last_error = excluded.last_error,
            updated_at = excluded.updated_at,
            completed_at = NULL
-         WHERE retry_exhausted_at IS NULL`,
+         WHERE multiremi_session_archives.retry_exhausted_at IS NULL`,
         [
           id,
           input.workspaceId,

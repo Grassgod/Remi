@@ -108,9 +108,15 @@ describe("translateSqliteToPg", () => {
 
 // ────────────────────────────── PostgresSyncDatabase + MultiremiStore ──────────────────────────────
 
-const PG_ADMIN_URL = "postgres://multimira:multimira@localhost:5432/postgres";
-const PG_HOST_URL = "postgres://multimira:multimira@localhost:5432";
+const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
+  ?? "postgres://multimira:multimira@localhost:5432/postgres";
 const TEST_DB = `multiremi_pgtest_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
+
+function pgDatabaseUrl(database: string): string {
+  const url = new URL(PG_ADMIN_URL);
+  url.pathname = `/${database}`;
+  return url.toString();
+}
 
 async function probePostgres(): Promise<boolean> {
   try {
@@ -194,7 +200,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
     // Constructing the store runs migrate(): all CREATE TABLE / ALTER / index DDL
     // flows through translateSqliteToPg. A mis-translation would throw right here.
-    db = new PostgresSyncDatabase(`${PG_HOST_URL}/${TEST_DB}`);
+    db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
     store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
   });
@@ -367,6 +373,34 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getScmConnection(connection.id)).toMatchObject({
       repositoryScope: "selected",
       isDefault: false,
+    });
+  });
+
+  it("backfills session archive retry budgets on Postgres", () => {
+    const archiveId = `sar_pg_retry_budget_${process.pid}`;
+    db.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260826_session_archive_retry_budget"],
+    );
+    db.run(
+      `INSERT INTO multiremi_session_archives (
+        id, issue_id, runtime_id, daemon_id, source_revision, sha256,
+        size_bytes, status, relative_path, attempt_count, last_error,
+        created_at, updated_at
+       ) VALUES (?, ?, 'rt_pg', 'dmn_pg', 'rev-pg', ?, 1, 'failed', ?, 6,
+         'network failed', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z')`,
+      [archiveId, `iss_pg_retry_budget_${process.pid}`, "4".repeat(64), `${archiveId}/sessions.tar.gz`],
+    );
+
+    runMigrations(db);
+
+    expect(db.query(
+      `SELECT status, next_retry_at, retry_exhausted_at
+       FROM multiremi_session_archives WHERE id = ?`,
+    ).get(archiveId)).toEqual({
+      status: "failed",
+      next_retry_at: expect.any(String),
+      retry_exhausted_at: expect.any(String),
     });
   });
 
@@ -992,7 +1026,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const secondWorker = new Worker(workerUrl);
     const firstReady = waitForWorkerPhase(firstWorker, "ready");
     const secondReady = waitForWorkerPhase(secondWorker, "ready");
-    const databaseUrl = `${PG_HOST_URL}/${TEST_DB}`;
+    const databaseUrl = pgDatabaseUrl(TEST_DB);
     firstWorker.postMessage({ type: "init", databaseUrl });
     secondWorker.postMessage({ type: "init", databaseUrl });
     await Promise.all([firstReady, secondReady]);
@@ -1715,7 +1749,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const locked = waitForWorkerPhase(worker, "locked");
     const committed = waitForWorkerPhase(worker, "committed");
     worker.postMessage({
-      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      databaseUrl: pgDatabaseUrl(TEST_DB),
       issueId: issue.id,
       eventId: `sev_pg_terminal_${wsCounter}`,
       holdMs: 200,
@@ -1755,7 +1789,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const locked = waitForWorkerPhase(worker, "locked");
     const committed = waitForWorkerPhase(worker, "committed");
     worker.postMessage({
-      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      databaseUrl: pgDatabaseUrl(TEST_DB),
       sessionId: task.issueSessionId!,
       taskId: task.id,
       holdMs: 150,
@@ -1782,11 +1816,11 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       new URL("./fixtures/postgres-comment-edit-worker.ts", import.meta.url).href,
     );
     const ready = waitForWorkerPhase(worker, "ready");
-    worker.postMessage({ type: "init", databaseUrl: `${PG_HOST_URL}/${TEST_DB}` });
+    worker.postMessage({ type: "init", databaseUrl: pgDatabaseUrl(TEST_DB) });
     await ready;
 
-    const blocker = new Bun.SQL(`${PG_HOST_URL}/${TEST_DB}`, { max: 1 });
-    const observer = new Bun.SQL(`${PG_HOST_URL}/${TEST_DB}`, { max: 1 });
+    const blocker = new Bun.SQL(pgDatabaseUrl(TEST_DB), { max: 1 });
+    const observer = new Bun.SQL(pgDatabaseUrl(TEST_DB), { max: 1 });
     await blocker`BEGIN`;
     await blocker`
       UPDATE multiremi_workspaces
@@ -1851,7 +1885,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const committed = waitForWorkerPhase(worker, "committed");
     const steerId = `steer_pg_race_${wsCounter}`;
     worker.postMessage({
-      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      databaseUrl: pgDatabaseUrl(TEST_DB),
       mode: "steer",
       workspaceId,
       taskId: task.id,
@@ -1883,7 +1917,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const locked = waitForWorkerPhase(worker, "locked");
     const committed = waitForWorkerPhase(worker, "committed");
     worker.postMessage({
-      databaseUrl: `${PG_HOST_URL}/${TEST_DB}`,
+      databaseUrl: pgDatabaseUrl(TEST_DB),
       mode: "complete",
       workspaceId,
       taskId: task.id,
