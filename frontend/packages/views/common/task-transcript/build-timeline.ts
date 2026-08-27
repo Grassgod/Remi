@@ -31,6 +31,11 @@ export interface TimelineItem {
   meta?: Record<string, unknown>;
 }
 
+/** Shared tool-call count contract for transcript summaries and dialogs. */
+export function countToolCalls(items: readonly TimelineItem[]): number {
+  return items.filter((item) => item.type === "tool_use").length;
+}
+
 /** Rolled-up token snapshot for the transcript header. */
 export interface UsageSnapshot {
   model?: string;

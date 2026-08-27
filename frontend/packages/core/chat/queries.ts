@@ -1,6 +1,6 @@
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { ChatPendingTask, PendingChatTasksResponse } from "../types";
+import type { ChatPendingTask, PendingChatTasksResponse, TaskMessagePayload } from "../types";
 
 // NOTE on workspace scoping:
 // `wsId` is used only as part of queryKey for cache isolation per workspace.
@@ -27,10 +27,85 @@ export const chatKeys = {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PREFIXED_TASK_ID_PATTERN = /^tsk_[a-z0-9_]+$/i;
 export const CHAT_PENDING_REFETCH_INTERVAL_MS = 3000;
+const TASK_MESSAGE_IN_FLIGHT_MAX_PER_TASK = 200;
+const TASK_MESSAGE_IN_FLIGHT_MAX_TASKS = 100;
+const inFlightTaskMessages = new Map<string, TaskMessagePayload[]>();
 
 export function isTaskMessageTaskId(taskId: string | null | undefined): taskId is string {
   return typeof taskId === "string"
     && (UUID_PATTERN.test(taskId) || PREFIXED_TASK_ID_PATTERN.test(taskId));
+}
+
+/**
+ * Merge task-message snapshots and live frames by sequence. Later sources win:
+ * the daemon assigns seq before persisting an immutable outbox payload, and WS
+ * frames are broadcast from the post-upsert row, so they are equal to or newer
+ * than a racing history response.
+ */
+export function mergeTaskMessages(
+  ...sources: ReadonlyArray<readonly TaskMessagePayload[]>
+): TaskMessagePayload[] {
+  const bySeq = new Map<number, TaskMessagePayload>();
+  for (const source of sources) {
+    for (const message of source) bySeq.set(message.seq, message);
+  }
+  return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
+}
+
+function bufferInFlightTaskMessages(
+  taskId: string,
+  pending: readonly TaskMessagePayload[],
+): void {
+  const existing = inFlightTaskMessages.get(taskId) ?? [];
+  const bounded = mergeTaskMessages(existing, pending).slice(-TASK_MESSAGE_IN_FLIGHT_MAX_PER_TASK);
+  inFlightTaskMessages.delete(taskId);
+  while (inFlightTaskMessages.size >= TASK_MESSAGE_IN_FLIGHT_MAX_TASKS) {
+    const oldestTaskId = inFlightTaskMessages.keys().next().value;
+    if (oldestTaskId === undefined) break;
+    inFlightTaskMessages.delete(oldestTaskId);
+  }
+  inFlightTaskMessages.set(taskId, bounded);
+}
+
+function mergeAndDrainInFlightTaskMessages(
+  taskId: string,
+  ...sources: ReadonlyArray<readonly TaskMessagePayload[]>
+): TaskMessagePayload[] {
+  const buffered = inFlightTaskMessages.get(taskId) ?? [];
+  const merged = mergeTaskMessages(...sources, buffered);
+  inFlightTaskMessages.delete(taskId);
+  return merged;
+}
+
+/**
+ * Append live frames only after a full task-message snapshot has hydrated.
+ * During the initial fetch window, keep a bounded bridge buffer for queryFn to
+ * drain. It is never rendered or treated as a second transcript data source.
+ */
+export function appendTaskMessagesToHydratedCache(
+  client: QueryClient,
+  taskId: string,
+  pending: readonly TaskMessagePayload[],
+): boolean {
+  const key = chatKeys.taskMessages(taskId);
+  const cached = client.getQueryData<TaskMessagePayload[]>(key);
+  if (cached === undefined) {
+    if (client.getQueryState(key)?.fetchStatus === "fetching") {
+      bufferInFlightTaskMessages(taskId, pending);
+    }
+    return false;
+  }
+
+  const seen = new Set(cached.map((message) => message.seq));
+  const additions = pending.filter((message) => {
+    if (seen.has(message.seq)) return false;
+    seen.add(message.seq);
+    return true;
+  });
+  if (additions.length > 0) {
+    client.setQueryData(key, mergeTaskMessages(cached, additions));
+  }
+  return true;
 }
 
 export function pendingChatTaskRefetchInterval(query: {
@@ -108,13 +183,23 @@ export function pendingChatTaskOptions(sessionId: string) {
 
 /**
  * Timeline for a single task — rendered by both the live chat view (while a
- * task is running) and AssistantMessage (for completed tasks). WS
- * `task:message` events seed this cache in real time via useRealtimeSync.
+ * task is running) and AssistantMessage (for completed tasks). Once the full
+ * history has hydrated this key, WS `task:message` events append to it via
+ * useRealtimeSync.
  */
 export function taskMessagesOptions(taskId: string) {
   return queryOptions({
     queryKey: chatKeys.taskMessages(taskId),
-    queryFn: () => api.listTaskMessages(taskId),
+    queryFn: async ({ client }) => {
+      try {
+        const history = await api.listTaskMessages(taskId);
+        const cached = client.getQueryData<TaskMessagePayload[]>(chatKeys.taskMessages(taskId)) ?? [];
+        return mergeAndDrainInFlightTaskMessages(taskId, history, cached);
+      } catch (error) {
+        inFlightTaskMessages.delete(taskId);
+        throw error;
+      }
+    },
     enabled: isTaskMessageTaskId(taskId),
     staleTime: Infinity,
   });

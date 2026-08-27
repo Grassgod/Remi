@@ -9,8 +9,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@multiremi/ui/components/ui/tooltip";
-import { api } from "@multiremi/core/api";
-import { chatKeys } from "@multiremi/core/chat/queries";
+import { taskMessagesOptions } from "@multiremi/core/chat/queries";
 import { useTaskScopeSubscription } from "@multiremi/core/realtime";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
@@ -61,10 +60,8 @@ export function TranscriptButton({
   // tasks ride the workspace-wide broadcast.
   const useQueryCache = providedItems === undefined;
   const { data: liveMessages, isFetching } = useQuery({
-    queryKey: chatKeys.taskMessages(task.id),
-    queryFn: () => api.listTaskMessages(task.id),
+    ...taskMessagesOptions(task.id),
     enabled: open && useQueryCache,
-    staleTime: Infinity,
   });
   const loading = isFetching && !liveMessages;
   useTaskScopeSubscription(task.id, open && useQueryCache);

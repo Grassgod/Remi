@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Bot, ChevronDown, Clock, Loader2, Square } from "lucide-react";
 import { api } from "@multiremi/core/api";
+import { chatKeys, mergeTaskMessages } from "@multiremi/core/chat/queries";
 import { useWSEvent, useWSReconnect } from "@multiremi/core/realtime";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import type { AgentTask } from "@multiremi/core/types/agent";
@@ -13,6 +15,7 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import {
   TranscriptButton,
   buildTimeline,
+  countToolCalls,
   type TimelineItem,
 } from "../../common/task-transcript";
 import { useT } from "../../i18n";
@@ -48,6 +51,7 @@ interface AgentLiveCardProps {
 }
 
 export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
+  const qc = useQueryClient();
   const { t } = useT("issues");
   const { getActorName } = useActorName();
   const [taskStates, setTaskStates] = useState<Map<string, TaskState>>(new Map());
@@ -71,6 +75,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
   const [expanded, setExpanded] = useState(false);
   const seenSeqs = useRef(new Set<string>());
   const hydratedTaskIds = useRef(new Set<string>());
+  const taskMessagesRef = useRef(new Map<string, TaskMessagePayload[]>());
   const mountedRef = useRef(true);
   // Monotonic counter — each reconcile() call captures its issued seq and
   // only applies its response if it's still the latest issued. This stops
@@ -126,6 +131,9 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
       for (const id of Array.from(hydratedTaskIds.current)) {
         if (!activeIds.has(id)) hydratedTaskIds.current.delete(id);
       }
+      for (const id of Array.from(taskMessagesRef.current.keys())) {
+        if (!activeIds.has(id)) taskMessagesRef.current.delete(id);
+      }
 
       // Hydrate messages for tasks we haven't fetched yet. Per-task guard
       // prevents duplicate fetches when reconcile fires repeatedly (mount
@@ -135,14 +143,17 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
         hydratedTaskIds.current.add(task.id);
         api.listTaskMessages(task.id).then((msgs) => {
           if (!mountedRef.current) return;
-          for (const m of msgs) seenSeqs.current.add(`${m.task_id}:${m.seq}`);
+          const key = chatKeys.taskMessages(task.id);
+          const cached = qc.getQueryData<TaskMessagePayload[]>(key) ?? [];
+          const local = taskMessagesRef.current.get(task.id) ?? [];
+          const messages = mergeTaskMessages(msgs, cached, local);
+          taskMessagesRef.current.set(task.id, messages);
+          qc.setQueryData(key, messages);
+          for (const m of messages) seenSeqs.current.add(`${m.task_id}:${m.seq}`);
           setTaskStates((prev) => {
             const next = new Map(prev);
             const existing = next.get(task.id);
             if (!existing) return prev;
-            const loadedSeqs = new Set(msgs.map((i) => i.seq));
-            const wsOnly = existing.messages.filter((i) => !loadedSeqs.has(i.seq));
-            const messages = [...msgs, ...wsOnly].sort((a, b) => a.seq - b.seq);
             next.set(task.id, { task: existing.task, messages });
             return next;
           });
@@ -152,7 +163,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
         });
       }
     }).catch(console.error);
-  }, [issueId, issueSessionId]);
+  }, [issueId, issueSessionId, qc]);
 
   // Initial fetch on mount / issueId change.
   useEffect(() => {
@@ -173,12 +184,13 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
       const key = `${msg.task_id}:${msg.seq}`;
       if (seenSeqs.current.has(key)) return;
       seenSeqs.current.add(key);
+      const messages = mergeTaskMessages(taskMessagesRef.current.get(msg.task_id) ?? [], [msg]);
+      taskMessagesRef.current.set(msg.task_id, messages);
 
       setTaskStates((prev) => {
         const next = new Map(prev);
         const existing = next.get(msg.task_id);
         if (existing) {
-          const messages = [...existing.messages, msg].sort((a, b) => a.seq - b.seq);
           next.set(msg.task_id, { ...existing, messages });
         }
         return next;
@@ -200,6 +212,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
       return next;
     });
     setHumanRequestTasks((prev) => prev.filter((task) => task.id !== p.task_id));
+    taskMessagesRef.current.delete(p.task_id);
     reconcile();
   }, [issueId, reconcile]);
 
@@ -410,7 +423,7 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
     return () => clearInterval(interval);
   }, [task.started_at, task.dispatched_at, task.created_at]);
 
-  const toolCount = items.filter((i) => i.type === "tool_use").length;
+  const toolCount = countToolCalls(items);
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 text-muted-foreground">
