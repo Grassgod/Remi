@@ -117,6 +117,7 @@ function doc(partial: Partial<ProjectDoc> & { id: string }): ProjectDoc {
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...partial,
+    path: partial.path ?? `${partial.id}.md`,
   };
 }
 

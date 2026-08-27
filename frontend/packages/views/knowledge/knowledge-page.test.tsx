@@ -175,6 +175,7 @@ function doc(partial: Partial<WorkspaceDoc> & { id: string }): WorkspaceDoc {
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...partial,
+    path: partial.path ?? `${partial.id}.md`,
   };
 }
 
