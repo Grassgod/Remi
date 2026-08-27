@@ -37,6 +37,7 @@ export function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<
     id: runtime.id,
     workspace_id: runtimeWorkspaceId(runtime),
     daemon_id: runtime.daemonId,
+    daemon_display_name: runtime.daemonDisplayName,
     name: runtime.name,
     runtime_mode: runtime.runtimeMode,
     provider: runtime.provider,
@@ -415,6 +416,7 @@ export function daemonRuntimeResponse(
   id: string;
   workspace_id: string | null;
   daemon_id: string | null;
+  daemon_display_name: string | null;
   name: string;
   runtime_mode: string;
   provider: string;
@@ -432,6 +434,7 @@ export function daemonRuntimeResponse(
     id: runtime.id,
     workspace_id: runtime.workspaceId,
     daemon_id: runtime.daemonId ?? metadata.daemonId,
+    daemon_display_name: runtime.daemonDisplayName,
     name: runtime.name,
     runtime_mode: runtime.runtimeMode,
     provider: runtime.provider,

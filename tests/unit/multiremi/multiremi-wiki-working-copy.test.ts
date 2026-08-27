@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,11 +29,24 @@ interface RepositoryDocState {
 
 const tempDirs: string[] = [];
 let previousWorkspaceRoot: string | undefined;
+let previousProjectId: string | undefined;
+let previousTaskId: string | undefined;
+
+beforeEach(() => {
+  previousProjectId = process.env.MULTIREMI_PROJECT_ID;
+  previousTaskId = process.env.MULTIREMI_TASK_ID;
+  delete process.env.MULTIREMI_PROJECT_ID;
+  delete process.env.MULTIREMI_TASK_ID;
+});
 
 afterEach(() => {
   if (previousWorkspaceRoot === undefined) delete process.env.MULTIREMI_WORKSPACE_ROOT;
   else process.env.MULTIREMI_WORKSPACE_ROOT = previousWorkspaceRoot;
   previousWorkspaceRoot = undefined;
+  if (previousProjectId === undefined) delete process.env.MULTIREMI_PROJECT_ID;
+  else process.env.MULTIREMI_PROJECT_ID = previousProjectId;
+  if (previousTaskId === undefined) delete process.env.MULTIREMI_TASK_ID;
+  else process.env.MULTIREMI_TASK_ID = previousTaskId;
   while (tempDirs.length) rmSync(tempDirs.pop()!, { recursive: true, force: true });
 });
 

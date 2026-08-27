@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 643,
+    "routeCount": 644,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 425,
+      "compat": 426,
       "root": 13
     },
     "getRoutes": 278,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 365,
+    "mutationRoutes": 366,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -405,6 +405,7 @@
     "PATCH /api/autopilots/:id",
     "PATCH /api/autopilots/:id/triggers/:triggerId",
     "PATCH /api/chat/sessions/:sessionId",
+    "PATCH /api/daemons/:daemonId",
     "PATCH /api/issues/:id",
     "PATCH /api/issues/:id/sessions/:sessionId",
     "PATCH /api/me",
@@ -4753,6 +4754,7 @@
             "id": "rt_n55323",
             "workspace_id": "local",
             "daemon_id": "dmn_flow",
+            "daemon_display_name": "flow-device",
             "name": "flow-runtime",
             "runtime_mode": "local",
             "provider": "claude",
@@ -17752,6 +17754,7 @@
             "provider": "claude",
             "daemonId": "dmn_snapshot",
             "legacyDaemonId": null,
+            "daemonDisplayName": null,
             "runtimeMode": "local",
             "deviceInfo": "",
             "metadata": {},
@@ -17797,6 +17800,7 @@
           "provider": "claude",
           "daemonId": "dmn_snapshot",
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -19289,6 +19293,7 @@
           "id": "rt_snapshot",
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
+          "daemon_display_name": null,
           "name": "snapshot-runtime",
           "runtime_mode": "local",
           "provider": "claude",
@@ -19316,6 +19321,7 @@
           "provider": "claude",
           "daemonId": "dmn_snapshot",
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -19344,7 +19350,8 @@
           ],
           "lastHeartbeatAt": "<timestamp>",
           "createdAt": "<timestamp>",
-          "updatedAt": "<timestamp>"
+          "updatedAt": "<timestamp>",
+          "daemon_display_name": null
         },
         "usage": [
           {
@@ -22924,6 +22931,7 @@
           "provider": "codex",
           "daemonId": null,
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -22959,6 +22967,7 @@
           "provider": "claude",
           "daemonId": "dmn_snapshot",
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -23000,6 +23009,7 @@
         "id": "rt_snapshot",
         "workspace_id": "local",
         "daemon_id": "dmn_snapshot",
+        "daemon_display_name": null,
         "name": "flow-runtime-compat",
         "runtime_mode": "local",
         "provider": "claude",
