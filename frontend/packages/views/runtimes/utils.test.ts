@@ -213,6 +213,49 @@ describe("estimateCost", () => {
     ).toBeCloseTo(1.75 + 14, 5);
   });
 
+  it("prices the three named GPT-5.6 tiers independently", () => {
+    // Sol / Terra / Luna replace the -mini / -nano suffixes of earlier
+    // generations, and the spread between them is 25x on input — inheriting
+    // one tier's rate for another would be a wild mis-estimate, so each is
+    // its own row. Rates are the standard short-context meter.
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-sol",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(5 + 30, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-terra",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(2 + 12, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-luna",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.2 + 1.2, 5);
+    // GPT-5.6 is the first OpenAI family to publish a cache-write rate
+    // (1.25x input) instead of mirroring input like gpt-5.5 and older.
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-sol",
+        cache_read_tokens: 1_000_000,
+        cache_write_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.5 + 6.25, 5);
+    // The bare family name is not a SKU — it must not inherit a tier.
+    expect(isModelPriced("gpt-5.6")).toBe(false);
+  });
+
   it("flags catalog SKUs without a published price (gpt-5.5-mini) as unmapped", () => {
     // `gpt-5.5-mini` is in the Codex catalog but OpenAI hasn't published a
     // public rate. We refuse to absorb it into `gpt-5.5` — the diagnostic
