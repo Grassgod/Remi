@@ -1,7 +1,7 @@
 // `multiremi config` persistence/redaction plus the launch, foreground-arg and
 // launchd/systemd service specs the daemon installer emits.
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,6 +16,7 @@ import {
   multiremiDaemonPaths,
   multiremiDaemonServicePath,
   resolveDeviceName,
+  resolveSetupConfig,
   runMultiremi,
 } from "../../../apps/remi/cli/multiremi.js";
 
@@ -81,6 +82,79 @@ describe("Multiremi CLI — config file and daemon service specs", () => {
       .toBe("CLI Runtime");
     expect(resolveDeviceName({}, {}, { MULTIREMI_DEVICE_NAME: undefined, MULTIREMI_RUNTIME_NAME: undefined, USER: "runner" }, "host"))
       .toBe("host-runner");
+  });
+
+  test("pins an existing machine identity before adding a device name", () => {
+    const next = resolveSetupConfig(
+      { server_url: "https://example.test", workspace_id: "ws_1" },
+      { "device-name": "New name" },
+      { MULTIREMI_DEVICE_NAME: undefined, MULTIREMI_RUNTIME_NAME: undefined, USER: "runner" },
+      "host",
+    );
+
+    expect(next.device_name).toBe("New name");
+    expect(next.daemon_id).toBe("host-runner");
+  });
+
+  test("keeps an explicit daemon id when adding a device name", () => {
+    const next = resolveSetupConfig(
+      {},
+      { "device-name": "New name", "daemon-id": "dmn_x" },
+      { MULTIREMI_DEVICE_NAME: undefined, MULTIREMI_RUNTIME_NAME: undefined, USER: "runner" },
+      "host",
+    );
+
+    expect(next.device_name).toBe("New name");
+    expect(next.daemon_id).toBe("dmn_x");
+  });
+
+  test("does not pin a daemon id when setup has no device name", () => {
+    const next = resolveSetupConfig(
+      {},
+      {},
+      { MULTIREMI_DEVICE_NAME: undefined, MULTIREMI_RUNTIME_NAME: undefined, USER: "runner" },
+      "host",
+    );
+
+    expect(next).not.toHaveProperty("daemon_id");
+  });
+
+  test("preserves an existing daemon id when changing the device name", () => {
+    const next = resolveSetupConfig(
+      { daemon_id: "dmn_existing", device_name: "Old name" },
+      { "device-name": "New name" },
+      { MULTIREMI_DEVICE_NAME: undefined, MULTIREMI_RUNTIME_NAME: undefined, USER: "runner" },
+      "host",
+    );
+
+    expect(next.device_name).toBe("New name");
+    expect(next.daemon_id).toBe("dmn_existing");
+  });
+
+  test("shows setup help without creating or rewriting config", async () => {
+    tmp = mkdtempSync(join(tmpdir(), "multiremi-setup-help-"));
+    const configPath = join(tmp, "config.json");
+    const previousConfigPath = process.env.MULTIREMI_CONFIG;
+    const originalLog = console.log;
+    const logs: string[] = [];
+    try {
+      process.env.MULTIREMI_CONFIG = configPath;
+      console.log = (...parts: unknown[]) => { logs.push(parts.map(String).join(" ")); };
+
+      await runMultiremi(["setup", "--help"], { programName: "remi" });
+
+      expect(existsSync(configPath)).toBeFalse();
+      expect(logs.join("\n")).toContain("Usage: remi <command> [options]");
+
+      const originalConfig = '{ "server_url": "https://example.test", "workspace_id": "ws_1" }\n';
+      writeFileSync(configPath, originalConfig);
+      await runMultiremi(["setup", "--help"], { programName: "remi" });
+      expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
+    } finally {
+      console.log = originalLog;
+      if (previousConfigPath === undefined) delete process.env.MULTIREMI_CONFIG;
+      else process.env.MULTIREMI_CONFIG = previousConfigPath;
+    }
   });
 
   test("builds background daemon launch spec without leaking token in argv", () => {

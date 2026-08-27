@@ -99,7 +99,7 @@ export async function runMultiremi(args: string[], runOptions: RunMultiremiOptio
 
   switch (parsed.command) {
     case "setup":
-      setup(parsed.options);
+      if (!setup(parsed.options, programName)) return;
       if (Boolean(parsed.options.start)) await daemon(parsed.options, [], programName);
       return;
     case "login":
@@ -164,34 +164,13 @@ async function serve(options: CliOptions): Promise<void> {
   await waitForShutdown(() => server.stop(true));
 }
 
-function setup(options: CliOptions): void {
-  const current = loadMultiremiConfig();
-  const next: MultiremiCliConfig = { ...current };
-  const serverUrl = stringOpt(options.server ?? options["server-url"], process.env.MULTIREMI_SERVER_URL);
-  const workspaceId = stringOpt(options.workspace ?? options["workspace-id"], process.env.MULTIREMI_WORKSPACE_ID);
-  const token = stringOpt(options.token, process.env.MULTIREMI_TOKEN);
-  const provider = stringOpt(options.provider, process.env.MULTIREMI_PROVIDER);
-  const runtimeId = stringOpt(options.runtimeId ?? options["runtime-id"], process.env.MULTIREMI_RUNTIME_ID);
-  const runtimeName = stringOpt(options.name ?? options["runtime-name"], process.env.MULTIREMI_RUNTIME_NAME);
-  const deviceName = stringOpt(options["device-name"] ?? options.deviceName, process.env.MULTIREMI_DEVICE_NAME);
-  const daemonId = stringOpt(options.daemonId ?? options["daemon-id"], process.env.MULTIREMI_DAEMON_ID);
-  const maxConcurrency = stringOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY);
-
-  if (serverUrl) next.server_url = serverUrl.replace(/\/+$/, "");
-  if (workspaceId) next.workspace_id = workspaceId;
-  if (token) next.token = token;
-  if (provider) next.provider = provider;
-  if (runtimeId) next.runtime_id = runtimeId;
-  if (runtimeName) next.runtime_name = runtimeName;
-  if (deviceName) next.device_name = deviceName;
-  if (daemonId) next.daemon_id = daemonId;
-  if (maxConcurrency) {
-    const n = parseInt(maxConcurrency, 10);
-    if (!Number.isFinite(n) || n < 1) {
-      throw new Error("--max-concurrency must be an integer >= 1");
-    }
-    next.max_concurrency = n;
+function setup(options: CliOptions, programName: string): boolean {
+  if (options.help || options.h) {
+    showHelp(programName);
+    return false;
   }
+  const current = loadMultiremiConfig();
+  const next = resolveSetupConfig(current, options);
 
   if (!next.server_url) {
     throw new Error("server URL is required: multiremi setup --server <url> --workspace <id> [--token <token>]");
@@ -216,6 +195,7 @@ function setup(options: CliOptions): void {
     console.log("  remi login --token <YOUR_TOKEN>");
   }
   console.log("Ready. Start the agent with:  remi daemon start");
+  return true;
 }
 
 function login(options: CliOptions): void {
@@ -1099,6 +1079,46 @@ async function followLog(logPath: string, lines: number): Promise<void> {
 
 function formatRuntimeName(baseName: string | undefined, provider: string): string {
   return `${baseName ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`}-${provider}`;
+}
+
+export function resolveSetupConfig(
+  current: MultiremiCliConfig,
+  options: CliOptions,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  fallbackHostname = hostname(),
+): MultiremiCliConfig {
+  const next: MultiremiCliConfig = { ...current };
+  const serverUrl = stringOpt(options.server ?? options["server-url"], environment.MULTIREMI_SERVER_URL);
+  const workspaceId = stringOpt(options.workspace ?? options["workspace-id"], environment.MULTIREMI_WORKSPACE_ID);
+  const token = stringOpt(options.token, environment.MULTIREMI_TOKEN);
+  const provider = stringOpt(options.provider, environment.MULTIREMI_PROVIDER);
+  const runtimeId = stringOpt(options.runtimeId ?? options["runtime-id"], environment.MULTIREMI_RUNTIME_ID);
+  const runtimeName = stringOpt(options.name ?? options["runtime-name"], environment.MULTIREMI_RUNTIME_NAME);
+  const deviceName = stringOpt(options["device-name"] ?? options.deviceName, environment.MULTIREMI_DEVICE_NAME);
+  const daemonId = stringOpt(options.daemonId ?? options["daemon-id"], environment.MULTIREMI_DAEMON_ID);
+  const maxConcurrency = stringOpt(options["max-concurrency"] ?? options.maxConcurrency, environment.MULTIREMI_MAX_CONCURRENCY);
+
+  if (serverUrl) next.server_url = serverUrl.replace(/\/+$/, "");
+  if (workspaceId) next.workspace_id = workspaceId;
+  if (token) next.token = token;
+  if (provider) next.provider = provider;
+  if (runtimeId) next.runtime_id = runtimeId;
+  if (runtimeName) next.runtime_name = runtimeName;
+  if (daemonId) next.daemon_id = daemonId;
+  if (deviceName && !next.daemon_id) {
+    // Pin the machine's existing identity before the display name changes,
+    // otherwise the daemon re-registers under a new id and orphans its old card.
+    next.daemon_id = resolveDeviceName({}, current, environment, fallbackHostname);
+  }
+  if (deviceName) next.device_name = deviceName;
+  if (maxConcurrency) {
+    const n = parseInt(maxConcurrency, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      throw new Error("--max-concurrency must be an integer >= 1");
+    }
+    next.max_concurrency = n;
+  }
+  return next;
 }
 
 export function resolveDeviceName(
