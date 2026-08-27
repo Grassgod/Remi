@@ -36,8 +36,11 @@ and restores the old symlink if health checks fail.
 
 ## Docker Compose control plane
 
-Keep `platform.env` and `api.env` outside Git with mode `0600`. Set API and Web
-images to immutable GHCR digests from `platform-release.json`, then run:
+Keep `platform.env` and `api.env` outside Git with mode `0600`. Create `api.env`
+from [`docker/api.env.example`](docker/api.env.example), replace every required
+placeholder, and enable only the optional features the deployment uses. Never
+commit the populated file. Set API and Web images to immutable GHCR digests from
+`platform-release.json`, then run:
 
 ```bash
 docker compose --env-file /etc/multiremi/platform.env \
@@ -55,9 +58,10 @@ When PostgreSQL and OpenViking already run in Docker, use
 data-service networks; it never creates, replaces, or deletes data containers.
 
 1. Back up PostgreSQL, OpenViking, uploads, session archives, and SSH Mesh state.
-2. Create an API env file outside Git. Change the database hostname to the
-   existing network alias (`postgres` by default). Do not copy secrets into the
-   Compose env file. Create a separate control-plane env file whose database
+2. Copy `deploy/docker/api.env.example` to an API env file outside Git, replace
+   its required placeholders, set mode `0600`, and change the database hostname
+   to the existing network alias (`postgres` by default). Do not copy secrets
+   into the Compose env file. Create a separate control-plane env file whose database
    URL uses the host-published PostgreSQL address (`127.0.0.1` by default).
 3. Create a persistent service home owned by the runtime user and bind it with
    `REMI_HOME_DIR`. Bind the existing uploads, session archives, and SSH Mesh
