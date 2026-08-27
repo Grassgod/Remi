@@ -1,6 +1,7 @@
 "use client";
 
 import { LarkTab } from "./lark-tab";
+import { BotMenuSection } from "./bot-menu-section";
 import { useT } from "../../i18n";
 
 // Integrations is the umbrella tab for third-party platform connections.
@@ -17,6 +18,7 @@ export function IntegrationsTab() {
         <h2 className="text-sm font-semibold">{t(($) => $.lark.section_title)}</h2>
         <LarkTab />
       </section>
+      <BotMenuSection />
     </div>
   );
 }

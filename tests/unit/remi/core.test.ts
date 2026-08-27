@@ -137,7 +137,6 @@ function makeConfig(tmpDir: string): RemiConfig {
       userAccessToken: "",
     },
     tokenSync: [],
-    botMenu: {},
     proxy: { http: "", noProxy: "" },
     plugins: { dir: join(tmpDir, "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},

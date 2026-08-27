@@ -515,6 +515,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
           ),
         );
         if (!feishu) throw new Error("Feishu configuration disappeared during daemon startup");
+        daemons[0]!.setBotMenuPublisher(feishu.publishBotMenu);
         running.push(feishu.start);
       }
       stopChannelWhenProvidersFinish(providerRuns, feishu);

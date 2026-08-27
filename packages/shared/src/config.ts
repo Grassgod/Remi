@@ -58,50 +58,6 @@ export interface TokenSyncRuleConfig {
   extraKeys?: Record<string, string>;
 }
 
-// ── Bot Menu (千人千面菜单) ─────────────────────────────────
-
-export interface BotMenuBehavior {
-  type: "target" | "event_key" | "send_message";
-  /** URL for type=target — maps to target.common_url. */
-  url?: string;
-  /** Event key for type=event_key. */
-  eventKey?: string;
-  isPrimary?: boolean;
-}
-
-export interface BotMenuIcon {
-  /** Icon library token (e.g. "search_outlined"). */
-  token?: string;
-  /** Icon color (e.g. "blue"). */
-  color?: string;
-  /** Custom image key. */
-  fileKey?: string;
-}
-
-export interface BotMenuItemConfig {
-  name: string;
-  i18nName?: Record<string, string>;
-  icon?: BotMenuIcon;
-  tag?: string;
-  behaviors?: BotMenuBehavior[];
-  children?: BotMenuItemConfig[];
-}
-
-export interface BotMenuUserConfig {
-  userId: string;
-  userIdType?: "open_id" | "union_id" | "user_id";
-  /** Display label for Dashboard (not sent to API). */
-  label?: string;
-  items: BotMenuItemConfig[];
-}
-
-export interface BotMenuConfig {
-  /** Global default menu items (visible to all users). */
-  default?: BotMenuItemConfig[];
-  /** Per-user personalized menus (千人千面). */
-  users?: BotMenuUserConfig[];
-}
-
 export interface ProxyConfig {
   /** HTTP/HTTPS proxy URL. Empty = no proxy. */
   http: string;
@@ -131,8 +87,6 @@ export interface RemiConfig {
   auth: AuthConfig;
   /** Token sync rules for distributing tokens to external tools. */
   tokenSync: TokenSyncRuleConfig[];
-  /** Bot menu config (千人千面菜单). */
-  botMenu: BotMenuConfig;
   /** Proxy settings for outbound HTTP requests. */
   proxy: ProxyConfig;
   /** Google API config for Gemini image generation (optional). */
@@ -158,7 +112,6 @@ export function defaultRemiConfig(): RemiConfig {
   return {
     feishu: defaultFeishuConfig(),
     tokenSync: [],
-    botMenu: {},
     proxy: { http: "", noProxy: "" },
     plugins: { dir: join(homedir(), ".remi", "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},

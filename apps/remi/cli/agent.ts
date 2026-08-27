@@ -12,7 +12,12 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@shared/logger.js";
-import type { MultiremiAgent, MultiremiDaemonBotProject } from "@multiremi/contracts/types.js";
+import type {
+  BotMenuPublishResult,
+  MultiremiAgent,
+  MultiremiDaemonBotProject,
+  ResolvedBotMenuConfig,
+} from "@multiremi/contracts/types.js";
 
 const log = createLogger("agent");
 
@@ -39,6 +44,7 @@ export interface FeishuChannelHandle {
   start: Promise<void>;
   stop: () => Promise<void>;
   updateProjects: (projects: MultiremiDaemonBotProject[]) => void;
+  publishBotMenu: (config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>;
 }
 
 /**
@@ -55,11 +61,19 @@ export async function bootFeishuChannel(
   if (!feishuConfigured()) return null;
   const { Remi } = await import("@remi/core.js");
   const { loadConfig } = await import("@shared/config.js");
-  const remi = Remi.boot(loadConfig(), agent, projects, { authorizeFeishuSender: authorizeSender });
+  const config = loadConfig();
+  const remi = Remi.boot(config, agent, projects, { authorizeFeishuSender: authorizeSender });
+  const { MenuSyncer } = await import("@connectors/feishu/menu-sync.js");
+  const menuSyncer = new MenuSyncer({
+    appId: config.feishu.appId,
+    appSecret: config.feishu.appSecret,
+    domain: config.feishu.domain,
+  });
   log.info("Starting Feishu channel");
   return {
     start: remi.start(),
     stop: () => remi.stop(),
     updateProjects: (next) => remi.setBotProjects(next),
+    publishBotMenu: (menu, dryRun) => menuSyncer.syncAll(menu, { dryRun }),
   };
 }

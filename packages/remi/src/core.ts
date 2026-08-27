@@ -23,7 +23,6 @@ import { AcpProvider } from "@acp/index.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { buildAgentMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
 import { FeishuConnector, type FeishuSenderAuthorizer } from "@connectors/feishu/index.js";
-import { MenuSyncer } from "@connectors/feishu/sdk.js";
 
 import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
 import type { TokenSyncRule } from "@auth/token-sync.js";
@@ -250,16 +249,6 @@ export class Remi {
       });
       remi.addConnector(feishu);
       log.info("Registered Feishu connector (with 1Passport)");
-
-      // Bot menu sync (fire-and-forget on startup)
-      const menuSyncer = new MenuSyncer({
-        appId: config.feishu.appId,
-        appSecret: config.feishu.appSecret,
-        domain: config.feishu.domain,
-      });
-      menuSyncer.syncAll(config.botMenu).catch((err) => {
-        log.warn(`Bot menu sync failed: ${err.message}`);
-      });
     }
 
     // 4. ConfigManager — symlinks

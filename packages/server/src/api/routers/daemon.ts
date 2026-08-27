@@ -42,6 +42,7 @@ import {
 } from "../wire/index.js";
 import type {
   MultiremiDaemonSshMeshStatus,
+  ReportBotMenuPublishInput,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
   MultiremiTask,
@@ -347,6 +348,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       active_task_count?: number;
       bot_agent_id?: string;
       include_bot_projects?: boolean;
+      supports_bot_menu?: boolean;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -371,6 +373,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       supportsBatchImport: body.supports_batch_import ?? false,
       supportsDirectoryScan: body.supports_directory_scan ?? false,
       agentPluginProtocol: reportsAgentPluginProtocol ? body.agent_plugin_protocol : undefined,
+      supportsBotMenu: body.supports_bot_menu,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     if (reportsSshMeshProtocol) {
@@ -417,6 +420,24 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       c.header("Cache-Control", "no-store");
     }
     return c.json(response);
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const requestId = c.req.param("requestId");
+    const request = store.getBotMenuPublishRequest(runtimeId, requestId);
+    if (!request) return c.json({ error: "request not found" }, 404);
+    if (request.status === "completed" || request.status === "failed" || request.status === "timeout") {
+      return c.json({ status: "ok" });
+    }
+    const body = await readJsonStrict<ReportBotMenuPublishInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (body.status !== "completed" && body.status !== "failed") {
+      return c.json({ error: "invalid bot menu publish status" }, 400);
+    }
+    store.reportBotMenuPublishResult(runtimeId, requestId, body);
+    return c.json({ status: "ok" });
   });
   app.get("/api/daemon/ssh-mesh/config", (c) => {
     const runtimeId = String(c.req.query("runtime_id") ?? "").trim();

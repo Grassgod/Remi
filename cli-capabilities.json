@@ -468,6 +468,71 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.bot-menu.get": {
+      "command": "remi workspace bot-menu get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.bot-menu.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.bot-menu.update": {
+      "command": "remi workspace bot-menu update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.bot-menu.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.bot-menu.publish": {
+      "command": "remi workspace bot-menu publish",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.bot-menu.publish",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "workspace.bot-menu.publish-status": {
+      "command": "remi workspace bot-menu publish-status",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.bot-menu.publish-status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.prompt.get": {
       "command": "remi workspace prompt get",
       "aliases": [],
@@ -8968,6 +9033,12 @@
     "GET /api/workspaces/:id": {
       "command": "workspace.get"
     },
+    "GET /api/workspaces/:id/bot-menu": {
+      "command": "workspace.bot-menu.get"
+    },
+    "GET /api/workspaces/:id/bot-menu/publish/:requestId": {
+      "command": "workspace.bot-menu.publish-status"
+    },
     "GET /api/workspaces/:id/env": {
       "command": "workspace.env.get"
     },
@@ -9297,6 +9368,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -9913,6 +9989,9 @@
     "POST /api/workspaces": {
       "command": "workspace.create"
     },
+    "POST /api/workspaces/:id/bot-menu/publish": {
+      "command": "workspace.bot-menu.publish"
+    },
     "POST /api/workspaces/:id/lark/install/begin": {
       "command": "lark.install.begin"
     },
@@ -10095,6 +10174,9 @@
     },
     "PUT /api/workspaces/:id": {
       "command": "workspace.update"
+    },
+    "PUT /api/workspaces/:id/bot-menu": {
+      "command": "workspace.bot-menu.update"
     },
     "PUT /api/workspaces/:id/env": {
       "command": "workspace.env.update"

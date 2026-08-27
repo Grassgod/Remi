@@ -4,6 +4,7 @@ import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiAgent,
   MultiremiDaemonBotProject,
+  ReportBotMenuPublishInput,
   MultiremiProjectDocIndexEntry,
   MultiremiRepoData,
   MultiremiRuntimeDirectoryCandidate,
@@ -247,6 +248,7 @@ export class MultiremiDaemonClient {
     drainStatus?: { ackGeneration: number; activeTaskCount: number },
     botAgentId?: string | null,
     includeBotProjects = false,
+    supportsBotMenu = false,
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
     let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
@@ -254,6 +256,7 @@ export class MultiremiDaemonClient {
         runtime_id: runtimeId,
         supports_batch_import: true,
         supports_directory_scan: true,
+        supports_bot_menu: supportsBotMenu,
         agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
         ...(sshMeshStatus ? { ssh_mesh_status: sshMeshStatus } : {}),
@@ -281,6 +284,17 @@ export class MultiremiDaemonClient {
       ...(botAgent ? { botAgent } : {}),
       ...(botProjects ? { botProjects } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
+  }
+
+  async reportBotMenuPublishResult(
+    runtimeId: string,
+    requestId: string,
+    input: ReportBotMenuPublishInput,
+  ): Promise<void> {
+    await this.post(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/bot-menu/${encodeURIComponent(requestId)}/result`,
+      input,
+    );
   }
 
   async getSshMeshConfig(runtimeId: string, signal?: AbortSignal): Promise<MultiremiDaemonSshMeshConfig> {

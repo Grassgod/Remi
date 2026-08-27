@@ -869,6 +869,11 @@ export interface MultiremiDaemonHeartbeatAck {
     args: string[];
     timeout_ms: number;
   };
+  pending_bot_menu?: {
+    id: string;
+    config: ResolvedBotMenuConfig;
+    dry_run: boolean;
+  };
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -3382,6 +3387,97 @@ export interface MultiremiWorkspace {
   created_at: string;
   updatedAt: string;
   updated_at: string;
+}
+
+// ─── Workspace Feishu bot menu ─────────────────────────────────────────────────────────────────
+
+export type BotMenuUserIdType = "open_id" | "union_id" | "user_id";
+
+export interface BotMenuBehavior {
+  type: "target" | "event_key" | "send_message";
+  url?: string;
+  eventKey?: string;
+  isPrimary?: boolean;
+}
+
+export interface BotMenuIcon {
+  token?: string;
+  color?: string;
+  fileKey?: string;
+}
+
+export interface BotMenuItemConfig {
+  name: string;
+  i18nName?: Record<string, string>;
+  icon?: BotMenuIcon;
+  tag?: string;
+  behaviors?: BotMenuBehavior[];
+  children?: BotMenuItemConfig[];
+}
+
+export type BotMenuAudienceTarget =
+  | { type: "member"; memberId: string }
+  | { type: "role"; role: "owner" | "admin" | "member" }
+  | { type: "external"; userId: string; userIdType: BotMenuUserIdType };
+
+export interface BotMenuUserConfig {
+  target: BotMenuAudienceTarget;
+  label?: string;
+  items: BotMenuItemConfig[];
+}
+
+export interface BotMenuConfig {
+  default?: BotMenuItemConfig[];
+  users?: BotMenuUserConfig[];
+}
+
+/** Daemon-facing menu after member/role targets have been resolved to Feishu identifiers. */
+export interface ResolvedBotMenuUserConfig {
+  userId: string;
+  userIdType: BotMenuUserIdType;
+  label?: string;
+  items: BotMenuItemConfig[];
+}
+
+export interface ResolvedBotMenuConfig {
+  default?: BotMenuItemConfig[];
+  users?: ResolvedBotMenuUserConfig[];
+}
+
+export type MultiremiBotMenuPublishRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+
+export interface BotMenuPublishResult {
+  dryRun: boolean;
+  defaultPublished: boolean;
+  userMenuCount: number;
+}
+
+export interface MultiremiBotMenuPublishRequest {
+  id: string;
+  runtimeId: string;
+  workspaceId: string;
+  config: ResolvedBotMenuConfig;
+  dryRun: boolean;
+  status: MultiremiBotMenuPublishRequestStatus;
+  result: BotMenuPublishResult | null;
+  error: string | null;
+  createdBy: string | null;
+  runStartedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateBotMenuPublishRequestInput {
+  workspaceId: string;
+  config: ResolvedBotMenuConfig;
+  dryRun: boolean;
+  createdBy?: string | null;
+}
+
+export interface ReportBotMenuPublishInput {
+  status: "completed" | "failed";
+  result?: BotMenuPublishResult | null;
+  error?: string | null;
 }
 
 export interface MultiremiPromptSettings {

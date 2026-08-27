@@ -142,6 +142,7 @@ import {
 } from "@daemon/agent-runtime/workspace/session-archive.js";
 import { SshMeshManager } from "@daemon/ssh-mesh.js";
 import type {
+  BotMenuPublishResult,
   MultiremiDaemonBotProject,
   MultiremiDaemonHeartbeatAck,
   MultiremiAgent,
@@ -156,6 +157,7 @@ import type {
   MultiremiTaskWithAgent,
   MultiremiSshMeshHeartbeatAck,
   RegisterRuntimeInput,
+  ResolvedBotMenuConfig,
   TaskUsageEntry,
 } from "@multiremi/contracts/types.js";
 import {
@@ -628,6 +630,7 @@ export class MultiremiDaemon {
   private runtimeModelRefreshAbort: AbortController | null = null;
   private runtimeModelRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private runtimeModelRetryWake: (() => void) | null = null;
+  private botMenuPublisher: ((config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>) | null = null;
 
   constructor(options: MultiremiDaemonOptions) {
     if (options.inProcessRuntimeModelDiscoveryEnabled && !options.providerFactory) {
@@ -798,6 +801,12 @@ export class MultiremiDaemon {
     return this.client.checkExternalWorkspaceMembership(workspaceId, externalId);
   }
 
+  setBotMenuPublisher(
+    publisher: ((config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>) | null,
+  ): void {
+    this.botMenuPublisher = publisher;
+  }
+
   async start(): Promise<void> {
     this.startedAt = new Date();
     this.ready = false;
@@ -857,6 +866,7 @@ export class MultiremiDaemon {
             },
             this.botAgentId,
             Boolean(this.onBotProjectsUpdated),
+            this.botMenuPublisher !== null,
           );
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
           if (!skipClaim && !this.stopped) {
@@ -990,13 +1000,14 @@ export class MultiremiDaemon {
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
     this.options.runtimeId = runtime.runtime.id;
-    if (this.botAgentId || this.onBotProjectsUpdated) {
+    if (this.botAgentId || this.onBotProjectsUpdated || this.botMenuPublisher) {
       const ack = await this.client.heartbeatRuntime(
         this.options.runtimeId,
         undefined,
         undefined,
         this.botAgentId,
         Boolean(this.onBotProjectsUpdated),
+        this.botMenuPublisher !== null,
       );
       if (ack.workspace_settings) this.applyWorkspaceSettings(this.options.workspaceId ?? "local", ack.workspace_settings);
       if (ack.relay) this.workspaceRelays.set(this.options.workspaceId ?? "local", ack.relay);
@@ -1104,6 +1115,9 @@ export class MultiremiDaemon {
     }
     if (ack.pending_command) {
       await this.handleRuntimeCommand(runtimeId, ack.pending_command);
+    }
+    if (ack.pending_bot_menu) {
+      await this.handleBotMenuPublish(runtimeId, ack.pending_bot_menu);
     }
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
@@ -1289,6 +1303,31 @@ export class MultiremiDaemon {
       duration_ms: result.durationMs,
       ...(result.error ? { error: result.error } : {}),
     });
+  }
+
+  private async handleBotMenuPublish(
+    runtimeId: string,
+    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_bot_menu"]>,
+  ): Promise<void> {
+    if (!this.botMenuPublisher) {
+      await this.client.reportBotMenuPublishResult(runtimeId, request.id, {
+        status: "failed",
+        error: "Feishu bot menu publisher is unavailable",
+      });
+      return;
+    }
+    try {
+      const result = await this.botMenuPublisher(request.config, request.dry_run);
+      await this.client.reportBotMenuPublishResult(runtimeId, request.id, {
+        status: "completed",
+        result,
+      });
+    } catch (error) {
+      await this.client.reportBotMenuPublishResult(runtimeId, request.id, {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {

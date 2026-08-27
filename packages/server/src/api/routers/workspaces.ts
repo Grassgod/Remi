@@ -56,6 +56,7 @@ import type {
   MultiremiAutopilotEventConfig,
   MultiremiAutopilotExecutionMode,
   MultiremiAutopilotTriggerKind,
+  MultiremiBotMenuPublishRequest,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
   UpdateRepositoryWikiDocInput,
@@ -84,6 +85,12 @@ import { createAgentFromTemplate, getAgentTemplate } from "../agent-templates.js
 import { sanitizeWorkspaceProgressSummarySettings } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 import { sanitizeIssueAutoTitleSettings } from "@multiremi/issue-title/settings.js";
 import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
+import {
+  BotMenuConfigError,
+  parseBotMenuConfig,
+  readWorkspaceBotMenu,
+  resolveBotMenuConfig,
+} from "../../bot-menu/config.js";
 import {
   autopilotRunSourceRevision,
   repositoryWikiBuildDedupeKey,
@@ -212,6 +219,88 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (!mode) return c.json({ error: "mode must be report_only or act", code: "organizer_mode_invalid" }, 400);
     store.updateWorkspace(workspaceId, { settings: organizerSettings(workspace, mode) });
     return c.json({ workspace_id: workspaceId, mode });
+  });
+  app.get("/api/workspaces/:id/bot-menu", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    try {
+      return c.json({ workspace_id: workspaceId, bot_menu: readWorkspaceBotMenu(workspace.settings) });
+    } catch (error) {
+      return botMenuError(c, error);
+    }
+  });
+  app.put("/api/workspaces/:id/bot-menu", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{ bot_menu?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const botMenu = parseBotMenuConfig(body.bot_menu);
+      const updated = store.updateWorkspace(workspaceId, {
+        settings: { ...workspace.settings, botMenu },
+      });
+      publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, { workspace: updated });
+      return c.json({ workspace_id: workspaceId, bot_menu: botMenu });
+    } catch (error) {
+      return botMenuError(c, error);
+    }
+  });
+  app.post("/api/workspaces/:id/bot-menu/publish", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{ dry_run?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (typeof body.dry_run !== "boolean") {
+      return c.json({ error: "dry_run must be explicitly true or false" }, 400);
+    }
+    try {
+      const botMenu = readWorkspaceBotMenu(workspace.settings);
+      const resolved = resolveBotMenuConfig(
+        botMenu,
+        workspaceId,
+        store.listWorkspaceMembers(workspaceId),
+        (userId) => store.getUser(userId),
+      );
+      const runtime = store.listRuntimes()
+        .filter((entry) =>
+          entry.workspaceId === workspaceId
+          && entry.status === "online"
+          && entry.metadata.feishu_bot_menu === true
+        )
+        .sort((a, b) => String(b.lastHeartbeatAt ?? "").localeCompare(String(a.lastHeartbeatAt ?? "")))[0];
+      if (!runtime) {
+        return c.json({ error: "no online Feishu bot menu publisher is available" }, 503);
+      }
+      const request = store.createBotMenuPublishRequest(runtime.id, {
+        workspaceId,
+        config: resolved,
+        dryRun: body.dry_run,
+        createdBy: currentRequestUserId(c),
+      });
+      return c.json(botMenuPublishResponse(request), 202);
+    } catch (error) {
+      return botMenuError(c, error);
+    }
+  });
+  app.get("/api/workspaces/:id/bot-menu/publish/:requestId", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const request = store.findBotMenuPublishRequest(workspaceId, c.req.param("requestId"));
+    if (!request) return c.json({ error: "bot menu publish request not found" }, 404);
+    return c.json(botMenuPublishResponse(request));
   });
   app.get("/api/workspaces/:id/prompts", (c) => {
     const workspaceId = c.req.param("id");
@@ -1320,6 +1409,27 @@ function runtimeProvisionStateResponse(state: import("@multiremi/contracts/types
 function runtimeProvisionError(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : "runtime provision request failed";
   if (/not found/i.test(message)) return c.json({ error: message }, 404);
+  return c.json({ error: message }, 400);
+}
+
+function botMenuPublishResponse(request: MultiremiBotMenuPublishRequest): Record<string, unknown> {
+  return {
+    id: request.id,
+    workspace_id: request.workspaceId,
+    dry_run: request.dryRun,
+    status: request.status,
+    result: request.result,
+    error: request.error,
+    created_at: request.createdAt,
+    updated_at: request.updatedAt,
+  };
+}
+
+function botMenuError(c: Context, error: unknown): Response {
+  if (error instanceof BotMenuConfigError) {
+    return c.json({ error: error.message, code: error.code }, 400);
+  }
+  const message = error instanceof Error ? error.message : "bot menu operation failed";
   return c.json({ error: message }, 400);
 }
 
