@@ -17,6 +17,7 @@ function uniqueMessageId(label: string): string {
 function messageEvent(options: {
   messageId: string;
   senderOpenId: string;
+  text?: string;
   chatType?: "p2p" | "group";
   chatId?: string;
   mentions?: FeishuMessageEvent["message"]["mentions"];
@@ -28,7 +29,7 @@ function messageEvent(options: {
       chat_id: options.chatId ?? "oc_private_chat",
       chat_type: options.chatType ?? "p2p",
       message_type: "text",
-      content: JSON.stringify({ text: "hello" }),
+      content: JSON.stringify({ text: options.text ?? "hello" }),
       mentions: options.mentions,
     },
   };
@@ -120,10 +121,17 @@ describe("Feishu workspace membership admission", () => {
     expect(gate.deniedReasons).toEqual([]);
   });
 
-  it("rejects a non-member before group policy and sender resolution", async () => {
+  it("silently rejects ordinary group chatter before group policy and sender resolution", async () => {
     const senderOpenId = "ou_non_member";
     const { client, getSenderCalls } = clientWithSender();
     const gate = admission(async () => false);
+    let groupPolicyCalls = 0;
+    setGroupPolicy({
+      getByChatId: () => {
+        groupPolicyCalls += 1;
+        return null;
+      },
+    });
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
     try {
@@ -141,12 +149,59 @@ describe("Feishu workspace membership admission", () => {
 
       expect(result).toBeNull();
       expect(getSenderCalls()).toBe(0);
-      expect(gate.deniedReasons).toEqual(["not_member"]);
+      expect(groupPolicyCalls).toBe(0);
+      expect(gate.deniedReasons).toEqual([]);
       expect(warnSpy.mock.calls.flat().join(" ")).toContain("workspace membership denied");
       expect(warnSpy.mock.calls.flat().join(" ")).not.toContain(senderOpenId);
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  it("notifies a non-member who mentions the bot in a group", async () => {
+    const senderOpenId = "ou_non_member_mention";
+    const { client, getSenderCalls } = clientWithSender();
+    const gate = admission(async () => false);
+
+    const result = await processFeishuMessageEvent(
+      client,
+      messageEvent({
+        messageId: uniqueMessageId("gate-non-member-mention"),
+        senderOpenId,
+        chatType: "group",
+        chatId: "oc_unconfigured_group",
+        text: "@_user_1 hello",
+        mentions: [{ key: "@_user_1", id: { open_id: "ou_bot" }, name: "Remi" }],
+      }),
+      "ou_bot",
+      gate.options,
+    );
+
+    expect(result).toBeNull();
+    expect(getSenderCalls()).toBe(0);
+    expect(gate.deniedReasons).toEqual(["not_member"]);
+  });
+
+  it("notifies a non-member who sends a slash command in a group", async () => {
+    const { client, getSenderCalls } = clientWithSender();
+    const gate = admission(async () => false);
+
+    const result = await processFeishuMessageEvent(
+      client,
+      messageEvent({
+        messageId: uniqueMessageId("gate-non-member-command"),
+        senderOpenId: "ou_non_member_command",
+        chatType: "group",
+        chatId: "oc_unconfigured_group",
+        text: "/status",
+      }),
+      undefined,
+      gate.options,
+    );
+
+    expect(result).toBeNull();
+    expect(getSenderCalls()).toBe(0);
+    expect(gate.deniedReasons).toEqual(["not_member"]);
   });
 
   it("rejects an unknown external user without entering the message pipeline", async () => {
@@ -161,6 +216,27 @@ describe("Feishu workspace membership admission", () => {
     );
 
     expect(result).toBeNull();
+    expect(getSenderCalls()).toBe(0);
+    expect(gate.deniedReasons).toEqual(["not_member"]);
+  });
+
+  it("rejects a missing sender open id without calling the membership lookup", async () => {
+    const { client, getSenderCalls } = clientWithSender();
+    let authorizationCalls = 0;
+    const gate = admission(async () => {
+      authorizationCalls += 1;
+      return true;
+    });
+
+    const result = await processFeishuMessageEvent(
+      client,
+      messageEvent({ messageId: uniqueMessageId("gate-missing-open-id"), senderOpenId: "" }),
+      undefined,
+      gate.options,
+    );
+
+    expect(result).toBeNull();
+    expect(authorizationCalls).toBe(0);
     expect(getSenderCalls()).toBe(0);
     expect(gate.deniedReasons).toEqual(["not_member"]);
   });

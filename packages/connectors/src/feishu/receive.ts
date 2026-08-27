@@ -472,6 +472,9 @@ export async function processFeishuMessageEvent(
 
   // Parse
   const ctx = parseFeishuMessageEvent(event, botOpenId);
+  const isSlashCommand = /^\/\w+/i.test(ctx.content.trim());
+  const shouldNotifyAdmissionDenial =
+    ctx.chatType === "p2p" || ctx.mentionedBot || isSlashCommand;
 
   if (!admission) {
     log.error("workspace membership gate is not configured");
@@ -483,11 +486,15 @@ export async function processFeishuMessageEvent(
     admitted = Boolean(ctx.senderOpenId) && await admission.authorizeSender(ctx.senderOpenId);
   } catch {
     log.error("workspace membership lookup failed; message denied");
-    return denyFeishuMessage(admission, ctx, "unavailable");
+    return shouldNotifyAdmissionDenial
+      ? denyFeishuMessage(admission, ctx, "unavailable")
+      : null;
   }
   if (!admitted) {
     log.warn("workspace membership denied");
-    return denyFeishuMessage(admission, ctx, "not_member");
+    return shouldNotifyAdmissionDenial
+      ? denyFeishuMessage(admission, ctx, "not_member")
+      : null;
   }
   log.info("workspace membership allowed");
 
@@ -507,7 +514,6 @@ export async function processFeishuMessageEvent(
     const isMonitor = groupConfig.monitor === true;
     const mentions = event.message.mentions ?? [];
     const directedAtOthers = mentions.length > 0 && !ctx.mentionedBot;
-    const isSlashCommand = /^\/\w+/i.test(ctx.content.trim());
 
     if (ctx.mentionedBot || isSlashCommand) {
       // Always respond when bot is @mentioned or slash command
