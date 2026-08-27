@@ -769,7 +769,9 @@ export class DaemonRetirementRepo {
   ): Array<Record<string, string>> {
     const identityColumns = table === "multiremi_runtime_models"
       ? ["runtime_id", "model_id"]
-      : ["runtime_id", "id"];
+      : table === "multiremi_runtime_provision_states"
+        ? ["runtime_id", "provision_id"]
+        : ["runtime_id", "id"];
     const rows = this.rowsForRuntimeIds(
       `SELECT ${identityColumns.join(", ")}
        FROM ${table}

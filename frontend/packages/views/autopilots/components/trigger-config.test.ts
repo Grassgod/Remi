@@ -3,7 +3,7 @@ import {
   parseCronExpression,
   toCronExpression,
   getDefaultTriggerConfig,
-} from "./trigger-config";
+} from "../../common/trigger-config";
 
 describe("parseCronExpression", () => {
   it("round-trips hourly", () => {

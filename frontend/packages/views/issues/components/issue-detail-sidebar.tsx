@@ -3,7 +3,11 @@
 import { Bot, CalendarClock, CalendarDays, CheckCircle2, ChevronRight, ListTree, Plus, Tag } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
-import { issueDetailOptions, issueKeys } from "@multiremi/core/issues/queries";
+import {
+  generatedIssuesOptions,
+  issueDetailOptions,
+  issueKeys,
+} from "@multiremi/core/issues/queries";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multiremi/ui/components/ui/dialog";
@@ -426,11 +430,11 @@ function IssueCreationRelationSection({ issue }: { issue: Issue }) {
   const wsId = issue.workspace_id;
   const paths = useWorkspacePaths();
   const isIntake = issue.issue_kind === "intake";
+  const isTerminal = issue.status === "done" || issue.status === "cancelled";
   const { data: generated } = useQuery({
-    queryKey: ["issues", wsId, "generated", issue.id],
-    queryFn: () => api.listGeneratedIssues(issue.id),
+    ...generatedIssuesOptions(wsId, issue.id),
     enabled: isIntake,
-    refetchInterval: isIntake && issue.status !== "done" ? 5_000 : false,
+    refetchInterval: isIntake && !isTerminal ? 5_000 : false,
   });
   const { data: source } = useQuery({
     ...issueDetailOptions(wsId, issue.source_issue_id ?? ""),
@@ -461,7 +465,9 @@ function IssueCreationRelationSection({ issue }: { issue: Issue }) {
         ))}
         {isIntake && linkedIssues.length === 0 && (
           <div className="px-2 py-1 text-xs text-muted-foreground">
-            {t(($) => $.detail.generated_issues_empty)}
+            {t(($) => isTerminal
+              ? $.detail.generated_issues_empty_terminal
+              : $.detail.generated_issues_empty)}
           </div>
         )}
       </div>

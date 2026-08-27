@@ -17,6 +17,9 @@ import type {
   DaemonInventoryResponse,
   DaemonRetirementPlan,
   RetireDaemonResponse,
+  RuntimeProvision,
+  RuntimeProvisionInput,
+  RuntimeProvisionState,
   SshMeshOverview,
   SshMeshTestResponse,
 } from "../../runtimes/types";
@@ -46,12 +49,17 @@ import {
   EMPTY_FLEET_MODELS,
   EMPTY_RELAY_CONFIG,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+  EMPTY_RUNTIME_PROVISION_LIST,
+  EMPTY_RUNTIME_PROVISION_STATES,
   EMPTY_RETIRE_DAEMON_RESPONSE,
   EMPTY_SSH_MESH_OVERVIEW,
   FleetModelsResponseSchema,
   type RelayConfigResponse,
   RelayConfigResponseSchema,
   RuntimeDirectoryScanRequestSchema,
+  RuntimeProvisionListResponseSchema,
+  RuntimeProvisionResponseSchema,
+  RuntimeProvisionStatesResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
@@ -253,6 +261,87 @@ export class RuntimesEndpoints {
     return response.workspace_id === workspaceId
       ? response
       : EMPTY_SSH_MESH_OVERVIEW;
+  }
+
+  async listRuntimeProvisions(workspaceId: string): Promise<RuntimeProvision[]> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-provisions`,
+    );
+    const response = parseWithFallback(
+      raw,
+      RuntimeProvisionListResponseSchema,
+      EMPTY_RUNTIME_PROVISION_LIST,
+      { endpoint: "GET /api/workspaces/:id/runtime-provisions" },
+    );
+    return response.provisions.filter((provision) => provision.workspace_id === workspaceId);
+  }
+
+  async listRuntimeProvisionStates(
+    workspaceId: string,
+    provisionId: string,
+  ): Promise<RuntimeProvisionState[]> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-provisions/${encodeURIComponent(provisionId)}/states`,
+    );
+    const response = parseWithFallback(
+      raw,
+      RuntimeProvisionStatesResponseSchema,
+      EMPTY_RUNTIME_PROVISION_STATES,
+      { endpoint: "GET /api/workspaces/:id/runtime-provisions/:provisionId/states" },
+    );
+    return response.states.filter((state) => state.provision_id === provisionId);
+  }
+
+  async createRuntimeProvision(
+    workspaceId: string,
+    input: RuntimeProvisionInput,
+  ): Promise<RuntimeProvision> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-provisions`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    const response = parseStrictResponse<import("../../runtimes/types").RuntimeProvisionResponse>(
+      raw,
+      RuntimeProvisionResponseSchema,
+      { endpoint: "POST /api/workspaces/:id/runtime-provisions" },
+    );
+    if (!response.provision.id || response.provision.workspace_id !== workspaceId) {
+      throw new ApiContractError(
+        "POST /api/workspaces/:id/runtime-provisions",
+        "Runtime provision response does not match the requested workspace",
+      );
+    }
+    return response.provision;
+  }
+
+  async updateRuntimeProvision(
+    workspaceId: string,
+    provisionId: string,
+    input: RuntimeProvisionInput,
+  ): Promise<RuntimeProvision> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-provisions/${encodeURIComponent(provisionId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    );
+    const response = parseStrictResponse<import("../../runtimes/types").RuntimeProvisionResponse>(
+      raw,
+      RuntimeProvisionResponseSchema,
+      { endpoint: "PATCH /api/workspaces/:id/runtime-provisions/:provisionId" },
+    );
+    if (response.provision.id !== provisionId || response.provision.workspace_id !== workspaceId) {
+      throw new ApiContractError(
+        "PATCH /api/workspaces/:id/runtime-provisions/:provisionId",
+        "Runtime provision response does not match the requested declaration",
+      );
+    }
+    return response.provision;
+  }
+
+  async deleteRuntimeProvision(workspaceId: string, provisionId: string): Promise<void> {
+    await this.http.fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-provisions/${encodeURIComponent(provisionId)}`,
+      { method: "DELETE" },
+    );
   }
 
   async setSshMeshEnabled(

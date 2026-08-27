@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 611,
+    "routeCount": 623,
     "routeCountByPrefix": {
       "native": 204,
-      "compat": 394,
+      "compat": 406,
       "root": 13
     },
-    "getRoutes": 264,
-    "getRoutesWithBody": 261,
+    "getRoutes": 269,
+    "getRoutesWithBody": 266,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 347,
-    "mutationRoutesCovered": 272,
+    "mutationRoutes": 354,
+    "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -119,6 +119,7 @@
     "DELETE /api/workspaces/:id/members/:memberId",
     "DELETE /api/workspaces/:id/repos/:repositoryId",
     "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "DELETE /api/workspaces/:id/runtime-provisions/:provisionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -167,6 +168,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
@@ -327,6 +329,7 @@
     "GET /api/runtimes",
     "GET /api/runtimes/:id",
     "GET /api/runtimes/:id/activity",
+    "GET /api/runtimes/:id/commands/:requestId",
     "GET /api/runtimes/:id/directory-scans/:requestId",
     "GET /api/runtimes/:id/local-skills/:requestId",
     "GET /api/runtimes/:id/local-skills/import/:requestId",
@@ -372,6 +375,9 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/repository-wikis/atlas",
+    "GET /api/workspaces/:id/runtime-provisions",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -415,6 +421,7 @@
     "PATCH /api/workspaces/:id",
     "PATCH /api/workspaces/:id/members/:memberId",
     "PATCH /api/workspaces/:id/repos/:repositoryId",
+    "PATCH /api/workspaces/:id/runtime-provisions/:provisionId",
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "POST /api/agents",
     "POST /api/agents/:id/archive",
@@ -447,9 +454,12 @@
     "POST /api/daemon/issues/:issueId/workspace/cleaned",
     "POST /api/daemon/register",
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
+    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+    "POST /api/daemon/runtimes/:runtimeId/commands/claim",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
@@ -596,6 +606,7 @@
     "POST /api/projects/:id/resources",
     "POST /api/projects/:id/restore",
     "POST /api/runtimes/:id/archive-agents-and-delete",
+    "POST /api/runtimes/:id/commands",
     "POST /api/runtimes/:id/directory-scans",
     "POST /api/runtimes/:id/local-skills",
     "POST /api/runtimes/:id/local-skills/import",
@@ -625,6 +636,7 @@
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/inspect",
     "POST /api/workspaces/:id/repository-wikis/atlas",
+    "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
     "POST /api/workspaces/:workspaceId/scm/connections",
@@ -772,6 +784,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
@@ -932,6 +945,7 @@
     "GET /api/runtimes",
     "GET /api/runtimes/:id",
     "GET /api/runtimes/:id/activity",
+    "GET /api/runtimes/:id/commands/:requestId",
     "GET /api/runtimes/:id/directory-scans/:requestId",
     "GET /api/runtimes/:id/local-skills/:requestId",
     "GET /api/runtimes/:id/local-skills/import/:requestId",
@@ -977,6 +991,9 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/repository-wikis/atlas",
+    "GET /api/workspaces/:id/runtime-provisions",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/scm/connections",
@@ -1044,6 +1061,8 @@
     "POST /api/daemon/deregister",
     "POST /api/daemon/heartbeat",
     "POST /api/daemon/register",
+    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+    "POST /api/daemon/runtimes/:runtimeId/commands/claim",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
@@ -1157,6 +1176,7 @@
     "POST /api/projects/:id/docs",
     "POST /api/projects/:id/resources",
     "POST /api/runtimes/:id/archive-agents-and-delete",
+    "POST /api/runtimes/:id/commands",
     "POST /api/runtimes/:id/directory-scans",
     "POST /api/runtimes/:id/local-skills",
     "POST /api/runtimes/:id/local-skills/import",
@@ -3016,7 +3036,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600233",
+        "order_id": "local-1767225600241",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -3500,7 +3520,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "6c2d3bd5ff4cc2e691359691dea5e80078940f283928480e0e687b7546f905d5",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -4991,7 +5011,25 @@
       }
     },
     {
-      "key": "daemon#014 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
+      "key": "daemon#014 POST /api/daemon/runtimes/:runtimeId/commands/claim",
+      "route": "POST /api/daemon/runtimes/:runtimeId/commands/claim",
+      "path": "/api/daemon/runtimes/rt_snapshot/commands/claim",
+      "status": 200,
+      "body": {
+        "request": null
+      }
+    },
+    {
+      "key": "daemon#015 POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+      "route": "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/commands/rcm_snapshot/result",
+      "status": 200,
+      "body": {
+        "status": "ok"
+      }
+    },
+    {
+      "key": "daemon#016 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "route": "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "path": "/api/daemon/runtimes/rt_snapshot/recover-orphans",
       "status": 200,
@@ -5001,7 +5039,7 @@
       }
     },
     {
-      "key": "daemon#015 POST /api/daemon/deregister",
+      "key": "daemon#017 POST /api/daemon/deregister",
       "route": "POST /api/daemon/deregister",
       "path": "/api/daemon/deregister",
       "status": 200,
@@ -9364,6 +9402,17 @@
             "allowed": true
           },
           {
+            "id": "runtime.command.run",
+            "command": "remi runtime command run",
+            "capability": "runtime.command.run",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "runtime.create",
             "command": "remi runtime create",
             "capability": "runtime.create",
@@ -10860,6 +10909,72 @@
             "allowed": true
           },
           {
+            "id": "workspace.runtime-provision.create",
+            "command": "remi workspace runtime-provision create",
+            "capability": "workspace.runtime-provision.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.delete",
+            "command": "remi workspace runtime-provision delete",
+            "capability": "workspace.runtime-provision.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.get",
+            "command": "remi workspace runtime-provision get",
+            "capability": "workspace.runtime-provision.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.list",
+            "command": "remi workspace runtime-provision list",
+            "capability": "workspace.runtime-provision.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.states",
+            "command": "remi workspace runtime-provision states",
+            "capability": "workspace.runtime-provision.states",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.update",
+            "command": "remi workspace runtime-provision update",
+            "capability": "workspace.runtime-provision.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.ssh-mesh.get",
             "command": "remi workspace ssh-mesh get",
             "capability": "workspace.ssh-mesh.get",
@@ -11187,6 +11302,15 @@
         "runtime_id": "rt_snapshot",
         "revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
         "plugins": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "route": "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "path": "/api/daemon/runtimes/rt_snapshot/issues/iss_snapshot/session-archives/sar_snapshot/content",
+      "status": 405,
+      "body": {
+        "error": "method not allowed"
       }
     },
     {
@@ -15012,7 +15136,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "6c2d3bd5ff4cc2e691359691dea5e80078940f283928480e0e687b7546f905d5",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -18736,6 +18860,37 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/runtimes/:id/commands/:requestId",
+      "route": "GET /api/runtimes/:id/commands/:requestId",
+      "path": "/api/runtimes/rt_snapshot/commands/rcm_snapshot",
+      "status": 200,
+      "body": {
+        "id": "rcm_snapshot",
+        "runtimeId": "rt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "command": "printf snapshot",
+        "args": [],
+        "timeoutMs": 1000,
+        "timeout_ms": 0,
+        "createdBy": "local",
+        "created_by": "local",
+        "status": "running",
+        "exitCode": null,
+        "exit_code": null,
+        "stdout": null,
+        "stderr": null,
+        "durationMs": null,
+        "duration_ms": null,
+        "error": null,
+        "runStartedAt": "<timestamp>",
+        "run_started_at": "<timestamp>",
+        "createdAt": "<timestamp>",
+        "created_at": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "updated_at": "<timestamp>"
+      }
+    },
+    {
       "key": "get-sweep GET /api/runtimes/:id/directory-scans/:requestId",
       "route": "GET /api/runtimes/:id/directory-scans/:requestId",
       "path": "/api/runtimes/rt_snapshot/directory-scans/rds_xtp8jpp4a7us",
@@ -19753,6 +19908,77 @@
         "repository_trigger_id": null,
         "project_autopilot_id": null,
         "project_trigger_id": null
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions",
+      "route": "GET /api/workspaces/:id/runtime-provisions",
+      "path": "/api/workspaces/local/runtime-provisions",
+      "status": 200,
+      "body": {
+        "provisions": [
+          {
+            "id": "prov_snapshot",
+            "workspace_id": "local",
+            "kind": "command",
+            "enabled": false,
+            "package": null,
+            "version": null,
+            "version_check": false,
+            "bin": null,
+            "registry": null,
+            "command": "printf provision-snapshot",
+            "args": [],
+            "trigger_kinds": [],
+            "cron_expression": null,
+            "timezone": "UTC",
+            "next_run_at": null,
+            "last_fired_at": null,
+            "timeout_ms": 0,
+            "created_by": "local",
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>"
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions/:provisionId",
+      "route": "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+      "path": "/api/workspaces/local/runtime-provisions/prov_snapshot",
+      "status": 200,
+      "body": {
+        "provision": {
+          "id": "prov_snapshot",
+          "workspace_id": "local",
+          "kind": "command",
+          "enabled": false,
+          "package": null,
+          "version": null,
+          "version_check": false,
+          "bin": null,
+          "registry": null,
+          "command": "printf provision-snapshot",
+          "args": [],
+          "trigger_kinds": [],
+          "cron_expression": null,
+          "timezone": "UTC",
+          "next_run_at": null,
+          "last_fired_at": null,
+          "timeout_ms": 0,
+          "created_by": "local",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "route": "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "path": "/api/workspaces/local/runtime-provisions/prov_snapshot/states",
+      "status": 200,
+      "body": {
+        "states": []
       }
     },
     {
@@ -22388,7 +22614,69 @@
       }
     },
     {
-      "key": "runtimes#016 POST /api/runtimes/:id/archive-agents-and-delete",
+      "key": "runtimes#016 POST /api/runtimes/:id/commands",
+      "route": "POST /api/runtimes/:id/commands",
+      "path": "/api/runtimes/rt_snapshot/commands",
+      "status": 202,
+      "body": {
+        "id": "rcmd_2ryujm2j4i6h",
+        "runtimeId": "rt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "command": "printf snapshot",
+        "args": [],
+        "timeoutMs": 1000,
+        "timeout_ms": 0,
+        "createdBy": "local",
+        "created_by": "local",
+        "status": "pending",
+        "exitCode": null,
+        "exit_code": null,
+        "stdout": null,
+        "stderr": null,
+        "durationMs": null,
+        "duration_ms": null,
+        "error": null,
+        "runStartedAt": null,
+        "run_started_at": null,
+        "createdAt": "<timestamp>",
+        "created_at": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "updated_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "runtimes#017 GET /api/runtimes/:id/commands/:requestId",
+      "route": "GET /api/runtimes/:id/commands/:requestId",
+      "path": "/api/runtimes/rt_snapshot/commands/rcmd_2ryujm2j4i6h",
+      "status": 200,
+      "body": {
+        "id": "rcmd_2ryujm2j4i6h",
+        "runtimeId": "rt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "command": "printf snapshot",
+        "args": [],
+        "timeoutMs": 1000,
+        "timeout_ms": 0,
+        "createdBy": "local",
+        "created_by": "local",
+        "status": "pending",
+        "exitCode": null,
+        "exit_code": null,
+        "stdout": null,
+        "stderr": null,
+        "durationMs": null,
+        "duration_ms": null,
+        "error": null,
+        "runStartedAt": null,
+        "run_started_at": null,
+        "createdAt": "<timestamp>",
+        "created_at": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "updated_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "runtimes#018 POST /api/runtimes/:id/archive-agents-and-delete",
       "route": "POST /api/runtimes/:id/archive-agents-and-delete",
       "path": "/api/runtimes/rt_snapshot/archive-agents-and-delete",
       "status": 409,
@@ -22458,7 +22746,7 @@
       }
     },
     {
-      "key": "runtimes#017 DELETE /api/runtimes/:id",
+      "key": "runtimes#019 DELETE /api/runtimes/:id",
       "route": "DELETE /api/runtimes/:id",
       "path": "/api/runtimes/rt_snapshot",
       "status": 409,
@@ -22589,7 +22877,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600234",
+        "id": "local-contact-1767225600242",
         "status": "received",
         "mode": "local",
         "request": {
@@ -23873,7 +24161,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600241",
+        "session_id": "local-lark-1767225600249",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

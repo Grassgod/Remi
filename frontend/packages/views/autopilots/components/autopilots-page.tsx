@@ -15,7 +15,7 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { cn } from "@multiremi/ui/lib/utils";
 import { AutopilotDialog } from "./autopilot-dialog";
 import type { Autopilot, AutopilotStatus, AutopilotExecutionMode } from "@multiremi/core/types";
-import type { TriggerFrequency } from "./trigger-config";
+import type { TriggerFrequency } from "../../common/trigger-config";
 import { useT } from "../../i18n";
 
 // Template-id keyed lookup for the i18n labels. Prompts stay raw English

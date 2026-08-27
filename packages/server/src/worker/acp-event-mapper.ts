@@ -195,6 +195,8 @@ function mapToolEvent(
   // frontend can nest it whichever message it sees first.
   if (state.parentToolCallId) meta.parent_tool_call_id = state.parentToolCallId;
 
+  const isTerminal = status != null && TERMINAL_TOOL_STATUS.has(status);
+
   if (isInitial) {
     // A placeholder-only input isn't the tool's args — emitting it would pin the
     // frontend's step card to `{terminal_id}` and the real command (which only
@@ -215,11 +217,37 @@ function mapToolEvent(
     });
   }
 
+  // The initial claude shell call only exposes a terminal placeholder. Publish
+  // the real args as soon as a later active update provides them so live
+  // timelines do not have to wait for the result. Frames with output or a
+  // terminal status stay on the tool_result path below, which owns input
+  // refreshes for those frames.
+  if (
+    !isInitial
+    && output == null
+    && !isTerminal
+    && !state.terminalEmitted
+    && !TERMINAL_TOOL_STATUS.has(state.status)
+    && hasMeaningfulInput(state.input)
+  ) {
+    const mergedInputJson = JSON.stringify(state.input);
+    if (mergedInputJson !== state.lastEmittedInputJson) {
+      messages.push({
+        type: "tool_use",
+        toolCallId: id,
+        status: status ?? state.status,
+        tool: state.name,
+        input: state.input,
+        meta: Object.keys(meta).length ? meta : undefined,
+      });
+      state.lastEmittedInputJson = mergedInputJson;
+    }
+  }
+
   // Emit a tool_result whenever this event carries output or reached a terminal
   // status — including an initial tool_call that's already complete. Idempotent
   // by fingerprint so a repeat of the same terminal frame doesn't double-post,
   // but a real statusless→terminal transition still lands once.
-  const isTerminal = status != null && TERMINAL_TOOL_STATUS.has(status);
   if (output != null || isTerminal) {
     const fingerprint = `${status ?? ""}:${output ?? ""}`;
     if (!(state.terminalEmitted && state.lastFingerprint === fingerprint)) {
