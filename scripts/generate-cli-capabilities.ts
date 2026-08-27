@@ -639,6 +639,12 @@ function exemptRoute(route: string): CliManifestRoute | null {
   if (path === "/api/config" || path === "/api/contact-sales") {
     return exempt("pure_ui", "Browser bootstrap or presentation-only action has no meaningful CLI workflow.");
   }
+  if (route === "PATCH /api/daemons/:daemonId") {
+    return exempt(
+      "pure_ui",
+      "MUL-156 exposes daemon display-name editing in the browser; a daemon rename CLI is intentionally out of scope.",
+    );
+  }
   if (path === "/" || path === "/favicon.ico") {
     return exempt("public_bootstrap_asset", "Public service bootstrap asset has no user-side CLI operation.");
   }

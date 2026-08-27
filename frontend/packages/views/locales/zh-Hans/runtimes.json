@@ -46,6 +46,9 @@
     "no_matches_hint": "没有机器匹配当前搜索或筛选。",
     "select_machine": "选择一台机器查看它的运行时。",
     "actions_aria": "机器操作",
+    "name_edit_hint": "重命名机器",
+    "name_toast_updated": "机器已重命名",
+    "name_toast_failed": "重命名机器失败",
     "tabs": {
       "runtimes": "运行时",
       "ssh_mesh": "SSH 互联",

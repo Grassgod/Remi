@@ -4,6 +4,7 @@ import type { DaemonInventoryEntry } from "@multiremi/core/runtimes";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
+  machineTitle,
   runtimeMachineCounts,
   selectMachineUpdateRuntime,
   splitRuntimeName,
@@ -46,6 +47,40 @@ function makeDaemon(
 }
 
 describe("runtime machine grouping", () => {
+  it("resolves machine titles from profile, device info, legacy name, then fallback", () => {
+    expect(machineTitle([
+      makeRuntime({
+        daemon_display_name: "Profile name",
+        device_info: "Device name · 1.0.0",
+        name: "claude (Legacy name)",
+      }),
+    ], { isCurrent: false })).toBe("Profile name");
+    expect(machineTitle([
+      makeRuntime({
+        daemon_display_name: null,
+        device_info: "Device name · 1.0.0",
+        name: "claude (Legacy name)",
+      }),
+    ], { isCurrent: false })).toBe("Device name");
+    expect(machineTitle([
+      makeRuntime({
+        daemon_display_name: null,
+        device_info: "",
+        name: "claude (Legacy name)",
+      }),
+    ], { isCurrent: false })).toBe("Legacy name");
+    expect(machineTitle([
+      makeRuntime({
+        daemon_display_name: null,
+        daemon_id: null,
+        runtime_mode: "cloud",
+        provider: "codex",
+        device_info: "",
+        name: "codex",
+      }),
+    ], { isCurrent: false })).toBe("Codex cloud");
+  });
+
   it("groups multiple provider runtimes by daemon id", () => {
     const machines = buildRuntimeMachines(
       [
@@ -58,7 +93,7 @@ describe("runtime machine grouping", () => {
     expect(machines).toHaveLength(1);
     expect(machines[0]).toMatchObject({
       id: "local:daemon-1",
-      title: "dev.local",
+      title: "dev-machine.local",
       section: "local",
       isCurrent: true,
       onlineCount: 2,
@@ -234,7 +269,7 @@ describe("runtime machine grouping", () => {
 
     expect(machines).toHaveLength(1);
     expect(machines[0]).toMatchObject({
-      title: "my laptop",
+      title: "My Laptop",
       section: "local",
       isCurrent: true,
       daemonId: "legacy-hostname",

@@ -23,6 +23,7 @@ const apiMocks = vi.hoisted(() => ({
   getLatestCliVersion: vi.fn(),
   initiateUpdate: vi.fn(),
   getUpdateResult: vi.fn(),
+  updateDaemonDisplayName: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", () => ({ api: apiMocks }));
@@ -62,6 +63,11 @@ vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multiremi/core/realtime", () => ({ useWSEvent: vi.fn() }));
 vi.mock("@multiremi/core/runtimes/hooks", () => ({
   useUpdatableRuntimeIds: () => new Set<string>(),
+}));
+vi.mock("@multiremi/core/runtimes/mutations", () => ({
+  useUpdateDaemonDisplayName: () => ({
+    mutateAsync: apiMocks.updateDaemonDisplayName,
+  }),
 }));
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({ useIsMobile: () => true }));
 vi.mock("../../navigation", async () => {
@@ -159,10 +165,51 @@ describe("RuntimesPage machine switching isolates the CLI update flow", () => {
       output: null,
       error: BUSY_ERROR,
     });
+    apiMocks.updateDaemonDisplayName.mockResolvedValue({
+      workspace_id: "ws-1",
+      daemon_id: "daemon-a",
+      display_name: "Renamed machine",
+      display_name_customized: true,
+      updated_by: "user-1",
+      updated_at: new Date().toISOString(),
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("shows machine rename only for editable local daemons", async () => {
+    const { unmount } = renderPage();
+    await act(async () => Promise.resolve());
+    expect(screen.getByTitle("Rename machine")).toBeInTheDocument();
+    unmount();
+
+    fixture.runtimes = [makeRuntime({ runtime_mode: "cloud" })];
+    renderPage();
+    await act(async () => Promise.resolve());
+    await selectMachine("host-a");
+    expect(screen.queryByTitle("Rename machine")).not.toBeInTheDocument();
+  });
+
+  it("hides machine rename without a daemon id or permission", async () => {
+    const { unmount } = renderPage();
+    await act(async () => Promise.resolve());
+    expect(screen.getByTitle("Rename machine")).toBeInTheDocument();
+    unmount();
+
+    fixture.runtimes = [makeRuntime({ daemon_id: null })];
+    fixture.daemons = [];
+    const noId = renderPage();
+    await act(async () => Promise.resolve());
+    expect(screen.queryByTitle("Rename machine")).not.toBeInTheDocument();
+    noId.unmount();
+
+    fixture.runtimes = [makeRuntime()];
+    fixture.daemons = [];
+    renderPage();
+    await act(async () => Promise.resolve());
+    expect(screen.queryByTitle("Rename machine")).not.toBeInTheDocument();
   });
 
   it("does not carry a failed update from one machine to the next, and never retries against the newly selected machine", async () => {

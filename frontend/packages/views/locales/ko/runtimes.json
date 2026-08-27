@@ -48,6 +48,9 @@
     "no_matches_hint": "현재 검색 또는 필터와 일치하는 기기가 없습니다.",
     "select_machine": "기기를 선택해 런타임을 확인하세요.",
     "actions_aria": "기기 작업",
+    "name_edit_hint": "기기 이름 변경",
+    "name_toast_updated": "기기 이름을 변경했습니다",
+    "name_toast_failed": "기기 이름을 변경하지 못했습니다",
     "tabs": {
       "runtimes": "런타임",
       "ssh_mesh": "SSH 연결",

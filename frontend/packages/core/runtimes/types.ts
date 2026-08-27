@@ -22,6 +22,15 @@ export interface DaemonInventoryResponse {
   daemons: DaemonInventoryEntry[];
 }
 
+export interface DaemonProfileResponse {
+  workspace_id: string;
+  daemon_id: string;
+  display_name: string;
+  display_name_customized: boolean;
+  updated_by: string | null;
+  updated_at: string;
+}
+
 export type RuntimeProvisionKind = "npm-global" | "command";
 export type RuntimeProvisionTriggerKind = "cron" | "on_register" | "on_change";
 export type RuntimeProvisionStatus = "pending" | "converged" | "drifted" | "failed";

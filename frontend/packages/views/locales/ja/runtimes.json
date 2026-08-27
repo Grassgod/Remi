@@ -46,6 +46,9 @@
     "no_matches_hint": "現在の検索またはフィルターに一致するマシンがありません。",
     "select_machine": "マシンを選択して、そのランタイムを確認してください。",
     "actions_aria": "マシン操作",
+    "name_edit_hint": "マシン名を変更",
+    "name_toast_updated": "マシン名を変更しました",
+    "name_toast_failed": "マシン名を変更できませんでした",
     "tabs": {
       "runtimes": "ランタイム",
       "ssh_mesh": "SSH 接続",

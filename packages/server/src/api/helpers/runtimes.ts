@@ -336,7 +336,7 @@ export function registerDaemonRuntimes(
     if ("error" in providerResult) return providerResult;
     const provider = providerResult.provider;
     const version = String(runtime.version ?? "").trim();
-    const name = String(runtime.name ?? "").trim() || (deviceName ? `${provider} (${deviceName})` : provider);
+    const name = String(runtime.name ?? "").trim() || provider;
     const id = daemonRuntimeId(daemonId, provider);
     const existingRuntime = store.getRuntime(id);
     const deviceInfo = [deviceName, version].filter(Boolean).join(" · ");
@@ -372,7 +372,10 @@ export function registerDaemonRuntimes(
 
   let savedRuntimes: ReturnType<MultiremiStore["registerDaemonRuntimeBatch"]>;
   try {
-    savedRuntimes = store.registerDaemonRuntimeBatch(registrations.map((entry) => entry.input));
+    savedRuntimes = store.registerDaemonRuntimeBatch(
+      registrations.map((entry) => entry.input),
+      { displayName: deviceName },
+    );
   } catch (error) {
     if (
       error instanceof DaemonRetiredError
