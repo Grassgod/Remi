@@ -97,6 +97,7 @@ vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: () => <span data-testid="avatar" />,
 }));
 
+import { useUsageDiagnosticsStore } from "@multiremi/core/runtimes/usage-diagnostics-store";
 import { UsageSection } from "./usage-section";
 
 const RUNTIME: AgentRuntime = {
@@ -131,6 +132,9 @@ beforeEach(() => {
   refetchCalls.count = 0;
   usageState.current = {};
   byAgentState.current = { data: [] };
+  // The diagnostics strip's collapse state is a persisted global store, so
+  // one test expanding it would leak into the next.
+  useUsageDiagnosticsStore.setState({ expanded: false });
   cleanup();
 });
 
@@ -541,7 +545,12 @@ describe("UsageSection — pricing notice excludes total-only rows (MUL-123)", (
     render(<UsageSection runtime={RUNTIME} />, { wrapper: Wrapper });
 
     // Filtering per MODEL would wrongly drop this model entirely; per ROW
-    // keeps it, because its 5K split tokens DO become priceable.
+    // keeps it, because its 5K split tokens DO become priceable. The strip
+    // is collapsed by default (MUL-168), so the summary carries the reason
+    // and the CTA sits one click behind it.
+    expect(screen.getByText(/1 model without a price/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+
     expect(
       screen.getByRole("button", { name: "Set custom prices" }),
     ).toBeTruthy();

@@ -435,6 +435,13 @@
     "empty_pricing_hint": "コスト合計に含めるには、カスタム単価を設定してください。",
     "empty_zero_cost": "トークンは記録されましたが、コスト計算の結果は $0 でした。",
     "unmapped_notice_other": "管理された価格がないモデルが {{count}} 個あり、そのトークンはコスト合計から除外されています。",
+    "diagnostics": {
+      "summary": "一部のトークンはコスト合計に含まれていません：{{reasons}}",
+      "reason_unpriced_other": "価格未設定のモデル {{count}} 個",
+      "reason_total_only": "入力/出力の内訳がない過去のトークン {{tokens}}",
+      "show_detail": "詳細",
+      "hide_detail": "閉じる"
+    },
     "custom_pricing": {
       "open_button": "カスタム価格を設定",
       "title": "カスタムモデル価格",

@@ -217,7 +217,8 @@ describe("estimateCost", () => {
     // Sol / Terra / Luna replace the -mini / -nano suffixes of earlier
     // generations, and the spread between them is 25x on input — inheriting
     // one tier's rate for another would be a wild mis-estimate, so each is
-    // its own row. Rates are the standard short-context meter.
+    // its own row. Rates are the standard short-context meter, Sol at the
+    // promotional $4/$20 the pricing page shows today (MUL-168).
     expect(
       estimateCost({
         ...zeroUsage,
@@ -225,7 +226,7 @@ describe("estimateCost", () => {
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
       }),
-    ).toBeCloseTo(5 + 30, 5);
+    ).toBeCloseTo(4 + 20, 5);
     expect(
       estimateCost({
         ...zeroUsage,
@@ -243,7 +244,7 @@ describe("estimateCost", () => {
       }),
     ).toBeCloseTo(0.2 + 1.2, 5);
     // GPT-5.6 is the first OpenAI family to publish a cache-write rate
-    // (1.25x input) instead of mirroring input like gpt-5.5 and older.
+    // separate from input, instead of mirroring it like gpt-5.5 and older.
     expect(
       estimateCost({
         ...zeroUsage,
@@ -251,9 +252,37 @@ describe("estimateCost", () => {
         cache_read_tokens: 1_000_000,
         cache_write_tokens: 1_000_000,
       }),
-    ).toBeCloseTo(0.5 + 6.25, 5);
+    ).toBeCloseTo(0.4 + 5, 5);
     // The bare family name is not a SKU — it must not inherit a tier.
     expect(isModelPriced("gpt-5.6")).toBe(false);
+    expect(
+      estimateCost({ ...zeroUsage, model: "gpt-5.2", input_tokens: 1_000_000 }),
+    ).toBeCloseTo(1.75, 5);
+  });
+
+  it("prices Claude Code's bare aliases at the SKU they point at", () => {
+    // Runtimes report the alias the user picked (`sonnet`, `opus[1m]`), not
+    // the resolved SKU. Before MUL-168 every Claude Code runtime therefore
+    // showed up as "no maintained price" while the SKU behind it was priced.
+    expect(
+      estimateCost({ ...zeroUsage, model: "sonnet", input_tokens: 1_000_000 }),
+    ).toBeCloseTo(3, 5);
+    expect(
+      estimateCost({ ...zeroUsage, model: "opus", output_tokens: 1_000_000 }),
+    ).toBeCloseTo(25, 5);
+    expect(
+      estimateCost({ ...zeroUsage, model: "haiku", input_tokens: 1_000_000 }),
+    ).toBeCloseTo(1, 5);
+    // The `[1m]` context tag rides tolerance 4 down to the bare alias, and
+    // Anthropic bills the 1M window at the standard tier — same row.
+    expect(
+      estimateCost({ ...zeroUsage, model: "opus[1m]", output_tokens: 1_000_000 }),
+    ).toBeCloseTo(25, 5);
+    expect(isModelPriced("sonnet[1m]")).toBe(true);
+    // Provider-prefixed spellings reach the same entry via tolerance 1.
+    expect(isModelPriced("anthropic/sonnet")).toBe(true);
+    // Still no startsWith behaviour: an unknown bare word stays unmapped.
+    expect(isModelPriced("sonnet-turbo")).toBe(false);
   });
 
   it("flags catalog SKUs without a published price (gpt-5.5-mini) as unmapped", () => {
