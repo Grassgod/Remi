@@ -4,7 +4,7 @@
  * Extracted verbatim from the former single-file `cli/multiremi.ts`.
  */
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { type CliOptions, rawStringOption } from "../options.js";
 import {
@@ -30,6 +30,7 @@ export async function attachment(positional: string[], options: CliOptions): Pro
   const filename = safeOutputFilename(attachmentStringField(attachmentRow, "filename") ?? attachmentId, attachmentId);
   const outputDir = rawStringOption(options, "output-dir", "outputDir", "o") ?? ".";
   const data = await multiremiApiDownloadFile(downloadUrl, options);
+  mkdirSync(outputDir, { recursive: true });
   const outputPath = join(outputDir, filename);
   writeFileSync(outputPath, data, { mode: 0o644 });
   const absolutePath = resolve(outputPath);
