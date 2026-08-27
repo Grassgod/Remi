@@ -77,6 +77,9 @@ function makeArchive(overrides: Partial<SessionArchive> = {}): SessionArchive {
     metadata: {},
     attempt_count: 1,
     last_error: null,
+    next_retry_at: null,
+    retry_exhausted_at: null,
+    retry_state: "eligible",
     created_at: "2026-08-19T01:00:00Z",
     updated_at: "2026-08-19T01:01:00Z",
     completed_at: "2026-08-19T01:01:00Z",
@@ -141,6 +144,30 @@ describe("IssueSessionArchivesSection", () => {
 
     await waitFor(() => expect(mockRetry).toHaveBeenCalledWith(archive.id));
     expect(screen.queryByRole("button", { name: "Verify archive" })).not.toBeInTheDocument();
+  });
+
+  it("shows exhausted retry details and keeps manual retry available", async () => {
+    const user = userEvent.setup();
+    const archive = makeArchive({
+      status: "failed",
+      attempt_count: 6,
+      last_error: "upload stalled after 900000ms",
+      next_retry_at: "2026-08-19T02:00:00Z",
+      retry_exhausted_at: "2026-08-19T01:30:00Z",
+      retry_state: "exhausted",
+    });
+    archivesRef.data = { archives: [archive], latest: archive, latest_ready: null };
+    renderSection();
+
+    expect(screen.getByText("Automatic retries stopped")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Session archives/ }));
+    expect(screen.getAllByText("Automatic retries stopped")).toHaveLength(2);
+    expect(screen.getByText((_, element) =>
+      element?.tagName === "P" && element.textContent?.includes("6 attempts") === true
+    )).toBeInTheDocument();
+    expect(screen.getByText("upload stalled after 900000ms")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry archive" }));
+    await waitFor(() => expect(mockRetry).toHaveBeenCalledWith(archive.id));
   });
 
   it("stays hidden for an active issue with no archive", () => {

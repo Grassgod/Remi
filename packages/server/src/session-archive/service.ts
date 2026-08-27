@@ -36,6 +36,7 @@ import { createLogger } from "@shared/logger.js";
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
+const UPLOAD_PROGRESS_HEARTBEAT_MS = 30_000;
 const DEFAULT_ROOT = join(homedir(), ".remi", "multiremi", "session-archives");
 const ISSUE_PURGE_OUTBOX = ".issue-purge-outbox";
 const DEFAULT_PURGE_RECOVERY_INTERVAL_MS = 30_000;
@@ -251,6 +252,21 @@ export class SessionArchiveService {
     if (!claimed) {
       archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
       if (archive.status === "ready") return { archive, uploadAttempt: null };
+      if (archive.retryExhaustedAt) {
+        await this.cleanupExhaustedPartials(archive);
+        throw new SessionArchiveError(
+          "session archive automatic retry budget is exhausted",
+          409,
+          "session_archive_retry_exhausted",
+        );
+      }
+      if (archive.nextRetryAt && archive.nextRetryAt > new Date().toISOString()) {
+        throw new SessionArchiveError(
+          `session archive retry is deferred until ${archive.nextRetryAt}`,
+          429,
+          "session_archive_retry_backoff",
+        );
+      }
       throw new SessionArchiveError(
         "session archive upload attempt could not be claimed",
         409,
@@ -262,12 +278,13 @@ export class SessionArchiveService {
       const finalPath = await this.resolveArchivePath(archive.relativePath, true);
       await this.cleanupPriorAttemptPartials(finalPath, archive.attemptCount);
     } catch (error) {
-      this.store.markSessionArchiveFailedAttempt(
+      const failed = this.store.markSessionArchiveFailedAttempt(
         archive.id,
         runtimeId,
         archive.attemptCount,
         error instanceof Error ? error.message : String(error),
       );
+      await this.cleanupExhaustedPartials(failed);
       throw error;
     }
     return { archive, uploadAttempt: archive.attemptCount };
@@ -304,6 +321,7 @@ export class SessionArchiveService {
 
     let handle: Awaited<ReturnType<typeof open>> | null = null;
     let uploaded = 0;
+    let lastProgressAt = Date.now();
     try {
       const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
         | (constants.O_NOFOLLOW ?? 0);
@@ -326,6 +344,25 @@ export class SessionArchiveService {
         while (offset < value.byteLength) {
           const result = await handle.write(value, offset, value.byteLength - offset, null);
           offset += result.bytesWritten;
+        }
+        const progressAt = Date.now();
+        if (progressAt - lastProgressAt >= UPLOAD_PROGRESS_HEARTBEAT_MS) {
+          const heartbeat = this.store.markSessionArchiveUploadedAttempt(
+            archive.id,
+            runtimeId,
+            attemptCount,
+            uploaded,
+          );
+          if (!heartbeat) {
+            await reader.cancel("archive upload attempt was superseded");
+            throw new SessionArchiveError(
+              "session archive upload attempt was superseded",
+              409,
+              "session_archive_attempt_conflict",
+            );
+          }
+          archive = heartbeat;
+          lastProgressAt = progressAt;
         }
       }
       await handle.sync();
@@ -356,12 +393,13 @@ export class SessionArchiveService {
       await handle?.close().catch(() => undefined);
       await unlink(partialPath).catch(() => undefined);
       const message = error instanceof Error ? error.message : String(error);
-      this.store.markSessionArchiveFailedAttempt(
+      const failed = this.store.markSessionArchiveFailedAttempt(
         archive.id,
         runtimeId,
         attemptCount,
         message,
       );
+      await this.cleanupExhaustedPartials(failed);
       throw error;
     }
   }
@@ -496,12 +534,13 @@ export class SessionArchiveService {
         && current.sizeBytes === archive.sizeBytes
       ) return current;
       const message = error instanceof Error ? error.message : String(error);
-      this.store.markSessionArchiveFailedAttempt(
+      const failed = this.store.markSessionArchiveFailedAttempt(
         archive.id,
         runtimeId,
         attemptCount,
         message,
       );
+      await this.cleanupExhaustedPartials(failed);
       throw error;
     }
   }
@@ -617,6 +656,7 @@ export class SessionArchiveService {
         verifiedAttempt,
         errorMessage,
       ) ?? this.store.getSessionArchive(archive.id) ?? archive;
+      await this.cleanupExhaustedPartials(archive);
     }
     return {
       archive,
@@ -664,16 +704,17 @@ export class SessionArchiveService {
     return current;
   }
 
-  retry(archiveId: string): MultiremiSessionArchive {
+  async retry(archiveId: string): Promise<MultiremiSessionArchive> {
     const archive = this.store.getSessionArchive(archiveId);
     if (!archive) throw new SessionArchiveError("session archive not found", 404, "session_archive_not_found");
-    if (archive.status !== "failed") {
+    if (archive.status !== "failed" && !archive.retryExhaustedAt) {
       throw new SessionArchiveError(
         `cannot retry archive in ${archive.status} state`,
         409,
         "session_archive_invalid_state",
       );
     }
+    await this.cleanupArchivePartials(archive, false);
     const retried = this.store.retrySessionArchive(archiveId);
     if (!retried) throw this.issueLifecycleClosed();
     return retried;
@@ -1019,6 +1060,54 @@ export class SessionArchiveService {
       if (!legacyPartial && (!Number.isSafeInteger(attempt) || attempt >= activeAttempt)) continue;
       await unlink(join(directory, entry.name));
     }
+  }
+
+  async cleanupExhaustedPartials(archive: MultiremiSessionArchive | null): Promise<void> {
+    if (!archive?.retryExhaustedAt) return;
+    const current = this.store.getSessionArchive(archive.id);
+    if (!this.isSameRetryExhaustion(current, archive)) return;
+    await this.cleanupArchivePartials(current, true, archive);
+  }
+
+  private async cleanupArchivePartials(
+    archive: MultiremiSessionArchive,
+    bestEffort: boolean,
+    exhaustedGeneration?: MultiremiSessionArchive,
+  ): Promise<void> {
+    try {
+      const finalPath = await this.resolveArchivePath(archive.relativePath, false);
+      const directory = dirname(finalPath);
+      const finalName = basename(finalPath);
+      const attemptPattern = new RegExp(`^${escapeRegExp(finalName)}\\.\\d+\\.partial$`);
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        if (entry.name !== `${finalName}.partial` && !attemptPattern.test(entry.name)) continue;
+        if (
+          exhaustedGeneration
+          && !this.isSameRetryExhaustion(
+            this.store.getSessionArchive(archive.id),
+            exhaustedGeneration,
+          )
+        ) return;
+        await unlink(join(directory, entry.name));
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if (!bestEffort) throw error;
+      log.warn(
+        `Failed to clean Session archive partials for ${archive.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private isSameRetryExhaustion(
+    current: MultiremiSessionArchive | null,
+    expected: MultiremiSessionArchive,
+  ): current is MultiremiSessionArchive {
+    return Boolean(
+      current?.retryExhaustedAt
+      && current.retryExhaustedAt === expected.retryExhaustedAt
+      && current.attemptCount === expected.attemptCount,
+    );
   }
 
   private async writeManifest(

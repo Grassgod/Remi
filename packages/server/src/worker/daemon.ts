@@ -23,6 +23,8 @@ import {
   type MultiremiDaemonHeartbeatConfigAck,
   type MultiremiDaemonGcStatus,
   type MultiremiDaemonRegisterResponse,
+  type MultiremiDaemonSessionArchiveStatus,
+  type MultiremiDaemonSessionArchiveWire,
   type MultiremiRelayEngineWire,
   type MultiremiRelayWire,
 } from "./client.js";
@@ -582,6 +584,7 @@ export class MultiremiDaemon {
   private restartRequestedFlag = false;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
   private gcInFlight: Promise<MultiremiDaemonGcSummary> | null = null;
+  private sessionArchiveRetryLogAt = new Map<string, number>();
   private readonly gitWorktreeInspector: GitWorktreeInspector;
   private localPathLocks = new LocalPathLocker();
   private issueWorkspaceLifecycleLocks: IssueWorkspaceLifecycleLocker;
@@ -1709,6 +1712,7 @@ export class MultiremiDaemon {
     const runtimeId = this.options.runtimeId;
     if (!runtimeId) throw new Error("Session archive requires a registered Runtime");
     const receipt = await readIssueSessionArchiveReceipt(workspaceDir);
+    let preflightStatus: MultiremiDaemonSessionArchiveStatus | null = null;
     if (!forceFreshSnapshot && receipt?.issueId === issueId) {
       const status = await this.client.getIssueSessionArchiveStatus(
         runtimeId,
@@ -1727,6 +1731,11 @@ export class MultiremiDaemon {
           sha256: receipt.sha256,
         };
       }
+      preflightStatus = status;
+    }
+    preflightStatus ??= await this.client.getIssueSessionArchiveStatus(runtimeId, issueId);
+    if (this.shouldDeferIssueSessionArchive(issueId, preflightStatus.latest)) {
+      return null;
     }
     let prepared: Awaited<ReturnType<typeof prepareIssueSessionArchive>>;
     try {
@@ -1846,6 +1855,36 @@ export class MultiremiDaemon {
     } finally {
       await removePreparedIssueSessionArchive(prepared.archivePath);
     }
+  }
+
+  private shouldDeferIssueSessionArchive(
+    issueId: string,
+    archive: MultiremiDaemonSessionArchiveWire | null,
+  ): boolean {
+    if (
+      !archive
+      || (archive.status !== "pending" && archive.status !== "uploading" && archive.status !== "failed")
+    ) return false;
+    const retryState = archive.retry_state
+      ?? (archive?.retry_exhausted_at
+        ? "exhausted"
+        : archive?.next_retry_at && archive.next_retry_at > new Date().toISOString()
+          ? "backoff"
+          : "eligible");
+    if (retryState !== "backoff" && retryState !== "exhausted") return false;
+    const now = Date.now();
+    const logs = this.sessionArchiveRetryLogAt ??= new Map<string, number>();
+    const previous = logs.get(issueId) ?? 0;
+    if (now - previous >= 60_000) {
+      logs.set(issueId, now);
+      if (logs.size > 1_000) logs.delete(logs.keys().next().value!);
+      log.warn(
+        retryState === "exhausted"
+          ? `Issue Session archive automatic retries exhausted for ${issueId}; preserving workspace for manual retry`
+          : `Issue Session archive retry deferred for ${issueId} until ${archive?.next_retry_at ?? "the server retry window"}`,
+      );
+    }
+    return true;
   }
 
   restartRequested(): boolean {

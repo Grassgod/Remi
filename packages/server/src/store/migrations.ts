@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import {
+  isSessionArchiveRetryExhausted,
+  nextSessionArchiveRetryAt,
+  resolveSessionArchiveRetryPolicy,
+  resolveSessionArchiveUploadStallMs,
+} from "@multiremi/session-archive/retry-policy.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("multiremi-store");
@@ -8,6 +14,7 @@ const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
 const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_delivery_v3";
 const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
+const SESSION_ARCHIVE_RETRY_BUDGET_MIGRATION = "20260826_session_archive_retry_budget";
 const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4";
 const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_policy";
 const TASK_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_task_issue_proposal_policy";
@@ -1874,6 +1881,11 @@ export function runMigrations(db: SqlDatabase): void {
       recent_releases TEXT NOT NULL DEFAULT '[]',
       services TEXT NOT NULL DEFAULT '[]',
       auto_update_stable INTEGER NOT NULL DEFAULT 0,
+      auto_update_time TEXT NOT NULL DEFAULT '05:00',
+      auto_update_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+      auto_update_next_check_at TEXT,
+      auto_update_last_checked_at TEXT,
+      auto_update_last_result TEXT,
       updater_heartbeat_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -1957,6 +1969,8 @@ export function runMigrations(db: SqlDatabase): void {
       metadata TEXT NOT NULL DEFAULT '{}',
       attempt_count INTEGER NOT NULL DEFAULT 0,
       last_error TEXT,
+      next_retry_at TEXT,
+      retry_exhausted_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       completed_at TEXT,
@@ -2025,6 +2039,15 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_at TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_reported_active_tasks INTEGER");
   addColumnIfMissing(db, "multiremi_platform_operations", "cancel_requested INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_time TEXT NOT NULL DEFAULT '05:00'");
+  addColumnIfMissing(
+    db,
+    "multiremi_platform_state",
+    "auto_update_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'",
+  );
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_next_check_at TEXT");
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_last_checked_at TEXT");
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_last_result TEXT");
   addColumnIfMissing(
     db,
     "multiremi_daemon_retirements",
@@ -2082,6 +2105,11 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_source_revision TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_sha256 TEXT");
+  addColumnIfMissing(db, "multiremi_session_archives", "next_retry_at TEXT");
+  addColumnIfMissing(db, "multiremi_session_archives", "retry_exhausted_at TEXT");
+  runMigrationOnce(db, SESSION_ARCHIVE_RETRY_BUDGET_MIGRATION, () => {
+    backfillSessionArchiveRetryBudget(db);
+  });
   addColumnIfMissing(db, "multiremi_issue_comments", "parent_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "type TEXT NOT NULL DEFAULT 'comment'");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_at TEXT");
@@ -3074,6 +3102,46 @@ function normalizeActiveDaemonTokenExpiry(db: SqlDatabase): void {
        AND expires_at > ?`,
     [now],
   );
+}
+
+function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const stallBefore = new Date(now.getTime() - resolveSessionArchiveUploadStallMs()).toISOString();
+  const policy = resolveSessionArchiveRetryPolicy();
+  const rows = db.query(
+    `SELECT id, status, attempt_count, updated_at
+     FROM multiremi_session_archives
+     WHERE status = 'failed'
+        OR (status = 'uploading' AND updated_at <= ?)`,
+  ).all(stallBefore) as Array<{
+    id: string;
+    status: string;
+    attempt_count: number;
+    updated_at: string;
+  }>;
+  for (const row of rows) {
+    const attemptCount = Number(row.attempt_count ?? 0);
+    const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy);
+    const nextRetryAt = nextSessionArchiveRetryAt(row.id, attemptCount, policy, now);
+    db.run(
+      `UPDATE multiremi_session_archives
+       SET status = 'failed',
+           last_error = CASE
+             WHEN status = 'uploading' THEN 'upload stalled'
+             ELSE last_error
+           END,
+           next_retry_at = COALESCE(next_retry_at, ?),
+           retry_exhausted_at = CASE
+             WHEN ? IS NOT NULL THEN COALESCE(retry_exhausted_at, ?)
+             ELSE retry_exhausted_at
+           END,
+           updated_at = CASE WHEN status = 'uploading' THEN ? ELSE updated_at END,
+           completed_at = NULL
+       WHERE id = ?`,
+      [nextRetryAt, exhausted ? nowIso : null, nowIso, nowIso, row.id],
+    );
+  }
 }
 
 function nextIssueNumber(db: SqlDatabase, workspaceId: string): number {

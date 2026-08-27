@@ -514,6 +514,18 @@ runMigrations(this.db);
     return this.platformOperations.setAutoUpdateStable(enabled);
   }
 
+  setPlatformAutoUpdateSettings(input: { enabled: boolean; time: string; timezone: string }, at?: Date) {
+    return this.platformOperations.setAutoUpdateSettings(input, at);
+  }
+
+  claimDuePlatformAutoUpdateCheck(at?: Date) {
+    return this.platformOperations.claimDueAutoUpdateCheck(at);
+  }
+
+  setPlatformAutoUpdateResult(result: import("@multiremi/contracts/types.js").MultiremiPlatformAutoUpdateResult) {
+    return this.platformOperations.setAutoUpdateResult(result);
+  }
+
   heartbeatPlatformUpdater(input: {
     driver: "systemd_release" | "docker_compose";
     currentRelease?: MultiremiPlatformRelease | null;

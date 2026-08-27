@@ -64,6 +64,7 @@ const STATUS_ONLY_ROUTES = new Set([
 
 const NORMALIZER_RULES = [
   "ISO-8601 timestamps (anywhere in a string) -> \"<timestamp>\"",
+  "local timestamp ids (local[-contact|-lark]-<epoch>) -> \"<timestamp>\" suffix",
   "epoch-millisecond numbers (1.5e12..4e12) and *_ms/duration/elapsed/uptime/latency numeric keys -> 0",
   "absolute machine paths (repo root, $HOME, $TMPDIR, upload dir) -> \"<repo>\"/\"<home>\"/\"<tmp>\"/\"<uploads>\"",
   "hostname in URL/UNC authorities -> \"<hostname>\"; username in Unix/Windows home paths -> \"<user>\"",
@@ -188,6 +189,7 @@ function installDeterminism(): () => void {
 // ---------------------------------------------------------------------------
 
 const ISO_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})/g;
+const LOCAL_TIME_ID_RE = /\b(local(?:-contact|-lark)?)-\d{13}\b/g;
 const TIME_KEY_RE = /(^|_)(duration|elapsed|uptime|latency)(_ms|_seconds)?$/i;
 const MS_KEY_RE = /_ms$/i;
 
@@ -227,7 +229,9 @@ function scrubPathIdentity(
 }
 
 export function scrubString(value: string, identity: SnapshotMachineIdentity = {}): string {
-  let out = value.replace(ISO_RE, "<timestamp>");
+  let out = value
+    .replace(ISO_RE, "<timestamp>")
+    .replace(LOCAL_TIME_ID_RE, "$1-<timestamp>");
   for (const [needle, replacement] of PATH_REPLACEMENTS) {
     if (needle && out.includes(needle)) out = out.split(needle).join(replacement);
   }

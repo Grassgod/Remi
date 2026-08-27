@@ -6,6 +6,13 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION } from "@multiremi/contracts/types.js";
 import { nowIso } from "@multiremi/ids.js";
+import {
+  isSessionArchiveRetryExhausted,
+  nextSessionArchiveRetryAt,
+  resolveSessionArchiveRetryPolicy,
+  resolveSessionArchiveUploadStallMs,
+  type SessionArchiveRetryPolicy,
+} from "@multiremi/session-archive/retry-policy.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 
 type Row = Record<string, unknown>;
@@ -40,6 +47,8 @@ function hydrate(row: Row): MultiremiSessionArchive {
     metadata: parseMetadata(row.metadata),
     attemptCount: Number(row.attempt_count ?? 0),
     lastError: row.last_error == null ? null : String(row.last_error),
+    nextRetryAt: row.next_retry_at == null ? null : String(row.next_retry_at),
+    retryExhaustedAt: row.retry_exhausted_at == null ? null : String(row.retry_exhausted_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     completedAt: row.completed_at == null ? null : String(row.completed_at),
@@ -58,6 +67,7 @@ export interface SessionArchiveWorkspaceUsage {
   readyArchives: number;
   failedArchives: number;
   pendingArchives: number;
+  exhaustedArchives: number;
   totalBytes: number;
   lastFailure: {
     archiveId: string;
@@ -92,6 +102,7 @@ export class SessionArchivesRepo {
   ): { archive: MultiremiSessionArchive; created: boolean } | null {
     return this.withWritableIssueArchive(input.workspaceId, input.issueId, input.runtimeId, () => {
       const now = nowIso();
+      const policy = resolveSessionArchiveRetryPolicy();
       const metadata = JSON.stringify({
         kind: "preparation_failure",
         stage: input.stage,
@@ -102,8 +113,9 @@ export class SessionArchivesRepo {
            id, workspace_id, issue_id, runtime_id, daemon_id,
            source_revision, sha256, size_bytes, uploaded_size_bytes,
            file_count, status, relative_path, metadata, attempt_count,
-           last_error, created_at, updated_at, completed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, 'failed', ?, ?, 0, ?, ?, ?, NULL)
+           last_error, next_retry_at, retry_exhausted_at,
+           created_at, updated_at, completed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, 'failed', ?, ?, 1, ?, NULL, NULL, ?, ?, NULL)
          ON CONFLICT(issue_id, source_revision, sha256) DO UPDATE SET
            workspace_id = excluded.workspace_id,
            runtime_id = excluded.runtime_id,
@@ -112,9 +124,11 @@ export class SessionArchivesRepo {
            uploaded_size_bytes = 0,
            file_count = NULL,
            metadata = excluded.metadata,
+           attempt_count = attempt_count + 1,
            last_error = excluded.last_error,
            updated_at = excluded.updated_at,
-           completed_at = NULL`,
+           completed_at = NULL
+         WHERE retry_exhausted_at IS NULL`,
         [
           id,
           input.workspaceId,
@@ -139,18 +153,35 @@ export class SessionArchivesRepo {
         PREPARATION_FAILURE_SHA256,
       ) as Row | null;
       if (!row) throw new Error("session archive failure report was not persisted");
-      const archive = hydrate(row);
+      let archive = hydrate(row);
+      if (!archive.retryExhaustedAt) {
+        const exhausted = isSessionArchiveRetryExhausted(archive.attemptCount, policy);
+        this.ctx.db.run(
+          `UPDATE multiremi_session_archives
+           SET next_retry_at = ?, retry_exhausted_at = ?
+           WHERE id = ?`,
+          [
+            nextSessionArchiveRetryAt(archive.id, archive.attemptCount, policy, new Date(now)),
+            exhausted ? now : null,
+            archive.id,
+          ],
+        );
+        archive = this.get(archive.id)!;
+      }
       return { archive, created: archive.id === id };
     });
   }
 
   workspaceUsage(workspaceId: string): SessionArchiveWorkspaceUsage {
+    // Deliberately converge stalled uploads on this low-frequency Settings read.
+    this.normalizeStalledUploads(workspaceId);
     const totals = this.ctx.db.query(
       `SELECT
          COUNT(*) AS total_archives,
          SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_archives,
          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_archives,
          SUM(CASE WHEN status IN ('pending', 'uploading') THEN 1 ELSE 0 END) AS pending_archives,
+         SUM(CASE WHEN retry_exhausted_at IS NOT NULL THEN 1 ELSE 0 END) AS exhausted_archives,
          SUM(CASE WHEN status = 'ready' THEN uploaded_size_bytes ELSE 0 END) AS total_bytes
        FROM multiremi_session_archives
        WHERE workspace_id = ? AND status <> 'superseded'`,
@@ -167,6 +198,7 @@ export class SessionArchivesRepo {
       readyArchives: Number(totals?.ready_archives ?? 0),
       failedArchives: Number(totals?.failed_archives ?? 0),
       pendingArchives: Number(totals?.pending_archives ?? 0),
+      exhaustedArchives: Number(totals?.exhausted_archives ?? 0),
       totalBytes: Number(totals?.total_bytes ?? 0),
       lastFailure: failure
         ? {
@@ -261,7 +293,8 @@ export class SessionArchivesRepo {
       // initialized instead of leaving it pending forever.
       this.ctx.db.run(
         `UPDATE multiremi_session_archives
-         SET status = 'superseded', updated_at = ?
+         SET status = 'superseded', next_retry_at = NULL,
+             retry_exhausted_at = NULL, updated_at = ?
          WHERE issue_id = ? AND (source_revision <> ? OR sha256 <> ?)
            AND status IN ('pending', 'uploading', 'failed')`,
         [now, input.issueId, input.sourceRevision, input.sha256],
@@ -270,7 +303,8 @@ export class SessionArchivesRepo {
       // not a second valid GC barrier.
       this.ctx.db.run(
         `UPDATE multiremi_session_archives
-         SET status = 'superseded', updated_at = ?
+         SET status = 'superseded', next_retry_at = NULL,
+             retry_exhausted_at = NULL, updated_at = ?
          WHERE issue_id = ? AND source_revision = ?
            AND sha256 <> ? AND status IN ('pending', 'uploading', 'ready', 'failed')`,
         [now, input.issueId, input.sourceRevision, input.sha256],
@@ -310,14 +344,49 @@ export class SessionArchivesRepo {
 
   claimUploadAttempt(id: string, runtimeId: string): MultiremiSessionArchive | null {
     return this.withWritableArchive(id, runtimeId, () => {
-      const now = nowIso();
+      const nowDate = new Date();
+      const now = nowDate.toISOString();
+      const policy = resolveSessionArchiveRetryPolicy();
+      const stallMs = resolveSessionArchiveUploadStallMs();
+      let current = this.get(id);
+      if (!current || current.retryExhaustedAt) return null;
+      if (
+        current.status !== "pending"
+        && current.status !== "uploading"
+        && current.status !== "failed"
+      ) return null;
+      if (
+        current.status === "uploading"
+        && Date.parse(current.updatedAt) <= nowDate.getTime() - stallMs
+      ) {
+        current = this.markStalledUpload(current, nowDate, stallMs, policy);
+      }
+      if (!current || current.retryExhaustedAt) return null;
+      if (isSessionArchiveRetryExhausted(current.attemptCount, policy)) {
+        this.ctx.db.run(
+          `UPDATE multiremi_session_archives
+           SET status = 'failed', last_error = COALESCE(last_error, 'retry budget exhausted'),
+               retry_exhausted_at = ?, updated_at = ?, completed_at = NULL
+           WHERE id = ? AND runtime_id = ? AND retry_exhausted_at IS NULL
+             AND status IN ('pending', 'uploading', 'failed')`,
+          [now, now, id, runtimeId],
+        );
+        return null;
+      }
+      if (current.nextRetryAt && current.nextRetryAt > now) return null;
+      const nextAttemptCount = current.attemptCount + 1;
+      const nextRetryAt = nextSessionArchiveRetryAt(id, nextAttemptCount, policy, nowDate);
       const result = this.ctx.db.run(
         `UPDATE multiremi_session_archives
          SET status = 'pending', uploaded_size_bytes = 0,
              attempt_count = attempt_count + 1, last_error = NULL,
+             next_retry_at = ?, retry_exhausted_at = NULL,
              updated_at = ?, completed_at = NULL
-         WHERE id = ? AND runtime_id = ? AND status IN ('pending', 'uploading', 'failed')`,
-        [now, id, runtimeId],
+         WHERE id = ? AND runtime_id = ? AND attempt_count = ?
+           AND status IN ('pending', 'failed')
+           AND retry_exhausted_at IS NULL
+           AND (next_retry_at IS NULL OR next_retry_at <= ?)`,
+        [nextRetryAt, now, id, runtimeId, current.attemptCount, now],
       );
       if (result.changes !== 1) return null;
       const archive = this.get(id);
@@ -378,6 +447,7 @@ export class SessionArchivesRepo {
       const result = this.ctx.db.run(
         `UPDATE multiremi_session_archives
          SET status = 'ready', uploaded_size_bytes = ?, last_error = NULL,
+             next_retry_at = NULL, retry_exhausted_at = NULL,
              updated_at = ?, completed_at = ?
          WHERE id = ? AND runtime_id = ? AND attempt_count = ? AND status = 'uploading'`,
         [uploadedSizeBytes, now, now, id, runtimeId, attemptCount],
@@ -399,22 +469,48 @@ export class SessionArchivesRepo {
     error: string,
   ): MultiremiSessionArchive | null {
     return this.withWritableArchive(id, runtimeId, () => {
+      const nowDate = new Date();
+      const now = nowDate.toISOString();
+      const policy = resolveSessionArchiveRetryPolicy();
+      const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy);
       const result = this.ctx.db.run(
         `UPDATE multiremi_session_archives
-         SET status = 'failed', last_error = ?, updated_at = ?, completed_at = NULL
+         SET status = 'failed', last_error = ?, next_retry_at = ?,
+             retry_exhausted_at = ?, updated_at = ?, completed_at = NULL
          WHERE id = ? AND runtime_id = ? AND attempt_count = ? AND status IN ('pending', 'uploading')`,
-        [error.slice(0, 2_000), nowIso(), id, runtimeId, attemptCount],
+        [
+          error.slice(0, 2_000),
+          nextSessionArchiveRetryAt(id, attemptCount, policy, nowDate),
+          exhausted ? now : null,
+          now,
+          id,
+          runtimeId,
+          attemptCount,
+        ],
       );
       return result.changes === 1 ? this.get(id) : null;
     });
   }
 
   markFailed(id: string, error: string): MultiremiSessionArchive | null {
+    const current = this.get(id);
+    if (!current) return null;
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const policy = resolveSessionArchiveRetryPolicy();
+    const exhausted = isSessionArchiveRetryExhausted(current.attemptCount, policy);
     this.ctx.db.run(
       `UPDATE multiremi_session_archives
-       SET status = 'failed', last_error = ?, updated_at = ?, completed_at = NULL
+       SET status = 'failed', last_error = ?, next_retry_at = ?,
+           retry_exhausted_at = ?, updated_at = ?, completed_at = NULL
        WHERE id = ? AND status <> 'superseded'`,
-      [error.slice(0, 2_000), nowIso(), id],
+      [
+        error.slice(0, 2_000),
+        nextSessionArchiveRetryAt(id, current.attemptCount, policy, nowDate),
+        exhausted ? now : null,
+        now,
+        id,
+      ],
     );
     return this.get(id);
   }
@@ -424,24 +520,37 @@ export class SessionArchivesRepo {
     attemptCount: number,
     error: string,
   ): MultiremiSessionArchive | null {
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const policy = resolveSessionArchiveRetryPolicy();
+    const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy);
     const result = this.ctx.db.run(
       `UPDATE multiremi_session_archives
-       SET status = 'failed', last_error = ?, updated_at = ?, completed_at = NULL
+       SET status = 'failed', last_error = ?, next_retry_at = ?,
+           retry_exhausted_at = ?, updated_at = ?, completed_at = NULL
        WHERE id = ? AND attempt_count = ? AND status = 'ready'`,
-      [error.slice(0, 2_000), nowIso(), id, attemptCount],
+      [
+        error.slice(0, 2_000),
+        nextSessionArchiveRetryAt(id, attemptCount, policy, nowDate),
+        exhausted ? now : null,
+        now,
+        id,
+        attemptCount,
+      ],
     );
     return result.changes === 1 ? this.get(id) : null;
   }
 
   retry(id: string): MultiremiSessionArchive | null {
     const current = this.get(id);
-    if (!current || current.status !== "failed") return null;
+    if (!current || (current.status !== "failed" && !current.retryExhaustedAt)) return null;
     return this.withWritableArchive(id, current.runtimeId, () => {
       this.ctx.db.run(
         `UPDATE multiremi_session_archives
-         SET status = 'pending', uploaded_size_bytes = 0, last_error = NULL,
+         SET status = 'pending', uploaded_size_bytes = 0, attempt_count = 0,
+             last_error = NULL, next_retry_at = NULL, retry_exhausted_at = NULL,
              updated_at = ?, completed_at = NULL
-         WHERE id = ? AND status = 'failed'`,
+         WHERE id = ? AND (status = 'failed' OR retry_exhausted_at IS NOT NULL)`,
         [nowIso(), id],
       );
       return this.get(id);
@@ -450,6 +559,46 @@ export class SessionArchivesRepo {
 
   touchWritableArchive(id: string, runtimeId: string): MultiremiSessionArchive | null {
     return this.withWritableArchive(id, runtimeId, (archive) => archive);
+  }
+
+  private normalizeStalledUploads(workspaceId: string): void {
+    const nowDate = new Date();
+    const stallMs = resolveSessionArchiveUploadStallMs();
+    const stallBefore = new Date(nowDate.getTime() - stallMs).toISOString();
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_session_archives
+       WHERE workspace_id = ? AND status = 'uploading' AND updated_at <= ?`,
+    ).all(workspaceId, stallBefore) as Row[];
+    const policy = resolveSessionArchiveRetryPolicy();
+    for (const row of rows) this.markStalledUpload(hydrate(row), nowDate, stallMs, policy);
+  }
+
+  private markStalledUpload(
+    archive: MultiremiSessionArchive,
+    nowDate: Date,
+    stallMs: number,
+    policy: SessionArchiveRetryPolicy,
+  ): MultiremiSessionArchive | null {
+    const now = nowDate.toISOString();
+    const exhausted = isSessionArchiveRetryExhausted(archive.attemptCount, policy);
+    const result = this.ctx.db.run(
+      `UPDATE multiremi_session_archives
+       SET status = 'failed', last_error = ?, next_retry_at = ?,
+           retry_exhausted_at = ?, updated_at = ?, completed_at = NULL
+       WHERE id = ? AND runtime_id = ? AND attempt_count = ?
+         AND status = 'uploading' AND updated_at = ?`,
+      [
+        `upload stalled after ${stallMs}ms`,
+        nextSessionArchiveRetryAt(archive.id, archive.attemptCount, policy, nowDate),
+        exhausted ? now : null,
+        now,
+        archive.id,
+        archive.runtimeId,
+        archive.attemptCount,
+        archive.updatedAt,
+      ],
+    );
+    return this.get(archive.id);
   }
 
   private withWritableArchive<T>(

@@ -118,6 +118,127 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_notification_deliveries")).toEqual(expect.arrayContaining([
       "claim_seq", "leased_until",
     ]));
+    expect(columnNames(database, "multiremi_platform_state")).toEqual(expect.arrayContaining([
+      "auto_update_time",
+      "auto_update_timezone",
+      "auto_update_next_check_at",
+      "auto_update_last_checked_at",
+      "auto_update_last_result",
+    ]));
+  });
+
+  it("adds the automatic update schedule to a legacy platform state table", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_platform_state (
+        id TEXT PRIMARY KEY,
+        driver TEXT NOT NULL DEFAULT 'systemd_release',
+        current_release TEXT,
+        latest_release TEXT,
+        recent_releases TEXT NOT NULL DEFAULT '[]',
+        services TEXT NOT NULL DEFAULT '[]',
+        auto_update_stable INTEGER NOT NULL DEFAULT 0,
+        updater_heartbeat_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO multiremi_platform_state (
+        id, driver, auto_update_stable, created_at, updated_at
+      ) VALUES (
+        'platform', 'docker_compose', 1,
+        '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_platform_state")).toEqual(expect.arrayContaining([
+      "auto_update_time",
+      "auto_update_timezone",
+      "auto_update_next_check_at",
+      "auto_update_last_checked_at",
+      "auto_update_last_result",
+    ]));
+    expect(database.query(
+      "SELECT auto_update_time, auto_update_timezone FROM multiremi_platform_state WHERE id = 'platform'",
+    ).get()).toEqual({ auto_update_time: "05:00", auto_update_timezone: "Asia/Shanghai" });
+  });
+
+  it("backfills retry budgets for legacy failures and stalled uploads", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_session_archives (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        issue_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        daemon_id TEXT NOT NULL,
+        source_revision TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        size_bytes BIGINT NOT NULL,
+        uploaded_size_bytes BIGINT NOT NULL DEFAULT 0,
+        file_count INTEGER,
+        status TEXT NOT NULL DEFAULT 'pending',
+        relative_path TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE(issue_id, source_revision, sha256)
+      );
+      INSERT INTO multiremi_session_archives (
+        id, issue_id, runtime_id, daemon_id, source_revision, sha256,
+        size_bytes, status, relative_path, attempt_count, last_error,
+        created_at, updated_at
+      ) VALUES
+        ('sar_failed', 'iss_failed', 'rt_1', 'dmn_1', 'rev-failed', '${"1".repeat(64)}',
+         1, 'failed', 'failed/sessions.tar.gz', 6, 'network failed',
+         '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z'),
+        ('sar_stalled', 'iss_stalled', 'rt_1', 'dmn_1', 'rev-stalled', '${"2".repeat(64)}',
+         1, 'uploading', 'stalled/sessions.tar.gz', 2, NULL,
+         '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z'),
+        ('sar_active', 'iss_active', 'rt_1', 'dmn_1', 'rev-active', '${"3".repeat(64)}',
+         1, 'uploading', 'active/sessions.tar.gz', 1, NULL,
+         '2999-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
+      "next_retry_at", "retry_exhausted_at",
+    ]));
+    const rows = database.query(
+      `SELECT id, status, attempt_count, last_error, next_retry_at, retry_exhausted_at
+       FROM multiremi_session_archives ORDER BY id`,
+    ).all() as Array<Record<string, unknown>>;
+    expect(rows).toEqual([
+      {
+        id: "sar_active",
+        status: "uploading",
+        attempt_count: 1,
+        last_error: null,
+        next_retry_at: null,
+        retry_exhausted_at: null,
+      },
+      {
+        id: "sar_failed",
+        status: "failed",
+        attempt_count: 6,
+        last_error: "network failed",
+        next_retry_at: expect.any(String),
+        retry_exhausted_at: expect.any(String),
+      },
+      {
+        id: "sar_stalled",
+        status: "failed",
+        attempt_count: 2,
+        last_error: "upload stalled",
+        next_retry_at: expect.any(String),
+        retry_exhausted_at: null,
+      },
+    ]);
   });
 
   it("adds the notification delivery lease to a pre-lease table", () => {

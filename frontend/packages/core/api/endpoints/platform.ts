@@ -6,6 +6,7 @@ import {
   PlatformSettingsResponseSchema,
   PlatformStatusSchema,
   type PlatformOperation,
+  type PlatformAutoUpdateSchedule,
   type PlatformStatus,
 } from "../schemas/platform";
 
@@ -42,13 +43,17 @@ export class PlatformEndpoints {
     }).operation;
   }
 
-  async updatePlatformSettings(autoUpdateStable: boolean): Promise<boolean> {
+  async updatePlatformSettings(autoUpdate: {
+    enabled: boolean;
+    time: string;
+    timezone: string;
+  }): Promise<PlatformAutoUpdateSchedule> {
     const raw = await this.http.fetch<unknown>("/api/multiremi/platform/settings", {
       method: "PATCH",
-      body: JSON.stringify({ autoUpdateStable }),
+      body: JSON.stringify({ autoUpdate }),
     });
-    return parseStrictResponse<{ state: { autoUpdateStable: boolean } }>(raw, PlatformSettingsResponseSchema, {
+    return parseStrictResponse<{ state: { autoUpdate: PlatformAutoUpdateSchedule } }>(raw, PlatformSettingsResponseSchema, {
       endpoint: "PATCH /api/multiremi/platform/settings",
-    }).state.autoUpdateStable;
+    }).state.autoUpdate;
   }
 }

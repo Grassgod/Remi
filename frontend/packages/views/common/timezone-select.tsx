@@ -82,12 +82,14 @@ export function TimezoneSelect({
   browserSuffix,
   disabled,
   triggerClassName,
+  ariaLabel,
 }: {
   value: string;
   onValueChange: (next: string) => void;
   browserSuffix: string;
   disabled?: boolean;
   triggerClassName?: string;
+  ariaLabel?: string;
 }) {
   const browser = browserTimezone();
   const options = timezoneOptions(value);
@@ -103,6 +105,7 @@ export function TimezoneSelect({
       }}
     >
       <SelectTrigger
+        aria-label={ariaLabel}
         size="sm"
         className={triggerClassName ?? "w-full rounded-md font-mono text-xs"}
       >

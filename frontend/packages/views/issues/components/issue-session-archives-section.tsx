@@ -100,7 +100,7 @@ export function IssueSessionArchivesSection({
         aria-expanded={open}
       >
         {t(($) => $.detail.section_session_archives)}
-        <ArchiveStatusBadge status={status} />
+        <ArchiveStatusBadge status={status} retryState={latest?.retry_state} />
         {archives.length > 0 && (
           <span className="tabular-nums text-muted-foreground">· {archives.length}</span>
         )}
@@ -193,11 +193,27 @@ function ArchiveRow({
                   size: formatBytes(archive.size_bytes),
                 })}
           </span>
+          {archive.retry_state === "exhausted" && (
+            <Badge variant="destructive" className="h-4 px-1 text-[10px] font-normal">
+              {t(($) => $.detail.session_archive_stopped)}
+            </Badge>
+          )}
         </div>
-        <p className="truncate text-[10px] text-muted-foreground">
-          {formatTimestamp(archive.completed_at ?? archive.updated_at)}
-          {archive.last_error ? ` · ${archive.last_error}` : ""}
+        <p className="text-[10px] text-muted-foreground">
+          {formatTimestamp(archive.completed_at ?? archive.updated_at)} · {t(($) => $.detail.session_archive_attempts, {
+            count: archive.attempt_count,
+          })}
         </p>
+        {archive.last_error && (
+          <p className="break-words text-[10px] text-destructive">{archive.last_error}</p>
+        )}
+        {archive.retry_state === "backoff" && archive.next_retry_at && (
+          <p className="text-[10px] text-muted-foreground">
+            {t(($) => $.detail.session_archive_next_retry, {
+              time: formatTimestamp(archive.next_retry_at),
+            })}
+          </p>
+        )}
       </div>
       {archive.status === "ready" && (
         <ArchiveAction
@@ -208,7 +224,7 @@ function ArchiveRow({
           <ShieldCheck className="size-3.5" />
         </ArchiveAction>
       )}
-      {archive.status === "failed" && (
+      {(archive.status === "failed" || archive.retry_state === "exhausted") && (
         <ArchiveAction
           label={t(($) => $.detail.session_archive_retry)}
           loading={retrying}
@@ -253,8 +269,21 @@ function ArchiveAction({
   );
 }
 
-function ArchiveStatusBadge({ status }: { status: string }) {
+function ArchiveStatusBadge({
+  status,
+  retryState,
+}: {
+  status: string;
+  retryState?: SessionArchive["retry_state"];
+}) {
   const { t } = useT("issues");
+  if (retryState === "exhausted") {
+    return (
+      <Badge variant="destructive" className="h-4 px-1 text-[10px] font-normal">
+        {t(($) => $.detail.session_archive_stopped)}
+      </Badge>
+    );
+  }
   let label: string;
   switch (status) {
     case "ready": label = t(($) => $.detail.session_archive_status.ready); break;
