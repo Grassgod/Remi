@@ -38,7 +38,21 @@ export function resolveWorkDir(
   workspacesRoot = join(homedir(), ".remi", "multiremi", "workspaces"),
 ): ResolvedWorkDir {
   if (task.issue?.key) {
-    return { workDir: join(workspacesRoot, safeIssueKey(task.issue.key)), ensureDir: true };
+    const issueRoot = join(workspacesRoot, safePathSegment(task.issue.key, "issue key"));
+    if (task.holdsWorkspace === false || task.holds_workspace === false) {
+      const issueSessionId = task.issueSessionId ?? task.issue_session_id;
+      if (!issueSessionId) throw new Error("discussion task requires an issue session id");
+      return {
+        workDir: join(
+          workspacesRoot,
+          ".sessions",
+          safePathSegment(task.issue.key, "issue key"),
+          safePathSegment(issueSessionId, "issue session id"),
+        ),
+        ensureDir: true,
+      };
+    }
+    return { workDir: issueRoot, ensureDir: true };
   }
   if (task.workDir) return { workDir: task.workDir, ensureDir: true };
   // agent.cwd is a machine-local absolute path; under pool scheduling it may
@@ -51,9 +65,9 @@ export function resolveWorkDir(
   return { workDir: join(workspacesRoot, task.workspaceId, task.id), ensureDir: true };
 }
 
-function safeIssueKey(value: string): string {
+function safePathSegment(value: string, label: string): string {
   const key = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!key || key === "." || key === "..") throw new Error(`invalid issue key for workspace path: ${JSON.stringify(value)}`);
+  if (!key || key === "." || key === "..") throw new Error(`invalid ${label} for workspace path: ${JSON.stringify(value)}`);
   return key;
 }
 

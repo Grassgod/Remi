@@ -193,9 +193,31 @@ describe("NewSessionButton", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
-      expect(mockMutations.createSession).toHaveBeenCalledWith({ title: "Implementation" }),
+      expect(mockMutations.createSession).toHaveBeenCalledWith({
+        title: "Implementation",
+        holds_workspace: true,
+      }),
     );
     expect(onCreated).toHaveBeenCalledWith("session-2");
+  });
+
+  it("creates a discussion session without the shared workspace", async () => {
+    mockMutations.createSession.mockResolvedValue({ id: "session-2" });
+    renderWithI18n(<NewSessionButton issueId="issue-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    fireEvent.change(await screen.findByLabelText("Session name"), {
+      target: { value: "Architecture chat" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Discussion" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(mockMutations.createSession).toHaveBeenCalledWith({
+        title: "Architecture chat",
+        holds_workspace: false,
+      }),
+    );
   });
 
   it("closes without creating anything when cancelled", async () => {

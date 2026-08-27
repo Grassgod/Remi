@@ -6,6 +6,7 @@ import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiTask,
   MultiremiTaskMessage,
+  MultiremiTaskQueueBlocker,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
 } from "@multiremi/contracts/types.js";
@@ -98,7 +99,11 @@ export function taskRealtimePayload(task: MultiremiTask): Record<string, unknown
   return payload;
 }
 
-export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: MultiremiTaskTriggerMetadata | null = null): Omit<
+export function taskCompatibilityResponse(
+  task: MultiremiTask,
+  triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
+  queueBlocker: MultiremiTaskQueueBlocker | null = null,
+): Omit<
   MultiremiTask,
   "result" | "delegationId" | "delegation_id" | "delegatedByAgentId" | "delegated_by_agent_id"
 > & {
@@ -218,6 +223,16 @@ export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: 
     response.new_comment_count = triggerMetadata.newCommentCount;
     if (triggerMetadata.newCommentsSince) response.new_comments_since = triggerMetadata.newCommentsSince;
   }
+  if (queueBlocker) {
+    (response as Record<string, unknown>).queue_blocker = {
+      task_id: queueBlocker.taskId,
+      agent_id: queueBlocker.agentId,
+      agent_name: queueBlocker.agentName,
+      issue_session_id: queueBlocker.issueSessionId,
+      issue_session_title: queueBlocker.issueSessionTitle,
+      reason: queueBlocker.reason,
+    };
+  }
   return response;
 }
 
@@ -230,6 +245,7 @@ export function daemonTaskWireResponse(
     agent_id: task.agentId,
     runtime_id: task.runtimeId ?? "",
     issue_id: task.issueId ?? "",
+    holds_workspace: task.holdsWorkspace,
     workspace_id: task.workspaceId,
     status: task.status,
     priority: task.priority,

@@ -115,7 +115,11 @@ import {
   resolveTaskWorkDir,
   type ResolvedTaskWorkDir,
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
-import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
+import {
+  discussionSessionLifecycleKey,
+  runWorkspaceGcOnce,
+  type MultiremiDaemonGcSummary,
+} from "@daemon/agent-runtime/workspace/gc.js";
 import { resolveWorkspaceGcPolicy, type WorkspaceGcPolicy } from "@daemon/agent-runtime/workspace/gc-policy.js";
 import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 import {
@@ -2047,9 +2051,13 @@ export class MultiremiDaemon {
     try {
       this.assertWorkspaceRootOwner();
       if (task.issueId) {
-        // GC uses this same lease for its deletion-time snapshot, upload and rm.
-        // Holding it for the full task lifecycle makes provider exit the archive barrier.
-        releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquire(task.issueId);
+        // Shared Issue roots and private discussion Session roots have separate
+        // lifecycle keys, so each is protected from GC without serializing them
+        // against one another.
+        const lifecycleKey = task.holdsWorkspace === false
+          ? discussionSessionLifecycleKey(task.issueSessionId ?? "")
+          : task.issueId;
+        releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquire(lifecycleKey);
         this.assertWorkspaceRootOwner();
       }
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
@@ -2065,7 +2073,7 @@ export class MultiremiDaemon {
         // materialization or provider-native JSONL can write through it.
         await ensureProviderHomeDirectory(providerHome);
       }
-      if (task.issueId) {
+      if (task.issueId && task.holdsWorkspace !== false) {
         // Establish the Issue lifecycle before provider setup can create JSONL.
         // This also covers repository-free Issues and preparation failures, so
         // GC can never mistake their history for an unowned directory.
@@ -2351,6 +2359,7 @@ export class MultiremiDaemon {
     syncResults: MultiremiRepoSyncResult[],
     signal: AbortSignal,
   ): Promise<PreparedIssueWorkspace> {
+    if (task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
       if (!resolvedWorkDir.localDirectory) {
@@ -2424,7 +2433,7 @@ export class MultiremiDaemon {
     workspaceRepos: MultiremiIssueWorkspaceRepo[],
   ): Promise<void> {
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
-    if (!task.issueId || !runtimeId) return;
+    if (!task.issueId || task.holdsWorkspace === false || !runtimeId) return;
     if (task.issue?.issueKind === "intake") {
       // A degraded intake run keeps its error repos; the final report must not
       // paper over them with "ready" or the workspace status would contradict
@@ -2696,7 +2705,7 @@ export class MultiremiDaemon {
     // preparation unchanged, including for any task that also carries Chat
     // metadata but is anchored to an Issue workspace.
     const homepageChat = Boolean(task.chatSessionId && !task.issueId);
-    const repoSyncResults = homepageChat
+    const repoSyncResults = homepageChat || task.holdsWorkspace === false
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal);

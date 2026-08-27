@@ -49,6 +49,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       "dispatched_at",
       "error",
       "execution_fingerprint",
+      "holds_workspace",
       "id",
       "issue_id",
       "issue_session_generation",
@@ -68,6 +69,9 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       agent_id: boundAgent.id,
       runtime_id: runtime.id,
       issue_id: issue.id,
+      // The daemon reads this to pick between the shared Issue root and a
+      // discussion Session's private root, so it must survive the wire.
+      holds_workspace: true,
       workspace_id: "local",
       status: "dispatched",
       priority: 100,

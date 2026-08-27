@@ -916,6 +916,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     issueId: stringOrNull(raw.issue_id ?? raw.issueId),
     issueSessionId: stringOrNull(raw.issue_session_id ?? raw.issueSessionId),
     issueSessionGeneration: numberOrNull(raw.issue_session_generation ?? raw.issueSessionGeneration),
+    holdsWorkspace: booleanOrDefault(raw.holds_workspace ?? raw.holdsWorkspace, true),
     chatSessionId: stringOrNull(raw.chat_session_id ?? raw.chatSessionId),
     autopilotRunId: stringOrNull(raw.autopilot_run_id ?? raw.autopilotRunId),
     triggerCommentId: stringOrNull(raw.trigger_comment_id ?? raw.triggerCommentId),
@@ -1241,6 +1242,13 @@ function numberOrNull(value: unknown): number | null {
 
 function numberOrDefault(value: unknown, fallback: number): number {
   return numberOrNull(value) ?? fallback;
+}
+
+function booleanOrDefault(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1") return true;
+  if (value === 0 || value === "0") return false;
+  return fallback;
 }
 
 function objectOrDefault(value: unknown): Record<string, any> {

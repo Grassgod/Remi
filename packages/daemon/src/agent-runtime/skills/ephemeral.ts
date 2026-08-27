@@ -52,25 +52,34 @@ export function writeTaskContext(workDir: string, task: AgentTask): void {
 export function writeTaskGcContext(workDir: string, task: AgentTask, options: { localDirectory?: boolean } = {}): void {
   const dir = join(workDir, ".multiremi");
   mkdirSync(dir, { recursive: true });
+  const discussionIssue = Boolean(
+    task.issueId
+    && (task.holdsWorkspace === false || task.holds_workspace === false),
+  );
   // A new Issue task can append provider history after an earlier terminal
   // snapshot. Force the next terminal sweep to verify a fresh archive.
-  if (task.issueId) rmSync(join(dir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE), { force: true });
+  if (task.issueId && !discussionIssue) {
+    rmSync(join(dir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE), { force: true });
+  }
   // An Issue owns its stable workspace for the full lifecycle. Automation
   // tasks can carry both issueId and autopilotRunId; letting the run win here
   // would replace the Issue GC policy and bypass its dirty/unpushed Git guard.
-  const kind = task.issueId
-    ? "issue"
+  const kind = discussionIssue
+    ? "discussion_issue"
+    : task.issueId
+      ? "issue"
     : task.chatSessionId
       ? "chat"
       : task.autopilotRunId
         ? "autopilot_run"
         : "quick_create";
   const payload = {
-    version: task.issueId ? 2 : 1,
+    version: task.issueId && !discussionIssue ? 2 : 1,
     kind,
     workspace_id: task.workspaceId,
     task_id: task.id,
     issue_id: task.issueId,
+    issue_session_id: task.issueSessionId ?? task.issue_session_id,
     chat_session_id: task.chatSessionId,
     autopilot_run_id: task.autopilotRunId,
     completed_at: task.completedAt,

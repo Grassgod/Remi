@@ -72,7 +72,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   appendProjectPromptSections(sections, task, mode);
   if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);
 
-  if (mode === "bootstrap" && task.repos.length) {
+  if (mode === "bootstrap" && task.repos.length && taskHoldsWorkspace(task)) {
     const checkouts = opts.repoCheckouts ?? [];
     const checkoutByUrl = new Map(checkouts.map((checkout) => [checkout.repoUrl.trim(), checkout]));
     sections.push("");
@@ -128,6 +128,10 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     prompt,
     sha256: createHash("sha256").update(prompt).digest("hex"),
   };
+}
+
+function taskHoldsWorkspace(task: AgentTask): boolean {
+  return task.holdsWorkspace !== false && task.holds_workspace !== false;
 }
 
 function appendWorkspacePromptSection(sections: string[], task: AgentTask, mode: TaskPromptMode): void {

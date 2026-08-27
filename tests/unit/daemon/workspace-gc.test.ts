@@ -14,6 +14,59 @@ afterEach(() => {
 });
 
 describe("Issue workspace GC", () => {
+  it("cleans discussion Session roots without archiving or reporting the shared workspace", async () => {
+    const root = tempRoot();
+    const sessionRoot = join(root, ".sessions", "MUL-136", "ises_discussion");
+    mkdirSync(join(sessionRoot, ".multiremi"), { recursive: true });
+    writeFileSync(join(sessionRoot, ".multiremi", "gc.json"), JSON.stringify({
+      version: 1,
+      kind: "discussion_issue",
+      issue_id: "iss_discussion",
+      issue_session_id: "ises_discussion",
+      task_id: "tsk_discussion",
+    }));
+    let status = "in_progress";
+    let archived = false;
+    let reported = false;
+    const lockKeys: string[] = [];
+    const client = gcClient();
+    client.getIssueGcCheck = async () => ({
+      status,
+      updated_at: "2000-01-01T00:00:00.000Z",
+    });
+    client.reportIssueWorkspaceCleaned = async () => { reported = true; };
+    const options = {
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client,
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => {
+        archived = true;
+        return archiveBinding();
+      },
+      withIssueWorkspaceLock: async (key: string, _workspaceDir: string, action: () => Promise<void>) => {
+        lockKeys.push(key);
+        await action();
+      },
+      now: Date.now() + 1_000,
+    };
+
+    expect(await runWorkspaceGcOnce(options)).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+    expect(existsSync(sessionRoot)).toBe(true);
+
+    status = "done";
+    expect(await runWorkspaceGcOnce(options)).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+    expect(existsSync(sessionRoot)).toBe(false);
+    expect(lockKeys).toEqual([
+      "discussion-session:ises_discussion",
+      "discussion-session:ises_discussion",
+    ]);
+    expect(archived).toBe(false);
+    expect(reported).toBe(false);
+  });
+
   it("holds the Issue lifecycle lock through archive verification and removal", async () => {
     const root = tempRoot();
     const workspace = issueWorkspace(root, "MUL-locked", "iss_locked");

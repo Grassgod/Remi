@@ -1221,6 +1221,9 @@ export interface MultiremiTask {
    * time and persisted so late completions cannot promote into a newer lane. */
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
+  /** Immutable snapshot of whether this task owns the shared Issue workspace. */
+  holdsWorkspace: boolean;
+  holds_workspace?: boolean;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   triggerCommentId: string | null;
@@ -1322,6 +1325,21 @@ export interface MultiremiTask {
   completedAt: string | null;
   failedAt: string | null;
   cancelledAt: string | null;
+}
+
+export type MultiremiTaskQueueBlockerReason =
+  | "session"
+  | "issue_workspace"
+  | "legacy_issue"
+  | "agent_capacity";
+
+export interface MultiremiTaskQueueBlocker {
+  taskId: string;
+  agentId: string;
+  agentName: string;
+  issueSessionId: string | null;
+  issueSessionTitle: string | null;
+  reason: MultiremiTaskQueueBlockerReason;
 }
 
 export interface MultiremiTaskTriggerMetadata {
@@ -2032,6 +2050,8 @@ export interface MultiremiIssueSession {
   status: MultiremiIssueSessionStatus;
   isDefault: boolean;
   is_default?: boolean;
+  holdsWorkspace: boolean;
+  holds_workspace?: boolean;
   summary: string | null;
   createdByType: string;
   created_by_type?: string;
@@ -2147,6 +2167,8 @@ export interface CreateIssueSessionInput {
   created_by_id?: string | null;
   participantAgentIds?: string[];
   participant_agent_ids?: string[];
+  holdsWorkspace?: boolean;
+  holds_workspace?: boolean;
 }
 
 export interface UpdateIssueSessionInput {

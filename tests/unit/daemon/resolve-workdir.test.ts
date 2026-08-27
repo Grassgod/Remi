@@ -42,6 +42,39 @@ test("issue key owns the stable workspace path across tasks and agent cwd", () =
   });
 });
 
+test("discussion Issue Sessions use an isolated directory outside the Issue GC root", () => {
+  const resolved = resolveWorkDir(task({
+    id: "tsk_discussion",
+    issueId: "iss_1",
+    issueSessionId: "ises_side_chat",
+    holdsWorkspace: false,
+    issue: { id: "iss_1", key: "MUL-136" },
+  }), ROOT);
+
+  expect(resolved).toEqual({
+    workDir: join(ROOT, ".sessions", "MUL-136", "ises_side_chat"),
+    ensureDir: true,
+  });
+  expect(resolved.workDir.startsWith(join(ROOT, "MUL-136"))).toBe(false);
+});
+
+test("discussion Session paths sanitize unsafe segments", () => {
+  expect(resolveWorkDir(task({
+    issueId: "iss_1",
+    issueSessionId: "../../side/chat",
+    holds_workspace: false,
+    issue: { id: "iss_1", key: "../../MUL/136" },
+  }), ROOT).workDir).toBe(join(ROOT, ".sessions", "..-..-MUL-136", "..-..-side-chat"));
+});
+
+test("discussion Tasks fail closed when the Issue Session id is absent", () => {
+  expect(() => resolveWorkDir(task({
+    issueId: "iss_1",
+    holdsWorkspace: false,
+    issue: { id: "iss_1", key: "MUL-136" },
+  }), ROOT)).toThrow("discussion task requires an issue session id");
+});
+
 test("uses agent.cwd when it is an existing directory, but never recreates it (ensureDir=false)", () => {
   const real = mkdtempSync(join(tmpdir(), "cwd-real-"));
   expect(resolveWorkDir(task({ agent: { cwd: real } }), ROOT)).toEqual({ workDir: real, ensureDir: false });
