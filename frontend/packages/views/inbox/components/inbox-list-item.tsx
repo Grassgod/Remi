@@ -41,12 +41,13 @@ export function InboxListItem({
   onItemClick?: (item: InboxItem) => void;
   onArchive: () => void;
 }) {
-  const { t } = useT("inbox");
+  const { t, i18n } = useT("inbox");
   const timeAgo = useTimeAgo();
   const [expanded, setExpanded] = useState(false);
   const merged = groupedItems.length > 1;
   const read = groupedItems.every((entry) => entry.read);
   const localizer = {
+    locale: i18n.resolvedLanguage ?? i18n.language,
     scheduled: (time: string) => t(($) => $.autopilot.scheduled, { time }),
     repeatedRuns: (title: string, count: number) =>
       t(($) => $.autopilot.repeated_runs, { title, count }),

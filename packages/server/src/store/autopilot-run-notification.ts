@@ -34,7 +34,7 @@ export function summarizeAutopilotOutcome(
   if (NO_CHANGE_PATTERN.test(normalized)) {
     return { kind: "no_change", text: null, links: [], counts: null };
   }
-  return { kind: text ? "changes" : "unknown", text, links: [], counts: null };
+  return { kind: "unknown", text, links: [], counts: null };
 }
 
 export function autopilotTriggerObjectLabel(
@@ -65,7 +65,7 @@ export function autopilotOutcomeBody(
     ? `Failed after ${durationSeconds}s`
     : `Completed in ${durationSeconds}s`;
   if (outcome.kind === "no_change") return `${prefix} | No changes.`;
-  if (outcome.kind === "unknown") return `${prefix} | Run completed.`;
+  if (outcome.kind === "unknown") return `${prefix} | ${outcome.text ?? "Run completed."}`;
   if (outcome.kind === "failed") return `${prefix} | ${outcome.text ?? "Run failed."}`;
 
   const linkSummary = outcome.links.length > 0
@@ -105,8 +105,8 @@ function outcomeCounts(links: AutopilotOutcomeLink[]): Record<string, number> | 
 
 function summarizeCompleteSentences(value: string): string | null {
   const sentences = value
-    .split(/\n+/u)
-    .flatMap(splitLineIntoSentences)
+    .split(/\n\s*\n+/u)
+    .flatMap(splitParagraphIntoSentences)
     .map(cleanSentence)
     .filter((sentence): sentence is string => Boolean(sentence))
     .filter((sentence) => !PROCESS_NARRATION_PATTERN.test(sentence));
@@ -115,7 +115,10 @@ function summarizeCompleteSentences(value: string): string | null {
   let length = 0;
   for (let index = sentences.length - 1; index >= 0; index -= 1) {
     const sentence = sentences[index]!;
-    if (sentence.length > 240) continue;
+    if (sentence.length > 240) {
+      if (selected.length === 0) selected.unshift(truncateSentenceEnd(sentence, 240));
+      break;
+    }
     const nextLength = length === 0 ? sentence.length : length + sentence.length + 1;
     if (nextLength > 240) break;
     selected.unshift(sentence);
@@ -124,10 +127,24 @@ function summarizeCompleteSentences(value: string): string | null {
   return selected.length > 0 ? selected.join(" ") : null;
 }
 
-function splitLineIntoSentences(line: string): string[] {
-  const normalized = line.replace(/\s+/g, " ").trim();
+function splitParagraphIntoSentences(paragraph: string): string[] {
+  const normalized = paragraph.replace(/\s+/g, " ").trim();
   if (!normalized) return [];
   return normalized.split(/(?<=[.!?。！？])\s+/u);
+}
+
+function truncateSentenceEnd(sentence: string, maxLength: number): string {
+  const characters = Array.from(sentence);
+  if (characters.length <= maxLength) return sentence;
+
+  const limit = Math.max(1, maxLength - 1);
+  let prefix = characters.slice(0, limit).join("");
+  const nextCharacter = characters[limit] ?? "";
+  if (/[A-Za-z0-9]/u.test(prefix.at(-1) ?? "") && /[A-Za-z0-9]/u.test(nextCharacter)) {
+    const wordBoundary = prefix.lastIndexOf(" ");
+    if (wordBoundary >= Math.floor(limit / 2)) prefix = prefix.slice(0, wordBoundary);
+  }
+  return `${prefix.trimEnd()}…`;
 }
 
 function cleanSentence(value: string): string | null {

@@ -93,7 +93,7 @@ function InboxLoadError({ onRetry }: { onRetry: () => void }) {
 }
 
 export function InboxPage() {
-  const { t } = useT("inbox");
+  const { t, i18n } = useT("inbox");
   const { t: tCommon } = useT("common");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
@@ -528,6 +528,7 @@ export function InboxPage() {
     <div className="p-6">
       <h2 className="text-lg font-semibold">
         {getInboxDisplayTitle(selected, {
+          locale: i18n.resolvedLanguage ?? i18n.language,
           scheduled: (time) => t(($) => $.autopilot.scheduled, { time }),
           repeatedRuns: (title, count) => t(($) => $.autopilot.repeated_runs, { title, count }),
         }, selectedEntry?.items.length ?? 1)}

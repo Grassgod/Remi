@@ -88,6 +88,7 @@
     "collapse_runs": "收起运行记录",
     "no_change": "本次无变更",
     "completed": "本次运行已完成",
+    "completed_with_summary": "本次运行已完成：{{summary}}",
     "failed": "本次运行失败",
     "failed_with_summary": "失败：{{summary}}",
     "changes_other": "{{count}} 个改动",

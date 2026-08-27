@@ -88,6 +88,7 @@
     "collapse_runs": "実行履歴を折りたたむ",
     "no_change": "変更なし",
     "completed": "実行が完了しました",
+    "completed_with_summary": "実行完了: {{summary}}",
     "failed": "実行に失敗しました",
     "failed_with_summary": "失敗: {{summary}}",
     "changes_other": "{{count}} 件の変更",

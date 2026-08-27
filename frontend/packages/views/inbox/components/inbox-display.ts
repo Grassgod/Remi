@@ -5,6 +5,8 @@ import type {
 } from "@multiremi/core/types";
 
 export interface InboxDisplayLocalizer {
+  locale?: string;
+  timeZone?: string;
   scheduled: (time: string) => string;
   repeatedRuns: (title: string, count: number) => string;
 }
@@ -117,6 +119,8 @@ function getAutopilotTriggerObjectLabel(
     if (!localizer) return null;
     return localizer.scheduled(triggerTime(
       trigger?.occurred_at ?? item.details?.triggered_at ?? item.created_at,
+      localizer.locale,
+      localizer.timeZone,
     ));
   }
   return null;
@@ -134,7 +138,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function triggerTime(value: string): string {
+function triggerTime(value: string, locale?: string, timeZone?: string): string {
+  const date = new Date(value);
+  if (!Number.isNaN(date.getTime())) {
+    try {
+      return new Intl.DateTimeFormat(locale, {
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+        ...(timeZone ? { timeZone } : {}),
+      }).format(date);
+    } catch {
+      // Preserve the existing UTC fallback for invalid locale/time-zone data.
+    }
+  }
   const isoTime = value.match(/T(\d{2}:\d{2})/u)?.[1];
   return isoTime ? `${isoTime} UTC` : value;
 }

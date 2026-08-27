@@ -144,7 +144,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         repository_name: null,
       },
       outcome: {
-        kind: "changes",
+        kind: "unknown",
         text: "Published 12 project updates. No blockers.",
         links: [],
         counts: null,

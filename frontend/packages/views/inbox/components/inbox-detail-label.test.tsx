@@ -107,4 +107,18 @@ describe("InboxDetailLabel autopilot outcomes", () => {
 
     expect(screen.getByText("失败：Dependency service unavailable.")).toBeInTheDocument();
   });
+
+  it("renders a plain-text completed summary exactly once", () => {
+    const summary = "Published the repository wiki update successfully.";
+    renderLabel(item({
+      body: "Completed in 8s | fallback",
+      details: {
+        outcome: { kind: "unknown", text: summary, links: [], counts: null },
+      },
+    }), "zh-Hans");
+
+    expect(screen.getByText(`本次运行已完成：${summary}`)).toBeInTheDocument();
+    expect(screen.getAllByText(new RegExp(summary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u")))
+      .toHaveLength(1);
+  });
 });

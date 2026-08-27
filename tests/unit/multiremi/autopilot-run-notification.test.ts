@@ -63,6 +63,41 @@ describe("autopilot run notifications", () => {
     expect(outcome.text!.length).toBeLessThanOrEqual(240);
   });
 
+  it("keeps an overlong unpunctuated summary from its beginning", () => {
+    const summary = `Published ${"repository documentation ".repeat(20).trim()}`;
+    const outcome = summarizeAutopilotOutcome(summary);
+
+    expect(outcome.kind).toBe("unknown");
+    expect(outcome.text).not.toBeNull();
+    expect(outcome.text).toStartWith("Published repository documentation");
+    expect(outcome.text).toEndWith("…");
+    expect(Array.from(outcome.text!).length).toBeLessThanOrEqual(240);
+  });
+
+  it("folds soft line breaks before splitting sentences", () => {
+    const outcome = summarizeAutopilotOutcome("Published wiki pages and\nupdated indexes");
+
+    expect(outcome).toMatchObject({
+      kind: "unknown",
+      text: "Published wiki pages and updated indexes.",
+    });
+    expect(outcome.text).not.toContain("and. updated");
+  });
+
+  it("keeps plain text as an unknown outcome without claiming a change", () => {
+    const outcome = summarizeAutopilotOutcome("Published the repository wiki update successfully.");
+
+    expect(outcome).toEqual({
+      kind: "unknown",
+      text: "Published the repository wiki update successfully.",
+      links: [],
+      counts: null,
+    });
+    expect(autopilotOutcomeBody(outcome, 8)).toBe(
+      "Completed in 8s | Published the repository wiki update successfully.",
+    );
+  });
+
   it("drops process narration before choosing the final result", () => {
     const outcome = summarizeAutopilotOutcome(
       "Good, the files match. Now let's inspect the manifest. Checking repository status. Published the wiki update. No blockers.",

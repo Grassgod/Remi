@@ -126,9 +126,15 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
           ? t(($) => $.autopilot.failed_with_summary, { summary: outcome.text })
           : t(($) => $.autopilot.failed);
       } else if (outcome.kind === "unknown") {
-        summary = item.type === "autopilot_run_failed"
-          ? t(($) => $.autopilot.failed)
-          : t(($) => $.autopilot.completed);
+        if (item.type === "autopilot_run_failed") {
+          summary = outcome.text
+            ? t(($) => $.autopilot.failed_with_summary, { summary: outcome.text })
+            : t(($) => $.autopilot.failed);
+        } else {
+          summary = outcome.text
+            ? t(($) => $.autopilot.completed_with_summary, { summary: outcome.text })
+            : t(($) => $.autopilot.completed);
+        }
       } else {
         const count = outcome.counts?.changes ?? outcome.links.length;
         summary = count > 0
@@ -138,9 +144,6 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
       return (
         <span className="inline-flex min-w-0 items-center gap-1">
           <span>{summary}</span>
-          {outcome.kind === "changes" && outcome.links.length === 0 && outcome.text && (
-            <span className="truncate">· {outcome.text}</span>
-          )}
           {outcome.links.map((link) => (
             <a
               key={link.url}

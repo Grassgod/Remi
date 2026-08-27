@@ -31,6 +31,7 @@ function item(overrides: Partial<InboxItem>): InboxItem {
 
 describe("inbox display helpers", () => {
   const localizer = {
+    locale: "en",
     scheduled: (time: string) => `Scheduled ${time}`,
     repeatedRuns: (title: string, count: number) => `${title} and ${count} runs`,
   };
@@ -138,7 +139,7 @@ describe("inbox display helpers", () => {
     expect(getInboxDisplayTitle(changeItem, localizer)).toBe("Docs sync · Remi #123");
   });
 
-  it("localizes schedule and repeated-run titles", () => {
+  it("localizes schedule time in the viewer's time zone", () => {
     const scheduledItem = item({
       type: "autopilot_run_completed",
       title: "legacy server title",
@@ -146,13 +147,34 @@ describe("inbox display helpers", () => {
       details: {
         autopilot_title: "Daily summary",
         trigger: "schedule",
-        triggered_at: "2026-08-27T07:30:00Z",
+        triggered_at: "2026-08-27T01:00:00Z",
         trigger_object: null,
       },
     });
 
-    expect(getInboxDisplayTitle(scheduledItem, localizer, 12))
-      .toBe("Daily summary · Scheduled 07:30 UTC and 12 runs");
+    expect(getInboxDisplayTitle(scheduledItem, {
+      ...localizer,
+      locale: "zh-CN",
+      timeZone: "Asia/Shanghai",
+    }, 12)).toBe("Daily summary · Scheduled 09:00 and 12 runs");
+  });
+
+  it("falls back to the UTC label when schedule time formatting fails", () => {
+    const scheduledItem = item({
+      type: "autopilot_run_completed",
+      title: "legacy server title",
+      details: {
+        autopilot_title: "Daily summary",
+        trigger: "schedule",
+        triggered_at: "2026-08-27T01:00:00Z",
+        trigger_object: null,
+      },
+    });
+
+    expect(getInboxDisplayTitle(scheduledItem, {
+      ...localizer,
+      timeZone: "not-a-time-zone",
+    })).toBe("Daily summary · Scheduled 01:00 UTC");
   });
 
   it("falls back without appending an undefined trigger object", () => {

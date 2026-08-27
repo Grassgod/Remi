@@ -89,6 +89,7 @@
     "collapse_runs": "Collapse runs",
     "no_change": "No changes",
     "completed": "Run completed",
+    "completed_with_summary": "Run completed: {{summary}}",
     "failed": "Run failed",
     "failed_with_summary": "Failed: {{summary}}",
     "changes_one": "{{count}} change",

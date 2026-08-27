@@ -88,6 +88,7 @@
     "collapse_runs": "실행 기록 접기",
     "no_change": "변경 사항 없음",
     "completed": "실행 완료",
+    "completed_with_summary": "실행 완료: {{summary}}",
     "failed": "실행 실패",
     "failed_with_summary": "실패: {{summary}}",
     "changes_other": "변경 {{count}}건",
