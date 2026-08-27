@@ -38,6 +38,7 @@ import type {
   UpdateProjectInput,
   UpdateProjectResourceInput,
 } from "@multiremi/contracts/types.js";
+import { normalizeWikiPath } from "@multiremi/contracts/wiki-path";
 import type { ProjectKnowledgeWriteControl } from "@multiremi/project-knowledge/types.js";
 
 type Row = Record<string, unknown>;
@@ -579,6 +580,7 @@ export class ProjectsRepo {
     if (!title) throw new Error("title is required");
     const id = input.id ?? createId("pdoc");
     const slug = projectDocSlug(input.slug, title, id);
+    const path = normalizeProjectWikiPath(input.path ?? `${slug}.md`);
     const summary = cleanOptionalString(input.summary);
     const body = String(input.body ?? "");
     const pinned = input.pinned === undefined || input.pinned === null ? kind === "memory" : Boolean(input.pinned);
@@ -588,20 +590,22 @@ export class ProjectsRepo {
     // agent writing its first entry already has something to follow. Seeding a
     // `_schema` doc itself must not recurse — hence the slug guard.
     if (slug !== PROJECT_DOC_SCHEMA_SLUG) this.ensureProjectDocSchema(projectId);
+    this.assertProjectDocIdentityAvailable(projectId, slug, path);
     const now = nowIso();
     const tx = this.ctx.db.transaction(() => {
       this.ctx.db.run(
         `INSERT INTO multiremi_project_docs (
-          id, project_id, workspace_id, kind, slug, title, summary, body, tags, pinned, refs,
+          id, project_id, workspace_id, kind, slug, path, title, summary, body, tags, pinned, refs,
           source_task_id, source_issue_id, author_type, author_id,
           updated_by_type, updated_by_id, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           projectId,
           project.workspaceId,
           kind,
           slug,
+          path,
           title,
           summary,
           body,
@@ -639,26 +643,29 @@ export class ProjectsRepo {
     if (!title) throw new Error("title is required");
     const id = input.id ?? createId("pdoc");
     const slug = projectDocSlug(input.slug, title, id);
+    const path = normalizeProjectWikiPath(input.path ?? `${slug}.md`);
     const summary = cleanOptionalString(input.summary);
     const pinned = input.pinned === undefined || input.pinned === null ? kind === "memory" : Boolean(input.pinned);
     const authorType = cleanOptionalString(input.authorType ?? input.author_type);
     const authorId = cleanOptionalString(input.authorId ?? input.author_id);
+    this.assertProjectDocIdentityAvailable(projectId, slug, path);
     const now = nowIso();
     const tx = this.ctx.db.transaction(() => {
       this.ctx.db.run(
         `INSERT INTO multiremi_project_docs (
-          id, project_id, workspace_id, kind, slug, title, summary, body, tags, pinned, refs,
+          id, project_id, workspace_id, kind, slug, path, title, summary, body, tags, pinned, refs,
           source_task_id, source_issue_id, author_type, author_id,
           updated_by_type, updated_by_id, version,
           storage_backend, content_uri, content_sha256, sync_status, sync_error, snapshot_oid,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'openviking', ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'openviking', ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           projectId,
           project.workspaceId,
           kind,
           slug,
+          path,
           title,
           summary,
           toJson(normalizeProjectDocTags(input.tags)),
@@ -697,6 +704,8 @@ export class ProjectsRepo {
     const title = hasAnyField(input, "title") ? String(input.title ?? "").trim() : existing.title;
     if (!title) throw new Error("title is required");
     const slug = hasAnyField(input, "slug") ? projectDocSlug(input.slug, title, existing.id) : existing.slug;
+    const path = hasAnyField(input, "path") ? normalizeProjectWikiPath(input.path) : existing.path;
+    this.assertProjectDocIdentityAvailable(projectId, slug, path, existing.id);
     const summary = hasAnyField(input, "summary") ? cleanOptionalString(input.summary) : existing.summary;
     const body = hasAnyField(input, "body") ? String(input.body ?? "") : existing.body;
     const tags = hasAnyField(input, "tags") ? normalizeProjectDocTags(input.tags) : existing.tags;
@@ -710,11 +719,12 @@ export class ProjectsRepo {
     const tx = this.ctx.db.transaction(() => {
       this.ctx.db.run(
         `UPDATE multiremi_project_docs
-         SET slug = ?, title = ?, summary = ?, body = ?, tags = ?, pinned = ?, refs = ?,
+         SET slug = ?, path = ?, title = ?, summary = ?, body = ?, tags = ?, pinned = ?, refs = ?,
              updated_by_type = ?, updated_by_id = ?, version = ?, updated_at = ?
          WHERE id = ?`,
         [
           slug,
+          path,
           title,
           summary,
           body,
@@ -747,13 +757,14 @@ export class ProjectsRepo {
     const tx = this.ctx.db.transaction(() => {
       const result = this.ctx.db.run(
         `UPDATE multiremi_project_docs
-         SET slug = ?, title = ?, summary = ?, tags = ?, pinned = ?, refs = ?,
+         SET slug = ?, path = ?, title = ?, summary = ?, tags = ?, pinned = ?, refs = ?,
              updated_by_type = ?, updated_by_id = ?, version = ?,
              storage_backend = 'openviking', content_uri = ?, content_sha256 = ?,
              sync_status = ?, sync_error = ?, snapshot_oid = ?, updated_at = ?
          WHERE id = ? AND version = ?`,
         [
           prepared.slug,
+          prepared.path,
           prepared.title,
           prepared.summary,
           toJson(prepared.tags),
@@ -811,6 +822,17 @@ export class ProjectsRepo {
       ],
     );
     return this.getProjectDoc(docId)!;
+  }
+
+  private assertProjectDocIdentityAvailable(projectId: string, slug: string, path: string, excludeId?: string): void {
+    const slugRow = this.ctx.db.query(
+      "SELECT id FROM multiremi_project_docs WHERE project_id = ? AND slug = ?",
+    ).get(projectId, slug) as { id: string } | null;
+    if (slugRow && slugRow.id !== excludeId) throw new Error("UNIQUE constraint failed: project doc slug conflict");
+    const pathRow = this.ctx.db.query(
+      "SELECT id FROM multiremi_project_docs WHERE project_id = ? AND path = ?",
+    ).get(projectId, path) as { id: string } | null;
+    if (pathRow && pathRow.id !== excludeId) throw new Error("UNIQUE constraint failed: project doc path conflict");
   }
 
   setProjectDocRevisionStorage(
@@ -1255,6 +1277,7 @@ function toProjectDoc(row: Row): MultiremiProjectDoc {
     workspaceId: String(row.workspace_id ?? "local"),
     kind: row.kind === "memory" ? "memory" : "wiki",
     slug: String(row.slug),
+    path: normalizeProjectWikiPath(row.path ?? `${String(row.slug)}.md`),
     title: String(row.title),
     summary: nullableString(row.summary),
     body: String(row.body ?? ""),
@@ -1306,6 +1329,7 @@ function toProjectDocIndexEntry(doc: MultiremiProjectDoc): MultiremiProjectDocIn
   return {
     id: doc.id,
     slug: doc.slug,
+    path: doc.path,
     title: doc.title,
     summary: doc.summary === null ? null : trimProjectDocText(doc.summary, PROJECT_DOC_INDEX_SUMMARY_MAX),
     body: doc.kind === "memory" ? trimProjectDocText(doc.body, PROJECT_DOC_INDEX_BODY_MAX) : null,
@@ -1356,6 +1380,14 @@ export function projectDocSlug(explicit: string | null | undefined, title: strin
   if (source === PROJECT_DOC_SCHEMA_SLUG) return PROJECT_DOC_SCHEMA_SLUG;
   const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return slug || docId;
+}
+
+export function normalizeProjectWikiPath(value: unknown): string {
+  try {
+    return normalizeWikiPath(value);
+  } catch {
+    throw new Error("invalid project wiki path");
+  }
 }
 
 function toPinnedItem(row: Row): MultiremiPinnedItem {

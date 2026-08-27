@@ -1189,6 +1189,7 @@ function normalizeDaemonClaimProjectDocEntries(raw: any): MultiremiProjectDocInd
   if (!Array.isArray(raw)) return [];
   return raw.map((entry) => ({
     ...entry,
+    path: String(entry.path ?? `${String(entry.slug ?? entry.id ?? "wiki")}.md`),
     summary: stringOrNull(entry.summary),
     body: stringOrNull(entry.body),
     kind: entry.kind === "memory" ? "memory" : "wiki",

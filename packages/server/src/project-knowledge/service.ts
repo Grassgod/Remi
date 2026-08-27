@@ -18,6 +18,7 @@ import {
   normalizeProjectDocKind,
   normalizeProjectDocRefs,
   normalizeProjectDocTags,
+  normalizeProjectWikiPath,
   projectDocSlug,
 } from "@multiremi/store/repos/projects-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
@@ -614,6 +615,7 @@ function prepareUpdatedDoc(current: ProjectKnowledgeDoc, input: UpdateProjectDoc
   return {
     ...current,
     slug: hasAnyField(input, "slug") ? projectDocSlug(input.slug, title, current.id) : current.slug,
+    path: hasAnyField(input, "path") ? normalizeProjectWikiPath(input.path) : current.path,
     title,
     summary: hasAnyField(input, "summary") ? cleanOptional(input.summary) : current.summary,
     body: hasAnyField(input, "body") ? String(input.body ?? "") : current.body,
@@ -656,6 +658,7 @@ function projectDocsIndex(docs: ProjectKnowledgeDoc[]): { memory: MultiremiProje
   const entries = docs.map((doc): MultiremiProjectDocIndexEntry => ({
     id: doc.id,
     slug: doc.slug,
+    path: doc.path,
     title: doc.title,
     summary: trim(doc.summary, 160),
     body: doc.kind === "memory" ? trim(doc.body, 500) : null,

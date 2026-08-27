@@ -24,6 +24,7 @@ describe("Bun Multiremi project docs", () => {
     const wiki = store.createProjectDoc(project.id, { kind: "wiki", title: "Build & Deploy Guide" });
     expect(wiki.kind).toBe("wiki");
     expect(wiki.slug).toBe("build-deploy-guide");
+    expect(wiki.path).toBe("build-deploy-guide.md");
     expect(wiki.pinned).toBe(false);
     expect(wiki.version).toBe(1);
     expect(wiki.body).toBe("");
@@ -42,6 +43,14 @@ describe("Bun Multiremi project docs", () => {
 
     const explicit = store.createProjectDoc(project.id, { kind: "wiki", title: "Another page", slug: "Custom Slug" });
     expect(explicit.slug).toBe("custom-slug");
+
+    const nested = store.createProjectDoc(project.id, {
+      kind: "wiki",
+      title: "API catalog",
+      path: "sdma-server/aiproxy/catalog",
+    });
+    expect(nested.slug).toBe("api-catalog");
+    expect(nested.path).toBe("sdma-server/aiproxy/catalog.md");
 
     // An explicit pinned flag overrides the per-kind default.
     const unpinned = store.createProjectDoc(project.id, { kind: "memory", title: "Not pinned", pinned: false });
@@ -82,6 +91,25 @@ describe("Bun Multiremi project docs", () => {
     expect(() => store.createProjectDoc(project.id, { kind: "wiki", title: "   " })).toThrow("title is required");
     expect(() => store.createProjectDoc("prj_missing", { kind: "wiki", title: "Nope" })).toThrow("Project not found: prj_missing");
     expect(() => store.listProjectDocs("prj_missing")).toThrow("Project not found: prj_missing");
+  });
+
+  it("rejects unsafe, over-deep, and duplicate paths", () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Paths" });
+    store.createProjectDoc(project.id, { kind: "wiki", title: "First", path: "guides/first.md" });
+
+    for (const path of [
+      "/absolute.md",
+      "guides\\windows.md",
+      "guides/../escape.md",
+      "guides//empty.md",
+      "a/b/c/d/e/f/page.md",
+    ]) {
+      expect(() => store.createProjectDoc(project.id, { kind: "wiki", title: path, path }))
+        .toThrow("invalid project wiki path");
+    }
+    expect(() => store.createProjectDoc(project.id, { kind: "wiki", title: "Duplicate", path: "guides/first.md" }))
+      .toThrow(/UNIQUE|duplicate key/i);
   });
 
   it("rejects a duplicate slug in the same project but allows it across projects", () => {
@@ -156,6 +184,13 @@ describe("Bun Multiremi project docs", () => {
     expect(partial.title).toBe("Deploy (2026)");
     expect(partial.tags).toEqual(["ops"]);
     expect(partial.pinned).toBe(true);
+
+    const moved = store.updateProjectDoc(project.id, doc.id, { path: "operations/deploy.md" });
+    expect(moved.id).toBe(doc.id);
+    expect(moved.slug).toBe("deploy");
+    expect(moved.path).toBe("operations/deploy.md");
+    expect(moved.version).toBe(4);
+    expect(store.listProjectDocRevisions(doc.id).map((revision) => revision.version)).toEqual([4, 3, 2, 1]);
   });
 
   it("rejects an update whose expectedVersion is stale", () => {

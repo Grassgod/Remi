@@ -173,6 +173,7 @@ describe("Multiremi CLI project knowledge commands", () => {
         "--kind", "wiki",
         "--title", "Deploy runbook",
         "--slug", "deploy-runbook",
+        "--path", "operations/deploy-runbook.md",
         "--summary", "How production ships",
         "--tags", "ops, runbook",
         "--ref", "issue:MUL-12",
@@ -187,6 +188,7 @@ describe("Multiremi CLI project knowledge commands", () => {
         "--server", serverUrl,
         "--token", "tok_cli",
         "--title", "Build guide v2",
+        "--path", "guides/build-guide.md",
         "--pinned", "false",
         "--ref", "issue:MUL-13",
         "--expected-version", "1",
@@ -200,6 +202,7 @@ describe("Multiremi CLI project knowledge commands", () => {
           kind: "wiki",
           title: "Deploy runbook",
           slug: "deploy-runbook",
+          path: "operations/deploy-runbook.md",
           summary: "How production ships",
           tags: ["ops", "runbook"],
           pinned: true,
@@ -218,6 +221,7 @@ describe("Multiremi CLI project knowledge commands", () => {
         path: "/api/projects/prj_1/docs/build-guide",
         body: {
           title: "Build guide v2",
+          path: "guides/build-guide.md",
           pinned: false,
           // --ref replaces the doc's refs wholesale.
           refs: [{ type: "issue", value: "MUL-13" }],

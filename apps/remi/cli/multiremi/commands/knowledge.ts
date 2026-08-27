@@ -175,6 +175,7 @@ async function createKnowledge(kind: KnowledgeKind, options: CliOptions): Promis
     ...(kind === "memory" ? { pinned: true } : {}),
   };
   addStringBodyField(body, options, "slug", "slug");
+  addStringBodyField(body, options, "path", "path");
   addStringBodyField(body, options, "summary", "summary", false, true);
   await addKnowledgeBodyFields(body, options);
   if (kind === "memory") {
@@ -201,10 +202,11 @@ async function updateKnowledge(
   const ref = requireRef(kind, "update", rawRef);
   const body: Record<string, unknown> = {};
   addStringBodyField(body, options, "title", "title");
+  addStringBodyField(body, options, "path", "path");
   addStringBodyField(body, options, "summary", "summary", false, true);
   await addKnowledgeBodyFields(body, options);
   if (Object.keys(body).length === 0) {
-    throw new Error("no fields to update; pass --title, --summary, --tags, --pinned, --ref, or --content");
+    throw new Error("no fields to update; pass --title, --path, --summary, --tags, --pinned, --ref, or --content");
   }
   const expectedVersion = integerOption(options, "expected-version");
   if (expectedVersion !== null) body.expected_version = expectedVersion;
