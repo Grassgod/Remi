@@ -75,10 +75,12 @@ describe("formatToolInputSummary — Bash commands", () => {
 });
 
 describe("isBashCommandMissing", () => {
-  it("flags only Bash steps whose command never made it into the input", () => {
+  it("flags only terminal Bash steps whose command never made it into the input", () => {
     expect(isBashCommandMissing("Bash", undefined)).toBe(true);
     expect(isBashCommandMissing("Bash", { terminal_id: "term-1" })).toBe(true);
     expect(isBashCommandMissing("Bash", { command: "   " })).toBe(true);
+    expect(isBashCommandMissing("Bash", undefined, true)).toBe(false);
+    expect(isBashCommandMissing("Bash", { terminal_id: "term-1" }, true)).toBe(false);
     expect(isBashCommandMissing("Bash", { command: "ls a/b/c | head -1" })).toBe(false);
     expect(isBashCommandMissing("Read", { file_path: "/a/b/c/d.ts" })).toBe(false);
   });

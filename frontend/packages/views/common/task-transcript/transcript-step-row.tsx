@@ -14,6 +14,7 @@ import {
 } from "./event-format";
 import {
   formatToolInputSummary,
+  formatRunningToolSummary,
   isBashCommandMissing,
   isCollabInput,
   isSubagentActivityInput,
@@ -47,12 +48,18 @@ export const TranscriptStepRow = ({
   const autoExpanded = useRef(false);
   const Icon = toolIcon(step.tool, step.input);
   const summary = formatToolInputSummary(step.tool ?? "", step.input);
-  const commandMissing = isBashCommandMissing(step.tool, step.input);
   const running = isStepRunning(step.status);
   // Codex sometimes abandons a call and re-issues it under a new id; the orphan
   // never gets a terminal frame. Once the task is done it cannot still be
   // running, so show it as unfinished rather than spinning forever.
   const abandoned = running && taskTerminal;
+  // An abandoned call is neither live nor legacy: no further input can arrive,
+  // so it gets neither the running placeholder (it is not running — the badge
+  // already says unfinished) nor the older-version label (this version did
+  // record it, and blaming old data is the misattribution this row avoids).
+  const activelyRunning = running && !abandoned;
+  const runningSummary = activelyRunning && !summary ? formatRunningToolSummary(step.tool, step.meta) : "";
+  const commandMissing = isBashCommandMissing(step.tool, step.input, running);
   const failed = step.status === "failed";
   const children = step.children ?? [];
   const isSelected = selectedSeq === step.seq || children.some((child) => child.seq === selectedSeq);
@@ -130,7 +137,9 @@ export const TranscriptStepRow = ({
                   {t(($) => $.transcript.command_not_recorded)}
                 </span>
               ) : (
-                <span className="truncate font-mono">{summary}</span>
+                <span className="truncate font-mono">
+                  {summary || runningSummary || (activelyRunning ? t(($) => $.transcript.tool_running) : "")}
+                </span>
               )}
             </div>
           </CollapsibleTrigger>

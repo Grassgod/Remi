@@ -165,6 +165,61 @@ describe("transcript step card — Bash command", () => {
     expect(screen.getByText(MISSING_COMMAND_LABEL)).toBeInTheDocument();
   });
 
+  it("uses the ACP title while a Bash command input is still pending", () => {
+    renderTranscript(
+      [{
+        seq: 1,
+        type: "tool_use",
+        tool: "Bash",
+        toolCallId: "call-1",
+        status: "pending",
+        meta: { title: "echo live command" },
+      }],
+      { task: { status: "running" }, isLive: true },
+    );
+
+    expect(screen.getByText("$ echo live command")).toBeInTheDocument();
+    expect(screen.queryByText(MISSING_COMMAND_LABEL)).not.toBeInTheDocument();
+  });
+
+  it("uses a neutral placeholder for a running generic terminal frame", () => {
+    renderTranscript(
+      [{
+        seq: 1,
+        type: "tool_use",
+        tool: "Bash",
+        toolCallId: "call-1",
+        status: "pending",
+        meta: { title: "Terminal" },
+      }],
+      { task: { status: "running" }, isLive: true },
+    );
+
+    expect(screen.getByText("Running…")).toBeInTheDocument();
+    expect(screen.queryByText(MISSING_COMMAND_LABEL)).not.toBeInTheDocument();
+  });
+
+  it("calls an abandoned Bash step neither running nor recorded by an older version", () => {
+    // The task is over, so a step still marked pending was abandoned: its input
+    // can no longer arrive, but this version did record it. The unfinished badge
+    // carries the state on its own.
+    renderTranscript(
+      [{
+        seq: 1,
+        type: "tool_use",
+        tool: "Bash",
+        toolCallId: "call-1",
+        status: "pending",
+        meta: { title: "Terminal" },
+      }],
+      { task: { status: "completed" }, isLive: false },
+    );
+
+    expect(screen.getByText("Not finished")).toBeInTheDocument();
+    expect(screen.queryByText("Running…")).not.toBeInTheDocument();
+    expect(screen.queryByText(MISSING_COMMAND_LABEL)).not.toBeInTheDocument();
+  });
+
   it("leaves other tools untouched", () => {
     renderTranscript([
       { seq: 1, type: "tool_use", tool: "Read", toolCallId: "call-1", input: { file_path: "/a/b/c/d.ts" } },
