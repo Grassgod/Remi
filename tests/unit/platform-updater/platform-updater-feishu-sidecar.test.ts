@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { MultiremiPlatformOperation } from "@multiremi/contracts";
+import type { MultiremiPlatformOperation, MultiremiPlatformServiceId } from "@multiremi/contracts";
 import { DockerComposeDriver } from "@remi-platform/updater/compose-driver.js";
 import type { CommandRunner } from "@remi-platform/updater/types.js";
 
@@ -15,7 +15,7 @@ const DIGEST = `ghcr.io/grassgod/remi-api@sha256:${"a".repeat(64)}`;
 const WEB_DIGEST = `ghcr.io/grassgod/remi-web@sha256:${"b".repeat(64)}`;
 const OLD_DIGEST = `ghcr.io/grassgod/remi-api@sha256:${"c".repeat(64)}`;
 const OLD_WEB_DIGEST = `ghcr.io/grassgod/remi-web@sha256:${"d".repeat(64)}`;
-const CORE_SERVICES = ["api", "web", "ssh-mesh-control-plane"];
+const CORE_SERVICES: MultiremiPlatformServiceId[] = ["api", "web", "ssh-mesh-control-plane"];
 
 let tempDirs: string[] = [];
 afterEach(() => {
