@@ -70,6 +70,26 @@ describe("inbox grouping", () => {
     expect(filterInboxItemsBySource(items, "all")).toEqual(items);
   });
 
+  it("counts Feishu ingestion rows as automation", () => {
+    const at = new Date().toISOString();
+    const items = [
+      item("autopilot", "autopilot_run_failed", at),
+      item("notification", "feishu_message_notification", at),
+      item("proposal", "feishu_issue_proposal", at),
+      item("draft", "feishu_reply_draft", at),
+      item("alert", "feishu_ingest_connection_alert", at),
+      item("comment", "comment_created", at),
+    ];
+
+    expect(filterInboxItemsBySource(items, "automation").map((entry) => entry.id)).toEqual([
+      "autopilot",
+      "notification",
+      "proposal",
+      "draft",
+      "alert",
+    ]);
+  });
+
   it("counts only unread, unarchived attention-or-higher rows for badges", () => {
     const at = new Date().toISOString();
     const withSeverity = (

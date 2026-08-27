@@ -1,6 +1,7 @@
 export * from "./queries";
 export * from "./mutations";
 export * from "./state";
+export * from "./inbox";
 export type {
   FeishuIssueInput,
   FeishuMessageActionResult,

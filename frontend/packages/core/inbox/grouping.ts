@@ -4,6 +4,7 @@ import type { InboxItem } from "../types";
 // provider protocol with NodeNext ".js" specifiers, which webpack cannot map
 // back to ".ts" — and the browser bundle has no business pulling that in.
 import { isInboxLedgerType } from "@multiremi/contracts/inbox";
+import { isFeishuInboxType } from "../feishu/inbox";
 
 export type InboxSourceFilter = "all" | "automation" | "mentions" | "assignments";
 export type InboxDateGroup = "today" | "yesterday" | "this_week" | "earlier";
@@ -60,7 +61,11 @@ export function filterInboxItemsBySource(
   source: InboxSourceFilter,
 ): InboxItem[] {
   if (source === "all") return items;
-  if (source === "automation") return items.filter((item) => item.type.startsWith("autopilot_"));
+  // Feishu ingestion is machine-driven inbound, same as an autopilot run — a
+  // user narrowing to "automation" is looking for both.
+  if (source === "automation") {
+    return items.filter((item) => item.type.startsWith("autopilot_") || isFeishuInboxType(item.type));
+  }
   if (source === "mentions") return items.filter((item) => MENTION_TYPES.has(item.type));
   return items.filter((item) => ASSIGNMENT_TYPES.has(item.type));
 }

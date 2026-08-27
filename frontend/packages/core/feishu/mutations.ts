@@ -1,7 +1,16 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import type { FeishuIssueInput, FeishuSourceInput } from "../api/endpoints/feishu";
+import { inboxKeys } from "../inbox/queries";
 import { feishuKeys } from "./queries";
+
+/** Acting on a message settles its Inbox row too — approving a proposal or
+ *  ignoring a message removes the row the user is looking at. Invalidating only
+ *  the Feishu cache would leave a stale, un-actionable row in the inbox. */
+function invalidateMessageCaches(queryClient: QueryClient, workspaceId: string): void {
+  void queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) });
+  void queryClient.invalidateQueries({ queryKey: inboxKeys.all(workspaceId) });
+}
 
 /** Re-checks one endpoint on demand and refreshes the whole panel: a sidecar
  *  that just came back also unblocks every source pointing at it. */
@@ -43,7 +52,7 @@ export function useResolveFeishuMessage(workspaceId: string) {
   return useMutation({
     mutationFn: ({ messageId, outcome, reason }: { messageId: string; outcome: string; reason?: string }) =>
       api.resolveFeishuMessage(workspaceId, messageId, { outcome, reason }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+    onSettled: () => invalidateMessageCaches(queryClient, workspaceId),
   });
 }
 
@@ -52,7 +61,7 @@ export function useNotifyFeishuMessage(workspaceId: string) {
   return useMutation({
     mutationFn: ({ messageId, summary }: { messageId: string; summary: string }) =>
       api.notifyFeishuMessage(workspaceId, messageId, summary),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+    onSettled: () => invalidateMessageCaches(queryClient, workspaceId),
   });
 }
 
@@ -63,7 +72,7 @@ export function useDraftFeishuMessageReply(workspaceId: string) {
   return useMutation({
     mutationFn: ({ messageId, draftText }: { messageId: string; draftText: string }) =>
       api.draftFeishuMessageReply(workspaceId, messageId, draftText),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+    onSettled: () => invalidateMessageCaches(queryClient, workspaceId),
   });
 }
 
@@ -72,7 +81,7 @@ export function useProposeFeishuMessageIssue(workspaceId: string) {
   return useMutation({
     mutationFn: ({ messageId, input }: { messageId: string; input: FeishuIssueInput }) =>
       api.proposeFeishuMessageIssue(workspaceId, messageId, input),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+    onSettled: () => invalidateMessageCaches(queryClient, workspaceId),
   });
 }
 
@@ -80,7 +89,7 @@ export function useApproveFeishuProposal(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (proposalId: string) => api.approveFeishuProposal(workspaceId, proposalId),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+    onSettled: () => invalidateMessageCaches(queryClient, workspaceId),
   });
 }
 
@@ -88,6 +97,6 @@ export function useRejectFeishuProposal(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (proposalId: string) => api.rejectFeishuProposal(workspaceId, proposalId),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+    onSettled: () => invalidateMessageCaches(queryClient, workspaceId),
   });
 }

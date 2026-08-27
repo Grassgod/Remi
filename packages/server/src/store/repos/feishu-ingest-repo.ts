@@ -729,6 +729,9 @@ export class FeishuIngestRepo {
         actorId: null,
         details: {
           source_id: sourceId,
+          // The body sentence is server-rendered in one language; the name is
+          // repeated as a field so the client can build a localized line.
+          source_name: String(source.name),
           error_code: normalizedCode,
           consecutive_failures: Number(source.consecutive_failures),
         },
