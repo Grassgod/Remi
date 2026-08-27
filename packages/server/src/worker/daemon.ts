@@ -785,6 +785,14 @@ export class MultiremiDaemon {
     });
   }
 
+  async checkExternalWorkspaceMembership(workspaceId: string, externalId: string): Promise<boolean> {
+    workspaceId = workspaceId.trim();
+    if (!workspaceId) {
+      throw new Error("Multiremi workspace is required for external membership checks");
+    }
+    return this.client.checkExternalWorkspaceMembership(workspaceId, externalId);
+  }
+
   async start(): Promise<void> {
     this.startedAt = new Date();
     this.ready = false;

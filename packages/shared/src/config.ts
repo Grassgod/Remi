@@ -19,8 +19,6 @@ export interface FeishuConfig {
   domain: "feishu" | "lark" | "bytedance";
   connectionMode: "websocket";
   userAccessToken: string;
-  /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
-  triggerUserIds: string[];
 }
 
 /**
@@ -153,7 +151,6 @@ function defaultFeishuConfig(): FeishuConfig {
     domain: "feishu",
     connectionMode: "websocket",
     userAccessToken: "",
-    triggerUserIds: [],
   };
 }
 

@@ -23,7 +23,7 @@ export function loadConfig(chatIdOverride?: string): {
     appId: config.feishu.appId,
     appSecret: config.feishu.appSecret,
     domain: config.feishu.domain ?? "feishu",
-    chatId: chatIdOverride || config.feishu.triggerUserIds?.[0] || "",
+    chatId: chatIdOverride || process.env.FEISHU_TEST_CHAT_ID || "",
     verificationToken: config.feishu.verificationToken ?? "",
     encryptKey: config.feishu.encryptKey ?? "",
   };

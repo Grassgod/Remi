@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 645,
+    "routeCount": 646,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 427,
+      "compat": 428,
       "root": 13
     },
     "getRoutes": 278,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 367,
+    "mutationRoutes": 368,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -499,6 +499,7 @@
     "POST /api/daemon/tasks/:taskId/usage",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
     "POST /api/daemon/tasks/:taskId/workspace",
+    "POST /api/daemon/workspaces/:workspaceId/external-membership/check",
     "POST /api/feedback",
     "POST /api/inbox/:id/archive",
     "POST /api/inbox/:id/read",

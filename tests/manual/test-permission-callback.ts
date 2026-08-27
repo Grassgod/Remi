@@ -35,7 +35,7 @@ async function main() {
     appSecret: config.appSecret,
     verificationToken: config.verificationToken,
     encryptKey: config.encryptKey,
-  }, async () => {});
+  }, async () => {}, async () => false);
   console.log("WebSocket connected\n");
 
   const session = new FeishuStreamingSession(client, creds);

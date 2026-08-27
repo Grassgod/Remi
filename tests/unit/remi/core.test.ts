@@ -130,7 +130,6 @@ function makeConfig(tmpDir: string): RemiConfig {
       domain: "feishu",
       connectionMode: "websocket",
       userAccessToken: "",
-      triggerUserIds: [],
     },
     tokenSync: [],
     botMenu: {},

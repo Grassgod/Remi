@@ -313,6 +313,14 @@ export class MultiremiDaemonClient {
     return this.get<MultiremiWorkspaceReposResponse>(`/api/daemon/workspaces/${encodeURIComponent(workspaceId)}/repos`);
   }
 
+  async checkExternalWorkspaceMembership(workspaceId: string, externalId: string): Promise<boolean> {
+    const response = await this.post<{ allowed: boolean }>(
+      `/api/daemon/workspaces/${encodeURIComponent(workspaceId)}/external-membership/check`,
+      { external_id: externalId },
+    );
+    return response.allowed === true;
+  }
+
   async createTaskHumanRequest(taskId: string, input: { kind: "permission" | "question"; payload: Record<string, unknown> }): Promise<MultiremiTaskHumanRequest> {
     const resp = await this.post<{ request: MultiremiTaskHumanRequest }>(`/api/daemon/tasks/${taskId}/human-requests`, input);
     return resp.request;

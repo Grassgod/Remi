@@ -21,10 +21,9 @@ import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat } from "@connectors/feishu/sdk.js";
 import { loadConfig } from "@shared/config.js";
 
-/** Resolve the project owner's Feishu open_id from config. */
+/** Resolve the project owner's Feishu open_id from the Multiremi deployment identity. */
 function getOwnerOpenId(): string {
-  const config = loadConfig();
-  return config.feishu.triggerUserIds[0] ?? "";
+  return process.env.MULTIREMI_OWNER_OPEN_ID?.trim() ?? "";
 }
 
 // ── SSE Event System ──
@@ -111,7 +110,7 @@ export async function runProjectInit(
     if (!chatId) {
       const ownerOpenId = getOwnerOpenId();
       if (!ownerOpenId) {
-        throw new Error("No owner open_id configured. Set feishu.triggerUserIds via remi login.");
+        throw new Error("No owner open_id configured. Set MULTIREMI_OWNER_OPEN_ID.");
       }
       chatId = await createProjectChat(loadConfig().feishu, input.name, ownerOpenId);
       store.updateField(projectId, "chat_id", chatId);

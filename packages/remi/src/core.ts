@@ -22,7 +22,7 @@ import { createAgentResponse, type AgentResponse, type Provider, type ProviderEv
 import { AcpProvider } from "@acp/index.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { buildAgentMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
-import { FeishuConnector } from "@connectors/feishu/index.js";
+import { FeishuConnector, type FeishuSenderAuthorizer } from "@connectors/feishu/index.js";
 import { MenuSyncer } from "@connectors/feishu/sdk.js";
 
 import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
@@ -170,7 +170,11 @@ export class Remi {
    * Build a fully-wired Remi instance from config.
    * Replaces the old RemiDaemon._buildRemi() — all component assembly in one place.
    */
-  static boot(config: RemiConfig, agent: MultiremiAgent): Remi {
+  static boot(
+    config: RemiConfig,
+    agent: MultiremiAgent,
+    options: { authorizeFeishuSender?: FeishuSenderAuthorizer } = {},
+  ): Remi {
     const remi = new Remi(config, agent);
 
     // 1. AuthStore (1Passport) with token sync rules
@@ -207,8 +211,15 @@ export class Remi {
 
     // 3. Feishu connector
     if (hasFeishuCreds) {
+      if (!options.authorizeFeishuSender) {
+        throw new Error("Feishu workspace membership authorizer is required");
+      }
       const feishuConfig = { ...config.feishu };
-      const feishu = new FeishuConnector(feishuConfig);
+      const feishu = new FeishuConnector(
+        feishuConfig,
+        { getByChatId: () => ({ monitor: false }) },
+        options.authorizeFeishuSender,
+      );
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
       // Wire /esc abort: (1) signal abort to unblock readline, (2) kill CLI process
       feishu.setAbortHandler(async (chatId: string) => {
@@ -227,7 +238,7 @@ export class Remi {
         appSecret: config.feishu.appSecret,
         domain: config.feishu.domain,
       });
-      menuSyncer.syncAll(config.botMenu, config.feishu.triggerUserIds).catch((err) => {
+      menuSyncer.syncAll(config.botMenu).catch((err) => {
         log.warn(`Bot menu sync failed: ${err.message}`);
       });
     }

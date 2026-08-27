@@ -56,3 +56,6 @@ export interface GroupPolicy {
     projectId?: string | null;
   } | null;
 }
+
+/** Resolve whether a Feishu sender belongs to the configured Multiremi workspace. */
+export type FeishuSenderAuthorizer = (senderOpenId: string) => Promise<boolean>;

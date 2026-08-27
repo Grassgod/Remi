@@ -244,6 +244,28 @@ describe("MultiremiDaemonClient SSH Mesh wire", () => {
 });
 
 describe("MultiremiDaemonClient workspace configuration", () => {
+  it("checks an external identity through the authenticated daemon workspace route", async () => {
+    let requestedUrl = "";
+    let authorization = "";
+    let requestBody: unknown;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrl = String(input);
+      authorization = new Headers(init?.headers).get("authorization") ?? "";
+      requestBody = JSON.parse(String(init?.body));
+      return Response.json({ allowed: true });
+    }) as unknown as typeof globalThis.fetch;
+
+    const allowed = await new MultiremiDaemonClient("https://remi.example/", "daemon-token")
+      .checkExternalWorkspaceMembership("workspace/a", "ou_member");
+
+    expect(allowed).toBe(true);
+    expect(requestedUrl).toBe(
+      "https://remi.example/api/daemon/workspaces/workspace%2Fa/external-membership/check",
+    );
+    expect(authorization).toBe("Bearer daemon-token");
+    expect(requestBody).toEqual({ external_id: "ou_member" });
+  });
+
   it("returns heartbeat-delivered settings and Relay configuration", async () => {
     globalThis.fetch = (async () => Response.json({
       status: "ok",

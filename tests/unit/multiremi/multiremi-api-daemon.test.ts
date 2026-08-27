@@ -99,6 +99,89 @@ describe("Multiremi API — daemon endpoints", () => {
     }
   });
 
+  it("checks Feishu external identities against the daemon token workspace", async () => {
+    const store = createStore();
+    const memberUser = store.getOrCreateUser({
+      externalId: "ou_workspace_member",
+      email: "workspace-member@example.test",
+      name: "Workspace Member",
+    });
+    const nonMemberUser = store.getOrCreateUser({
+      externalId: "ou_known_non_member",
+      email: "known-non-member@example.test",
+      name: "Known Non-member",
+    });
+    store.createWorkspaceMember({
+      id: "mem_workspace_member",
+      workspaceId: "local",
+      userId: memberUser.id,
+      name: "Workspace Member",
+      role: "member",
+    });
+    store.createWorkspace({
+      id: "ws_other",
+      name: "Other Workspace",
+      slug: "other-workspace",
+      issuePrefix: "OTH",
+    });
+    const daemonToken = await store.createAccessToken({
+      workspaceId: "local",
+      name: "Membership gate daemon",
+      type: "daemon",
+      daemonId: "daemon-membership-gate",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const request = (workspaceId: string, externalId: string) => app.request(
+      `/api/daemon/workspaces/${workspaceId}/external-membership/check`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${daemonToken.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ external_id: externalId }),
+      },
+    );
+
+    const member = await request("local", memberUser.externalId!);
+    expect(member.status).toBe(200);
+    expect(await member.json()).toEqual({ allowed: true });
+    expect(member.headers.get("cache-control")).toBe("no-store");
+
+    const nonMember = await request("local", nonMemberUser.externalId!);
+    expect(nonMember.status).toBe(200);
+    expect(await nonMember.json()).toEqual({ allowed: false });
+
+    const unknown = await request("local", "ou_unknown_external_user");
+    expect(unknown.status).toBe(200);
+    expect(await unknown.json()).toEqual({ allowed: false });
+    expect(store.getUserByExternalId("ou_unknown_external_user")).toBeNull();
+
+    const crossWorkspace = await request("ws_other", memberUser.externalId!);
+    expect(crossWorkspace.status).toBe(403);
+    expect(await crossWorkspace.json()).toEqual({ error: "forbidden for daemon token workspace" });
+
+    const memberToken = await store.createAccessToken({
+      workspaceId: "local",
+      userId: memberUser.id,
+      name: "Human member",
+      type: "pat",
+    });
+    const humanRequest = await app.request(
+      "/api/daemon/workspaces/local/external-membership/check",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${memberToken.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ external_id: memberUser.externalId }),
+      },
+    );
+    expect(humanRequest.status).toBe(403);
+    expect(await humanRequest.json()).toMatchObject({ code: "daemon_token_required" });
+  });
+
   it("reports an Issue code workspace and exposes it to the Issue sidebar", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({

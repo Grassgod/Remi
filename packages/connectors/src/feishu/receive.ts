@@ -7,7 +7,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { FeishuChannelConfig, GroupPolicy } from "./config.js";
+import type { FeishuChannelConfig, FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("feishu");
@@ -25,7 +25,7 @@ export function setGroupPolicy(policy: GroupPolicy): void {
 }
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
-import { getMessageFeishu } from "./send.js";
+import { getMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
 import { handleFormSubmission, handleButtonClick, hasPendingAction } from "./card-actions.js";
 
 // ── Dedup (persisted across restarts) ────────────────────────
@@ -429,12 +429,41 @@ export type ParsedFeishuMessage = {
   rootId?: string;
 };
 
-/** Full message processing pipeline: dedup → parse → resolve sender → resolve media → resolve quote. */
+export type FeishuAdmissionDenialReason = "not_member" | "unavailable";
+
+export interface FeishuMessageAdmissionOptions {
+  authorizeSender: FeishuSenderAuthorizer;
+  onDenied: (
+    context: FeishuMessageContext,
+    reason: FeishuAdmissionDenialReason,
+  ) => Promise<void>;
+}
+
+export function feishuAdmissionDenialMessage(reason: FeishuAdmissionDenialReason): string {
+  return reason === "not_member"
+    ? "你还不是这个 workspace 的成员，请联系管理员添加后再试。"
+    : "暂时无法验证 workspace 成员身份，请稍后再试。";
+}
+
+async function denyFeishuMessage(
+  options: FeishuMessageAdmissionOptions,
+  context: FeishuMessageContext,
+  reason: FeishuAdmissionDenialReason,
+): Promise<null> {
+  try {
+    await options.onDenied(context, reason);
+  } catch {
+    log.error("failed to send workspace membership denial");
+  }
+  return null;
+}
+
+/** Full message processing pipeline: dedup → parse → authorize → resolve sender/media/quote. */
 export async function processFeishuMessageEvent(
   client: Lark.Client,
   event: FeishuMessageEvent,
   botOpenId?: string,
-  opts?: { triggerUserIds?: string[] },
+  admission?: FeishuMessageAdmissionOptions,
 ): Promise<ParsedFeishuMessage | null> {
   const messageId = event.message.message_id;
 
@@ -444,11 +473,28 @@ export async function processFeishuMessageEvent(
   // Parse
   const ctx = parseFeishuMessageEvent(event, botOpenId);
 
+  if (!admission) {
+    log.error("workspace membership gate is not configured");
+    return null;
+  }
+
+  let admitted = false;
+  try {
+    admitted = Boolean(ctx.senderOpenId) && await admission.authorizeSender(ctx.senderOpenId);
+  } catch {
+    log.error("workspace membership lookup failed; message denied");
+    return denyFeishuMessage(admission, ctx, "unavailable");
+  }
+  if (!admitted) {
+    log.warn("workspace membership denied");
+    return denyFeishuMessage(admission, ctx, "not_member");
+  }
+  log.info("workspace membership allowed");
+
   // Group message filtering:
   // 1) allowedGroups whitelist — empty means no restriction
   // 2) Skip messages directed at other users (has @mentions, none are the bot)
-  // 3) triggerUser @mentions only trigger on top-level messages (not in threads)
-  // 4) monitorGroups auto-reply for messages without explicit @mentions
+  // 3) monitorGroups auto-reply for messages without explicit @mentions
   let monitored = false;
   if (ctx.chatType === "group") {
     // DB-based group filtering — group must exist in group_configs
@@ -458,31 +504,24 @@ export async function processFeishuMessageEvent(
       return null;
     }
 
-    const isMonitor = groupConfig.monitor;
+    const isMonitor = groupConfig.monitor === true;
     const mentions = event.message.mentions ?? [];
     const directedAtOthers = mentions.length > 0 && !ctx.mentionedBot;
-    const isInThread = !!event.message.root_id;
-    const mentionedTriggerUser = opts?.triggerUserIds?.length
-      ? mentions.some((m) => opts.triggerUserIds!.includes(m.id.open_id ?? ""))
-      : false;
     const isSlashCommand = /^\/\w+/i.test(ctx.content.trim());
 
     if (ctx.mentionedBot || isSlashCommand) {
       // Always respond when bot is @mentioned or slash command
-    } else if (directedAtOthers && !mentionedTriggerUser) {
+    } else if (directedAtOthers) {
       log.info(`skipped group message ${messageId} (directed at other users, not bot)`);
       return null;
-    } else if (mentionedTriggerUser && isInThread) {
-      log.info(`skipped group message ${messageId} (triggerUser mentioned in thread, not top-level)`);
-      return null;
-    } else if (!isMonitor && !mentionedTriggerUser) {
+    } else if (!isMonitor) {
       log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored)`);
       return null;
     } else if (isMonitor && directedAtOthers) {
       log.info(`skipped group message ${messageId} (monitor group but directed at other users)`);
       return null;
     }
-    monitored = (isMonitor || mentionedTriggerUser) && !ctx.mentionedBot;
+    monitored = isMonitor && !ctx.mentionedBot;
   }
 
   // Resolve sender name (best-effort)
@@ -560,8 +599,9 @@ export type FeishuWSHandle = {
 
 /** Start WebSocket listener. Returns a handle to stop it. */
 export function startWebSocketListener(
-  config: FeishuChannelConfig & { triggerUserIds?: string[] },
+  config: FeishuChannelConfig,
   onMessage: FeishuMessageCallback,
+  authorizeSender: FeishuSenderAuthorizer,
 ): FeishuWSHandle {
   const creds = {
     appId: config.appId,
@@ -572,8 +612,6 @@ export function startWebSocketListener(
   const client = createFeishuClient(creds);
   let botOpenId: string | undefined;
   let stopped = false;
-
-  const triggerUserIds = config.triggerUserIds ?? [];
 
   // Probe bot open_id in background
   probeFeishu(creds).then((result) => {
@@ -598,7 +636,14 @@ export function startWebSocketListener(
       if (stopped) return;
       try {
         const event = data as unknown as FeishuMessageEvent;
-        const msg = await processFeishuMessageEvent(client, event, botOpenId, { triggerUserIds });
+        const msg = await processFeishuMessageEvent(client, event, botOpenId, {
+          authorizeSender,
+          onDenied: async (context, reason) => {
+            await sendMarkdownCardFeishu(client, context.chatId, feishuAdmissionDenialMessage(reason), {
+              replyToMessageId: context.messageId,
+            });
+          },
+        });
         if (msg) {
           await onMessage(msg);
         }

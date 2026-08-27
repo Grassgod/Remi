@@ -46,11 +46,14 @@ export interface FeishuChannelHandle {
  * `null` when Feishu is not configured. Remi is loaded via dynamic import so the
  * worker/server paths don't eagerly pull in the monolith.
  */
-export async function bootFeishuChannel(agent: MultiremiAgent): Promise<FeishuChannelHandle | null> {
+export async function bootFeishuChannel(
+  agent: MultiremiAgent,
+  authorizeSender: (senderOpenId: string) => Promise<boolean>,
+): Promise<FeishuChannelHandle | null> {
   if (!feishuConfigured()) return null;
   const { Remi } = await import("@remi/core.js");
   const { loadConfig } = await import("@shared/config.js");
-  const remi = Remi.boot(loadConfig(), agent);
+  const remi = Remi.boot(loadConfig(), agent, { authorizeFeishuSender: authorizeSender });
   log.info("Starting Feishu channel");
   return { start: remi.start(), stop: () => remi.stop() };
 }

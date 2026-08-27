@@ -285,6 +285,15 @@ export interface WorkerDaemonSupervisorOptions {
   onBotAgentResolved?: (agent: MultiremiAgent) => void;
 }
 
+function configuredWorkerWorkspaceId(
+  options: CliOptions,
+  config: MultiremiCliConfig,
+): string | undefined {
+  return stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)
+    ?? config.workspace_id
+    ?? undefined;
+}
+
 export async function resolveWorkerDaemons(
   options: CliOptions,
   supervisor: WorkerDaemonSupervisorOptions = {},
@@ -344,9 +353,7 @@ export async function resolveWorkerDaemons(
     deviceName,
     provider,
     maxConcurrency,
-    workspaceId: stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)
-      ?? config.workspace_id
-      ?? "local",
+    workspaceId: configuredWorkerWorkspaceId(options, config) ?? "local",
     botAgentId: supervisor.botAgentId,
     onBotAgentResolved: supervisor.onBotAgentResolved,
     daemonPort: providers.length > 1 && baseDaemonPort !== 0 ? baseDaemonPort + providers.indexOf(provider) : baseDaemonPort,
@@ -408,6 +415,12 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
   let restartRequested = false;
   try {
     const shouldStartFeishu = !Boolean(options.once) && feishuConfigured();
+    const feishuWorkspaceId = shouldStartFeishu
+      ? configuredWorkerWorkspaceId(options, loadMultiremiConfig())
+      : undefined;
+    if (shouldStartFeishu && !feishuWorkspaceId) {
+      throw new Error("Feishu requires an explicitly configured Multiremi workspace");
+    }
     const botAgentId = String(process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim();
     if (shouldStartFeishu && !botAgentId) {
       throw new Error("MULTIREMI_BOT_AGENT_ID is required when the Feishu channel is configured");
@@ -427,6 +440,12 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
         resolveBotAgent(agent);
       },
     });
+    // Co-resident Feishu requires the daemon's authenticated workspace control
+    // plane. Starting it without that gate would admit messages without proof
+    // of workspace membership.
+    if (shouldStartFeishu && daemons.length === 0) {
+      throw new Error("Feishu requires a healthy Multiremi daemon for workspace membership checks");
+    }
     if (daemons.length === 0) {
       workspaceSupervisor.release();
       workspaceSupervisor = null;
@@ -469,7 +488,13 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
           throw new Error("Multiremi daemon exited before resolving the configured bot agent");
         })));
         const botAgent = await Promise.race([botAgentReady, providerExitedBeforeAgent]);
-        feishu = await bootFeishuChannel(botAgent);
+        feishu = await bootFeishuChannel(
+          botAgent,
+          (senderOpenId) => daemons[0]!.checkExternalWorkspaceMembership(
+            feishuWorkspaceId!,
+            senderOpenId,
+          ),
+        );
         if (!feishu) throw new Error("Feishu configuration disappeared during daemon startup");
         running.push(feishu.start);
       }

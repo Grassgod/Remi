@@ -437,6 +437,20 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!response) return c.json({ error: "workspace not found" }, 404);
     return c.json(response);
   });
+  app.post("/api/daemon/workspaces/:workspaceId/external-membership/check", async (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyDaemonTokenWorkspace(c, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ external_id?: string }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const externalId = cleanString(body.external_id);
+    if (!externalId) return c.json({ error: "external_id is required" }, 400);
+
+    const user = store.getUserByExternalId(externalId);
+    const allowed = Boolean(user && store.findWorkspaceMemberForUser(user.id, workspaceId));
+    c.header("Cache-Control", "no-store");
+    return c.json({ allowed });
+  });
   // Multiremi daemon-compatible endpoints.
   app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
     const task = store.claimTask(c.req.param("runtimeId"));
