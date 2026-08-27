@@ -43,7 +43,7 @@ import { api } from "@multiremi/core/api";
 import { useTranscriptViewStore } from "@multiremi/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
 import { redactString } from "./redact";
-import { buildEntries, nestEntries, type TimelineItem } from "./build-timeline";
+import { buildEntries, countToolCalls, nestEntries, type TimelineItem } from "./build-timeline";
 import { useT } from "../../i18n";
 import {
   formatProvider,
@@ -291,7 +291,7 @@ export function AgentTranscriptDialog({
         ? elapsed
         : null;
 
-  const toolCount = items.filter((i) => i.type === "tool_use").length;
+  const toolCount = countToolCalls(items);
 
   // Header token rollup (server-provided) + the agent's final reply, surfaced
   // above the event list so the outcome isn't buried in a one-line summary.

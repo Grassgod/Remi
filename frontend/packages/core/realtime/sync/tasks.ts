@@ -1,4 +1,5 @@
 import { normalizeTaskMessage } from "../../chat/normalize-message";
+import { appendTaskMessagesToHydratedCache } from "../../chat/queries";
 import type { TaskMessagePayload } from "../../types";
 import type { SyncContext, SyncModule } from "./types";
 
@@ -20,12 +21,7 @@ export function createTaskHandlers({ qc }: SyncContext): SyncModule {
   const flushTaskMessages = () => {
     taskMessageFlushTimer = null;
     for (const [taskId, pending] of taskMessageBuffer) {
-      qc.setQueryData<TaskMessagePayload[]>(["task-messages", taskId], (old = []) => {
-        const seen = new Set(old.map((m) => m.seq));
-        const additions = pending.filter((m) => !seen.has(m.seq));
-        if (additions.length === 0) return old;
-        return [...old, ...additions].sort((a, b) => a.seq - b.seq);
-      });
+      appendTaskMessagesToHydratedCache(qc, taskId, pending);
     }
     taskMessageBuffer.clear();
   };

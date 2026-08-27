@@ -2,19 +2,26 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
+import { appendTaskMessagesToHydratedCache } from "@multiremi/core/chat/queries";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
+import enAgents from "../../locales/en/agents.json";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 
-const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
+const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon, issues: enIssues } };
 
-const { listTasksByIssue, listTaskMessages } = vi.hoisted(() => ({
+const { getAgent, getTaskPrompt, listRuntimes, listTasksByIssue, listTaskMessages } = vi.hoisted(() => ({
+  getAgent: vi.fn(),
+  getTaskPrompt: vi.fn(),
+  listRuntimes: vi.fn(),
   listTasksByIssue: vi.fn(),
   listTaskMessages: vi.fn(),
 }));
 
-vi.mock("@multiremi/core/api", () => ({ api: { listTasksByIssue, listTaskMessages } }));
+vi.mock("@multiremi/core/api", () => ({
+  api: { getAgent, getTaskPrompt, listRuntimes, listTasksByIssue, listTaskMessages },
+}));
 
 vi.mock("@multiremi/core/workspace/hooks", () => ({
   useActorName: () => ({
@@ -73,8 +80,9 @@ function productionMessages(): TaskMessagePayload[] {
   );
 }
 
-function renderRow() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+function renderRow(
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }),
+) {
   const view = render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -87,6 +95,9 @@ function renderRow() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getAgent.mockResolvedValue({});
+  getTaskPrompt.mockResolvedValue(null);
+  listRuntimes.mockResolvedValue([]);
   listTaskMessages.mockResolvedValue([]);
 });
 
@@ -94,8 +105,15 @@ describe("session agent stream row", () => {
   it("fetches the full 288-message history and shows all 61 tool calls", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
     listTaskMessages.mockResolvedValue(productionMessages());
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 
-    renderRow();
+    expect(appendTaskMessagesToHydratedCache(qc, "tsk_abc123", [
+      message({ seq: 281 }),
+      message({ seq: 283 }),
+    ])).toBe(false);
+    expect(qc.getQueryData(["task-messages", "tsk_abc123"])).toBeUndefined();
+
+    renderRow(qc);
 
     const row = await screen.findByText("Agent a1 is working");
     await waitFor(() => expect(listTaskMessages).toHaveBeenCalledWith("tsk_abc123"));
