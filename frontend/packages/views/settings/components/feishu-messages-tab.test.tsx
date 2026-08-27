@@ -630,6 +630,27 @@ describe("message list", () => {
     await waitFor(() => expect(screen.getByText("No message matches these filters.")).toBeTruthy());
   });
 
+  it("labels the source and chat filters instead of showing their raw values", async () => {
+    const user = userEvent.setup();
+    server.sources = { sources: [source()], total: 1 };
+    server.chats = { chats: [{ sourceId: "src-1", chatId: "oc_alpha", chatName: "Ops room" }], total: 1 };
+    server.messages = messageList([message()]);
+    renderTab();
+
+    // The trigger renders the sentinel value verbatim unless it resolves its own
+    // label, which is how "__any__" and bare source UUIDs leaked into the UI.
+    const sourceFilter = screen.getByLabelText("Source");
+    const chatFilter = screen.getByLabelText("Chat");
+    expect(sourceFilter.textContent).toContain("Any source");
+    expect(chatFilter.textContent).toContain("Any chat");
+    expect(screen.queryByText("__any__")).toBeNull();
+
+    await user.click(sourceFilter);
+    await user.click(await screen.findByRole("option", { name: "Personal automation" }));
+    await waitFor(() => expect(screen.getByLabelText("Source").textContent).toContain("Personal automation"));
+    expect(screen.queryByText("src-1")).toBeNull();
+  });
+
   it("surfaces a load failure instead of an empty list", () => {
     server.messagesError = true;
     server.messages = null;

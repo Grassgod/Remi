@@ -294,7 +294,14 @@ function FilterControls({ filters, sources, chatOptions, onChange }: FilterContr
         onValueChange={(value) => onChange({ source: String(value) === ANY ? "" : String(value), chat: "" })}
       >
         <SelectTrigger className="w-40" aria-label={t(($) => $.feishu.messages.filter_source)}>
-          <SelectValue placeholder={t(($) => $.feishu.messages.filter_source)} />
+          {/* Base UI renders the raw value unless the trigger resolves its own
+              label, which would surface the ANY sentinel and the source UUIDs. */}
+          <SelectValue placeholder={t(($) => $.feishu.messages.filter_source)}>
+            {() =>
+              sources.find((source) => source.id === filters.source)?.name ??
+              t(($) => $.feishu.messages.any_source)
+            }
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ANY}>{t(($) => $.feishu.messages.any_source)}</SelectItem>
@@ -309,7 +316,13 @@ function FilterControls({ filters, sources, chatOptions, onChange }: FilterContr
         onValueChange={(value) => onChange({ chat: String(value) === ANY ? "" : String(value) })}
       >
         <SelectTrigger className="w-40" aria-label={t(($) => $.feishu.messages.filter_chat)}>
-          <SelectValue placeholder={t(($) => $.feishu.messages.filter_chat)} />
+          <SelectValue placeholder={t(($) => $.feishu.messages.filter_chat)}>
+            {() => {
+              const chat = chatOptions.find((entry) => entry.chatId === filters.chat);
+              if (!chat) return t(($) => $.feishu.messages.any_chat);
+              return chat.chatName ?? truncateId(chat.chatId);
+            }}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ANY}>{t(($) => $.feishu.messages.any_chat)}</SelectItem>
