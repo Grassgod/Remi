@@ -24,6 +24,14 @@ describe("PlatformStatusSchema", () => {
     expect(result.services).toEqual([]);
     expect(result.activeOperation).toBeNull();
     expect(result.lastOperation).toBeNull();
+    expect(result.autoUpdateSchedule).toEqual({
+      enabled: false,
+      time: "05:00",
+      timezone: "Asia/Shanghai",
+      nextCheckAt: null,
+      lastCheckedAt: null,
+      lastResult: null,
+    });
     expect(result.maintenance).toEqual({
       mode: "normal",
       generation: 0,

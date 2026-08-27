@@ -1753,6 +1753,11 @@ export function runMigrations(db: SqlDatabase): void {
       recent_releases TEXT NOT NULL DEFAULT '[]',
       services TEXT NOT NULL DEFAULT '[]',
       auto_update_stable INTEGER NOT NULL DEFAULT 0,
+      auto_update_time TEXT NOT NULL DEFAULT '05:00',
+      auto_update_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+      auto_update_next_check_at TEXT,
+      auto_update_last_checked_at TEXT,
+      auto_update_last_result TEXT,
       updater_heartbeat_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -1888,6 +1893,15 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_at TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_reported_active_tasks INTEGER");
   addColumnIfMissing(db, "multiremi_platform_operations", "cancel_requested INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_time TEXT NOT NULL DEFAULT '05:00'");
+  addColumnIfMissing(
+    db,
+    "multiremi_platform_state",
+    "auto_update_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai'",
+  );
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_next_check_at TEXT");
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_last_checked_at TEXT");
+  addColumnIfMissing(db, "multiremi_platform_state", "auto_update_last_result TEXT");
   addColumnIfMissing(
     db,
     "multiremi_daemon_retirements",

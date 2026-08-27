@@ -3981,13 +3981,35 @@ export interface MultiremiPlatformOperation {
   finishedAt: string | null;
 }
 
+export type MultiremiPlatformAutoUpdateResult =
+  | "checking"
+  | "update_queued"
+  | "no_update"
+  | "busy"
+  | "blocked"
+  | "updated"
+  | "failed";
+
+export interface MultiremiPlatformAutoUpdateSchedule {
+  enabled: boolean;
+  /** Daily wall-clock time in HH:mm format. */
+  time: string;
+  /** IANA time zone used to interpret `time`. */
+  timezone: string;
+  nextCheckAt: string | null;
+  lastCheckedAt: string | null;
+  lastResult: MultiremiPlatformAutoUpdateResult | null;
+}
+
 export interface MultiremiPlatformStatus {
   canManage: boolean;
   driver: MultiremiPlatformDeploymentDriver;
   currentRelease: MultiremiPlatformRelease | null;
   latestRelease: MultiremiPlatformRelease | null;
   updateAvailable: boolean;
+  /** Backward-compatible alias for autoUpdateSchedule.enabled. */
   autoUpdateStable: boolean;
+  autoUpdateSchedule: MultiremiPlatformAutoUpdateSchedule;
   updaterStatus: "ready" | "stale" | "offline";
   updaterHeartbeatAt: string | null;
   services: MultiremiPlatformService[];

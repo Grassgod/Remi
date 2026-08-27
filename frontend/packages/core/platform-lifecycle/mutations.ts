@@ -25,7 +25,8 @@ export function useCancelPlatformOperation() {
 export function useUpdatePlatformSettings() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (enabled: boolean) => api.updatePlatformSettings(enabled),
+    mutationFn: (autoUpdate: { enabled: boolean; time: string; timezone: string }) =>
+      api.updatePlatformSettings(autoUpdate),
     onSettled: () => queryClient.invalidateQueries({ queryKey: platformLifecycleKeys.all }),
   });
 }

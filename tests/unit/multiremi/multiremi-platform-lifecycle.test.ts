@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PlatformOperationConflictError } from "@multiremi/store/repos/platform-operations-repo.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
-afterEach(resetMultiremiTestEnv);
+afterEach(() => {
+  setSystemTime();
+  resetMultiremiTestEnv();
+});
 
 describe("platform lifecycle", () => {
   it("serializes operations and resumes a claimed operation", () => {
@@ -61,9 +64,47 @@ describe("platform lifecycle", () => {
     expect((await claimed.json()).operation.status).toBe("preparing");
   });
 
-  it("does not continuously retry the same failed automatic update", async () => {
+  it("runs an automatic update only when the configured daily window is due", async () => {
+    setSystemTime(new Date("2026-08-27T20:00:00.000Z"));
     const store = createLocalStore();
-    store.setPlatformAutoUpdateStable(true);
+    const settings = store.setPlatformAutoUpdateSettings({
+      enabled: true,
+      time: "05:00",
+      timezone: "Asia/Shanghai",
+    });
+    expect(settings.autoUpdateNextCheckAt).toBe("2026-08-27T21:00:00.000Z");
+
+    const app = createMultiremiApp({ store, platformUpdaterToken: "updater-secret" });
+    const heartbeat = () => app.request("/api/platform-updater/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Multiremi-Updater-Token": "updater-secret" },
+      body: JSON.stringify({
+        driver: "docker_compose",
+        currentRelease: release("0.2.42"),
+        latestRelease: release("0.2.43"),
+      }),
+    });
+
+    expect((await heartbeat()).status).toBe(200);
+    expect(store.getActivePlatformOperation()).toBeNull();
+
+    setSystemTime(new Date("2026-08-27T21:00:00.000Z"));
+    expect((await heartbeat()).status).toBe(200);
+    expect(store.getActivePlatformOperation()?.targetVersion).toBe("0.2.43");
+    expect(store.getPlatformState()).toMatchObject({
+      autoUpdateLastCheckedAt: "2026-08-27T21:00:00.000Z",
+      autoUpdateLastResult: "update_queued",
+      autoUpdateNextCheckAt: "2026-08-28T21:00:00.000Z",
+    });
+
+    expect((await heartbeat()).status).toBe(200);
+    expect(store.listPlatformOperations(20)).toHaveLength(1);
+  });
+
+  it("does not retry the same failed automatic update in the next due decision", async () => {
+    setSystemTime(new Date("2026-08-27T00:00:00.000Z"));
+    const store = createLocalStore();
+    store.setPlatformAutoUpdateSettings({ enabled: true, time: "01:00", timezone: "UTC" });
     const failed = store.createPlatformOperation({
       kind: "update",
       targetVersion: "0.2.43",
@@ -71,6 +112,7 @@ describe("platform lifecycle", () => {
     }, "system:auto-update");
     store.reportPlatformOperation(failed.id, { status: "failed", error: "health check failed" });
 
+    setSystemTime(new Date("2026-08-27T01:00:00.000Z"));
     const app = createMultiremiApp({ store, platformUpdaterToken: "updater-secret" });
     const heartbeat = await app.request("/api/platform-updater/heartbeat", {
       method: "POST",
@@ -85,6 +127,36 @@ describe("platform lifecycle", () => {
     expect(heartbeat.status).toBe(200);
     expect(store.getActivePlatformOperation()).toBeNull();
     expect(store.listPlatformOperations(20)).toHaveLength(1);
+    expect(store.getPlatformState().autoUpdateLastResult).toBe("blocked");
+  });
+
+  it("validates and returns the complete automatic update schedule", async () => {
+    setSystemTime(new Date("2026-08-27T00:00:00.000Z"));
+    const store = createLocalStore();
+    const app = createMultiremiApp({ store, authToken: "master-secret" });
+    const headers = { Authorization: "Bearer master-secret", "Content-Type": "application/json" };
+
+    const invalid = await app.request("/api/multiremi/platform/settings", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ autoUpdate: { enabled: true, time: "25:00", timezone: "Asia/Shanghai" } }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const updated = await app.request("/api/multiremi/platform/settings", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ autoUpdate: { enabled: true, time: "04:30", timezone: "Asia/Shanghai" } }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).state.autoUpdate).toEqual({
+      enabled: true,
+      time: "04:30",
+      timezone: "Asia/Shanghai",
+      nextCheckAt: "2026-08-27T20:30:00.000Z",
+      lastCheckedAt: null,
+      lastResult: null,
+    });
   });
 });
 

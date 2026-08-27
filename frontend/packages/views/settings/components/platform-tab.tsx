@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Check,
@@ -17,6 +17,8 @@ import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@multiremi/ui/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
+import { Input } from "@multiremi/ui/components/ui/input";
+import { Label } from "@multiremi/ui/components/ui/label";
 import { Switch } from "@multiremi/ui/components/ui/switch";
 import {
   AlertDialog,
@@ -37,6 +39,7 @@ import {
   type PlatformRelease,
 } from "@multiremi/core/platform-lifecycle";
 import { useT } from "../../i18n";
+import { TimezoneSelect } from "../../common/timezone-select";
 
 type ConfirmAction =
   | { kind: "restart" }
@@ -53,9 +56,31 @@ export function PlatformTab() {
   const cancelMutation = useCancelPlatformOperation();
   const settingsMutation = useUpdatePlatformSettings();
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [autoUpdateDraft, setAutoUpdateDraft] = useState({
+    enabled: false,
+    time: "05:00",
+    timezone: "Asia/Shanghai",
+  });
   const status = statusQuery.data;
   const active = status?.activeOperation;
   const busy = Boolean(active) || operationMutation.isPending || cancelMutation.isPending;
+  const schedule = status?.autoUpdateSchedule;
+  const scheduleEnabled = schedule?.enabled;
+  const scheduleTime = schedule?.time;
+  const scheduleTimezone = schedule?.timezone;
+  useEffect(() => {
+    if (scheduleEnabled === undefined || !scheduleTime || !scheduleTimezone) return;
+    setAutoUpdateDraft({
+      enabled: scheduleEnabled,
+      time: scheduleTime,
+      timezone: scheduleTimezone,
+    });
+  }, [scheduleEnabled, scheduleTime, scheduleTimezone]);
+  const autoUpdateDirty = Boolean(schedule) && (
+    autoUpdateDraft.enabled !== schedule?.enabled
+    || autoUpdateDraft.time !== schedule?.time
+    || autoUpdateDraft.timezone !== schedule?.timezone
+  );
 
   async function runAction(action: ConfirmAction | { kind: "check_updates" }) {
     try {
@@ -82,6 +107,13 @@ export function PlatformTab() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t(($) => $.platform.operation_failed));
     }
+  }
+
+  function saveAutoUpdateSettings() {
+    settingsMutation.mutate(autoUpdateDraft, {
+      onSuccess: () => toast.success(t(($) => $.platform.auto_update_saved)),
+      onError: () => toast.error(t(($) => $.platform.operation_failed)),
+    });
   }
 
   if (statusQuery.isPending) {
@@ -208,19 +240,65 @@ export function PlatformTab() {
             </Button>
           </div>
 
-          <div className="flex items-center justify-between gap-4 border-t pt-4">
-            <div>
-              <p className="text-sm font-medium">{t(($) => $.platform.auto_update)}</p>
-              <p className="text-xs text-muted-foreground">{t(($) => $.platform.auto_update_hint)}</p>
+          <div className="space-y-4 border-t pt-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">{t(($) => $.platform.auto_update)}</p>
+                <p className="text-xs text-muted-foreground">{t(($) => $.platform.auto_update_hint)}</p>
+              </div>
+              <Switch
+                checked={autoUpdateDraft.enabled}
+                disabled={settingsMutation.isPending}
+                onCheckedChange={(enabled) => setAutoUpdateDraft((current) => ({ ...current, enabled }))}
+                aria-label={t(($) => $.platform.auto_update)}
+              />
             </div>
-            <Switch
-              checked={status.autoUpdateStable}
-              disabled={settingsMutation.isPending}
-              onCheckedChange={(checked) => settingsMutation.mutate(checked, {
-                onError: () => toast.error(t(($) => $.platform.operation_failed)),
-              })}
-              aria-label={t(($) => $.platform.auto_update)}
-            />
+
+            <div className="grid gap-3 sm:grid-cols-[minmax(8rem,0.7fr)_minmax(12rem,1fr)_auto] sm:items-end">
+              <div className="space-y-1.5">
+                <Label htmlFor="platform-auto-update-time">{t(($) => $.platform.auto_update_time)}</Label>
+                <Input
+                  id="platform-auto-update-time"
+                  type="time"
+                  value={autoUpdateDraft.time}
+                  disabled={settingsMutation.isPending}
+                  onChange={(event) => setAutoUpdateDraft((current) => ({
+                    ...current,
+                    time: event.target.value || current.time,
+                  }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>{t(($) => $.platform.auto_update_timezone)}</Label>
+                <TimezoneSelect
+                  value={autoUpdateDraft.timezone}
+                  disabled={settingsMutation.isPending}
+                  ariaLabel={t(($) => $.platform.auto_update_timezone)}
+                  browserSuffix={t(($) => $.platform.auto_update_browser_timezone_suffix)}
+                  triggerClassName="w-full"
+                  onValueChange={(timezone) => setAutoUpdateDraft((current) => ({ ...current, timezone }))}
+                />
+              </div>
+              <Button
+                variant="outline"
+                disabled={!autoUpdateDirty || settingsMutation.isPending}
+                onClick={saveAutoUpdateSettings}
+              >
+                {t(($) => $.platform.auto_update_save)}
+              </Button>
+            </div>
+
+            {status.autoUpdateSchedule.enabled && (
+              <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                <p>{t(($) => $.platform.auto_update_next, {
+                  time: formatTimestamp(status.autoUpdateSchedule.nextCheckAt),
+                })}</p>
+                <p>{t(($) => $.platform.auto_update_last, {
+                  result: autoUpdateResultLabel(status.autoUpdateSchedule.lastResult, t),
+                  time: formatTimestamp(status.autoUpdateSchedule.lastCheckedAt),
+                })}</p>
+              </div>
+            )}
           </div>
 
           <Collapsible>
@@ -357,5 +435,19 @@ function recentOperationResult(
 }
 function driverLabel(driver: string, t: Translate) { return driver === "docker_compose" ? t(($) => $.platform.driver_compose) : t(($) => $.platform.driver_systemd); }
 function updaterLabel(status: string, t: Translate) { return status === "ready" ? t(($) => $.platform.updater_ready) : status === "stale" ? t(($) => $.platform.updater_stale) : t(($) => $.platform.updater_offline); }
+function formatTimestamp(value: string | null): string {
+  if (!value) return "--";
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString() : "--";
+}
+function autoUpdateResultLabel(result: string | null, t: Translate): string {
+  if (!result) return t(($) => $.platform.auto_update_result_never);
+  if (result === "updated") return t(($) => $.platform.auto_update_result_updated);
+  if (result === "update_queued" || result === "checking") return t(($) => $.platform.auto_update_result_queued);
+  if (result === "no_update") return t(($) => $.platform.auto_update_result_no_update);
+  if (result === "busy") return t(($) => $.platform.auto_update_result_busy);
+  if (result === "blocked") return t(($) => $.platform.auto_update_result_blocked);
+  return t(($) => $.platform.auto_update_result_failed);
+}
 function confirmTitle(action: ConfirmAction | null, t: Translate) { return action?.kind === "restart" ? t(($) => $.platform.confirm_restart_title) : action?.kind === "rollback" ? t(($) => $.platform.confirm_rollback_title) : t(($) => $.platform.confirm_update_title); }
 function confirmDescription(action: ConfirmAction | null, t: Translate) { return action?.kind === "restart" ? t(($) => $.platform.confirm_restart_desc) : action?.kind === "rollback" ? t(($) => $.platform.confirm_rollback_desc, { version: action.release.version }) : t(($) => $.platform.confirm_update_desc, { version: action && "release" in action ? action.release.version : "" }); }

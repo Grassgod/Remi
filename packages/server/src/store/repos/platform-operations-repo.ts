@@ -4,12 +4,18 @@ import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type {
   CreatePlatformOperationInput,
   MultiremiPlatformDeploymentDriver,
+  MultiremiPlatformAutoUpdateResult,
   MultiremiPlatformOperation,
   MultiremiPlatformOperationStatus,
   MultiremiPlatformRelease,
   MultiremiPlatformService,
   ReportPlatformOperationInput,
 } from "@multiremi/contracts/types.js";
+import {
+  computeDailyScheduleNextRun,
+  DEFAULT_PLATFORM_UPDATE_TIME,
+  DEFAULT_PLATFORM_UPDATE_TIMEZONE,
+} from "@multiremi/store/schedule.js";
 
 type Row = Record<string, unknown>;
 
@@ -47,7 +53,18 @@ export interface PlatformStateRecord {
   recentReleases: MultiremiPlatformRelease[];
   services: MultiremiPlatformService[];
   autoUpdateStable: boolean;
+  autoUpdateTime: string;
+  autoUpdateTimezone: string;
+  autoUpdateNextCheckAt: string | null;
+  autoUpdateLastCheckedAt: string | null;
+  autoUpdateLastResult: MultiremiPlatformAutoUpdateResult | null;
   updaterHeartbeatAt: string | null;
+}
+
+export interface PlatformAutoUpdateSettingsInput {
+  enabled: boolean;
+  time: string;
+  timezone: string;
 }
 
 export class PlatformOperationsRepo {
@@ -60,11 +77,71 @@ export class PlatformOperationsRepo {
   }
 
   setAutoUpdateStable(enabled: boolean): PlatformStateRecord {
+    const current = this.getState();
+    return this.setAutoUpdateSettings({
+      enabled,
+      time: current.autoUpdateTime,
+      timezone: current.autoUpdateTimezone,
+    });
+  }
+
+  setAutoUpdateSettings(input: PlatformAutoUpdateSettingsInput, at: Date = new Date()): PlatformStateRecord {
     this.ensureState();
-    const now = nowIso();
+    const now = at.toISOString();
+    const nextCheckAt = input.enabled
+      ? computeDailyScheduleNextRun(input.time, input.timezone, at)
+      : null;
     this.db.run(
-      "UPDATE multiremi_platform_state SET auto_update_stable = ?, updated_at = ? WHERE id = 'platform'",
-      [enabled ? 1 : 0, now],
+      `UPDATE multiremi_platform_state
+       SET auto_update_stable = ?, auto_update_time = ?, auto_update_timezone = ?,
+           auto_update_next_check_at = ?, updated_at = ?
+       WHERE id = 'platform'`,
+      [input.enabled ? 1 : 0, input.time, input.timezone, nextCheckAt, now],
+    );
+    return this.getState();
+  }
+
+  claimDueAutoUpdateCheck(at: Date = new Date()): PlatformStateRecord | null {
+    const current = this.getState();
+    if (!current.autoUpdateStable) return null;
+    const now = at.toISOString();
+    const dueAt = current.autoUpdateNextCheckAt;
+    if (!dueAt || !Number.isFinite(Date.parse(dueAt))) {
+      const nextCheckAt = computeDailyScheduleNextRun(current.autoUpdateTime, current.autoUpdateTimezone, at);
+      if (dueAt) {
+        this.db.run(
+          `UPDATE multiremi_platform_state
+           SET auto_update_next_check_at = ?, updated_at = ?
+           WHERE id = 'platform' AND auto_update_stable = 1 AND auto_update_next_check_at = ?`,
+          [nextCheckAt, now, dueAt],
+        );
+      } else {
+        this.db.run(
+          `UPDATE multiremi_platform_state
+           SET auto_update_next_check_at = ?, updated_at = ?
+           WHERE id = 'platform' AND auto_update_stable = 1 AND auto_update_next_check_at IS NULL`,
+          [nextCheckAt, now],
+        );
+      }
+      return null;
+    }
+    if (Date.parse(dueAt) > at.getTime()) return null;
+    const nextCheckAt = computeDailyScheduleNextRun(current.autoUpdateTime, current.autoUpdateTimezone, at);
+    const result = this.db.run(
+      `UPDATE multiremi_platform_state
+       SET auto_update_next_check_at = ?, auto_update_last_checked_at = ?,
+           auto_update_last_result = 'checking', updated_at = ?
+       WHERE id = 'platform' AND auto_update_stable = 1 AND auto_update_next_check_at = ?`,
+      [nextCheckAt, now, now, dueAt],
+    );
+    return result.changes > 0 ? this.getState() : null;
+  }
+
+  setAutoUpdateResult(result: MultiremiPlatformAutoUpdateResult): PlatformStateRecord {
+    this.ensureState();
+    this.db.run(
+      "UPDATE multiremi_platform_state SET auto_update_last_result = ?, updated_at = ? WHERE id = 'platform'",
+      [result, nowIso()],
     );
     return this.getState();
   }
@@ -242,6 +319,13 @@ function toState(row: Row): PlatformStateRecord {
     recentReleases: parseJson<MultiremiPlatformRelease[]>(row.recent_releases, []),
     services: parseJson<MultiremiPlatformService[]>(row.services, []),
     autoUpdateStable: Number(row.auto_update_stable ?? 0) === 1,
+    autoUpdateTime: String(row.auto_update_time ?? DEFAULT_PLATFORM_UPDATE_TIME),
+    autoUpdateTimezone: String(row.auto_update_timezone ?? DEFAULT_PLATFORM_UPDATE_TIMEZONE),
+    autoUpdateNextCheckAt: row.auto_update_next_check_at ? String(row.auto_update_next_check_at) : null,
+    autoUpdateLastCheckedAt: row.auto_update_last_checked_at ? String(row.auto_update_last_checked_at) : null,
+    autoUpdateLastResult: row.auto_update_last_result
+      ? String(row.auto_update_last_result) as MultiremiPlatformAutoUpdateResult
+      : null,
     updaterHeartbeatAt: row.updater_heartbeat_at ? String(row.updater_heartbeat_at) : null,
   };
 }
