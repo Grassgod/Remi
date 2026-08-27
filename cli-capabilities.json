@@ -9095,6 +9095,11 @@
     "PATCH /api/chat/sessions/:sessionId": {
       "command": "chat.update"
     },
+    "PATCH /api/daemons/:daemonId": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "MUL-156 exposes daemon display-name editing in the browser; a daemon rename CLI is intentionally out of scope."
+    },
     "PATCH /api/issues/:id": {
       "command": "issue.update"
     },

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
 
 interface RecordedRequest {
@@ -11,22 +11,25 @@ interface RecordedRequest {
 let previousTaskId: string | undefined;
 let previousProjectId: string | undefined;
 
+beforeEach(() => {
+  previousTaskId = process.env.MULTIREMI_TASK_ID;
+  previousProjectId = process.env.MULTIREMI_PROJECT_ID;
+  delete process.env.MULTIREMI_TASK_ID;
+  delete process.env.MULTIREMI_PROJECT_ID;
+});
+
 afterEach(() => {
   if (previousTaskId === undefined) delete process.env.MULTIREMI_TASK_ID;
   else process.env.MULTIREMI_TASK_ID = previousTaskId;
-  previousTaskId = undefined;
   if (previousProjectId === undefined) delete process.env.MULTIREMI_PROJECT_ID;
   else process.env.MULTIREMI_PROJECT_ID = previousProjectId;
-  previousProjectId = undefined;
 });
 
 function setTaskId(taskId: string): void {
-  previousTaskId = process.env.MULTIREMI_TASK_ID;
   process.env.MULTIREMI_TASK_ID = taskId;
 }
 
 function setProjectId(projectId: string): void {
-  previousProjectId = process.env.MULTIREMI_PROJECT_ID;
   process.env.MULTIREMI_PROJECT_ID = projectId;
 }
 

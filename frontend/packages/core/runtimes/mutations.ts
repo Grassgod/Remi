@@ -8,6 +8,7 @@ import { agentPluginKeys } from "../plugins/queries";
 import { chatKeys } from "../chat/queries";
 import { issueKeys } from "../issues/queries";
 import type { SshMeshOverview } from "./types";
+import type { AgentRuntime } from "../types";
 
 export function useDeleteRuntime(wsId: string) {
   const qc = useQueryClient();
@@ -59,6 +60,50 @@ export function useUpdateRuntime(wsId: string) {
       runtimeId: string;
       patch: { visibility?: "private" | "public"; name?: string };
     }) => api.updateRuntime(runtimeId, patch),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    },
+  });
+}
+
+export function useUpdateDaemonDisplayName(wsId: string) {
+  const qc = useQueryClient();
+  const listKeys = [runtimeKeys.list(wsId), runtimeKeys.listMine(wsId)] as const;
+  return useMutation({
+    mutationFn: ({ daemonId, displayName }: { daemonId: string; displayName: string }) =>
+      api.updateDaemonDisplayName(wsId, daemonId, displayName),
+    onMutate: async ({ daemonId, displayName }) => {
+      await Promise.all(listKeys.map((queryKey) => qc.cancelQueries({ queryKey, exact: true })));
+      const previous = listKeys.map((queryKey) => [
+        queryKey,
+        qc.getQueryData<AgentRuntime[]>(queryKey),
+      ] as const);
+      for (const [queryKey, runtimes] of previous) {
+        if (!runtimes) continue;
+        qc.setQueryData<AgentRuntime[]>(queryKey, runtimes.map((runtime) =>
+          runtime.daemon_id === daemonId
+            ? { ...runtime, daemon_display_name: displayName }
+            : runtime,
+        ));
+      }
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      for (const [queryKey, runtimes] of context?.previous ?? []) {
+        qc.setQueryData(queryKey, runtimes);
+      }
+    },
+    onSuccess: (profile) => {
+      for (const queryKey of listKeys) {
+        const runtimes = qc.getQueryData<AgentRuntime[]>(queryKey);
+        if (!runtimes) continue;
+        qc.setQueryData<AgentRuntime[]>(queryKey, runtimes.map((runtime) =>
+          runtime.daemon_id === profile.daemon_id
+            ? { ...runtime, daemon_display_name: profile.display_name }
+            : runtime,
+        ));
+      }
+    },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
     },

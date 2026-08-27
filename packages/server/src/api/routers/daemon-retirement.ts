@@ -19,6 +19,41 @@ import type { RouterDeps } from "./deps.js";
 export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
+  app.patch("/api/daemons/:daemonId", async (c) => {
+    const body = await readJsonStrict<{
+      workspaceId?: string | null;
+      workspace_id?: string | null;
+      display_name?: unknown;
+    }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = requestedWorkspaceId(c, body);
+    const daemonId = String(c.req.param("daemonId") ?? "").trim();
+    if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
+    const access = authorizeDaemonRetirement(c, deps, workspaceId, daemonId);
+    if (access instanceof Response) return access;
+    const plan = store.getDaemonRetirementPlan(workspaceId, daemonId);
+    if (!plan.exists) return c.json({ error: "daemon not found", code: "daemon_not_found" }, 404);
+    const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
+    if (!displayName) return c.json({ error: "display_name must be a non-empty string" }, 400);
+    if (displayName.length > 100) {
+      return c.json({ error: "display_name must be at most 100 characters" }, 400);
+    }
+    const profile = store.updateDaemonDisplayName(
+      workspaceId,
+      daemonId,
+      displayName,
+      currentRequestUserId(c),
+    );
+    return c.json({
+      workspace_id: profile.workspaceId,
+      daemon_id: profile.daemonId,
+      display_name: profile.displayName,
+      display_name_customized: profile.displayNameCustomized,
+      updated_by: profile.updatedBy,
+      updated_at: profile.updatedAt,
+    });
+  });
+
   app.get("/api/multiremi/daemons", (c) => {
     const workspaceId = requestedWorkspaceId(c);
     const access = loadHumanWorkspaceAccess(c, deps, workspaceId);

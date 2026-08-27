@@ -48,6 +48,9 @@
     "no_matches_hint": "No machines match the current search or filter.",
     "select_machine": "Select a machine to inspect its runtimes.",
     "actions_aria": "Machine actions",
+    "name_edit_hint": "Rename machine",
+    "name_toast_updated": "Machine renamed",
+    "name_toast_failed": "Couldn't rename machine",
     "tabs": {
       "runtimes": "Runtimes",
       "ssh_mesh": "SSH access",

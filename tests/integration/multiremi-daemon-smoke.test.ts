@@ -756,13 +756,16 @@ describe("Bun Multiremi daemon smoke", () => {
         cacheWriteTokens: 1,
         totalTokens: 11,
       });
-      // Registration renames the runtime to `<provider> (<deviceName>)` where
-      // deviceName is host-derived (commit 2d2622b2), so match the convention.
-      expect(store.listRuntimes()[0]).toMatchObject({
-        name: expect.stringMatching(/^claude \(/),
+      // Runtime identity and machine display name are separate fields.
+      const registeredRuntime = store.listRuntimes()[0]!;
+      expect(registeredRuntime).toMatchObject({
+        name: "claude",
         provider: "claude",
         status: "online",
       });
+      expect(registeredRuntime.daemonDisplayName).toBe(
+        registeredRuntime.deviceInfo.split(" · ", 1)[0],
+      );
       expect(closed).toBe(true);
     } finally {
       server.stop(true);

@@ -52,6 +52,7 @@ describe("store migrations", () => {
       "multiremi_workspaces",
       "multiremi_workspace_members",
       "multiremi_runtimes",
+      "multiremi_daemon_profiles",
       "multiremi_autopilots",
       "multiremi_system_events",
       "multiremi_scm_connections",
@@ -112,6 +113,14 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_daemon_ssh_mesh_states")).toEqual(expect.arrayContaining([
       "node_kind", "name",
     ]));
+    expect(columnNames(database, "multiremi_daemon_profiles")).toEqual([
+      "workspace_id",
+      "daemon_id",
+      "display_name",
+      "display_name_customized",
+      "updated_by",
+      "updated_at",
+    ]);
     expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
       "source_revision", "sha256", "relative_path", "status", "uploaded_size_bytes",
     ]));
@@ -173,6 +182,54 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_project_docs")).toContain("path");
     expect(database.query("SELECT slug, path FROM multiremi_project_docs WHERE id = 'pdoc_legacy'").get())
       .toEqual({ slug: "build-guide", path: "build-guide.md" });
+  });
+
+  it("backfills daemon display names idempotently without overwriting customized profiles", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      DROP TABLE multiremi_daemon_profiles;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260827_daemon_profiles';
+      INSERT INTO multiremi_runtimes (
+        id, name, provider, daemon_id, device_info, workspace_id, created_at, updated_at
+      ) VALUES
+        ('rt_device', 'claude (legacy-device)', 'claude', 'daemon-device',
+         'Preferred device · 1.0.0', 'workspace-1', '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('rt_legacy', 'codex (Legacy host)', 'codex', 'daemon-legacy',
+         '', 'workspace-1', '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('rt_empty', 'plain runtime', 'codex', 'daemon-empty',
+         '', 'workspace-1', '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      `SELECT daemon_id, display_name, display_name_customized
+       FROM multiremi_daemon_profiles ORDER BY daemon_id`,
+    ).all()).toEqual([
+      { daemon_id: "daemon-device", display_name: "Preferred device", display_name_customized: 0 },
+      { daemon_id: "daemon-legacy", display_name: "Legacy host", display_name_customized: 0 },
+    ]);
+
+    database.run(
+      `UPDATE multiremi_daemon_profiles
+       SET display_name = 'Custom name', display_name_customized = 1
+       WHERE workspace_id = 'workspace-1' AND daemon_id = 'daemon-device'`,
+    );
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = '20260827_daemon_profiles'",
+    );
+    migrate(database);
+    migrate(database);
+
+    expect(database.query(
+      `SELECT display_name, display_name_customized
+       FROM multiremi_daemon_profiles
+       WHERE workspace_id = 'workspace-1' AND daemon_id = 'daemon-device'`,
+    ).get()).toEqual({ display_name: "Custom name", display_name_customized: 1 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_daemon_profiles",
+    ).get()).toEqual({ count: 2 });
   });
 
   it("backfills orphan attachments referenced by existing issue and comment Markdown", () => {

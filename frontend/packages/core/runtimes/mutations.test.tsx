@@ -11,7 +11,12 @@ import { issueKeys } from "../issues/queries";
 import { runtimeModelsKeys } from "./models";
 import { runtimeKeys } from "./queries";
 import type { SshMeshOverview, SshMeshRuntime } from "./types";
-import { useRetireDaemon, useTestSshMeshConnection } from "./mutations";
+import type { AgentRuntime } from "../types";
+import {
+  useRetireDaemon,
+  useTestSshMeshConnection,
+  useUpdateDaemonDisplayName,
+} from "./mutations";
 
 function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -27,6 +32,7 @@ describe("runtime mutations", () => {
   let queryClient: QueryClient;
   const retireDaemon = vi.fn();
   const testSshMeshConnection = vi.fn();
+  const updateDaemonDisplayName = vi.fn();
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -43,7 +49,11 @@ describe("runtime mutations", () => {
       probe_revision: 4,
       status: "pending",
     });
-    setApiInstance({ retireDaemon, testSshMeshConnection } as unknown as ApiClient);
+    setApiInstance({
+      retireDaemon,
+      testSshMeshConnection,
+      updateDaemonDisplayName,
+    } as unknown as ApiClient);
   });
 
   afterEach(() => {
@@ -124,7 +134,75 @@ describe("runtime mutations", () => {
     expect(cached?.nodes[0]?.desired_probe_revision).toBe(4);
     expect(cached?.runtimes[0]?.desired_probe_revision).toBe(3);
   });
+
+  it("optimistically renames every daemon runtime and rolls back on failure", async () => {
+    let rejectUpdate: (error: Error) => void = () => {};
+    updateDaemonDisplayName.mockImplementation(() => new Promise((_resolve, reject) => {
+      rejectUpdate = reject;
+    }));
+    const listKey = runtimeKeys.list("workspace-1");
+    const runtimes = [
+      runtime("runtime-1", "daemon-1", "Old name"),
+      runtime("runtime-2", "daemon-1", "Old name"),
+      runtime("runtime-3", "daemon-2", "Other machine"),
+    ];
+    queryClient.setQueryData(listKey, runtimes);
+    const provisionKey = runtimeKeys.provisions("workspace-1");
+    const provisions = { items: [{ id: "provision-1" }] };
+    queryClient.setQueryData(provisionKey, provisions);
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(
+      () => useUpdateDaemonDisplayName("workspace-1"),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    let request!: Promise<unknown>;
+    await act(async () => {
+      request = result.current.mutateAsync({
+        daemonId: "daemon-1",
+        displayName: "New name",
+      });
+      await Promise.resolve();
+    });
+    expect(queryClient.getQueryData<AgentRuntime[]>(listKey)?.map((entry) => entry.daemon_display_name)).toEqual([
+      "New name",
+      "New name",
+      "Other machine",
+    ]);
+    expect(queryClient.getQueryData(provisionKey)).toEqual(provisions);
+
+    await act(async () => {
+      rejectUpdate(new Error("rename failed"));
+      await expect(request).rejects.toThrow("rename failed");
+    });
+    expect(queryClient.getQueryData<AgentRuntime[]>(listKey)).toEqual(runtimes);
+    expect(queryClient.getQueryData(provisionKey)).toEqual(provisions);
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: runtimeKeys.all("workspace-1"),
+    });
+  });
 });
+
+function runtime(id: string, daemonId: string, displayName: string): AgentRuntime {
+  return {
+    id,
+    workspace_id: "workspace-1",
+    daemon_id: daemonId,
+    daemon_display_name: displayName,
+    name: "codex",
+    runtime_mode: "local",
+    provider: "codex",
+    launch_header: "Codex",
+    status: "online",
+    device_info: "",
+    metadata: {},
+    owner_id: "user-1",
+    visibility: "private",
+    last_seen_at: null,
+    created_at: "2026-08-27T00:00:00.000Z",
+    updated_at: "2026-08-27T00:00:00.000Z",
+  };
+}
 
 function meshNode(
   nodeId: string,
