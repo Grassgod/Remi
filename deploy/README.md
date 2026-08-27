@@ -142,6 +142,16 @@ does not inject the route proof, so it cannot attest itself even if it preserves
 the public `Host`; response-header passthrough therefore cannot create a false
 positive. Results are cached by target origin for the configured finite TTL.
 
+The route proof is only as trustworthy as the edge that injects it. Nginx must
+also clear a client-supplied `X-Remi-Archive-Direct-Route` on every other path,
+otherwise a caller can send the header itself and reach the API through the
+Next.js rewrite. The authority check does not cover this on its own: it compares
+the request `Host` to `MULTIREMI_DAEMON_DIRECT_BASE_URL`, so it is a no-op
+whenever the direct route shares the public host and port, which is the topology
+the sample configuration describes. Add
+`proxy_set_header X-Remi-Archive-Direct-Route "";` to the enclosing server block
+so only the direct location supplies the proof.
+
 The 8 MiB fallback is deliberately fail-closed and is a compatibility change.
 Production history includes one 8.912 MiB archive that previously succeeded,
 while the smallest observed failed archive was 10.051 MiB. Therefore an
@@ -154,8 +164,10 @@ Use [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf) in
 the public server block. It disables request/response buffering, allows bodies
 up to 1 GiB, gives a streaming upload 15 minutes, preserves the public `Host`,
 and injects the direct-route proof consumed by the API. Replace its sample
-`16120` upstream port with the host's effective `REMI_API_BIND_PORT`. Keep the
-API container bound to loopback; Nginx is the external network path.
+`16120` upstream port with the host's effective `REMI_API_BIND_PORT`, and add the
+server-level `proxy_set_header X-Remi-Archive-Direct-Route "";` documented in the
+file header. Keep the API container bound to loopback; Nginx is the external
+network path.
 
 Audit the complete effective configuration with `nginx -T`. Ordinary prefix
 location order does not decide this match. A broader regex declared earlier can
