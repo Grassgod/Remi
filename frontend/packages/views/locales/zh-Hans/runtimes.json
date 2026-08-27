@@ -294,6 +294,8 @@
     "step1_label": "安装 Remi CLI",
     "step2_label": "启动守护进程",
     "step2_hint": "会写入连接配置并在后台保持守护进程运行。",
+    "device_name_label": "电脑名称（可选）",
+    "device_name_placeholder": "留空则使用这台电脑的 hostname",
     "credential_loading": "正在创建安全连接凭证...",
     "credential_error": "无法创建连接凭证。",
     "credential_error_detail": "原因：{{reason}}",

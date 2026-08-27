@@ -113,6 +113,7 @@ Options:
   --workspace <id>       Workspace id (default: local)
   --runtime-id <id>      Reuse a fixed runtime id
   --daemon-id <id>       Stable daemon id for local directory resources
+  --device-name <name>   Device display name (defaults to hostname-user)
   --daemon-port <number> Local daemon helper port (default: 6131)
   --startup-timeout-ms <number> Daemon readiness timeout (default: 720000)
   --shutdown-timeout-ms <number> Graceful daemon drain timeout (default: 30000)

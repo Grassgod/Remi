@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "@multiremi/ui/components/ui/dialog";
 import { Button } from "@multiremi/ui/components/ui/button";
+import { Input } from "@multiremi/ui/components/ui/input";
 import { CODE_LIGATURE_CLASS } from "@multiremi/ui/lib/code-style";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { cn } from "@multiremi/ui/lib/utils";
@@ -65,11 +66,16 @@ function credentialErrorReason(error: unknown): string | null {
   return `${message} (${code})`;
 }
 
-function daemonCommands(
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function daemonCommands(
   serverUrl: string | undefined,
   workspaceId: string | undefined,
   token: string | null,
   daemonId: string | null,
+  deviceName: string,
 ) {
   const normalizedServerUrl = normalizeCommandURL(serverUrl) || SERVER_URL_PLACEHOLDER;
   const normalizedWorkspaceId = workspaceId?.trim() || WORKSPACE_ID_PLACEHOLDER;
@@ -77,6 +83,7 @@ function daemonCommands(
   let setupBase =
     `remi setup --server-url ${normalizedServerUrl} --workspace-id ${normalizedWorkspaceId}`;
   if (daemonId?.trim()) setupBase += ` --daemon-id ${daemonId.trim()}`;
+  if (deviceName.trim()) setupBase += ` --device-name ${shellQuote(deviceName.trim())}`;
 
   return {
     setupCmd: `${setupBase} --token ${setupToken} --start`,
@@ -247,6 +254,7 @@ function InstructionsStep({
   const qc = useQueryClient();
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [daemonId, setDaemonId] = useState<string | null>(null);
+  const [deviceName, setDeviceName] = useState("");
   const [credentialStatus, setCredentialStatus] = useState<"loading" | "ready" | "error">("loading");
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [credentialAttempt, setCredentialAttempt] = useState(0);
@@ -301,6 +309,7 @@ function InstructionsStep({
     wsId,
     setupToken,
     daemonId,
+    deviceName,
   );
   return (
     <>
@@ -324,6 +333,18 @@ function InstructionsStep({
 
           {credentialStatus === "ready" ? (
             <div>
+              <div className="mb-3 space-y-1.5">
+                <label htmlFor="connect-device-name" className="text-xs font-medium text-foreground">
+                  {t(($) => $.connect.device_name_label)}
+                </label>
+                <Input
+                  id="connect-device-name"
+                  value={deviceName}
+                  onChange={(event) => setDeviceName(event.target.value)}
+                  placeholder={t(($) => $.connect.device_name_placeholder)}
+                  autoComplete="off"
+                />
+              </div>
               <CommandStep
                 n={2}
                 label={t(($) => $.connect.step2_label)}
@@ -429,27 +450,25 @@ function TroubleshootingDetails({
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_check_status)}</span>
             {/* CLI command — literal shell string, not i18n content. */}
-            {/* eslint-disable-next-line i18next/no-literal-string */}
             <code
               className={cn(
                 "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"remi status"}
+              {"remi daemon status"}
             </code>
           </li>
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_view_logs)}</span>
             {/* CLI command — literal shell string, not i18n content. */}
-            {/* eslint-disable-next-line i18next/no-literal-string */}
             <code
               className={cn(
                 "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"remi logs -f"}
+              {"remi daemon logs -f"}
             </code>
           </li>
         </ul>
