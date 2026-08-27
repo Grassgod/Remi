@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { CliError, type CliOptionSpec, type CommandInvocation, type CommandSpec } from "../core/index.js";
 import type { CliOptions } from "../multiremi/options.js";
 import { wikiDiff, wikiMove, wikiPull, wikiPush, wikiStatus } from "../multiremi/commands/wiki-working-copy.js";
+import { wikiLint, wikiMerge } from "../multiremi/commands/wiki-librarian.js";
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
@@ -308,6 +309,44 @@ function wikiWorkingCopySpecs(): CommandSpec[] {
         project ? String(project.id) : null,
         positional(invocation, 0, "document"),
         positional(invocation, 1, "new-path"),
+      );
+    },
+  ));
+  specs.push(spec(
+    "wiki.lint",
+    ["wiki", "lint"],
+    "Report duplicate, contradictory, orphaned, and broken-link Wiki pages",
+    "read",
+    [],
+    [PROJECT_OPTION],
+    async (invocation) => {
+      const project = await resolveProject(
+        await clientFor(invocation),
+        requiredWorkspace(invocation),
+        requireProjectOption(invocation),
+      );
+      await wikiLint(legacyOptions(invocation), String(project.id));
+    },
+  ));
+  specs.push(spec(
+    "wiki.merge",
+    ["wiki", "merge"],
+    "Merge source Wiki pages into a target and preserve their references",
+    "destructive",
+    [refPositional("target"), { name: "source", required: true, variadic: true }],
+    [PROJECT_OPTION, YES_OPTION],
+    async (invocation) => {
+      requireConfirmation(invocation);
+      const project = await resolveProject(
+        await clientFor(invocation),
+        requiredWorkspace(invocation),
+        requireProjectOption(invocation),
+      );
+      await wikiMerge(
+        legacyOptions(invocation),
+        String(project.id),
+        positional(invocation, 0, "target"),
+        invocation.positionals.slice(1),
       );
     },
   ));

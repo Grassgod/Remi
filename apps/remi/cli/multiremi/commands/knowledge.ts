@@ -15,6 +15,7 @@ import {
   readOptionalTextBody,
 } from "./fields.js";
 import { wikiDiff, wikiMove, wikiPull, wikiPush, wikiStatus } from "./wiki-working-copy.js";
+import { wikiLint, wikiMerge } from "./wiki-librarian.js";
 
 type KnowledgeKind = "memory" | "wiki";
 
@@ -74,6 +75,18 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await wikiMove(options, projectOption(options), ref, destination);
     return;
   }
+  if (action === "lint") {
+    await wikiLint(options, requireProject("wiki", "lint", options));
+    return;
+  }
+  if (action === "merge") {
+    const target = positional[1]?.trim();
+    const sources = positional.slice(2).map((value) => value.trim()).filter(Boolean);
+    if (!target || !sources.length) throw new Error("usage: multiremi wiki merge <target> <source...> --project <project-id> --yes");
+    if (!hasOption(options, "yes")) throw new Error("wiki merge requires --yes");
+    await wikiMerge(options, requireProject("wiki", "merge", options), target, sources);
+    return;
+  }
   if (action === "push") {
     await wikiPush(options, projectOption(options));
     return;
@@ -112,7 +125,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await backlinks("wiki", positional[1], options);
     return;
   }
-  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|mv|push ...");
+  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|mv|lint|merge|push ...");
 }
 
 async function listKnowledge(kind: KnowledgeKind, options: CliOptions): Promise<void> {

@@ -1303,6 +1303,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "wiki.lint": {
+      "command": "remi wiki lint",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.lint",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.merge": {
+      "command": "remi wiki merge",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.merge",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.list": {
       "command": "remi issue list",
       "auth": [
