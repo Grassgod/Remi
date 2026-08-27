@@ -17,6 +17,7 @@ const INBOX_GROUP_KEYS = [
   "status_changes",
   "comments",
   "updates",
+  "feishu_messages",
   "agent_activity",
 ] as const;
 type InboxGroupKey = (typeof INBOX_GROUP_KEYS)[number];
@@ -76,6 +77,7 @@ export function NotificationsTab() {
                     </p>
                   </div>
                   <Switch
+                    aria-label={t(($) => $.notifications.groups[key].label)}
                     checked={enabled}
                     onCheckedChange={(checked) => handleToggle(key, checked)}
                   />
@@ -104,6 +106,7 @@ export function NotificationsTab() {
                 </p>
               </div>
               <Switch
+                aria-label={t(($) => $.notifications.system.label)}
                 checked={systemEnabled}
                 onCheckedChange={(checked) => handleToggle("system_notifications", checked)}
               />

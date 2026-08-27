@@ -2,7 +2,9 @@ import type { Context, Hono } from "hono";
 import {
   assigneeFrequencyQuery,
   canCurrentUserAccessAgent,
+  currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
+  denyRestrictedTaskIssueCreation,
   isActiveTaskStatus,
   isJsonApiError,
   issueCommentCreateInput,
@@ -464,12 +466,19 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
-    return c.json(store.batchUpdateIssues(body));
+    return c.json(store.batchUpdateIssues({
+      ...body,
+      updates: body.updates ? { ...body.updates, parentTaskId: currentTaskParentId(c) } : body.updates,
+    }));
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
-      const result = store.batchUpdateIssues(issueBatchUpdateCompatibilityInput(body));
+      const input = issueBatchUpdateCompatibilityInput(body);
+      const result = store.batchUpdateIssues({
+        ...input,
+        updates: input.updates ? { ...input.updates, parentTaskId: currentTaskParentId(c) } : input.updates,
+      });
       return c.json({ updated: result.updated });
     } catch (err) {
       if (err instanceof Error && err.message === "issue_ids is required") return c.json({ error: err.message }, 400);
@@ -504,6 +513,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.post("/api/multiremi/issues", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJson<CreateIssueWithTaskInput>(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
@@ -531,6 +542,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ issue, task }, 201);
   });
   app.post("/api/issues", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
@@ -597,6 +610,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.post("/api/multiremi/issues/quick-create", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
@@ -610,6 +625,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }, 202);
   });
   app.post("/api/issues/quick-create", async (c) => {
+    const policyDenied = denyRestrictedTaskIssueCreation(c, store);
+    if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
     const input = issueQuickCreateCompatibilityInput(body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
@@ -749,7 +766,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ agent_id?: string; agentId?: string; prompt?: string }>(c);
-    const result = safeRerunIssue(store, issue.id, body);
+    const result = safeRerunIssue(store, issue.id, {
+      ...body,
+      parentTaskId: currentTaskParentId(c),
+    });
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(taskCompatibilityResponse(result.task), 202);
   });
@@ -907,9 +927,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
-    const updated = store.updateIssue(issue.id, body);
-    lockAutoTitleAfterHumanEdit(c, updated, body);
-    return c.json({ issue: maybeDispatchOnIssueUpdate(store, issue, updated, body) });
+    const input = { ...body, parentTaskId: currentTaskParentId(c) };
+    const updated = store.updateIssue(issue.id, input);
+    lockAutoTitleAfterHumanEdit(c, updated, input);
+    return c.json({ issue: maybeDispatchOnIssueUpdate(store, issue, updated, input) });
   });
   const updateIssueCompatibilityRoute = async (c: Context) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -918,7 +939,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const input = issueUpdateCompatibilityInput(body);
+    const input = {
+      ...issueUpdateCompatibilityInput(body),
+      parentTaskId: currentTaskParentId(c),
+    };
     try {
       const updated = store.updateIssue(issue.id, input);
       lockAutoTitleAfterHumanEdit(c, updated, input);
@@ -1012,7 +1036,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
-    const result = store.assignIssue(issue.id, body);
+    const result = store.assignIssue(issue.id, {
+      ...body,
+      parentTaskId: currentTaskParentId(c),
+    });
     return c.json({
       ...result,
       task: result.task ? taskPublicResponse(result.task) : null,
@@ -1181,6 +1208,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         agentId: agentId ?? undefined,
         createdByType: creator.actorType,
         createdById: creator.actorId,
+        parentTaskId: currentTaskParentId(c),
       });
       return c.json(taskCompatibilityResponse(task), 201);
     } catch (error) {

@@ -25,6 +25,21 @@ import {
   type RecordScmCanonicalEventResult,
   type ScmConnectionWithRepositories,
 } from "@multiremi/store/repos/scm-repo.js";
+import {
+  FeishuIngestRepo,
+  type CreateFeishuInboxOutcomeInput,
+  type CreateFeishuInboxOutcomeResult,
+  type CreateFeishuIssueOutcomeInput,
+  type CreateFeishuIssueOutcomeResult,
+  type CreateFeishuIssueProposalInput,
+  type CreateFeishuIssueProposalResult,
+  type ResolveFeishuIssueProposalResult,
+  type ClaimFeishuSyncStreamInput,
+  type IngestedFeishuMessageInput,
+  type IngestFeishuBatchResult,
+  type ReconcileFeishuUnprocessedResult,
+  type UpdateClaimedFeishuSyncCursorInput,
+} from "@multiremi/store/repos/feishu-ingest-repo.js";
 import type {
   ScmSnapshotEventFactory,
   ScmSnapshotEventWriteResult,
@@ -336,8 +351,16 @@ import type {
   MultiremiScmRepositoryBinding,
   MultiremiScmSyncCursor,
   MultiremiScmSyncStream,
+  CreateMultiremiFeishuSourceInput,
+  MultiremiFeishuMessage,
+  MultiremiFeishuMessageOutcome,
+  MultiremiFeishuSource,
+  MultiremiFeishuSyncCursor,
+  MultiremiFeishuSourceStatus,
   RecordScmCanonicalEventInput,
+  ResolveMultiremiFeishuMessageInput,
   ReleaseScmSyncStreamInput,
+  UpdateMultiremiFeishuSourceInput,
   UpdateScmConnectionInput,
   UpdateClaimedScmSyncCursorInput,
   UpsertScmEntitySnapshotInput,
@@ -363,6 +386,7 @@ export class MultiremiStore {
   private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
   private scm: ScmRepo;
+  private feishuIngest: FeishuIngestRepo;
   private usage: UsageRepo;
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
@@ -412,6 +436,7 @@ export class MultiremiStore {
     this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
     this.scm = new ScmRepo(this.ctx);
+    this.feishuIngest = new FeishuIngestRepo(this.ctx);
     this.usage = new UsageRepo(this.ctx);
     this.squads = new SquadsRepo(this.ctx);
     this.analytics = new AnalyticsRepo(this.ctx);
@@ -907,7 +932,11 @@ runMigrations(this.db);
 
   ensureDefaultAgent(
     provider = "claude",
-    options: { workspaceId?: string | null; ownerId?: string | null } = {},
+    options: {
+      workspaceId?: string | null;
+      ownerId?: string | null;
+      issueCreationRequiresProposal?: boolean;
+    } = {},
   ): MultiremiAgent {
     return this.agents.ensureDefaultAgent(provider, options);
   }
@@ -1371,6 +1400,132 @@ runMigrations(this.db);
 
   countRecentFeedbackByUser(userId: string, since = new Date(Date.now() - 60 * 60 * 1000).toISOString()): number {
     return this.feedback.countRecentFeedbackByUser(userId, since);
+  }
+
+  listFeishuSources(input: { workspaceId?: string | null; enabled?: boolean } = {}): MultiremiFeishuSource[] {
+    return this.feishuIngest.listSources(input);
+  }
+
+  getFeishuSource(id: string): MultiremiFeishuSource | null {
+    return this.feishuIngest.getSource(id);
+  }
+
+  createFeishuSource(input: CreateMultiremiFeishuSourceInput): MultiremiFeishuSource {
+    return this.feishuIngest.createSource(input);
+  }
+
+  updateFeishuSource(id: string, input: UpdateMultiremiFeishuSourceInput): MultiremiFeishuSource {
+    return this.feishuIngest.updateSource(id, input);
+  }
+
+  getFeishuSyncCursor(sourceId: string, stream: string): MultiremiFeishuSyncCursor | null {
+    return this.feishuIngest.getSyncCursor(sourceId, stream);
+  }
+
+  claimFeishuSyncStream(input: ClaimFeishuSyncStreamInput): MultiremiFeishuSyncCursor | null {
+    return this.feishuIngest.claimSyncStream(input);
+  }
+
+  updateClaimedFeishuSyncCursor(input: UpdateClaimedFeishuSyncCursorInput): MultiremiFeishuSyncCursor | null {
+    return this.feishuIngest.updateClaimedSyncCursor(input);
+  }
+
+  releaseFeishuSyncStream(sourceId: string, stream: string, leaseToken: string): boolean {
+    return this.feishuIngest.releaseSyncStream(sourceId, stream, leaseToken);
+  }
+
+  ingestFeishuBatch(sourceId: string, messages: readonly IngestedFeishuMessageInput[]): IngestFeishuBatchResult {
+    return this.feishuIngest.ingestBatch(sourceId, messages);
+  }
+
+  getFeishuMessage(messageId: string): MultiremiFeishuMessage | null {
+    return this.feishuIngest.getMessage(messageId);
+  }
+
+  listFeishuMessages(input: {
+    workspaceId: string;
+    unprocessed?: boolean;
+    since?: string | null;
+    until?: string | null;
+    chatId?: string | null;
+    limit?: number;
+  }): MultiremiFeishuMessage[] {
+    return this.feishuIngest.listMessages(input);
+  }
+
+  listFeishuMessageOutcomes(messageId: string): MultiremiFeishuMessageOutcome[] {
+    return this.feishuIngest.listMessageOutcomes(messageId);
+  }
+
+  getFeishuSourceStatus(sourceId: string, now?: Date): MultiremiFeishuSourceStatus {
+    return this.feishuIngest.getSourceStatus(sourceId, now);
+  }
+
+  recordFeishuConnectionSuccess(sourceId: string, completedAt: string): void {
+    this.feishuIngest.recordConnectionSuccess(sourceId, completedAt);
+  }
+
+  recordFeishuConnectionFailure(sourceId: string, errorCode: string, failedAt: string): MultiremiInboxItem | null {
+    return this.feishuIngest.recordConnectionFailure(sourceId, errorCode, failedAt);
+  }
+
+  hasDueUnprocessedFeishuMessages(sourceId: string, now: Date): boolean {
+    return this.feishuIngest.hasDueUnprocessedMessages(sourceId, now);
+  }
+
+  reconcileUnprocessedFeishuMessages(
+    sourceId: string,
+    now: Date,
+    limit?: number,
+  ): ReconcileFeishuUnprocessedResult {
+    return this.feishuIngest.reconcileUnprocessedMessages(sourceId, now, limit);
+  }
+
+  resolveFeishuMessage(messageId: string, input: ResolveMultiremiFeishuMessageInput): {
+    message: MultiremiFeishuMessage;
+    outcome: MultiremiFeishuMessageOutcome;
+  } {
+    return this.feishuIngest.resolveMessage(messageId, input);
+  }
+
+  createFeishuInboxOutcome(
+    messageId: string,
+    outcomeKind: "notified" | "reply_drafted",
+    input: CreateFeishuInboxOutcomeInput,
+  ): CreateFeishuInboxOutcomeResult {
+    return this.feishuIngest.createInboxOutcome(messageId, outcomeKind, input);
+  }
+
+  createFeishuIssueOutcome(
+    messageId: string,
+    input: CreateFeishuIssueOutcomeInput,
+  ): CreateFeishuIssueOutcomeResult {
+    return this.feishuIngest.createIssueOutcome(messageId, input);
+  }
+
+  createFeishuIssueProposal(
+    messageId: string,
+    input: CreateFeishuIssueProposalInput,
+  ): CreateFeishuIssueProposalResult {
+    return this.feishuIngest.createIssueProposal(messageId, input);
+  }
+
+  approveFeishuIssueProposal(
+    proposalId: string,
+    input: { workspaceId: string; approvedBy: string },
+  ): ResolveFeishuIssueProposalResult {
+    return this.feishuIngest.approveIssueProposal(proposalId, input);
+  }
+
+  rejectFeishuIssueProposal(
+    proposalId: string,
+    input: { workspaceId: string; rejectedBy: string },
+  ): ResolveFeishuIssueProposalResult {
+    return this.feishuIngest.rejectIssueProposal(proposalId, input);
+  }
+
+  deleteExpiredFeishuMessages(now?: Date): number {
+    return this.feishuIngest.deleteExpiredMessages(now);
   }
 
   listScmConnections(input: {
@@ -3129,12 +3284,17 @@ runMigrations(this.db);
     signatureStatus?: MultiremiWebhookSignatureStatus | string | null;
     replayedFromDeliveryId?: string | null;
     triggerId?: string | null;
+    sourceTaskId?: string | null;
   } = {}): MultiremiWebhookDeliveryResult {
     return this.autopilots.handleAutopilotWebhook(autopilotId, input);
   }
 
-  replayWebhookDelivery(autopilotId: string, deliveryId: string): MultiremiWebhookDeliveryResult {
-    return this.autopilots.replayWebhookDelivery(autopilotId, deliveryId);
+  replayWebhookDelivery(
+    autopilotId: string,
+    deliveryId: string,
+    options: { sourceTaskId?: string | null } = {},
+  ): MultiremiWebhookDeliveryResult {
+    return this.autopilots.replayWebhookDelivery(autopilotId, deliveryId, options);
   }
 
   handleAutopilotWebhookByToken(token: string, input: {

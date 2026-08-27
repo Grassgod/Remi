@@ -39,10 +39,30 @@ export type AutopilotCompatibilityUpdateInput = {
   trigger_kind?: string | null;
   trigger_label?: string | null;
   cron_expression?: string | null;
+  issue_creation_restricted?: boolean;
 };
 
-export function autopilotCompatibilityResponse(autopilot: MultiremiAutopilot): Record<string, unknown> {
-  return {
+export function autopilotResponse(
+  autopilot: MultiremiAutopilot,
+  options: { redactPolicy?: boolean } = {},
+): Record<string, unknown> {
+  const response: Record<string, unknown> = { ...autopilot };
+  if (options.redactPolicy) {
+    delete response.issueCreationRestricted;
+    delete response.issue_creation_restricted;
+    delete response.issueCreationRestrictionReason;
+    delete response.issue_creation_restriction_reason;
+    delete response.issueCreationRestrictedByTaskId;
+    delete response.issue_creation_restricted_by_task_id;
+  }
+  return response;
+}
+
+export function autopilotCompatibilityResponse(
+  autopilot: MultiremiAutopilot,
+  options: { redactPolicy?: boolean } = {},
+): Record<string, unknown> {
+  const response: Record<string, unknown> = {
     id: autopilot.id,
     workspace_id: autopilot.workspaceId,
     title: autopilot.title,
@@ -61,6 +81,12 @@ export function autopilotCompatibilityResponse(autopilot: MultiremiAutopilot): R
     created_at: autopilot.createdAt,
     updated_at: autopilot.updatedAt,
   };
+  if (!options.redactPolicy) {
+    response.issue_creation_restricted = autopilot.issueCreationRestricted;
+    response.issue_creation_restriction_reason = autopilot.issueCreationRestrictionReason;
+    response.issue_creation_restricted_by_task_id = autopilot.issueCreationRestrictedByTaskId;
+  }
+  return response;
 }
 
 export function autopilotCreateCompatibilityInput(
@@ -111,6 +137,8 @@ export function autopilotCreateCompatibilityInput(
     trigger_label: input.trigger_label ?? null,
     cronExpression: input.cron_expression ?? null,
     cron_expression: input.cron_expression ?? null,
+    issueCreationRestricted: input.issue_creation_restricted,
+    issue_creation_restricted: input.issue_creation_restricted,
     created_by_type: input.created_by_type,
     created_by_id: input.created_by_id,
   });
@@ -171,12 +199,16 @@ export function autopilotUpdateCompatibilityInput(
   if (hasOwn(input, "trigger_kind")) output.triggerKind = input.trigger_kind ?? undefined;
   if (hasOwn(input, "trigger_label")) output.triggerLabel = input.trigger_label ?? null;
   if (hasOwn(input, "cron_expression")) output.cronExpression = input.cron_expression ?? null;
+  if (hasOwn(input, "issue_creation_restricted")) {
+    output.issueCreationRestricted = input.issue_creation_restricted;
+    output.issue_creation_restricted = input.issue_creation_restricted;
+  }
   return output;
 }
 
 export function autopilotTriggerCompatibilityResponse(
   trigger: MultiremiAutopilotTrigger,
-  options: { redactSecrets?: boolean } = {},
+  options: { redactSecrets?: boolean; redactPolicy?: boolean } = {},
 ): Record<string, unknown> {
   const isWebhook = trigger.kind === "webhook";
   const redactSecrets = options.redactSecrets === true;
@@ -200,6 +232,11 @@ export function autopilotTriggerCompatibilityResponse(
     updated_at: trigger.updatedAt,
     event_config: trigger.eventConfig,
   };
+  if (!options.redactPolicy) {
+    response.issue_creation_restricted = trigger.issueCreationRestricted;
+    response.issue_creation_restriction_reason = trigger.issueCreationRestrictionReason;
+    response.issue_creation_restricted_by_task_id = trigger.issueCreationRestrictedByTaskId;
+  }
   if (isWebhook && trigger.eventFilters?.length) response.event_filters = trigger.eventFilters;
   return response;
 }
@@ -370,6 +407,8 @@ export function autopilotTriggerCreateCompatibilityInput(input: CreateAutopilotT
     event_filters: eventFilters,
     eventConfig,
     event_config: eventConfig,
+    issueCreationRestricted: input.issue_creation_restricted,
+    issue_creation_restricted: input.issue_creation_restricted,
   };
 }
 
@@ -392,6 +431,10 @@ export function autopilotTriggerUpdateCompatibilityInput(input: UpdateAutopilotT
   if (eventConfig !== undefined) {
     output.eventConfig = eventConfig;
     output.event_config = eventConfig;
+  }
+  if (hasOwn(input, "issue_creation_restricted")) {
+    output.issueCreationRestricted = input.issue_creation_restricted;
+    output.issue_creation_restricted = input.issue_creation_restricted;
   }
   return output;
 }
@@ -426,6 +469,7 @@ const SYSTEM_EVENT_ISSUE_STATUSES = new Set([
 function validateSystemEventConfig(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "event_config is required for system_event triggers";
   const config = value as Record<string, unknown>;
+  if (config.resource === "feishu_source") return validateFeishuSystemEventConfig(config);
   const allowedKeys = new Set(["resource", "event", "conditions", "project_id", "projectId"]);
   if (Object.keys(config).some((key) => !allowedKeys.has(key))) return "event_config contains unsupported fields";
   if (config.resource !== "issue") return "event_config.resource must be issue";
@@ -451,6 +495,37 @@ function validateSystemEventConfig(value: unknown): string | null {
   const projectId = config.project_id ?? config.projectId;
   if (projectId !== undefined && projectId !== null && (typeof projectId !== "string" || !projectId.trim())) {
     return "event_config.project_id must be a non-empty string or null";
+  }
+  return null;
+}
+
+function validateFeishuSystemEventConfig(config: Record<string, unknown>): string | null {
+  const allowedKeys = new Set([
+    "resource",
+    "event",
+    "source_ids",
+    "sourceIds",
+    "trigger_issue_id",
+    "triggerIssueId",
+  ]);
+  if (Object.keys(config).some((key) => !allowedKeys.has(key))) {
+    return "event_config contains unsupported fields";
+  }
+  if (config.event !== "messages_ingested") return "event_config.event must be messages_ingested";
+  const triggerIssueId = config.trigger_issue_id ?? config.triggerIssueId;
+  if (typeof triggerIssueId !== "string" || !triggerIssueId.trim()) {
+    return "event_config.trigger_issue_id is required";
+  }
+  const sourceIds = config.source_ids ?? config.sourceIds;
+  if (sourceIds !== undefined && !Array.isArray(sourceIds)) {
+    return "event_config.source_ids must be an array";
+  }
+  if (Array.isArray(sourceIds)) {
+    for (let index = 0; index < sourceIds.length; index += 1) {
+      if (typeof sourceIds[index] !== "string" || !sourceIds[index].trim()) {
+        return `event_config.source_ids[${index}] must be a non-empty string`;
+      }
+    }
   }
   return null;
 }
@@ -540,8 +615,8 @@ function validateIssueTitleTemplateCompatibility(template: string | null | undef
 
 export function autopilotTriggerResponse(
   trigger: MultiremiAutopilotTrigger,
-  options: { redactSecrets?: boolean } = {},
-): MultiremiAutopilotTrigger & {
+  options: { redactSecrets?: boolean; redactPolicy?: boolean } = {},
+): Record<string, unknown> & {
   autopilot_id: string;
   cron_expression: string | null;
   next_run_at: string | null;
@@ -556,7 +631,20 @@ export function autopilotTriggerResponse(
   updated_at: string;
 } {
   const redactSecrets = options.redactSecrets === true;
-  return {
+  const response: Record<string, unknown> & {
+    autopilot_id: string;
+    cron_expression: string | null;
+    next_run_at: string | null;
+    webhook_token: string | null;
+    webhook_path: string | null;
+    webhook_url: string | null;
+    event_filters: MultiremiAutopilotTrigger["eventFilters"];
+    event_config: MultiremiAutopilotTrigger["eventConfig"];
+    signing_secret_set: boolean;
+    last_fired_at: string | null;
+    created_at: string;
+    updated_at: string;
+  } = {
     ...trigger,
     webhookToken: redactSecrets ? null : trigger.webhookToken,
     webhookPath: redactSecrets ? null : trigger.webhookPath,
@@ -575,4 +663,14 @@ export function autopilotTriggerResponse(
     created_at: trigger.createdAt,
     updated_at: trigger.updatedAt,
   };
+  if (options.redactPolicy) {
+    delete response.issueCreationRestricted;
+    delete response.issueCreationRestrictionReason;
+    delete response.issueCreationRestrictedByTaskId;
+  } else {
+    response.issue_creation_restricted = trigger.issueCreationRestricted;
+    response.issue_creation_restriction_reason = trigger.issueCreationRestrictionReason;
+    response.issue_creation_restricted_by_task_id = trigger.issueCreationRestrictedByTaskId;
+  }
+  return response;
 }

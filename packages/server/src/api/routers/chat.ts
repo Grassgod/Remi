@@ -9,6 +9,7 @@ import {
   withChatSessionRequestContext,
 } from "../helpers.js";
 import {
+  currentTaskAccessToken,
   chatMessageCompatibilityResponse,
   chatSessionCompatibilityResponse,
   currentRequestUserId,
@@ -64,7 +65,10 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<SendChatMessageInput>(c);
     const message = normalizeSendChatMessageInput(c, body);
     if (message instanceof Response) return message;
-    const result = store.sendChatMessage(loaded.session.id, message);
+    const result = store.sendChatMessage(loaded.session.id, {
+      ...message,
+      parentTaskId: currentTaskAccessToken(c)?.taskId ?? null,
+    });
     return c.json({ ...result, task: taskPublicResponse(result.task) }, 201);
   });
   app.get("/api/chat/sessions", (c) => {
@@ -154,7 +158,10 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<SendChatMessageInput>(c);
     const message = normalizeSendChatMessageInput(c, body);
     if (message instanceof Response) return message;
-    return c.json(sendChatMessageCompatibilityResponse(store.sendChatMessage(loaded.session.id, message)), 201);
+    return c.json(sendChatMessageCompatibilityResponse(store.sendChatMessage(loaded.session.id, {
+      ...message,
+      parentTaskId: currentTaskAccessToken(c)?.taskId ?? null,
+    })), 201);
   });
   app.get("/api/chat/sessions/:sessionId/pending-task", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));

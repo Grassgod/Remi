@@ -320,26 +320,149 @@ export function notifyBrowserWorkspaceEvent(
     actorId?: string | null;
   },
 ): void {
-  const frame = JSON.stringify({
+  const envelope = {
     type: event.type,
     payload: event.payload,
     actor_id: event.actorId ?? null,
     actor_type: event.actorType ?? "member",
-  });
+  };
+  const frames: BrowserWorkspaceEventFrames = {
+    human: JSON.stringify(envelope),
+    restricted: JSON.stringify({
+      ...envelope,
+      payload: redactWorkspaceEventPayloadForRestrictedClient(event.payload),
+    }),
+  };
   if (isChatRealtimeEvent(event.type)) {
     const chatSessionId = chatEventSessionId(event);
-    if (chatSessionId) notifyBrowserScopeClients(scopeRegistry, "chat", chatSessionId, frame);
+    if (chatSessionId) notifyBrowserScopeClientsByAudience(scopeRegistry, "chat", chatSessionId, frames);
     return;
   }
   if (event.type === "invitation:created" || event.type === "invitation:revoked") {
     const inviteeUserId = invitationEventInviteeUserId(event.payload);
-    if (inviteeUserId) notifyBrowserUserEvent(userRegistry, inviteeUserId, frame);
+    if (inviteeUserId) notifyBrowserUserEventByAudience(userRegistry, inviteeUserId, frames);
     return;
   }
-  notifyBrowserWorkspaceClients(workspaceRegistry, event.workspaceId, frame);
+  notifyBrowserWorkspaceClientsByAudience(workspaceRegistry, event.workspaceId, frames);
   if (event.type === "member:added") {
     const userId = memberAddedEventUserId(event.payload);
-    if (userId) notifyBrowserUserEvent(userRegistry, userId, frame, event.workspaceId);
+    if (userId) notifyBrowserUserEventByAudience(userRegistry, userId, frames, event.workspaceId);
+  }
+}
+
+type BrowserWorkspaceEventFrames = {
+  human: string;
+  restricted: string;
+};
+
+const RESTRICTED_REALTIME_FIELDS = new Set([
+  "webhookToken",
+  "webhook_token",
+  "webhookPath",
+  "webhook_path",
+  "webhookUrl",
+  "webhook_url",
+  "signingSecret",
+  "signing_secret",
+  "signingSecretHash",
+  "signing_secret_hash",
+  "signingSecretHint",
+  "signing_secret_hint",
+  "signingSecretSet",
+  "signing_secret_set",
+  "issueCreationRestricted",
+  "issue_creation_restricted",
+  "issueCreationRestrictionReason",
+  "issue_creation_restriction_reason",
+  "issueCreationRestrictedByTaskId",
+  "issue_creation_restricted_by_task_id",
+]);
+
+export function redactWorkspaceEventPayloadForRestrictedClient(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactWorkspaceEventPayloadForRestrictedClient(item));
+  }
+  if (!value || typeof value !== "object") return value;
+  const redacted: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (RESTRICTED_REALTIME_FIELDS.has(key)) continue;
+    redacted[key] = redactWorkspaceEventPayloadForRestrictedClient(nested);
+  }
+  return redacted;
+}
+
+function browserWorkspaceEventFrame(
+  client: MultiremiWebSocketClient,
+  frames: BrowserWorkspaceEventFrames,
+): string {
+  if (client.data.kind !== "browser") return frames.restricted;
+  const tokenType = client.data.accessToken?.type;
+  return tokenType == null || tokenType === "pat" ? frames.human : frames.restricted;
+}
+
+function notifyBrowserScopeClientsByAudience(
+  registry: BrowserScopeWebSocketRegistry,
+  scope: string,
+  id: string,
+  frames: BrowserWorkspaceEventFrames,
+): void {
+  const clients = registry.get(browserScopeKey(scope, id));
+  if (!clients?.size) return;
+  for (const client of [...clients]) {
+    try {
+      client.sendText(browserWorkspaceEventFrame(client, frames));
+    } catch {
+      unregisterBrowserScopeWebSocketClient(registry, client, scope, id);
+      try {
+        client.close();
+      } catch {
+        // Already closed.
+      }
+    }
+  }
+}
+
+function notifyBrowserWorkspaceClientsByAudience(
+  registry: BrowserWebSocketRegistry,
+  workspaceId: string,
+  frames: BrowserWorkspaceEventFrames,
+): void {
+  const clients = registry.get(workspaceId);
+  if (!clients?.size) return;
+  for (const client of [...clients]) {
+    try {
+      client.sendText(browserWorkspaceEventFrame(client, frames));
+    } catch {
+      unregisterBrowserWebSocketClient(registry, client);
+      try {
+        client.close();
+      } catch {
+        // Already closed.
+      }
+    }
+  }
+}
+
+function notifyBrowserUserEventByAudience(
+  registry: BrowserUserWebSocketRegistry,
+  userId: string,
+  frames: BrowserWorkspaceEventFrames,
+  excludeWorkspaceId?: string,
+): void {
+  const clients = registry.get(userId);
+  if (!clients?.size) return;
+  for (const client of [...clients]) {
+    if (client.data.kind === "browser" && excludeWorkspaceId && client.data.workspaceId === excludeWorkspaceId) continue;
+    try {
+      client.sendText(browserWorkspaceEventFrame(client, frames));
+    } catch {
+      unregisterBrowserUserWebSocketClient(registry, client);
+      try {
+        client.close();
+      } catch {
+        // Already closed.
+      }
+    }
   }
 }
 
@@ -656,9 +779,7 @@ export async function authorizeBrowserWebSocketToken(
   const accessToken = await store.verifyAccessToken(token);
   if (accessToken) {
     if (accessToken.type === "daemon") return { error: "forbidden for daemon token", status: 403 };
-    if (accessToken.type === "task" && accessToken.workspaceId !== workspaceId) {
-      return { error: "not a member of this workspace", status: 403 };
-    }
+    if (accessToken.type === "task") return { error: "forbidden for task token", status: 403 };
     const userId = accessToken.userId || "local";
     // Membership is the sole authority — a token being bound to this workspace
     // does not by itself make its user a member.

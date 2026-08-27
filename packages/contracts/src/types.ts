@@ -85,6 +85,8 @@ export interface MultiremiAgent {
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  issueCreationRequiresProposal: boolean;
+  issue_creation_requires_proposal?: boolean;
   supervisor?: boolean;
   archivedAt: string | null;
   createdAt: string;
@@ -123,6 +125,8 @@ export interface CreateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  issueCreationRequiresProposal?: boolean;
+  issue_creation_requires_proposal?: boolean;
 }
 
 export interface UpdateAgentInput {
@@ -155,6 +159,8 @@ export interface UpdateAgentInput {
   mcp_config?: unknown | null;
   thinkingLevel?: string | null;
   thinking_level?: string | null;
+  issueCreationRequiresProposal?: boolean;
+  issue_creation_requires_proposal?: boolean;
 }
 
 export interface CreateAgentFromTemplateInput {
@@ -180,6 +186,8 @@ export interface CreateAgentFromTemplateInput {
   workspace_id?: string | null;
   ownerId?: string | null;
   owner_id?: string | null;
+  issueCreationRequiresProposal?: boolean;
+  issue_creation_requires_proposal?: boolean;
 }
 
 export interface CreateAgentFromTemplateResult {
@@ -1284,6 +1292,10 @@ export interface MultiremiTask {
   attempt: number;
   maxAttempts: number;
   parentTaskId: string | null;
+  /** Immutable capability attenuation snapshot. Once true, every descendant
+   * task must also require a human-approved proposal before creating Issues. */
+  issueCreationRestricted: boolean;
+  issue_creation_restricted?: boolean;
   /** Stable identity shared by a delegated task, its infrastructure retries,
    *  and any tasks that return control to the delegating agent. */
   delegationId: string | null;
@@ -1472,6 +1484,10 @@ export interface CreateTaskInput {
   maxAttempts?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /** Server-derived capability snapshot. Public task creation must not trust
+   * this value; TasksRepo derives it from parent lineage and the target Agent. */
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
   /** Server-internal delegation lineage. Public task creation strips it. */
   delegationId?: string | null;
   delegation_id?: string | null;
@@ -1913,6 +1929,9 @@ export interface UpdateIssueInput {
   acceptance_criteria?: unknown[];
   contextRefs?: unknown[];
   context_refs?: unknown[];
+  /** Server-internal creator lineage for assignment/status-triggered tasks. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface BatchUpdateIssuesInput {
@@ -1964,6 +1983,9 @@ export interface AssignIssueInput {
   actor_type?: string | null;
   actorId?: string | null;
   actor_id?: string | null;
+  /** Server-internal creator lineage. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface AssignIssueResult {
@@ -2196,6 +2218,9 @@ export interface CreateSessionTaskInput {
   sourceEventId?: string | null;
   source_event_id?: string | null;
   priority?: number;
+  /** Server-internal creator lineage. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface PublishSessionResultInput {
@@ -2792,6 +2817,191 @@ export interface RemoveSquadMemberInput {
   memberId: string;
 }
 
+// ─── Feishu message ingestion ───────────────────────────────────────────────────────────────────
+
+export type MultiremiFeishuSourceType = "personal_automation";
+
+export interface MultiremiFeishuAllowlistEntry {
+  chatId: string;
+  addedAt: string;
+}
+
+export interface MultiremiFeishuSource {
+  id: string;
+  workspaceId: string;
+  name: string;
+  type: MultiremiFeishuSourceType;
+  endpointName: string;
+  allowlist: MultiremiFeishuAllowlistEntry[];
+  enabled: boolean;
+  retentionDays: number;
+  pollIntervalSeconds: number;
+  unprocessedRetrySeconds: number;
+  unprocessedRetryLimit: number;
+  accessTokenSet: boolean;
+  accessTokenHint: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateMultiremiFeishuSourceInput {
+  id?: string;
+  workspaceId?: string;
+  workspace_id?: string;
+  name?: string | null;
+  type?: MultiremiFeishuSourceType;
+  endpointName?: string;
+  endpoint_name?: string;
+  allowlist?: Array<string | Partial<MultiremiFeishuAllowlistEntry>>;
+  enabled?: boolean;
+  retentionDays?: number;
+  retention_days?: number;
+  pollIntervalSeconds?: number;
+  poll_interval_seconds?: number;
+  unprocessedRetrySeconds?: number;
+  unprocessed_retry_seconds?: number;
+  unprocessedRetryLimit?: number;
+  unprocessed_retry_limit?: number;
+}
+
+export interface UpdateMultiremiFeishuSourceInput {
+  name?: string | null;
+  endpointName?: string;
+  endpoint_name?: string;
+  allowlist?: Array<string | Partial<MultiremiFeishuAllowlistEntry>>;
+  enabled?: boolean;
+  retentionDays?: number;
+  retention_days?: number;
+  pollIntervalSeconds?: number;
+  poll_interval_seconds?: number;
+  unprocessedRetrySeconds?: number;
+  unprocessed_retry_seconds?: number;
+  unprocessedRetryLimit?: number;
+  unprocessed_retry_limit?: number;
+}
+
+export interface MultiremiFeishuSyncCursor {
+  sourceId: string;
+  stream: string;
+  cursor: Record<string, unknown> | null;
+  watermark: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseUntil: string | null;
+  leaseToken: string | null;
+  updatedAt: string;
+}
+
+export interface MultiremiFeishuMessage {
+  messageId: string;
+  workspaceId: string;
+  sourceId: string;
+  chatId: string;
+  chatType: string | null;
+  chatName: string | null;
+  threadId: string | null;
+  rootId: string | null;
+  parentId: string | null;
+  sender: Record<string, unknown>;
+  content: Record<string, unknown>;
+  searchableText: string;
+  contentFingerprint: string;
+  messageAppLink: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  recalled: boolean;
+  edited: boolean;
+  ingestedAt: string;
+  processedAt: string | null;
+  retryCount: number;
+  lastRetryAt: string | null;
+}
+
+export interface MultiremiFeishuSourceStatus {
+  sourceId: string;
+  unprocessedCount: number;
+  timedOutCount: number;
+  mutedDeliveryCount: number;
+  pendingIssueProposalCount: number;
+  oldestUnprocessedAt: string | null;
+  maximumRetryCount: number;
+  lastSuccessfulIngestAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorAt: string | null;
+  lagSeconds: number | null;
+  consecutiveFailures: number;
+  connectionAlertedAt: string | null;
+  connectionAlertDeliveryFailureCount: number;
+  connectionAlertDeliveryErrorCode: string | null;
+  connectionAlertDeliveryFailedAt: string | null;
+}
+
+export type MultiremiFeishuMessageOutcomeKind =
+  | "issue_proposed"
+  | "issue_created"
+  | "notified"
+  | "reply_drafted"
+  | "ignored"
+  | "dismissed";
+
+export interface MultiremiFeishuMessageOutcome {
+  id: string;
+  workspaceId: string;
+  messageId: string;
+  outcomeKind: MultiremiFeishuMessageOutcomeKind;
+  ref: string | null;
+  reason: string | null;
+  taskId: string | null;
+  createdAt: string;
+}
+
+export interface ResolveMultiremiFeishuMessageInput {
+  workspaceId?: string;
+  workspace_id?: string;
+  outcome: MultiremiFeishuMessageOutcomeKind;
+  ref?: string | null;
+  reason?: string | null;
+  taskId?: string | null;
+  task_id?: string | null;
+}
+
+export interface NotifyMultiremiFeishuMessageInput {
+  summary: string;
+}
+
+export interface DraftReplyMultiremiFeishuMessageInput {
+  draftText?: string;
+  draft_text?: string;
+}
+
+export interface CreateIssueFromMultiremiFeishuMessageInput {
+  title: string;
+  description?: string | null;
+  priority?: MultiremiIssuePriority | string;
+  projectId?: string | null;
+  project_id?: string | null;
+  assigneeType?: MultiremiAssigneeType | null;
+  assignee_type?: MultiremiAssigneeType | null;
+  assigneeId?: string | null;
+  assignee_id?: string | null;
+}
+
+export type MultiremiFeishuIssueProposalStatus = "pending" | "approved" | "rejected";
+
+export interface MultiremiFeishuIssueProposal {
+  id: string;
+  workspaceId: string;
+  messageId: string;
+  inboxItemId: string | null;
+  issue: CreateIssueFromMultiremiFeishuMessageInput;
+  status: MultiremiFeishuIssueProposalStatus;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  createdAt: string;
+}
+
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────
 
 export type MultiremiAutopilotStatus = "active" | "paused" | "archived";
@@ -2826,6 +3036,15 @@ export interface MultiremiAutopilotSystemEventConfig {
   project_id?: string | null;
 }
 
+export interface MultiremiAutopilotFeishuEventConfig {
+  resource: "feishu_source";
+  event: "messages_ingested";
+  sourceIds?: string[];
+  source_ids?: string[];
+  triggerIssueId: string;
+  trigger_issue_id?: string;
+}
+
 export interface MultiremiAutopilotScmEventConfig {
   resource: "scm";
   events: MultiremiScmCanonicalEventType[];
@@ -2838,6 +3057,7 @@ export interface MultiremiAutopilotScmEventConfig {
 
 export type MultiremiAutopilotEventConfig =
   | MultiremiAutopilotSystemEventConfig
+  | MultiremiAutopilotFeishuEventConfig
   | MultiremiAutopilotScmEventConfig;
 
 export type MultiremiSystemEventStatus = "pending" | "processing" | "processed" | "failed";
@@ -2845,8 +3065,8 @@ export type MultiremiSystemEventStatus = "pending" | "processing" | "processed" 
 export interface MultiremiSystemEvent {
   id: string;
   workspaceId: string;
-  resource: "issue";
-  event: "status_changed";
+  resource: "issue" | "feishu_source";
+  event: "status_changed" | "messages_ingested";
   resourceId: string;
   projectId: string | null;
   payload: Record<string, unknown>;
@@ -2886,6 +3106,12 @@ export interface MultiremiAutopilot {
   trigger_label?: string | null;
   cronExpression: string | null;
   cron_expression?: string | null;
+  issueCreationRestricted: boolean;
+  issue_creation_restricted?: boolean;
+  issueCreationRestrictionReason: "restricted_task" | "human_policy" | null;
+  issue_creation_restriction_reason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId: string | null;
+  issue_creation_restricted_by_task_id?: string | null;
   createdByType: "member" | "agent";
   created_by_type?: "member" | "agent";
   createdById: string;
@@ -2914,6 +3140,9 @@ export interface MultiremiAutopilotTrigger {
   eventFilters: MultiremiWebhookEventFilter[] | null;
   eventConfig: MultiremiAutopilotEventConfig | null;
   event_config?: MultiremiAutopilotEventConfig | null;
+  issueCreationRestricted: boolean;
+  issueCreationRestrictionReason: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId: string | null;
   signingSecretSet: boolean;
   signingSecretHint: string | null;
   lastFiredAt: string | null;
@@ -2970,6 +3199,11 @@ export interface CreateAutopilotInput {
   created_by_type?: "member" | "agent";
   createdById?: string | null;
   created_by_id?: string | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface CreateAutopilotTriggerInput {
@@ -2984,6 +3218,11 @@ export interface CreateAutopilotTriggerInput {
   event_filters?: MultiremiWebhookEventFilter[] | null;
   eventConfig?: MultiremiAutopilotEventConfig | null;
   event_config?: MultiremiAutopilotEventConfig | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface UpdateAutopilotTriggerInput {
@@ -2996,6 +3235,11 @@ export interface UpdateAutopilotTriggerInput {
   event_filters?: MultiremiWebhookEventFilter[] | null;
   eventConfig?: MultiremiAutopilotEventConfig | null;
   event_config?: MultiremiAutopilotEventConfig | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface UpdateAutopilotInput {
@@ -3012,6 +3256,11 @@ export interface UpdateAutopilotInput {
   triggerKind?: string;
   triggerLabel?: string | null;
   cronExpression?: string | null;
+  issueCreationRestricted?: boolean;
+  issue_creation_restricted?: boolean;
+  /** Server-owned audit fields. Public routes overwrite these values. */
+  issueCreationRestrictionReason?: "restricted_task" | "human_policy" | null;
+  issueCreationRestrictedByTaskId?: string | null;
 }
 
 export interface RunAutopilotInput {
@@ -3228,6 +3477,7 @@ export type MultiremiNotificationGroupKey =
   | "status_changes"
   | "comments"
   | "updates"
+  | "feishu_messages"
   | "agent_activity"
   | "system_notifications";
 
@@ -3327,6 +3577,9 @@ export interface SendChatMessageInput {
   content?: string | null;
   attachmentIds?: string[];
   attachment_ids?: string[];
+  /** Server-internal creator lineage. */
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface SendChatMessageResult {

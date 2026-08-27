@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import {
   canCurrentUserAccessAgent,
   canUserViewTaskMessages,
+  currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
   loadChatSessionForCurrentUser,
   organizerTaskInspection,
@@ -67,6 +68,10 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       execution_fingerprint: _executionFingerprintSnake,
       issueSessionGeneration: _issueSessionGeneration,
       issue_session_generation: _issueSessionGenerationSnake,
+      parentTaskId: _parentTaskId,
+      parent_task_id: _parentTaskIdSnake,
+      issueCreationRestricted: _issueCreationRestricted,
+      issue_creation_restricted: _issueCreationRestrictedSnake,
       delegationId: _delegationId,
       delegation_id: _delegationIdSnake,
       delegatedByAgentId: _delegatedByAgentId,
@@ -93,14 +98,17 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         issueSessionId: inheritedIssueSessionId,
       })
     );
-    const createInput: CreateTaskInput = leaderDelegation
-      ? {
-          ...publicInput,
+    const createInput: CreateTaskInput = {
+      ...publicInput,
+      parentTaskId: currentTaskParentId(c),
+      ...(leaderDelegation
+        ? {
           issueSessionId: inheritedIssueSessionId,
           delegationId: createId("dlg"),
           delegatedByAgentId: sourceTask!.agentId,
         }
-      : publicInput;
+        : {}),
+    };
     const task = store.createTask(createInput);
     if (taskToken && issue && !leaderDelegation) {
       store.appendIssueActivity(issue.id, {

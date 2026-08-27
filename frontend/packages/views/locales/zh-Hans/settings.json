@@ -79,6 +79,10 @@
         "label": "优先级与截止日期",
         "description": "你订阅的 issue 优先级或截止日期变更时"
       },
+      "feishu_messages": {
+        "label": "飞书消息",
+        "description": "由监听的飞书消息生成的提醒和回复草稿"
+      },
       "agent_activity": {
         "label": "智能体活动",
         "description": "智能体 task 完成或失败时"
