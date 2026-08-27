@@ -129,10 +129,12 @@ export function isVersionNewer(latest: string, current: string): boolean {
 //
 // Anthropic's cacheWrite reflects the 5-minute cache TTL (1.25× input); the
 // daemon reports cache_creation_input_tokens without TTL metadata, so 5m is
-// the safest / cheapest assumption (matches the API default). OpenAI,
-// DeepSeek, Moonshot and Zhipu do not bill cache writes separately (cached
-// input is just discounted on subsequent reads), so cacheWrite mirrors
-// input there.
+// the safest / cheapest assumption (matches the API default). DeepSeek,
+// Moonshot and Zhipu do not bill cache writes separately (cached input is
+// just discounted on subsequent reads), so cacheWrite mirrors input there.
+// Same for OpenAI up to GPT-5.5; the GPT-5.6 tiers are the first OpenAI SKUs
+// to publish an explicit cache-write rate (1.25× input), so those rows carry
+// the published number instead of the mirror.
 //
 // The resolver matches exact keys after stripping a trailing date snapshot
 // (see `resolvePricing` below). It deliberately does NOT do startsWith
@@ -176,6 +178,20 @@ const MODEL_PRICING: Record<
   // -- OpenAI: dotted-minor Codex catalog SKUs. Each generation is priced
   //    independently — no fallback to `gpt-5`. Entries track
   //    `server/pkg/agent/models.go` (Codex provider list).
+  //
+  //    GPT-5.6 ships three named tiers (Sol / Terra / Luna) rather than the
+  //    -mini / -nano suffixes of earlier generations, so each needs its own
+  //    row. Priced at the standard short-context meter (≤272K input): Sol is
+  //    currently discounted to $4/$20 through 2026-11-21 and OpenRouter
+  //    resells it lower still, but we carry the $5/$30 sticker for the same
+  //    reason the DeepSeek and Sonnet 5 rows do — a brief over-estimate beats
+  //    the dashboard falling off a cliff the day a promo ends. The >272K
+  //    long-context meter (2× input, 1.5× output) is not modelled: aggregated
+  //    rows carry no per-request prompt sizes, matching the `[1m]` handling
+  //    in `resolvePricing` below.
+  "gpt-5.6-sol":        { input: 5,    output: 30,   cacheRead: 0.50,  cacheWrite: 6.25 },
+  "gpt-5.6-terra":      { input: 2,    output: 12,   cacheRead: 0.20,  cacheWrite: 2.50 },
+  "gpt-5.6-luna":       { input: 0.20, output: 1.20, cacheRead: 0.02,  cacheWrite: 0.25 },
   "gpt-5.5":            { input: 5,    output: 30,   cacheRead: 0.50,  cacheWrite: 5 },
   "gpt-5.4-mini":       { input: 0.75, output: 4.50, cacheRead: 0.075, cacheWrite: 0.75 },
   "gpt-5.4":            { input: 2.50, output: 15,   cacheRead: 0.25,  cacheWrite: 2.50 },
@@ -197,17 +213,18 @@ const MODEL_PRICING: Record<
   "gpt-4o":             { input: 2.50, output: 10,   cacheRead: 1.25,  cacheWrite: 2.50 },
 
   // -- DeepSeek (api-docs.deepseek.com/quick_start/pricing).
-  //    The official catalog lists exactly two current SKUs; `deepseek-chat`
-  //    and `deepseek-reasoner` are aliases that route to `deepseek-v4-flash`
-  //    (non-thinking and thinking mode respectively) per the same page.
-  //    `deepseek-v4-pro` is currently under a 75%-off promo that ends
-  //    2026-05-31 15:59 UTC; we price at the post-promo standard rate
-  //    ($1.74/$3.48) so the dashboard does not jump 4× on June 1 — accept
-  //    a brief over-estimate during the promo over a sudden cliff after it. --
-  "deepseek-v4-flash":  { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
-  "deepseek-v4-pro":    { input: 1.74, output: 3.48, cacheRead: 0.0145, cacheWrite: 1.74 },
-  "deepseek-chat":      { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
-  "deepseek-reasoner":  { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
+  //    DeepSeek publishes peak and off-peak rates, but daily aggregate rows
+  //    do not retain request timestamps. Use the undiscounted peak rate so a
+  //    cost estimate never assumes the 50%-off window for traffic that may
+  //    have run at peak. `deepseek-chat` and `deepseek-reasoner` are retained
+  //    for historical usage; both aliases routed to `deepseek-v4-flash`.
+  //    Vision image tokens are converted to regular input tokens by DeepSeek,
+  //    so the vision SKU shares the Flash token rates. --
+  "deepseek-v4-flash":            { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
+  "deepseek-v4-pro":              { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 1.32 },
+  "deepseek-v4-flash-vision-exp": { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
+  "deepseek-chat":                { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
+  "deepseek-reasoner":            { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
 
   // -- Moonshot Kimi (kimi.com/resources/kimi-k2-6-pricing).
   //    Only K2.6 is on the official price sheet today; earlier K2 variants
