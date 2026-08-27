@@ -1,7 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { issueKeys } from "./queries";
-import type { IssueSession, IssueSessionTask, SessionResult } from "../types";
+import type {
+  CreateIssueSessionRequest,
+  IssueSession,
+  IssueSessionTask,
+  SessionResult,
+} from "../types";
 
 // ---------------------------------------------------------------------------
 // Issue sessions — the parallel tracks an issue is worked on in, plus the
@@ -11,7 +16,7 @@ import type { IssueSession, IssueSessionTask, SessionResult } from "../types";
 export function useCreateIssueSession(issueId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ title }: { title: string }) => api.createIssueSession(issueId, title),
+    mutationFn: (input: CreateIssueSessionRequest) => api.createIssueSession(issueId, input),
     onSuccess: (session) => {
       if (!session.id) return;
       qc.setQueryData<IssueSession[]>(issueKeys.sessions(issueId), (old = []) => {

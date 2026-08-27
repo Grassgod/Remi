@@ -89,13 +89,14 @@ export interface RunWorkspaceGcOnceOptions {
   now?: number;
 }
 
-type MultiremiGcKind = "issue" | "chat" | "autopilot_run" | "quick_create";
+type MultiremiGcKind = "issue" | "discussion_issue" | "chat" | "autopilot_run" | "quick_create";
 type MultiremiGcDecision = "clean" | "orphan" | "skip";
 interface MultiremiGcResolution {
   decision: MultiremiGcDecision;
   archive: MultiremiIssueWorkspaceArchiveBinding | null;
 }
 const ISSUE_CLEANED_OUTBOX_DIR = ".gc-cleaned-outbox";
+const DISCUSSION_SESSION_ROOT = ".sessions";
 const GC_RESERVED_ROOTS = new Set([
   ISSUE_CLEANED_OUTBOX_DIR,
   ".repos",
@@ -110,6 +111,7 @@ interface MultiremiGcMeta {
   workspace_id?: string | null;
   task_id?: string | null;
   issue_id?: string | null;
+  issue_session_id?: string | null;
   chat_session_id?: string | null;
   autopilot_run_id?: string | null;
   completed_at?: string | null;
@@ -139,6 +141,23 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
       || GC_RESERVED_ROOTS.has(workspace.name)
     ) continue;
     const workspaceDir = join(root, workspace.name);
+    if (workspace.name === DISCUSSION_SESSION_ROOT) {
+      const issues = safeReadDir(workspaceDir) ?? [];
+      for (const issue of issues) {
+        if (!issue.isDirectory()) continue;
+        const sessions = safeReadDir(join(workspaceDir, issue.name)) ?? [];
+        for (const session of sessions) {
+          if (!session.isDirectory()) continue;
+          await collectWorkspaceGcDecision(
+            root,
+            join(workspaceDir, issue.name, session.name),
+            options,
+            summary,
+          );
+        }
+      }
+      continue;
+    }
     log.debug(`Workspace GC evaluating: ${workspaceDir}`);
     // A corrupt/missing gc.json must not make a v2 Issue workspace look like
     // the legacy <workspace>/<task> layout. Keep the workspace as one GC unit
@@ -171,10 +190,22 @@ async function collectWorkspaceGcDecision(
   options: RunWorkspaceGcOnceOptions,
   summary: MultiremiDaemonGcSummary,
 ): Promise<void> {
-  const issueId = stringField(readGcMeta(workspaceDir)?.issue_id);
-  if (issueId && options.withIssueWorkspaceLock) {
-    await options.withIssueWorkspaceLock(issueId, workspaceDir, async () => {
-      if (stringField(readGcMeta(workspaceDir)?.issue_id) !== issueId) {
+  const meta = readGcMeta(workspaceDir);
+  const issueId = stringField(meta?.issue_id);
+  const issueSessionId = stringField(meta?.issue_session_id);
+  const lifecycleKey = meta?.kind === "discussion_issue" && issueSessionId
+    ? discussionSessionLifecycleKey(issueSessionId)
+    : issueId;
+  if (lifecycleKey && options.withIssueWorkspaceLock) {
+    await options.withIssueWorkspaceLock(lifecycleKey, workspaceDir, async () => {
+      const lockedMeta = readGcMeta(workspaceDir);
+      const lockedLifecycleKey = lockedMeta?.kind === "discussion_issue"
+        ? stringField(lockedMeta.issue_session_id)
+        : stringField(lockedMeta?.issue_id);
+      const expectedLockedKey = lockedMeta?.kind === "discussion_issue" && lockedLifecycleKey
+        ? discussionSessionLifecycleKey(lockedLifecycleKey)
+        : lockedLifecycleKey;
+      if (expectedLockedKey !== lifecycleKey) {
         throw new Error(`Issue workspace ownership changed while waiting for lifecycle lock: ${workspaceDir}`);
       }
       await collectWorkspaceGcDecisionUnlocked(root, workspaceDir, options, summary);
@@ -405,9 +436,41 @@ async function getWorkspaceGcDecision(
   if (meta.local_directory) return gcResolution("skip");
 
   if (meta.kind === "issue") return getIssueGcDecision(meta, taskDir, options, now);
+  if (meta.kind === "discussion_issue") return getDiscussionIssueGcDecision(meta, taskDir, options, now);
   if (meta.kind === "chat") return getChatGcDecision(meta, taskDir, options, now);
   if (meta.kind === "autopilot_run") return getAutopilotRunGcDecision(meta, taskDir, options, now);
   return getTaskGcDecision(meta, taskDir, options, now);
+}
+
+async function getDiscussionIssueGcDecision(
+  meta: MultiremiGcMeta,
+  taskDir: string,
+  options: RunWorkspaceGcOnceOptions,
+  now: number,
+): Promise<MultiremiGcResolution> {
+  const issueId = stringField(meta.issue_id);
+  const issueSessionId = stringField(meta.issue_session_id);
+  if (!issueId || !issueSessionId) {
+    return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
+  }
+  try {
+    const status = await options.client.getIssueGcCheck(issueId);
+    if (isTerminalIssueStatus(status.status) && isOlderThan(status.updated_at, options.ttlMs, now)) {
+      return gcResolution("clean");
+    }
+    return gcResolution("skip");
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
+    }
+    throw error;
+  }
+}
+
+export function discussionSessionLifecycleKey(issueSessionId: string): string {
+  const sessionId = issueSessionId.trim();
+  if (!sessionId) throw new Error("Discussion Session lifecycle lock requires a Session id");
+  return `discussion-session:${sessionId}`;
 }
 
 async function getIssueGcDecision(

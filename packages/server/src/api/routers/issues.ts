@@ -717,7 +717,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const tasks = store.listTasksForIssue(issue.id)
       .filter((task) => isActiveTaskStatus(task.status))
-      .map((task) => taskCompatibilityResponse(task));
+      .map((task) => taskCompatibilityResponse(
+        task,
+        null,
+        task.status === "queued" ? store.getTaskQueueBlocker(task.id) : null,
+      ));
     return c.json({ tasks });
   });
   app.get("/api/issues/:id/task-runs", (c) => {
@@ -726,7 +730,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     return c.json(store.listTasksForIssue(issue.id)
-      .map((task) => taskCompatibilityResponse(task)));
+      .map((task) => taskCompatibilityResponse(
+        task,
+        null,
+        task.status === "queued" ? store.getTaskQueueBlocker(task.id) : null,
+      )));
   });
   app.get("/api/issues/:id/usage", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1145,7 +1153,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     return c.json(store.listTasksForIssue(issue.id)
       .filter((task) => task.issueSessionId === session.id)
-      .map((task) => taskCompatibilityResponse(task)));
+      .map((task) => taskCompatibilityResponse(
+        task,
+        null,
+        task.status === "queued" ? store.getTaskQueueBlocker(task.id) : null,
+      )));
   });
   app.post("/api/issues/:id/sessions/:sessionId/tasks", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");

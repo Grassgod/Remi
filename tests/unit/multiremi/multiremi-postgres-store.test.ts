@@ -147,6 +147,33 @@ function waitForWorkerPhase(worker: Worker, expectedPhase: string): Promise<void
   });
 }
 
+function waitForWorkerMessage<T extends Record<string, unknown>>(
+  worker: Worker,
+  expectedPhase: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (event: MessageEvent<T & { phase?: string; error?: string }>) => {
+      if (event.data.phase === "error") {
+        cleanup();
+        reject(new Error(event.data.error ?? "Postgres race worker failed"));
+      } else if (event.data.phase === expectedPhase) {
+        cleanup();
+        resolve(event.data);
+      }
+    };
+    const onError = (event: ErrorEvent) => {
+      cleanup();
+      reject(event.error ?? new Error(event.message));
+    };
+    const cleanup = () => {
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+    };
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+  });
+}
+
 // Decide skip-vs-run at collection time (top-level await); the throwaway DB and
 // store are built in beforeAll so a probe failure never leaves half-open state.
 const pgAvailable = await probePostgres();
@@ -915,6 +942,81 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(claimed?.agent?.id).toBe(agent.id);
     // Nothing left queued → second claim yields null.
     expect(store.claimTask(runtime.id)).toBeNull();
+  });
+
+  it("grants at most one Issue workspace lease across concurrent claim connections", async () => {
+    const ws = freshWorkspace();
+    const firstRuntime = store.registerRuntime({
+      name: "rt-workspace-lease-a",
+      provider: "claude",
+      workspaceId: ws,
+      maxConcurrency: 2,
+    });
+    const secondRuntime = store.registerRuntime({
+      name: "rt-workspace-lease-b",
+      provider: "claude",
+      workspaceId: ws,
+      maxConcurrency: 2,
+    });
+    const firstAgent = store.createAgent({
+      name: "Workspace lease A",
+      provider: "claude",
+      workspaceId: ws,
+      maxConcurrentTasks: 2,
+    });
+    const secondAgent = store.createAgent({
+      name: "Workspace lease B",
+      provider: "claude",
+      workspaceId: ws,
+      maxConcurrentTasks: 2,
+    });
+    const issue = store.createIssue({ title: "Concurrent workspace lease", workspaceId: ws });
+    const firstSession = store.createIssueSession(issue.id, { title: "Work A" });
+    const secondSession = store.createIssueSession(issue.id, { title: "Work B" });
+    const first = store.createTask({
+      agentId: firstAgent.id,
+      issueId: issue.id,
+      issueSessionId: firstSession.id,
+      priority: 10,
+      prompt: "claim A",
+    });
+    const second = store.createTask({
+      agentId: secondAgent.id,
+      issueId: issue.id,
+      issueSessionId: secondSession.id,
+      prompt: "claim B",
+    });
+
+    const workerUrl = new URL("./fixtures/postgres-workspace-lease-claim-worker.ts", import.meta.url).href;
+    const firstWorker = new Worker(workerUrl);
+    const secondWorker = new Worker(workerUrl);
+    const firstReady = waitForWorkerPhase(firstWorker, "ready");
+    const secondReady = waitForWorkerPhase(secondWorker, "ready");
+    const databaseUrl = `${PG_HOST_URL}/${TEST_DB}`;
+    firstWorker.postMessage({ type: "init", databaseUrl });
+    secondWorker.postMessage({ type: "init", databaseUrl });
+    await Promise.all([firstReady, secondReady]);
+
+    const firstClaim = waitForWorkerMessage<{ taskId: string | null }>(firstWorker, "claimed");
+    const secondClaim = waitForWorkerMessage<{ taskId: string | null }>(secondWorker, "claimed");
+    firstWorker.postMessage({ type: "claim", runtimeId: firstRuntime.id });
+    secondWorker.postMessage({ type: "claim", runtimeId: secondRuntime.id });
+    const claimedIds = (await Promise.all([firstClaim, secondClaim]))
+      .map((result) => result.taskId)
+      .filter((taskId): taskId is string => Boolean(taskId));
+
+    expect(claimedIds).toHaveLength(1);
+    expect([first.id, second.id]).toContain(claimedIds[0]);
+    expect([store.getTask(first.id)?.status, store.getTask(second.id)?.status].sort())
+      .toEqual(["dispatched", "queued"]);
+
+    const firstClosed = waitForWorkerPhase(firstWorker, "closed");
+    const secondClosed = waitForWorkerPhase(secondWorker, "closed");
+    firstWorker.postMessage({ type: "close" });
+    secondWorker.postMessage({ type: "close" });
+    await Promise.all([firstClosed, secondClosed]);
+    firstWorker.terminate();
+    secondWorker.terminate();
   });
 
   it("pool-claims unbound agents' tasks and stamps affinity (chat session + local directory)", () => {

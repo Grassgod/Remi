@@ -105,6 +105,7 @@ export function issueSessionCompatibilityResponse(
     title: session.title,
     status: session.status,
     is_default: session.isDefault,
+    holds_workspace: session.holdsWorkspace,
     summary: session.summary,
     created_by_type: session.createdByType,
     created_by_id: session.createdById,

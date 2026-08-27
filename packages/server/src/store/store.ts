@@ -257,6 +257,7 @@ import type {
   MultiremiSquad,
   MultiremiSquadMember,
   MultiremiTask,
+  MultiremiTaskQueueBlocker,
   MultiremiTaskActivityByHour,
   MultiremiTaskHumanRequest,
   MultiremiTaskMessage,
@@ -2716,6 +2717,10 @@ runMigrations(this.db);
 
   listTasksForIssue(issueId: string): MultiremiTask[] {
     return this.tasks.listTasksForIssue(issueId);
+  }
+
+  getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
+    return this.tasks.getTaskQueueBlocker(taskId);
   }
 
   createProject(input: CreateProjectInput, writeContext: ProjectInstructionsWriteContext = {}): MultiremiProject {

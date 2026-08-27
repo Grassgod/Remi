@@ -686,6 +686,7 @@ export function runMigrations(db: SqlDatabase): void {
       title TEXT NOT NULL DEFAULT 'Main',
       status TEXT NOT NULL DEFAULT 'active',
       is_default INTEGER NOT NULL DEFAULT 0,
+      holds_workspace INTEGER NOT NULL DEFAULT 1,
       summary TEXT,
       created_by_type TEXT NOT NULL DEFAULT 'member',
       created_by_id TEXT,
@@ -1615,6 +1616,7 @@ export function runMigrations(db: SqlDatabase): void {
       issue_id TEXT,
       issue_session_id TEXT,
       issue_session_generation INTEGER,
+      holds_workspace INTEGER NOT NULL DEFAULT 1,
       chat_session_id TEXT,
       trigger_comment_id TEXT,
       trigger_summary TEXT,
@@ -1949,6 +1951,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_type TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "issue_session_id TEXT");
+  // Existing Sessions and Tasks keep the historical Issue-wide workspace
+  // lease. New discussion Sessions must opt out explicitly.
+  addColumnIfMissing(db, "multiremi_issue_sessions", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   // Agent auto-reply comments point back at the run that produced them, so the
   // chat stream can open that task's transcript. Forward-only: no backfill.
   addColumnIfMissing(db, "multiremi_issue_comments", "task_id TEXT");
@@ -1978,6 +1983,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_generation INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_source_event_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
