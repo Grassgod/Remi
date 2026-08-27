@@ -3038,9 +3038,9 @@
       "migration_status": "native"
     },
     "issue.attachment.download": {
-      "command": "remi issue attachment download",
+      "command": "remi attachment download",
       "aliases": [
-        "remi attachment download"
+        "remi issue attachment download"
       ],
       "auth": [
         "human",
@@ -7740,10 +7740,10 @@
       "replacement": "remi session archive retry",
       "hidden": false
     },
-    "remi attachment download": {
+    "remi issue attachment download": {
       "command": "issue.attachment.download",
       "deprecated_since": "0.3.0",
-      "replacement": "remi issue attachment download",
+      "replacement": "remi attachment download",
       "hidden": false
     },
     "remi task messages": {

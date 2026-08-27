@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import {
   isSessionArchiveRetryExhausted,
@@ -19,6 +20,7 @@ const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4"
 const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_policy";
 const TASK_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_task_issue_proposal_policy";
 const AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_autopilot_issue_proposal_policy";
+const MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION = "20260827_markdown_attachment_ownership";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -2184,6 +2186,7 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, FEISHU_INGEST_V2_MIGRATION, () => ensureFeishuIngestV2Schema(db));
   runMigrationOnce(db, FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION, () => ensureFeishuIngestAlertDeliveryV3Schema(db));
   runMigrationOnce(db, FEISHU_ISSUE_PROPOSALS_V4_MIGRATION, () => ensureFeishuIssueProposalsV4Schema(db));
+  runMigrationOnce(db, MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION, () => backfillMarkdownAttachmentOwnership(db));
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_autopilots", "session_policy TEXT NOT NULL DEFAULT 'new'");
@@ -2669,6 +2672,38 @@ function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): voi
     if (claimed !== 1) return;
     migrate();
   })();
+}
+
+function backfillMarkdownAttachmentOwnership(db: SqlDatabase): void {
+  const comments = db.query(
+    `SELECT id, issue_id, body FROM multiremi_issue_comments
+     WHERE body LIKE '%/api/attachments/att_%/%'
+     ORDER BY created_at ASC, id ASC`,
+  ).all() as Array<{ id: string; issue_id: string; body: string }>;
+  for (const comment of comments) {
+    for (const attachmentId of attachmentIdsFromText(comment.body)) {
+      db.run(
+        `UPDATE multiremi_attachments
+         SET issue_id = ?, comment_id = ?
+         WHERE id = ? AND issue_id IS NULL AND comment_id IS NULL`,
+        [comment.issue_id, comment.id, attachmentId],
+      );
+    }
+  }
+
+  const issues = db.query(
+    `SELECT id, description FROM multiremi_issues
+     WHERE description LIKE '%/api/attachments/att_%/%'
+     ORDER BY created_at ASC, id ASC`,
+  ).all() as Array<{ id: string; description: string }>;
+  for (const issue of issues) {
+    for (const attachmentId of attachmentIdsFromText(issue.description)) {
+      db.run(
+        "UPDATE multiremi_attachments SET issue_id = ? WHERE id = ? AND issue_id IS NULL",
+        [issue.id, attachmentId],
+      );
+    }
+  }
 }
 
 function ensureIssueSubscriberTypedSchema(db: SqlDatabase): void {

@@ -266,7 +266,8 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(prompt).toContain("Likes concrete dates and verification output.");
     expect(prompt).toContain("## Chat Message");
     expect(prompt).toContain("Check Shanghai weather\n\nand Qingdao too");
-    expect(prompt).toContain("att_1 - forecast.txt (text/plain)");
+    expect(prompt).toContain("- id: att_1; filename: forecast.txt; content-type: text/plain; size: unavailable");
+    expect(prompt).toContain("remi attachment download att_1 --output-dir <dir>");
     expect(prompt).toContain("## Autopilot Context");
     expect(prompt).toContain("Title: Webhook triage");
     expect(prompt).toContain("Source: webhook");

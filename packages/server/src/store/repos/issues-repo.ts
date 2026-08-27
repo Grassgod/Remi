@@ -20,6 +20,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { INBOX_LEDGER_TYPES } from "@multiremi/contracts";
+import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import type {
   AssignIssueInput,
   AssignIssueResult,
@@ -206,6 +207,7 @@ export class IssuesRepo {
         now,
       ],
     );
+    this.linkReferencedAttachmentsToIssue(id, input.description);
     if (projectId) {
       this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
     }
@@ -938,6 +940,7 @@ export class IssuesRepo {
         ],
       );
       const next = this.getIssue(id)!;
+      this.linkReferencedAttachmentsToIssue(id, next.description);
       this.ctx.autopilots().enqueueIssueStatusChangedEvent({
         issue: next,
         previousStatus: current.status,
@@ -1384,6 +1387,7 @@ export class IssuesRepo {
     );
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
+    this.linkReferencedAttachmentsToComment(id, issueId, body);
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     if (parentId) this.unresolveThreadRoot(parentId);
     if (authorType === "agent" && input.authorId) {
@@ -1528,6 +1532,7 @@ export class IssuesRepo {
     );
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, current.issueId, attachmentIds);
+    this.linkReferencedAttachmentsToComment(id, current.issueId, body);
     if (current.body !== body) this.cancelTasksByTriggerComments(current.issueId, [id]);
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId && current.body !== body) {
@@ -2310,6 +2315,24 @@ export class IssuesRepo {
         [issueId, issue.workspaceId, attachmentId],
       );
     }
+  }
+
+  private linkReferencedAttachmentsToIssue(issueId: string, text: string | null | undefined): void {
+    const attachmentIds = attachmentIdsFromText(text).filter((attachmentId) => {
+      const attachment = this.getAttachment(attachmentId);
+      return attachment !== null && (attachment.issueId === null || attachment.issueId === issueId);
+    });
+    if (attachmentIds.length) this.linkAttachmentsToIssue(issueId, attachmentIds);
+  }
+
+  private linkReferencedAttachmentsToComment(commentId: string, issueId: string, text: string): void {
+    const attachmentIds = attachmentIdsFromText(text).filter((attachmentId) => {
+      const attachment = this.getAttachment(attachmentId);
+      return attachment !== null
+        && attachment.commentId === null
+        && (attachment.issueId === null || attachment.issueId === issueId);
+    });
+    if (attachmentIds.length) this.linkAttachmentsToComment(commentId, issueId, attachmentIds);
   }
 
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void {

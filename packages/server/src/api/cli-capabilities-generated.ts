@@ -2175,7 +2175,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
       ]
     },
     "issue.attachment.download": {
-      "command": "remi issue attachment download",
+      "command": "remi attachment download",
       "auth": [
         "human",
         "task"

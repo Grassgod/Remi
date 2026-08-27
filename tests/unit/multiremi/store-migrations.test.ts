@@ -127,6 +127,75 @@ describe("store migrations", () => {
     ]));
   });
 
+  it("backfills orphan attachments referenced by existing issue and comment Markdown", () => {
+    const database = freshDb();
+    migrate(database);
+    const timestamp = "2026-08-27T00:00:00.000Z";
+    database.run(
+      `INSERT INTO multiremi_issues (id, issue_number, issue_key, title, description, created_at, updated_at)
+       VALUES (?, 1, 'MUL-1', 'Attachment backfill', ?, ?, ?)`,
+      [
+        "iss_attachment_backfill",
+        "![issue](/api/attachments/att_orphan_issue/content)",
+        timestamp,
+        timestamp,
+      ],
+    );
+    database.run(
+      `INSERT INTO multiremi_issues (id, issue_number, issue_key, title, created_at, updated_at)
+       VALUES ('iss_other', 2, 'MUL-2', 'Already bound elsewhere', ?, ?)`,
+      [timestamp, timestamp],
+    );
+    database.run(
+      `INSERT INTO multiremi_issue_comments (id, issue_id, body, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        "cmt_attachment_backfill",
+        "iss_attachment_backfill",
+        "![comment](/api/attachments/att_orphan_comment/content)",
+        timestamp,
+        timestamp,
+      ],
+    );
+    for (const id of ["att_orphan_issue", "att_orphan_comment", "att_already_bound"]) {
+      database.run(
+        `INSERT INTO multiremi_attachments (
+           id, workspace_id, issue_id, uploader_id, filename, url, content_type, size_bytes, created_at
+         ) VALUES (?, 'local', ?, 'local', ?, ?, 'image/png', 10, ?)`,
+        [
+          id,
+          id === "att_already_bound" ? "iss_other" : null,
+          `${id}.png`,
+          `/api/attachments/${id}/content`,
+          timestamp,
+        ],
+      );
+    }
+    database.run(
+      `UPDATE multiremi_issues
+       SET description = description || '\n![bound](/api/attachments/att_already_bound/content)'
+       WHERE id = 'iss_attachment_backfill'`,
+    );
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = '20260827_markdown_attachment_ownership'",
+    );
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT issue_id, comment_id FROM multiremi_attachments WHERE id = 'att_orphan_issue'",
+    ).get()).toEqual({ issue_id: "iss_attachment_backfill", comment_id: null });
+    expect(database.query(
+      "SELECT issue_id, comment_id FROM multiremi_attachments WHERE id = 'att_orphan_comment'",
+    ).get()).toEqual({ issue_id: "iss_attachment_backfill", comment_id: "cmt_attachment_backfill" });
+    expect(database.query(
+      "SELECT issue_id, comment_id FROM multiremi_attachments WHERE id = 'att_already_bound'",
+    ).get()).toEqual({ issue_id: "iss_other", comment_id: null });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260827_markdown_attachment_ownership'",
+    ).get()).toEqual({ count: 1 });
+  });
+
   it("adds the automatic update schedule to a legacy platform state table", () => {
     const database = freshDb();
     database.exec(`
