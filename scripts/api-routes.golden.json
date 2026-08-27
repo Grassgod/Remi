@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 617,
+    "routeCount": 636,
     "routeCountByPrefix": {
-      "native": 202,
-      "compat": 402,
+      "native": 204,
+      "compat": 419,
       "root": 13
     },
-    "getRoutes": 265,
-    "getRoutesWithBody": 262,
+    "getRoutes": 273,
+    "getRoutesWithBody": 270,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 352,
-    "mutationRoutesCovered": 272,
+    "mutationRoutes": 363,
+    "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -119,6 +119,7 @@
     "DELETE /api/workspaces/:id/members/:memberId",
     "DELETE /api/workspaces/:id/repos/:repositoryId",
     "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "DELETE /api/workspaces/:id/runtime-provisions/:provisionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -167,6 +168,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
@@ -303,6 +305,7 @@
     "GET /api/multiremi/tasks",
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
+    "GET /api/multiremi/tasks/:id/inspection",
     "GET /api/multiremi/tasks/:id/messages",
     "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
@@ -326,6 +329,7 @@
     "GET /api/runtimes",
     "GET /api/runtimes/:id",
     "GET /api/runtimes/:id/activity",
+    "GET /api/runtimes/:id/commands/:requestId",
     "GET /api/runtimes/:id/directory-scans/:requestId",
     "GET /api/runtimes/:id/local-skills/:requestId",
     "GET /api/runtimes/:id/local-skills/import/:requestId",
@@ -348,6 +352,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
@@ -360,6 +365,7 @@
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/organizer",
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
@@ -369,6 +375,9 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/repository-wikis/atlas",
+    "GET /api/workspaces/:id/runtime-provisions",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/feishu/messages",
@@ -416,6 +425,7 @@
     "PATCH /api/workspaces/:id",
     "PATCH /api/workspaces/:id/members/:memberId",
     "PATCH /api/workspaces/:id/repos/:repositoryId",
+    "PATCH /api/workspaces/:id/runtime-provisions/:provisionId",
     "PATCH /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "POST /api/agents",
@@ -449,9 +459,12 @@
     "POST /api/daemon/issues/:issueId/workspace/cleaned",
     "POST /api/daemon/register",
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
+    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+    "POST /api/daemon/runtimes/:runtimeId/commands/claim",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
+    "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
@@ -580,6 +593,7 @@
     "POST /api/multiremi/tasks",
     "POST /api/multiremi/tasks/:id/cancel",
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/multiremi/tasks/:id/redispatch",
     "POST /api/multiremi/tasks/:id/steer",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
@@ -597,6 +611,7 @@
     "POST /api/projects/:id/resources",
     "POST /api/projects/:id/restore",
     "POST /api/runtimes/:id/archive-agents-and-delete",
+    "POST /api/runtimes/:id/commands",
     "POST /api/runtimes/:id/directory-scans",
     "POST /api/runtimes/:id/local-skills",
     "POST /api/runtimes/:id/local-skills/import",
@@ -608,6 +623,7 @@
     "POST /api/squads/:id/members",
     "POST /api/tasks/:id/cancel",
     "POST /api/tasks/:id/human-requests/:requestId/respond",
+    "POST /api/tasks/:id/redispatch",
     "POST /api/tasks/:id/steer",
     "POST /api/tokens",
     "POST /api/tokens/current/renew",
@@ -625,6 +641,7 @@
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/inspect",
     "POST /api/workspaces/:id/repository-wikis/atlas",
+    "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue",
@@ -645,6 +662,7 @@
     "PUT /api/agents/:id",
     "PUT /api/agents/:id/env",
     "PUT /api/agents/:id/skills",
+    "PUT /api/agents/:id/supervisor",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
@@ -673,6 +691,7 @@
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/env",
     "PUT /api/workspaces/:id/issue-archive",
+    "PUT /api/workspaces/:id/organizer",
     "PUT /api/workspaces/:id/prompts",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery",
@@ -778,6 +797,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
@@ -914,6 +934,7 @@
     "GET /api/multiremi/tasks",
     "GET /api/multiremi/tasks/:id",
     "GET /api/multiremi/tasks/:id/human-requests",
+    "GET /api/multiremi/tasks/:id/inspection",
     "GET /api/multiremi/tasks/:id/messages",
     "GET /api/multiremi/tasks/:id/steer",
     "GET /api/multiremi/tokens",
@@ -937,6 +958,7 @@
     "GET /api/runtimes",
     "GET /api/runtimes/:id",
     "GET /api/runtimes/:id/activity",
+    "GET /api/runtimes/:id/commands/:requestId",
     "GET /api/runtimes/:id/directory-scans/:requestId",
     "GET /api/runtimes/:id/local-skills/:requestId",
     "GET /api/runtimes/:id/local-skills/import/:requestId",
@@ -959,6 +981,7 @@
     "GET /api/squads/:id/members",
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
+    "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
@@ -971,6 +994,7 @@
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
+    "GET /api/workspaces/:id/organizer",
     "GET /api/workspaces/:id/prompt-template",
     "GET /api/workspaces/:id/prompts",
     "GET /api/workspaces/:id/relay-config",
@@ -980,6 +1004,9 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
     "GET /api/workspaces/:id/repository-wikis/atlas",
+    "GET /api/workspaces/:id/runtime-provisions",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+    "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
     "GET /api/workspaces/:workspaceId/feishu/messages",
@@ -1051,6 +1078,8 @@
     "POST /api/daemon/deregister",
     "POST /api/daemon/heartbeat",
     "POST /api/daemon/register",
+    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+    "POST /api/daemon/runtimes/:runtimeId/commands/claim",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
@@ -1164,6 +1193,7 @@
     "POST /api/projects/:id/docs",
     "POST /api/projects/:id/resources",
     "POST /api/runtimes/:id/archive-agents-and-delete",
+    "POST /api/runtimes/:id/commands",
     "POST /api/runtimes/:id/directory-scans",
     "POST /api/runtimes/:id/local-skills",
     "POST /api/runtimes/:id/local-skills/import",
@@ -1248,6 +1278,7 @@
         "model": "",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "supervisor": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1283,6 +1314,7 @@
         "model": "claude-opus-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "supervisor": false,
         "owner_id": "local",
         "skills": [],
         "created_at": "<timestamp>",
@@ -1375,6 +1407,7 @@
         "model": "claude-opus-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1416,6 +1449,7 @@
         "model": "claude-opus-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -1458,6 +1492,7 @@
           "model": "",
           "thinking_level": "",
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "owner_id": "local",
           "skills": [],
           "created_at": "<timestamp>",
@@ -1503,6 +1538,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1570,6 +1606,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1643,6 +1680,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1683,6 +1721,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -1758,6 +1797,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -2799,6 +2839,8 @@
           "issue_session_id": null,
           "issueSessionGeneration": null,
           "issue_session_generation": null,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": "cht_snapshot",
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -3067,7 +3109,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600239",
+        "order_id": "local-1767225600247",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -3551,7 +3593,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "6c2d3bd5ff4cc2e691359691dea5e80078940f283928480e0e687b7546f905d5",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -3664,6 +3706,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -3719,6 +3763,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_snapshot",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
           "priority": 0,
@@ -3823,6 +3868,8 @@
             "status": "active",
             "isDefault": true,
             "is_default": true,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "summary": null,
             "createdByType": "member",
             "created_by_type": "member",
@@ -3925,6 +3972,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
           "priority": 0,
@@ -3992,6 +4040,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_i244sp2mewms",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
           "priority": 0,
@@ -4080,6 +4129,8 @@
             "status": "active",
             "isDefault": true,
             "is_default": true,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "summary": null,
             "createdByType": "member",
             "created_by_type": "member",
@@ -4177,6 +4228,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_8rcx9z88woyu",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
           "priority": 0,
@@ -4265,6 +4317,8 @@
             "status": "active",
             "isDefault": true,
             "is_default": true,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "summary": null,
             "createdByType": "member",
             "created_by_type": "member",
@@ -4591,6 +4645,7 @@
         "agent_id": "agt_snapshot",
         "runtime_id": "rt_snapshot",
         "issue_id": "iss_snapshot",
+        "holds_workspace": true,
         "workspace_id": "local",
         "status": "queued",
         "priority": 0,
@@ -4620,6 +4675,7 @@
         "agent_id": "agt_snapshot",
         "runtime_id": "rt_snapshot",
         "issue_id": "iss_snapshot",
+        "holds_workspace": true,
         "workspace_id": "local",
         "status": "completed",
         "priority": 0,
@@ -4721,6 +4777,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_snapshot",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
           "priority": 0,
@@ -4825,6 +4882,8 @@
             "status": "active",
             "isDefault": true,
             "is_default": true,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "summary": null,
             "createdByType": "member",
             "created_by_type": "member",
@@ -5042,7 +5101,25 @@
       }
     },
     {
-      "key": "daemon#014 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
+      "key": "daemon#014 POST /api/daemon/runtimes/:runtimeId/commands/claim",
+      "route": "POST /api/daemon/runtimes/:runtimeId/commands/claim",
+      "path": "/api/daemon/runtimes/rt_snapshot/commands/claim",
+      "status": 200,
+      "body": {
+        "request": null
+      }
+    },
+    {
+      "key": "daemon#015 POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+      "route": "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/commands/rcm_snapshot/result",
+      "status": 200,
+      "body": {
+        "status": "ok"
+      }
+    },
+    {
+      "key": "daemon#016 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "route": "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "path": "/api/daemon/runtimes/rt_snapshot/recover-orphans",
       "status": 200,
@@ -5052,7 +5129,7 @@
       }
     },
     {
-      "key": "daemon#015 POST /api/daemon/deregister",
+      "key": "daemon#017 POST /api/daemon/deregister",
       "route": "POST /api/daemon/deregister",
       "path": "/api/daemon/deregister",
       "status": 200,
@@ -5123,6 +5200,8 @@
           "issue_session_id": "ises_gbmah1mhgwob",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": "run_u4c9m3gewz2d",
           "triggerCommentId": null,
@@ -5180,6 +5259,8 @@
           "issue_session_id": "ises_j3m15clzy3p6",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": "run_sv8e5p1ut6x0",
           "triggerCommentId": null,
@@ -5237,6 +5318,8 @@
           "issue_session_id": null,
           "issueSessionGeneration": null,
           "issue_session_generation": null,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": "cht_snapshot",
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -5294,6 +5377,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -5351,6 +5436,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -5852,6 +5939,7 @@
           "model": "claude-sonnet-4",
           "thinking_level": "",
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "owner_id": "local",
           "skills": [
             {
@@ -5894,6 +5982,7 @@
         "model": "claude-sonnet-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "supervisor": false,
         "owner_id": "local",
         "skills": [
           {
@@ -5959,6 +6048,8 @@
           "issue_session_id": "ises_gbmah1mhgwob",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": "run_u4c9m3gewz2d",
           "triggerCommentId": null,
@@ -6016,6 +6107,8 @@
           "issue_session_id": "ises_j3m15clzy3p6",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": "run_sv8e5p1ut6x0",
           "triggerCommentId": null,
@@ -6073,6 +6166,8 @@
           "issue_session_id": null,
           "issueSessionGeneration": null,
           "issue_session_generation": null,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": "cht_snapshot",
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -6130,6 +6225,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -6187,6 +6284,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -6875,6 +6974,17 @@
             "id": "agent.skill.set",
             "command": "remi agent skill set",
             "capability": "agent.skill.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.supervisor.set",
+            "command": "remi agent supervisor set",
+            "capability": "agent.supervisor.set",
             "outputs": [
               "table",
               "json",
@@ -9556,6 +9666,17 @@
             "allowed": true
           },
           {
+            "id": "runtime.command.run",
+            "command": "remi runtime command run",
+            "capability": "runtime.command.run",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "runtime.create",
             "command": "remi runtime create",
             "capability": "runtime.create",
@@ -10469,6 +10590,17 @@
             "allowed": true
           },
           {
+            "id": "task.inspect",
+            "command": "remi task inspect",
+            "capability": "task.inspect",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "task.list",
             "command": "remi task list",
             "capability": "task.list",
@@ -10511,6 +10643,17 @@
               "jsonl"
             ],
             "allowed": true
+          },
+          {
+            "id": "task.redispatch",
+            "command": "remi task redispatch",
+            "capability": "task.redispatch",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": false
           },
           {
             "id": "task.request.list",
@@ -10931,6 +11074,28 @@
             "allowed": true
           },
           {
+            "id": "workspace.organizer.get",
+            "command": "remi workspace organizer get",
+            "capability": "workspace.organizer.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.organizer.update",
+            "command": "remi workspace organizer update",
+            "capability": "workspace.organizer.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.prompt.get",
             "command": "remi workspace prompt get",
             "capability": "workspace.prompt.get",
@@ -11000,6 +11165,72 @@
             "id": "workspace.relay.update",
             "command": "remi workspace relay update",
             "capability": "workspace.relay.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.create",
+            "command": "remi workspace runtime-provision create",
+            "capability": "workspace.runtime-provision.create",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.delete",
+            "command": "remi workspace runtime-provision delete",
+            "capability": "workspace.runtime-provision.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.get",
+            "command": "remi workspace runtime-provision get",
+            "capability": "workspace.runtime-provision.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.list",
+            "command": "remi workspace runtime-provision list",
+            "capability": "workspace.runtime-provision.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.states",
+            "command": "remi workspace runtime-provision states",
+            "capability": "workspace.runtime-provision.states",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.runtime-provision.update",
+            "command": "remi workspace runtime-provision update",
+            "capability": "workspace.runtime-provision.update",
             "outputs": [
               "table",
               "json",
@@ -11338,6 +11569,15 @@
       }
     },
     {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "route": "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "path": "/api/daemon/runtimes/rt_snapshot/issues/iss_snapshot/session-archives/sar_snapshot/content",
+      "status": 405,
+      "body": {
+        "error": "method not allowed"
+      }
+    },
+    {
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
       "route": "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
       "path": "/api/daemon/runtimes/rt_snapshot/issues/iss_snapshot/session-archives/status",
@@ -11357,6 +11597,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_snapshot",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
           "priority": 0,
@@ -11383,6 +11624,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
           "priority": 0,
@@ -11402,6 +11644,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_i244sp2mewms",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
           "priority": 0,
@@ -11423,6 +11666,7 @@
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_8rcx9z88woyu",
+          "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
           "priority": 0,
@@ -11956,6 +12200,8 @@
             "issue_session_id": "ises_cdyoy133keds",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
             "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -12290,6 +12536,7 @@
           "title": "Main",
           "status": "active",
           "is_default": true,
+          "holds_workspace": true,
           "summary": null,
           "created_by_type": "member",
           "created_by_id": "mem_snapshot_one",
@@ -12325,6 +12572,7 @@
           "title": "Snapshot session",
           "status": "active",
           "is_default": false,
+          "holds_workspace": true,
           "summary": null,
           "created_by_type": "member",
           "created_by_id": "mem_snapshot_one",
@@ -12367,6 +12615,7 @@
         "title": "Snapshot session",
         "status": "active",
         "is_default": false,
+        "holds_workspace": true,
         "summary": null,
         "created_by_type": "member",
         "created_by_id": "mem_snapshot_one",
@@ -12529,6 +12778,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -12609,6 +12860,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -13414,6 +13667,8 @@
             "issue_session_id": "ises_gbmah1mhgwob",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": "run_u4c9m3gewz2d",
             "triggerCommentId": null,
@@ -13471,6 +13726,8 @@
             "issue_session_id": "ises_j3m15clzy3p6",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": "run_sv8e5p1ut6x0",
             "triggerCommentId": null,
@@ -13528,6 +13785,8 @@
             "issue_session_id": null,
             "issueSessionGeneration": null,
             "issue_session_generation": null,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": "cht_snapshot",
             "autopilotRunId": null,
             "triggerCommentId": null,
@@ -13585,6 +13844,8 @@
             "issue_session_id": "ises_cdyoy133keds",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
             "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -13642,6 +13903,8 @@
             "issue_session_id": "ises_cdyoy133keds",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
             "triggerCommentId": null,
@@ -14184,6 +14447,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -14252,6 +14516,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
@@ -14324,6 +14589,8 @@
             "issue_session_id": "ises_gbmah1mhgwob",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": "run_u4c9m3gewz2d",
             "triggerCommentId": null,
@@ -14381,6 +14648,8 @@
             "issue_session_id": "ises_j3m15clzy3p6",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": "run_sv8e5p1ut6x0",
             "triggerCommentId": null,
@@ -14438,6 +14707,8 @@
             "issue_session_id": null,
             "issueSessionGeneration": null,
             "issue_session_generation": null,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": "cht_snapshot",
             "autopilotRunId": null,
             "triggerCommentId": null,
@@ -14495,6 +14766,8 @@
             "issue_session_id": "ises_cdyoy133keds",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
             "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -14552,6 +14825,8 @@
             "issue_session_id": "ises_cdyoy133keds",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
             "triggerCommentId": null,
@@ -15180,7 +15455,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "6c2d3bd5ff4cc2e691359691dea5e80078940f283928480e0e687b7546f905d5",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -15618,6 +15893,8 @@
               "issue_session_id": "ises_cdyoy133keds",
               "issueSessionGeneration": 1,
               "issue_session_generation": 1,
+              "holdsWorkspace": true,
+              "holds_workspace": true,
               "chatSessionId": null,
               "autopilotRunId": null,
               "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -15675,6 +15952,8 @@
               "issue_session_id": "ises_cdyoy133keds",
               "issueSessionGeneration": 1,
               "issue_session_generation": 1,
+              "holdsWorkspace": true,
+              "holds_workspace": true,
               "chatSessionId": null,
               "autopilotRunId": null,
               "triggerCommentId": null,
@@ -17766,6 +18045,8 @@
             "issue_session_id": "ises_gbmah1mhgwob",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": "run_u4c9m3gewz2d",
             "triggerCommentId": null,
@@ -17823,6 +18104,8 @@
             "issue_session_id": "ises_j3m15clzy3p6",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": "run_sv8e5p1ut6x0",
             "triggerCommentId": null,
@@ -17880,6 +18163,8 @@
             "issue_session_id": null,
             "issueSessionGeneration": null,
             "issue_session_generation": null,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": "cht_snapshot",
             "autopilotRunId": null,
             "triggerCommentId": null,
@@ -17937,6 +18222,8 @@
             "issue_session_id": "ises_cdyoy133keds",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
             "triggerCommentId": "cmt_xgqkr5l2r04q",
@@ -17994,6 +18281,8 @@
             "issue_session_id": "ises_cdyoy133keds",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
+            "holdsWorkspace": true,
+            "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
             "triggerCommentId": null,
@@ -18070,6 +18359,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -18176,6 +18467,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -18309,6 +18601,74 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/tasks/:id/inspection",
+      "route": "GET /api/multiremi/tasks/:id/inspection",
+      "path": "/api/multiremi/tasks/tsk_snapshot/inspection",
+      "status": 200,
+      "body": {
+        "inspection": {
+          "id": "tsk_snapshot",
+          "status": "completed",
+          "agent_id": "agt_snapshot",
+          "issue_id": "iss_snapshot",
+          "runtime_id": "rt_snapshot",
+          "progress_summary": "Waiting for permission approval",
+          "progress_step": 1,
+          "progress_total": 2,
+          "failure_reason": null,
+          "wait_reason": null,
+          "created_at": "<timestamp>",
+          "started_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "completed_at": "<timestamp>",
+          "dispatched_at": "<timestamp>",
+          "failed_at": null,
+          "cancelled_at": null,
+          "last_message": {
+            "seq": 1,
+            "created_at": "<timestamp>"
+          },
+          "message_type_histogram": [
+            {
+              "type": "assistant",
+              "tool": null,
+              "count": 1
+            }
+          ],
+          "human_requests": {
+            "counts": {
+              "pending": 1,
+              "responded": 0,
+              "timeout": 0,
+              "cancelled": 0
+            },
+            "latest": {
+              "kind": "permission",
+              "status": "pending",
+              "created_at": "<timestamp>",
+              "responded_at": null
+            }
+          },
+          "runtime": {
+            "id": "rt_snapshot",
+            "status": "online",
+            "online": true,
+            "last_heartbeat_at": "<timestamp>"
+          },
+          "agent": {
+            "id": "agt_snapshot",
+            "name": "Snapshot Agent",
+            "supervisor": false
+          },
+          "issue": {
+            "id": "iss_snapshot",
+            "key": "MUL-1",
+            "status": "todo"
+          }
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/tasks/:id/messages",
       "route": "GET /api/multiremi/tasks/:id/messages",
       "path": "/api/multiremi/tasks/tsk_snapshot/messages",
@@ -18358,6 +18718,7 @@
             "name": "Snapshot token",
             "type": "pat",
             "purpose": "personal",
+            "scopes": [],
             "tokenPrefix": "mul_00000000",
             "lastUsedAt": null,
             "expiresAt": null,
@@ -18836,6 +19197,37 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/runtimes/:id/commands/:requestId",
+      "route": "GET /api/runtimes/:id/commands/:requestId",
+      "path": "/api/runtimes/rt_snapshot/commands/rcm_snapshot",
+      "status": 200,
+      "body": {
+        "id": "rcm_snapshot",
+        "runtimeId": "rt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "command": "printf snapshot",
+        "args": [],
+        "timeoutMs": 1000,
+        "timeout_ms": 0,
+        "createdBy": "local",
+        "created_by": "local",
+        "status": "running",
+        "exitCode": null,
+        "exit_code": null,
+        "stdout": null,
+        "stderr": null,
+        "durationMs": null,
+        "duration_ms": null,
+        "error": null,
+        "runStartedAt": "<timestamp>",
+        "run_started_at": "<timestamp>",
+        "createdAt": "<timestamp>",
+        "created_at": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "updated_at": "<timestamp>"
+      }
+    },
+    {
       "key": "get-sweep GET /api/runtimes/:id/directory-scans/:requestId",
       "route": "GET /api/runtimes/:id/directory-scans/:requestId",
       "path": "/api/runtimes/rt_snapshot/directory-scans/rds_xtp8jpp4a7us",
@@ -18958,7 +19350,8 @@
           "input_tokens": 10,
           "output_tokens": 5,
           "cache_read_tokens": 0,
-          "cache_write_tokens": 0
+          "cache_write_tokens": 0,
+          "total_tokens": 0
         }
       ]
     },
@@ -18975,6 +19368,7 @@
           "output_tokens": 5,
           "cache_read_tokens": 0,
           "cache_write_tokens": 0,
+          "total_tokens": 0,
           "task_count": 1
         }
       ]
@@ -19318,6 +19712,74 @@
       }
     },
     {
+      "key": "get-sweep GET /api/tasks/:id/inspection",
+      "route": "GET /api/tasks/:id/inspection",
+      "path": "/api/tasks/tsk_snapshot/inspection",
+      "status": 200,
+      "body": {
+        "inspection": {
+          "id": "tsk_snapshot",
+          "status": "completed",
+          "agent_id": "agt_snapshot",
+          "issue_id": "iss_snapshot",
+          "runtime_id": "rt_snapshot",
+          "progress_summary": "Waiting for permission approval",
+          "progress_step": 1,
+          "progress_total": 2,
+          "failure_reason": null,
+          "wait_reason": null,
+          "created_at": "<timestamp>",
+          "started_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "completed_at": "<timestamp>",
+          "dispatched_at": "<timestamp>",
+          "failed_at": null,
+          "cancelled_at": null,
+          "last_message": {
+            "seq": 1,
+            "created_at": "<timestamp>"
+          },
+          "message_type_histogram": [
+            {
+              "type": "assistant",
+              "tool": null,
+              "count": 1
+            }
+          ],
+          "human_requests": {
+            "counts": {
+              "pending": 1,
+              "responded": 0,
+              "timeout": 0,
+              "cancelled": 0
+            },
+            "latest": {
+              "kind": "permission",
+              "status": "pending",
+              "created_at": "<timestamp>",
+              "responded_at": null
+            }
+          },
+          "runtime": {
+            "id": "rt_snapshot",
+            "status": "online",
+            "online": true,
+            "last_heartbeat_at": "<timestamp>"
+          },
+          "agent": {
+            "id": "agt_snapshot",
+            "name": "Snapshot Agent",
+            "supervisor": false
+          },
+          "issue": {
+            "id": "iss_snapshot",
+            "key": "MUL-1",
+            "status": "todo"
+          }
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/tasks/:id/steer",
       "route": "GET /api/tasks/:id/steer",
       "path": "/api/tasks/tsk_snapshot/steer",
@@ -19585,6 +20047,16 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/workspaces/:id/organizer",
+      "route": "GET /api/workspaces/:id/organizer",
+      "path": "/api/workspaces/local/organizer",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "mode": "report_only"
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:id/prompt-template",
       "route": "GET /api/workspaces/:id/prompt-template",
       "path": "/api/workspaces/local/prompt-template",
@@ -19773,6 +20245,77 @@
         "repository_trigger_id": null,
         "project_autopilot_id": null,
         "project_trigger_id": null
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions",
+      "route": "GET /api/workspaces/:id/runtime-provisions",
+      "path": "/api/workspaces/local/runtime-provisions",
+      "status": 200,
+      "body": {
+        "provisions": [
+          {
+            "id": "prov_snapshot",
+            "workspace_id": "local",
+            "kind": "command",
+            "enabled": false,
+            "package": null,
+            "version": null,
+            "version_check": false,
+            "bin": null,
+            "registry": null,
+            "command": "printf provision-snapshot",
+            "args": [],
+            "trigger_kinds": [],
+            "cron_expression": null,
+            "timezone": "UTC",
+            "next_run_at": null,
+            "last_fired_at": null,
+            "timeout_ms": 0,
+            "created_by": "local",
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>"
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions/:provisionId",
+      "route": "GET /api/workspaces/:id/runtime-provisions/:provisionId",
+      "path": "/api/workspaces/local/runtime-provisions/prov_snapshot",
+      "status": 200,
+      "body": {
+        "provision": {
+          "id": "prov_snapshot",
+          "workspace_id": "local",
+          "kind": "command",
+          "enabled": false,
+          "package": null,
+          "version": null,
+          "version_check": false,
+          "bin": null,
+          "registry": null,
+          "command": "printf provision-snapshot",
+          "args": [],
+          "trigger_kinds": [],
+          "cron_expression": null,
+          "timezone": "UTC",
+          "next_run_at": null,
+          "last_fired_at": null,
+          "timeout_ms": 0,
+          "created_by": "local",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "route": "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "path": "/api/workspaces/local/runtime-provisions/prov_snapshot/states",
+      "status": 200,
+      "body": {
+        "states": []
       }
     },
     {
@@ -20670,6 +21213,7 @@
         "title": "Flow session",
         "status": "active",
         "is_default": false,
+        "holds_workspace": true,
         "summary": null,
         "created_by_type": "member",
         "created_by_id": "local",
@@ -20701,6 +21245,7 @@
         "title": "Flow session renamed",
         "status": "active",
         "is_default": false,
+        "holds_workspace": true,
         "summary": null,
         "created_by_type": "member",
         "created_by_id": "local",
@@ -20797,6 +21342,8 @@
         "issue_session_id": "ises_nwk7j7pg419m",
         "issueSessionGeneration": 1,
         "issue_session_generation": 1,
+        "holdsWorkspace": true,
+        "holds_workspace": true,
         "chatSessionId": null,
         "autopilotRunId": null,
         "triggerCommentId": null,
@@ -21236,6 +21783,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -21336,6 +21885,8 @@
           "issue_session_id": "ises_piqp1rpc1xal",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -22446,7 +22997,69 @@
       }
     },
     {
-      "key": "runtimes#016 POST /api/runtimes/:id/archive-agents-and-delete",
+      "key": "runtimes#016 POST /api/runtimes/:id/commands",
+      "route": "POST /api/runtimes/:id/commands",
+      "path": "/api/runtimes/rt_snapshot/commands",
+      "status": 202,
+      "body": {
+        "id": "rcmd_2ryujm2j4i6h",
+        "runtimeId": "rt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "command": "printf snapshot",
+        "args": [],
+        "timeoutMs": 1000,
+        "timeout_ms": 0,
+        "createdBy": "local",
+        "created_by": "local",
+        "status": "pending",
+        "exitCode": null,
+        "exit_code": null,
+        "stdout": null,
+        "stderr": null,
+        "durationMs": null,
+        "duration_ms": null,
+        "error": null,
+        "runStartedAt": null,
+        "run_started_at": null,
+        "createdAt": "<timestamp>",
+        "created_at": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "updated_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "runtimes#017 GET /api/runtimes/:id/commands/:requestId",
+      "route": "GET /api/runtimes/:id/commands/:requestId",
+      "path": "/api/runtimes/rt_snapshot/commands/rcmd_2ryujm2j4i6h",
+      "status": 200,
+      "body": {
+        "id": "rcmd_2ryujm2j4i6h",
+        "runtimeId": "rt_snapshot",
+        "runtime_id": "rt_snapshot",
+        "command": "printf snapshot",
+        "args": [],
+        "timeoutMs": 1000,
+        "timeout_ms": 0,
+        "createdBy": "local",
+        "created_by": "local",
+        "status": "pending",
+        "exitCode": null,
+        "exit_code": null,
+        "stdout": null,
+        "stderr": null,
+        "durationMs": null,
+        "duration_ms": null,
+        "error": null,
+        "runStartedAt": null,
+        "run_started_at": null,
+        "createdAt": "<timestamp>",
+        "created_at": "<timestamp>",
+        "updatedAt": "<timestamp>",
+        "updated_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "runtimes#018 POST /api/runtimes/:id/archive-agents-and-delete",
       "route": "POST /api/runtimes/:id/archive-agents-and-delete",
       "path": "/api/runtimes/rt_snapshot/archive-agents-and-delete",
       "status": 409,
@@ -22509,6 +23122,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -22517,7 +23131,7 @@
       }
     },
     {
-      "key": "runtimes#017 DELETE /api/runtimes/:id",
+      "key": "runtimes#019 DELETE /api/runtimes/:id",
       "route": "DELETE /api/runtimes/:id",
       "path": "/api/runtimes/rt_snapshot",
       "status": 409,
@@ -22580,6 +23194,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
@@ -22649,7 +23264,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600240",
+        "id": "local-contact-1767225600248",
         "status": "received",
         "mode": "local",
         "request": {
@@ -23140,6 +23755,8 @@
           "issue_session_id": null,
           "issueSessionGeneration": null,
           "issue_session_generation": null,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -23205,6 +23822,8 @@
           "issue_session_id": null,
           "issueSessionGeneration": null,
           "issue_session_generation": null,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -23270,6 +23889,8 @@
           "issue_session_id": null,
           "issueSessionGeneration": null,
           "issue_session_generation": null,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -23334,6 +23955,8 @@
         "issue_session_id": null,
         "issueSessionGeneration": null,
         "issue_session_generation": null,
+        "holdsWorkspace": true,
+        "holds_workspace": true,
         "chatSessionId": null,
         "autopilotRunId": null,
         "triggerCommentId": null,
@@ -23421,6 +24044,8 @@
           "issue_session_id": "ises_cdyoy133keds",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
+          "holdsWorkspace": true,
+          "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
           "triggerCommentId": null,
@@ -23485,6 +24110,8 @@
         "issue_session_id": "ises_cdyoy133keds",
         "issueSessionGeneration": 1,
         "issue_session_generation": 1,
+        "holdsWorkspace": true,
+        "holds_workspace": true,
         "chatSessionId": null,
         "autopilotRunId": null,
         "triggerCommentId": null,
@@ -23571,6 +24198,8 @@
         "issue_session_id": "ises_cdyoy133keds",
         "issueSessionGeneration": 2,
         "issue_session_generation": 2,
+        "holdsWorkspace": true,
+        "holds_workspace": true,
         "chatSessionId": null,
         "autopilotRunId": null,
         "triggerCommentId": null,
@@ -23667,6 +24296,7 @@
         "name": "Renewed local token",
         "type": "pat",
         "purpose": "personal",
+        "scopes": [],
         "tokenPrefix": "mul_00000000",
         "lastUsedAt": null,
         "expiresAt": "<timestamp>",
@@ -23700,6 +24330,7 @@
           "name": "native token",
           "type": "pat",
           "purpose": "personal",
+          "scopes": [],
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,
@@ -23725,6 +24356,7 @@
           "name": "Snapshot token",
           "type": "pat",
           "purpose": "personal",
+          "scopes": [],
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,
@@ -23930,7 +24562,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600247",
+        "session_id": "local-lark-1767225600255",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

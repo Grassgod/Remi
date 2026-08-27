@@ -68,6 +68,7 @@ import {
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
 } from "@multiremi/store/repos/runtimes-repo.js";
+import { RuntimeProvisionsRepo } from "@multiremi/store/repos/runtime-provisions-repo.js";
 import {
   DaemonRetirementRepo,
   type DaemonInventoryEntry,
@@ -82,6 +83,7 @@ import {
 } from "@multiremi/store/repos/ssh-mesh-repo.js";
 import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
+import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
 import {
   AutopilotsRepo,
   type MultiremiAutopilotFailureThresholdCandidate,
@@ -155,6 +157,8 @@ import type {
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateRuntimeUpdateInput,
+  CreateRuntimeCommandInput,
+  CreateWorkspaceRuntimeProvisionInput,
   CreateRuntimeLocalSkillImportInput,
   CreateSessionTaskInput,
   CreateSkillInput,
@@ -216,6 +220,8 @@ import type {
   MultiremiNotificationChannel,
   MultiremiNotificationDelivery,
   MultiremiNotificationDeliveryStatus,
+  MultiremiOrganizerAction,
+  MultiremiOrganizerActionKind,
   MultiremiPinnedItem,
   MultiremiIssueReaction,
   MultiremiIssueSubscriber,
@@ -232,19 +238,24 @@ import type {
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
   MultiremiRuntimeDirectoryScanRequest,
+  MultiremiRuntimeCommandRequest,
+  MultiremiRuntimeProvisionState,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeModelListRequest,
   MultiremiRuntimeUpdateRequest,
+  MultiremiWorkspaceRuntimeProvision,
   MultiremiWorkspaceProjectDoc,
   PublishSessionResultInput,
   QuickCreateIssueInput,
   ReportRuntimeDirectoryScanInput,
+  ReportRuntimeCommandInput,
   ReportRuntimeModelListInput,
   QuickCreateIssueResult,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeUpdateInput,
+  UpdateWorkspaceRuntimeProvisionInput,
   MultiremiAgentRuntime,
   MultiremiRuntime,
   MultiremiRuntimeDaily,
@@ -261,6 +272,7 @@ import type {
   MultiremiSquad,
   MultiremiSquadMember,
   MultiremiTask,
+  MultiremiTaskQueueBlocker,
   MultiremiTaskActivityByHour,
   MultiremiTaskHumanRequest,
   MultiremiTaskMessage,
@@ -386,6 +398,7 @@ export class MultiremiStore {
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
   private runtimes: RuntimesRepo;
+  private runtimeProvisions: RuntimeProvisionsRepo;
   private daemonRetirement: DaemonRetirementRepo;
   private sshMesh: SshMeshRepo;
   private autopilots: AutopilotsRepo;
@@ -438,6 +451,7 @@ export class MultiremiStore {
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
+    this.runtimeProvisions = new RuntimeProvisionsRepo(this.ctx);
     this.daemonRetirement = new DaemonRetirementRepo(this.ctx);
     this.sshMesh = new SshMeshRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
@@ -682,6 +696,18 @@ runMigrations(this.db);
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
     return this.agents.updateAgent(id, input);
+  }
+
+  setAgentSupervisor(id: string, supervisor: boolean): MultiremiAgent {
+    return this.db.transaction(() => {
+      const current = this.agents.getAgent(id);
+      if (!current) throw new Error(`Agent not found: ${id}`);
+      const agent = this.agents.setAgentSupervisor(id, supervisor);
+      if (current.supervisor !== agent.supervisor) {
+        for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
+      }
+      return agent;
+    })();
   }
 
   archiveAgent(id: string): MultiremiAgent {
@@ -1684,7 +1710,9 @@ runMigrations(this.db);
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,
   ): Promise<MultiremiCreatedAccessToken> {
-    return this.accessTokens.createTaskAccessToken(task, userId);
+    const agent = this.getAgent(task.agentId);
+    const scopes = agent?.supervisor ? ["organizer:supervisor"] : [];
+    return this.accessTokens.createTaskAccessToken(task, userId, scopes);
   }
 
   listAccessTokens(workspaceId?: string | null): MultiremiAccessToken[] {
@@ -1813,7 +1841,11 @@ runMigrations(this.db);
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
     const daemonId = String(input.daemonId ?? input.daemon_id ?? "").trim();
-    if (!daemonId) return this.runtimes.registerRuntime(input);
+    if (!daemonId) {
+      const runtime = this.runtimes.registerRuntime(input);
+      this.runtimeProvisions.enqueueRuntimeOnRegister(runtime.id);
+      return runtime;
+    }
     const workspaceId = String(input.workspaceId ?? input.workspace_id ?? "local").trim() || "local";
     const tx = this.db.transaction(() => {
       this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
@@ -1835,7 +1867,9 @@ runMigrations(this.db);
       this.agentPlugins.reconcileAgentPluginDesiredStateWithinLock(workspaceId);
       return runtime;
     });
-    return tx();
+    const runtime = tx();
+    this.runtimeProvisions.enqueueRuntimeOnRegister(runtime.id);
+    return runtime;
   }
 
   registerDaemonRuntimeBatch(inputs: RegisterRuntimeInput[]): MultiremiRuntime[] {
@@ -1852,7 +1886,7 @@ runMigrations(this.db);
       }
     }
 
-    return this.db.transaction(() => {
+    const runtimes = this.db.transaction(() => {
       this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       this.agentPlugins.lockAgentPluginWorkspace(workspaceId);
@@ -1872,6 +1906,8 @@ runMigrations(this.db);
       this.agentPlugins.reconcileAgentPluginDesiredStateWithinLock(workspaceId);
       return runtimes;
     })();
+    for (const runtime of runtimes) this.runtimeProvisions.enqueueRuntimeOnRegister(runtime.id);
+    return runtimes;
   }
 
   isDaemonRetired(workspaceId: string, daemonId: string): boolean {
@@ -2168,6 +2204,58 @@ runMigrations(this.db);
 
   reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
     return this.runtimes.reportRuntimeUpdateResult(runtimeId, requestId, input);
+  }
+
+  createRuntimeCommandRequest(runtimeId: string, input: CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest {
+    return this.runtimes.createRuntimeCommandRequest(runtimeId, input);
+  }
+
+  getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null {
+    return this.runtimes.getRuntimeCommandRequest(runtimeId, requestId);
+  }
+
+  claimRuntimeCommandRequest(runtimeId: string): MultiremiRuntimeCommandRequest | null {
+    return this.runtimes.claimRuntimeCommandRequest(runtimeId);
+  }
+
+  reportRuntimeCommandResult(runtimeId: string, requestId: string, input: ReportRuntimeCommandInput): MultiremiRuntimeCommandRequest {
+    const request = this.runtimes.reportRuntimeCommandResult(runtimeId, requestId, input);
+    this.runtimeProvisions.recordCommandResult(request);
+    return request;
+  }
+
+  listWorkspaceRuntimeProvisions(workspaceId: string): MultiremiWorkspaceRuntimeProvision[] {
+    return this.runtimeProvisions.list(workspaceId);
+  }
+
+  getWorkspaceRuntimeProvision(id: string): MultiremiWorkspaceRuntimeProvision | null {
+    return this.runtimeProvisions.get(id);
+  }
+
+  createWorkspaceRuntimeProvision(
+    workspaceId: string,
+    input: CreateWorkspaceRuntimeProvisionInput,
+  ): MultiremiWorkspaceRuntimeProvision {
+    return this.runtimeProvisions.create(workspaceId, input);
+  }
+
+  updateWorkspaceRuntimeProvision(
+    id: string,
+    input: UpdateWorkspaceRuntimeProvisionInput,
+  ): MultiremiWorkspaceRuntimeProvision {
+    return this.runtimeProvisions.update(id, input);
+  }
+
+  deleteWorkspaceRuntimeProvision(id: string, actorId: string | null = null): boolean {
+    return this.runtimeProvisions.delete(id, actorId);
+  }
+
+  listRuntimeProvisionStates(provisionId: string): MultiremiRuntimeProvisionState[] {
+    return this.runtimeProvisions.listStates(provisionId);
+  }
+
+  enqueueWorkspaceRuntimeProvision(provisionId: string): number {
+    return this.runtimeProvisions.enqueueWorkspaceProvision(provisionId);
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
@@ -2786,6 +2874,10 @@ runMigrations(this.db);
     return this.tasks.listTasksForIssue(issueId);
   }
 
+  getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
+    return this.tasks.getTaskQueueBlocker(taskId);
+  }
+
   createProject(input: CreateProjectInput, writeContext: ProjectInstructionsWriteContext = {}): MultiremiProject {
     return this.projects.createProject(input, writeContext);
   }
@@ -3082,6 +3174,18 @@ runMigrations(this.db);
     return this.autopilots.recoverLostScheduleTriggers(now);
   }
 
+  claimDueRuntimeProvisions(now: Date = new Date()): MultiremiWorkspaceRuntimeProvision[] {
+    return this.runtimeProvisions.claimDue(now);
+  }
+
+  advanceRuntimeProvisionNextRun(id: string, from: Date = new Date()): MultiremiWorkspaceRuntimeProvision | null {
+    return this.runtimeProvisions.advanceNextRun(id, from);
+  }
+
+  recoverLostRuntimeProvisionSchedules(now: Date = new Date()): number {
+    return this.runtimeProvisions.recoverLostSchedules(now);
+  }
+
   enqueueIssueStatusChangedEvent(input: {
     issue: MultiremiIssue;
     previousStatus: string;
@@ -3351,6 +3455,124 @@ runMigrations(this.db);
 
   consumeTaskSteerMessages(taskId: string, steerIds: string[]): MultiremiTaskSteerMessage[] {
     return this.tasks.consumeTaskSteerMessages(taskId, steerIds);
+  }
+
+  listOrganizerActionsForTask(taskId: string): MultiremiOrganizerAction[] {
+    return this.tasks.listOrganizerActionsForTask(taskId);
+  }
+
+  performOrganizerAction(input: {
+    supervisorTaskId: string;
+    supervisorAgentId: string;
+    targetTaskId: string;
+    action: MultiremiOrganizerActionKind;
+    reason: string;
+    content?: string | null;
+  }): {
+    task: MultiremiTask;
+    replacementTask: MultiremiTask | null;
+    message: MultiremiTaskSteerMessage | null;
+    audit: MultiremiOrganizerAction;
+    comment: MultiremiIssueComment;
+  } {
+    let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    const result = this.db.transaction(() => {
+      const supervisorTask = this.getTask(input.supervisorTaskId);
+      const supervisorAgent = this.getAgent(input.supervisorAgentId);
+      if (
+        !supervisorTask
+        || !supervisorAgent?.supervisor
+        || supervisorTask.agentId !== supervisorAgent.id
+        || supervisorTask.workspaceId !== supervisorAgent.workspaceId
+      ) {
+        throw new OrganizerActionError("organizer_supervisor_required", "a current supervisor task is required");
+      }
+      const target = this.getTask(input.targetTaskId);
+      if (!target || target.workspaceId !== supervisorTask.workspaceId) {
+        throw new OrganizerActionError("organizer_target_forbidden", "target task is outside the supervisor workspace");
+      }
+      if (target.id === supervisorTask.id) {
+        throw new OrganizerActionError("organizer_self_action_forbidden", "a supervisor cannot act on its own task");
+      }
+      const targetAgent = this.getAgent(target.agentId);
+      if (targetAgent?.supervisor) {
+        throw new OrganizerActionError("organizer_supervisor_target_forbidden", "a supervisor cannot act on another supervisor task");
+      }
+      const workspace = this.getWorkspace(supervisorTask.workspaceId);
+      if (readOrganizerMode(workspace) !== "act") {
+        throw new OrganizerActionError(
+          "organizer_report_only",
+          "cross-task actions are disabled while organizer.mode is report_only",
+        );
+      }
+      const reportIssue = supervisorTask.issueId ? this.getIssue(supervisorTask.issueId) : null;
+      if (!reportIssue || reportIssue.workspaceId !== supervisorTask.workspaceId) {
+        throw new OrganizerActionError(
+          "organizer_report_issue_required",
+          "the supervisor task must belong to a patrol issue so the action can be disclosed",
+          409,
+        );
+      }
+      const reason = input.reason.trim();
+      if (!reason) throw new OrganizerActionError("organizer_reason_required", "reason is required", 400);
+      if (reason.length > 2_000) throw new OrganizerActionError("organizer_reason_too_long", "reason must be at most 2000 characters", 400);
+
+      let task = target;
+      let replacementTask: MultiremiTask | null = null;
+      let message: MultiremiTaskSteerMessage | null = null;
+      if (input.action === "cancel") {
+        task = this.tasks.cancelTask(target.id);
+      } else if (input.action === "redispatch") {
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id);
+        task = redispatchResult.cancelled;
+        replacementTask = redispatchResult.replacement;
+      } else {
+        const content = String(input.content ?? "").trim();
+        if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
+        message = this.tasks.createTaskSteerMessage({
+          taskId: target.id,
+          kind: input.action,
+          content,
+          authorType: "agent",
+          authorId: supervisorAgent.id,
+        });
+      }
+      const audit = this.tasks.recordOrganizerAction({
+        workspaceId: target.workspaceId,
+        supervisorTaskId: supervisorTask.id,
+        supervisorAgentId: supervisorAgent.id,
+        targetTaskId: target.id,
+        targetIssueId: target.issueId,
+        replacementTaskId: replacementTask?.id ?? null,
+        reportIssueId: reportIssue.id,
+        action: input.action,
+        reason,
+      });
+      const comment = this.issues.createIssueComment(reportIssue.id, {
+        authorType: "agent",
+        authorId: supervisorAgent.id,
+        taskId: supervisorTask.id,
+        body: [
+          `Organizer action: ${input.action}`,
+          `Target task: ${target.id}`,
+          ...(target.issueId ? [`Target issue: ${target.issueId}`] : []),
+          ...(replacementTask ? [`Replacement task: ${replacementTask.id}`] : []),
+          `Criterion: ${reason}`,
+          `Audit record: ${audit.id}`,
+        ].join("\n"),
+      });
+      this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
+        organizer_action_id: audit.id,
+        action: input.action,
+        target_task_id: target.id,
+        target_issue_id: target.issueId,
+        replacement_task_id: replacementTask?.id ?? null,
+        comment_id: comment.id,
+      });
+      return { task, replacementTask, message, audit, comment };
+    })();
+    if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+    return result;
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {

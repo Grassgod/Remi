@@ -179,6 +179,28 @@ function envEnabled(value: string | undefined, fallback = true): boolean {
   return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
 }
 
+function normalizeDaemonDirectBaseUrl(value: string | null | undefined): string | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("MULTIREMI_DAEMON_DIRECT_BASE_URL must be an absolute http(s) URL");
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:")
+    || url.username
+    || url.password
+    || url.search
+    || url.hash
+    || (url.pathname !== "/" && url.pathname !== "")
+  ) {
+    throw new Error("MULTIREMI_DAEMON_DIRECT_BASE_URL must be an http(s) origin without credentials, path, query, or fragment");
+  }
+  return url.origin;
+}
+
 export interface MultiremiApiOptions {
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
@@ -196,6 +218,8 @@ export interface MultiremiApiOptions {
   projectKnowledge?: ProjectKnowledgeServiceContract;
   repositoryWiki?: RepositoryWikiServiceContract;
   sessionArchives?: SessionArchiveService;
+  /** Absolute API origin advertised to daemons for direct archive uploads. */
+  daemonDirectBaseUrl?: string | null;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
   scmPolling?: ScmPollingScheduler | null;
   /** Undefined enables server-owned Feishu ingestion; null explicitly disables it. */
@@ -229,6 +253,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const feishuSidecarEndpoints = options.feishuSidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
+  const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
+    options.daemonDirectBaseUrl === undefined
+      ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
+      : options.daemonDirectBaseUrl,
+  );
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
     store,
@@ -247,6 +276,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     repositoryWiki,
     sessionArchives,
     feishuSidecarEndpoints,
+    daemonDirectBaseUrl,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
     issueRetitle: options.issueRetitle ?? retitleIssue,
   };

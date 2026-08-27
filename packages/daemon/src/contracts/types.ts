@@ -245,6 +245,9 @@ export interface AgentTask {
   issue_session_id?: string | null;
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
+  /** Whether this task owns the shared Issue workspace. Missing means true for older servers. */
+  holdsWorkspace?: boolean;
+  holds_workspace?: boolean;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   completedAt: string | null;
@@ -416,10 +419,14 @@ export type { RunAutopilotInput };
 /** Store surface the scheduler depends on. */
 export interface AutopilotStore {
   recoverLostScheduleTriggers(now?: Date): number;
+  recoverLostRuntimeProvisionSchedules(now?: Date): number;
   listAutopilots(workspaceId?: string | null): Autopilot[];
   listAutopilotTriggers(autopilotId: string): AutopilotTrigger[];
   claimDueScheduleTriggers(now?: Date): AutopilotTrigger[];
   advanceScheduleTriggerNextRun(triggerId: string, from?: Date): AutopilotTrigger | null;
+  claimDueRuntimeProvisions(now?: Date): Array<{ id: string }>;
+  enqueueWorkspaceRuntimeProvision(provisionId: string): number;
+  advanceRuntimeProvisionNextRun(provisionId: string, from?: Date): { id: string } | null;
   getAutopilot(id: string): Autopilot | null;
   runAutopilot(autopilotId: string, input?: RunAutopilotInput): AutopilotRun;
   dispatchPendingSystemEvents(now?: Date, limit?: number): AutopilotRun[];

@@ -21,6 +21,7 @@ export interface IssueSession {
   title: string;
   status: IssueSessionStatus;
   is_default: boolean;
+  holds_workspace?: boolean;
   summary: string | null;
   created_by_type: string;
   created_by_id: string | null;
@@ -57,6 +58,7 @@ export interface SessionResult {
 
 export interface CreateIssueSessionRequest {
   title: string;
+  holds_workspace?: boolean;
 }
 
 export interface CreateSessionTaskRequest {

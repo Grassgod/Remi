@@ -7,11 +7,11 @@ const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
 const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
 const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_delivery_v3";
+const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4";
 const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_policy";
 const TASK_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_task_issue_proposal_policy";
 const AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_autopilot_issue_proposal_policy";
-const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -49,6 +49,7 @@ export function runMigrations(db: SqlDatabase): void {
       mcp_config TEXT,
       thinking_level TEXT,
       issue_creation_requires_proposal INTEGER NOT NULL DEFAULT 0,
+      supervisor INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -430,6 +431,30 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_directory_scan_runtime ON multiremi_runtime_directory_scan_requests(runtime_id, status, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_command_requests (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      command TEXT NOT NULL,
+      args TEXT NOT NULL DEFAULT '[]',
+      redacted_command TEXT NOT NULL,
+      redacted_args TEXT NOT NULL DEFAULT '[]',
+      provision_id TEXT,
+      timeout_ms INTEGER NOT NULL,
+      created_by TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      exit_code INTEGER,
+      stdout TEXT,
+      stderr TEXT,
+      duration_ms INTEGER,
+      error TEXT,
+      run_started_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_command_runtime ON multiremi_runtime_command_requests(runtime_id, status, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -488,6 +513,68 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_workspace ON multiremi_workspace_members(workspace_id);
 
+    CREATE TABLE IF NOT EXISTS multiremi_workspace_runtime_provisions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      package TEXT,
+      version TEXT,
+      version_check INTEGER NOT NULL DEFAULT 1,
+      bin TEXT,
+      registry TEXT,
+      command TEXT,
+      args TEXT NOT NULL DEFAULT '[]',
+      redacted_command TEXT,
+      redacted_args TEXT NOT NULL DEFAULT '[]',
+      trigger_kinds TEXT NOT NULL DEFAULT '[]',
+      cron_expression TEXT,
+      timezone TEXT,
+      next_run_at TEXT,
+      last_fired_at TEXT,
+      timeout_ms INTEGER NOT NULL,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(workspace_id) REFERENCES multiremi_workspaces(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_runtime_provisions_due
+      ON multiremi_workspace_runtime_provisions(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_runtime_provisions_workspace
+      ON multiremi_workspace_runtime_provisions(workspace_id, enabled, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_provision_audit (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      provision_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      actor_id TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_provision_audit_provision
+      ON multiremi_runtime_provision_audit(provision_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_provision_states (
+      provision_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      observed_version TEXT,
+      last_command_request_id TEXT,
+      last_checked_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(provision_id, runtime_id),
+      FOREIGN KEY(provision_id) REFERENCES multiremi_workspace_runtime_provisions(id) ON DELETE CASCADE,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_provision_states_runtime
+      ON multiremi_runtime_provision_states(runtime_id, status);
+
     CREATE TABLE IF NOT EXISTS multiremi_access_tokens (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -498,6 +585,7 @@ export function runMigrations(db: SqlDatabase): void {
       name TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'pat',
       purpose TEXT NOT NULL DEFAULT 'personal',
+      scopes TEXT NOT NULL DEFAULT '[]',
       token_hash TEXT NOT NULL UNIQUE,
       token_prefix TEXT NOT NULL,
       last_used_at TEXT,
@@ -508,6 +596,25 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_workspace ON multiremi_access_tokens(workspace_id, type);
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_hash ON multiremi_access_tokens(token_hash);
+
+    CREATE TABLE IF NOT EXISTS multiremi_organizer_actions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      supervisor_task_id TEXT NOT NULL,
+      supervisor_agent_id TEXT NOT NULL,
+      target_task_id TEXT NOT NULL,
+      target_issue_id TEXT,
+      replacement_task_id TEXT,
+      report_issue_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_target
+      ON multiremi_organizer_actions(target_task_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_organizer_actions_supervisor
+      ON multiremi_organizer_actions(supervisor_task_id, created_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_issue_shares (
       id TEXT PRIMARY KEY,
@@ -586,6 +693,7 @@ export function runMigrations(db: SqlDatabase): void {
       title TEXT NOT NULL DEFAULT 'Main',
       status TEXT NOT NULL DEFAULT 'active',
       is_default INTEGER NOT NULL DEFAULT 0,
+      holds_workspace INTEGER NOT NULL DEFAULT 1,
       summary TEXT,
       created_by_type TEXT NOT NULL DEFAULT 'member',
       created_by_id TEXT,
@@ -1628,6 +1736,7 @@ export function runMigrations(db: SqlDatabase): void {
       issue_id TEXT,
       issue_session_id TEXT,
       issue_session_generation INTEGER,
+      holds_workspace INTEGER NOT NULL DEFAULT 1,
       chat_session_id TEXT,
       trigger_comment_id TEXT,
       trigger_summary TEXT,
@@ -1896,6 +2005,7 @@ export function runMigrations(db: SqlDatabase): void {
     addColumnIfMissing(db, "multiremi_autopilot_triggers", "issue_creation_restricted_by_task_id TEXT");
     addColumnIfMissing(db, "multiremi_webhook_deliveries", "source_task_id TEXT");
   });
+  addColumnIfMissing(db, "multiremi_agents", "supervisor INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_squads", "avatar_url TEXT");
   addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");
   addColumnIfMissing(
@@ -1932,6 +2042,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "agent_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "user_id TEXT NOT NULL DEFAULT 'local'");
+  addColumnIfMissing(db, "multiremi_access_tokens", "scopes TEXT NOT NULL DEFAULT '[]'");
   const accessTokenPurposeAdded = addColumnIfMissing(
     db,
     "multiremi_access_tokens",
@@ -1977,6 +2088,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_type TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "issue_session_id TEXT");
+  // Existing Sessions and Tasks keep the historical Issue-wide workspace
+  // lease. New discussion Sessions must opt out explicitly.
+  addColumnIfMissing(db, "multiremi_issue_sessions", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   // Agent auto-reply comments point back at the run that produced them, so the
   // chat stream can open that task's transcript. Forward-only: no backfill.
   addColumnIfMissing(db, "multiremi_issue_comments", "task_id TEXT");
@@ -2006,6 +2120,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_generation INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_source_event_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
@@ -2157,6 +2272,8 @@ export function runMigrations(db: SqlDatabase): void {
   // legacy `mem_<ws>_<userId>` id convention.
   addColumnIfMissing(db, "multiremi_users", "external_id TEXT");
   addColumnIfMissing(db, "multiremi_workspace_members", "user_id TEXT");
+  addColumnIfMissing(db, "multiremi_runtime_command_requests", "provision_id TEXT");
+  addColumnIfMissing(db, "multiremi_workspace_runtime_provisions", "version_check INTEGER NOT NULL DEFAULT 1");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_users_external_id ON multiremi_users(external_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
   backfillMemberUserIds(db);

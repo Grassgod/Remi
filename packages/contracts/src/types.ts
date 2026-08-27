@@ -87,6 +87,7 @@ export interface MultiremiAgent {
   thinkingLevel: string | null;
   issueCreationRequiresProposal: boolean;
   issue_creation_requires_proposal?: boolean;
+  supervisor?: boolean;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -581,6 +582,12 @@ export type MultiremiRuntimeDirectoryScanRequestStatus = "pending" | "running" |
 
 export type MultiremiRuntimeUpdateRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 
+export type MultiremiRuntimeCommandRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+
+export type MultiremiRuntimeProvisionKind = "npm-global" | "command";
+export type MultiremiRuntimeProvisionTriggerKind = "cron" | "on_register" | "on_change";
+export type MultiremiRuntimeProvisionStatus = "pending" | "converged" | "drifted" | "failed";
+
 export interface MultiremiRuntime {
   id: string;
   name: string;
@@ -738,6 +745,88 @@ export interface MultiremiRuntimeUpdateRequest {
   runStartedAt: string | null;
 }
 
+export interface MultiremiRuntimeCommandRequest {
+  id: string;
+  runtimeId: string;
+  command: string;
+  args: string[];
+  redactedCommand: string;
+  redactedArgs: string[];
+  provisionId: string | null;
+  timeoutMs: number;
+  createdBy: string | null;
+  status: MultiremiRuntimeCommandRequestStatus;
+  exitCode: number | null;
+  stdout: string | null;
+  stderr: string | null;
+  durationMs: number | null;
+  error: string | null;
+  runStartedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiWorkspaceRuntimeProvision {
+  id: string;
+  workspaceId: string;
+  kind: MultiremiRuntimeProvisionKind;
+  enabled: boolean;
+  package: string | null;
+  version: string | null;
+  versionCheck: boolean;
+  bin: string | null;
+  registry: string | null;
+  command: string | null;
+  args: string[];
+  redactedCommand: string | null;
+  redactedArgs: string[];
+  triggerKinds: MultiremiRuntimeProvisionTriggerKind[];
+  cronExpression: string | null;
+  timezone: string | null;
+  nextRunAt: string | null;
+  lastFiredAt: string | null;
+  timeoutMs: number;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiRuntimeProvisionState {
+  provisionId: string;
+  runtimeId: string;
+  status: MultiremiRuntimeProvisionStatus;
+  observedVersion: string | null;
+  lastCommandRequestId: string | null;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkspaceRuntimeProvisionInput {
+  kind?: MultiremiRuntimeProvisionKind | string;
+  enabled?: boolean;
+  package?: string | null;
+  version?: string | null;
+  versionCheck?: boolean;
+  version_check?: boolean;
+  bin?: string | null;
+  registry?: string | null;
+  command?: string | null;
+  args?: string[];
+  triggerKinds?: MultiremiRuntimeProvisionTriggerKind[];
+  trigger_kinds?: MultiremiRuntimeProvisionTriggerKind[];
+  cronExpression?: string | null;
+  cron_expression?: string | null;
+  timezone?: string | null;
+  timeoutMs?: number;
+  timeout_ms?: number;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export type UpdateWorkspaceRuntimeProvisionInput = Partial<CreateWorkspaceRuntimeProvisionInput>;
+
 export interface MultiremiDaemonHeartbeatAck {
   runtime_id: string;
   status: "ok" | "runtime_gone";
@@ -767,6 +856,12 @@ export interface MultiremiDaemonHeartbeatAck {
     id: string;
     skill_key: string;
   }>;
+  pending_command?: {
+    id: string;
+    command: string;
+    args: string[];
+    timeout_ms: number;
+  };
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -1003,6 +1098,29 @@ export interface ReportRuntimeUpdateInput {
   error?: string;
 }
 
+export interface CreateRuntimeCommandInput {
+  command?: string;
+  args?: string[];
+  timeoutMs?: number;
+  timeout_ms?: number;
+  createdBy?: string | null;
+  created_by?: string | null;
+  provisionId?: string | null;
+  provision_id?: string | null;
+  provisionKind?: MultiremiRuntimeProvisionKind;
+}
+
+export interface ReportRuntimeCommandInput {
+  status?: "completed" | "failed" | "timeout";
+  exitCode?: number | null;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  durationMs?: number;
+  duration_ms?: number;
+  error?: string;
+}
+
 // ─── Tasks ───────────────────────────────────────────────────────────────────────────────────────
 
 export type MultiremiTaskStatus =
@@ -1111,6 +1229,9 @@ export interface MultiremiTask {
    * time and persisted so late completions cannot promote into a newer lane. */
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
+  /** Immutable snapshot of whether this task owns the shared Issue workspace. */
+  holdsWorkspace: boolean;
+  holds_workspace?: boolean;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   triggerCommentId: string | null;
@@ -1218,6 +1339,21 @@ export interface MultiremiTask {
   cancelledAt: string | null;
 }
 
+export type MultiremiTaskQueueBlockerReason =
+  | "session"
+  | "issue_workspace"
+  | "legacy_issue"
+  | "agent_capacity";
+
+export interface MultiremiTaskQueueBlocker {
+  taskId: string;
+  agentId: string;
+  agentName: string;
+  issueSessionId: string | null;
+  issueSessionTitle: string | null;
+  reason: MultiremiTaskQueueBlockerReason;
+}
+
 export interface MultiremiTaskTriggerMetadata {
   triggerThreadId: string | null;
   triggerCommentContent: string | null;
@@ -1273,6 +1409,35 @@ export interface MultiremiTaskMessage {
   /** Low-frequency display semantics: title/kind/locations/content_blocks/duration_ms/entries/usage. */
   meta: Record<string, unknown> | null;
   createdAt: string;
+}
+
+export type MultiremiOrganizerActionKind = "steer" | "force_answer" | "cancel" | "redispatch";
+
+export interface MultiremiOrganizerAction {
+  id: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
+  createdAt: string;
+}
+
+export interface CreateOrganizerActionInput {
+  id?: string;
+  workspaceId: string;
+  supervisorTaskId: string;
+  supervisorAgentId: string;
+  targetTaskId: string;
+  targetIssueId: string | null;
+  replacementTaskId?: string | null;
+  reportIssueId: string;
+  action: MultiremiOrganizerActionKind;
+  reason: string;
 }
 
 export interface TaskUsageEntry {
@@ -1905,6 +2070,8 @@ export interface MultiremiIssueSession {
   status: MultiremiIssueSessionStatus;
   isDefault: boolean;
   is_default?: boolean;
+  holdsWorkspace: boolean;
+  holds_workspace?: boolean;
   summary: string | null;
   createdByType: string;
   created_by_type?: string;
@@ -2020,6 +2187,8 @@ export interface CreateIssueSessionInput {
   created_by_id?: string | null;
   participantAgentIds?: string[];
   participant_agent_ids?: string[];
+  holdsWorkspace?: boolean;
+  holds_workspace?: boolean;
 }
 
 export interface UpdateIssueSessionInput {
@@ -3216,6 +3385,7 @@ export interface MultiremiAccessToken {
   name: string;
   type: MultiremiAccessTokenType;
   purpose: MultiremiAccessTokenPurpose;
+  scopes?: string[];
   tokenPrefix: string;
   lastUsedAt: string | null;
   expiresAt: string | null;

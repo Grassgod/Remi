@@ -108,6 +108,25 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("`remi wiki push`");
   });
 
+  it("does not claim repositories are mounted for a discussion Session", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const prompt = buildTaskPrompt({
+      ...task,
+      holdsWorkspace: false,
+      holds_workspace: false,
+    } as any, {
+      repoCheckouts: [{
+        repoUrl: "https://github.com/example/knowledge",
+        path: "/tmp/knowledge",
+        branch: "agent/MUL-136",
+      }],
+    });
+
+    expect(prompt).not.toContain("## Available Repositories");
+    expect(prompt).not.toContain("already checked out into the working directory");
+  });
+
   it("tells issue tasks how to pick a project before creating an issue", () => {
     const store = createStore();
     const { task } = createProjectTask(store);

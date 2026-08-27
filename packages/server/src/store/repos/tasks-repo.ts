@@ -23,6 +23,7 @@ import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugin
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
 import { createLogger } from "@shared/logger.js";
 import type {
+  CreateOrganizerActionInput,
   CreateTaskHumanRequestInput,
   CreateTaskInput,
   CreateTaskSteerMessageInput,
@@ -32,6 +33,7 @@ import type {
   MultiremiChatSession,
   MultiremiIssue,
   MultiremiIssueComment,
+  MultiremiOrganizerAction,
   MultiremiProjectResource,
   MultiremiRepoData,
   MultiremiRuntime,
@@ -43,6 +45,7 @@ import type {
   MultiremiTaskMessage,
   MultiremiTaskPromptArtifact,
   MultiremiTaskProjectContext,
+  MultiremiTaskQueueBlocker,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiTaskStatus,
   MultiremiTaskSteerKind,
@@ -99,6 +102,11 @@ interface TaskTerminalFollowUps {
   delegationReturn: MultiremiTask | null;
 }
 
+export interface RedispatchTaskResult {
+  cancelled: MultiremiTask;
+  replacement: MultiremiTask;
+}
+
 class AgentPluginReadinessChangedError extends Error {}
 
 /** Steer submitted for a task that already reached a terminal state — API contract: 409. */
@@ -132,6 +140,68 @@ export class TasksRepo {
       "SELECT * FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at DESC",
     ).all(issueId) as Row[];
     return rows.map(toTask);
+  }
+
+  getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
+    const issueBlocker = this.ctx.db.query(
+      `SELECT active.id AS task_id,
+              active.agent_id,
+              agent.name AS agent_name,
+              active.issue_session_id,
+              session.title AS issue_session_title,
+              CASE
+                WHEN queued.issue_session_id IS NOT NULL
+                  AND active.issue_session_id = queued.issue_session_id THEN 'session'
+                WHEN queued.issue_id IS NOT NULL
+                  AND queued.issue_session_id IS NULL
+                  AND active.issue_id = queued.issue_id THEN 'legacy_issue'
+                ELSE 'issue_workspace'
+              END AS blocker_reason
+       FROM multiremi_tasks queued
+       JOIN multiremi_tasks active ON active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+       JOIN multiremi_agents agent ON agent.id = active.agent_id
+       LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id
+       WHERE queued.id = ?
+         AND queued.status = 'queued'
+         AND (
+           (queued.issue_session_id IS NOT NULL AND active.issue_session_id = queued.issue_session_id)
+           OR (queued.issue_id IS NOT NULL AND queued.issue_session_id IS NULL AND active.issue_id = queued.issue_id)
+           OR (
+             queued.issue_id IS NOT NULL
+             AND queued.holds_workspace = 1
+             AND active.issue_id = queued.issue_id
+             AND active.holds_workspace = 1
+           )
+         )
+       ORDER BY active.dispatched_at ASC, active.created_at ASC
+       LIMIT 1`,
+    ).get(taskId) as Row | null;
+    if (issueBlocker) return toTaskQueueBlocker(issueBlocker);
+
+    const agentBlocker = this.ctx.db.query(
+      `SELECT active.id AS task_id,
+              active.agent_id,
+              agent.name AS agent_name,
+              active.issue_session_id,
+              session.title AS issue_session_title,
+              'agent_capacity' AS blocker_reason
+       FROM multiremi_tasks queued
+       JOIN multiremi_agents agent ON agent.id = queued.agent_id
+       JOIN multiremi_tasks active
+         ON active.agent_id = queued.agent_id
+        AND active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+       LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id
+       WHERE queued.id = ?
+         AND queued.status = 'queued'
+         AND (
+           SELECT COUNT(*) FROM multiremi_tasks running
+           WHERE running.agent_id = queued.agent_id
+             AND running.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+         ) >= agent.max_concurrent_tasks
+       ORDER BY active.dispatched_at ASC, active.created_at ASC
+       LIMIT 1`,
+    ).get(taskId) as Row | null;
+    return agentBlocker ? toTaskQueueBlocker(agentBlocker) : null;
   }
 
   createTask(input: CreateTaskInput): MultiremiTask {
@@ -222,6 +292,10 @@ export class TasksRepo {
     if (requestedIssueSessionId && !issueSession) throw new Error(`Issue session not found: ${requestedIssueSessionId}`);
     if (issueSession && issueSession.issueId !== issueId) throw new Error("Issue session does not belong to task issue");
     if (issueSession && issueSession.workspaceId !== agent.workspaceId) throw new Error("Issue session workspace does not match agent workspace");
+    // Snapshot the lease decision on the Task. A Session setting may change
+    // later, but an in-flight Task must keep the workspace ownership it was
+    // created with. Historical Issue Tasks without a Session stay exclusive.
+    const holdsWorkspace = issueId ? (issueSession?.holdsWorkspace ?? true) : true;
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.ctx.runtimes().getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
     // Pool scheduling: tasks stay unbound so any provider-matching runtime can
@@ -306,13 +380,13 @@ export class TasksRepo {
       : null;
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
-        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, chat_session_id,
+        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
         assignment_event_id, assignment_source_event_id,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         taskKind,
@@ -321,6 +395,7 @@ export class TasksRepo {
         issueId,
         issueSession?.id ?? null,
         issueSessionGeneration,
+        holdsWorkspace ? 1 : 0,
         input.chatSessionId ?? null,
         triggerCommentId,
         triggerSummary,
@@ -1159,7 +1234,14 @@ export class TasksRepo {
              SELECT 1 FROM multiremi_tasks active
              WHERE active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
                AND (
-                 (t.issue_id IS NOT NULL AND active.issue_id = t.issue_id)
+                 (t.issue_session_id IS NOT NULL AND active.issue_session_id = t.issue_session_id)
+                 OR (t.issue_id IS NOT NULL AND t.issue_session_id IS NULL AND active.issue_id = t.issue_id)
+                 OR (
+                   t.issue_id IS NOT NULL
+                   AND t.holds_workspace = 1
+                   AND active.issue_id = t.issue_id
+                   AND active.holds_workspace = 1
+                 )
                  OR (active.agent_id = t.agent_id AND t.chat_session_id IS NOT NULL AND active.chat_session_id = t.chat_session_id)
                  OR (
                    active.agent_id = t.agent_id
@@ -1415,6 +1497,42 @@ export class TasksRepo {
     })();
   }
 
+  recordOrganizerAction(input: CreateOrganizerActionInput): MultiremiOrganizerAction {
+    const id = input.id ?? createId("orga");
+    this.ctx.db.run(
+      `INSERT INTO multiremi_organizer_actions (
+        id, workspace_id, supervisor_task_id, supervisor_agent_id,
+        target_task_id, target_issue_id, replacement_task_id, report_issue_id, action, reason, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        input.workspaceId,
+        input.supervisorTaskId,
+        input.supervisorAgentId,
+        input.targetTaskId,
+        input.targetIssueId,
+        input.replacementTaskId ?? null,
+        input.reportIssueId,
+        input.action,
+        input.reason,
+        nowIso(),
+      ],
+    );
+    return this.getOrganizerAction(id)!;
+  }
+
+  getOrganizerAction(id: string): MultiremiOrganizerAction | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_organizer_actions WHERE id = ?").get(id) as Row | null;
+    return row ? toOrganizerAction(row) : null;
+  }
+
+  listOrganizerActionsForTask(taskId: string): MultiremiOrganizerAction[] {
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_organizer_actions WHERE target_task_id = ? ORDER BY created_at ASC, id ASC",
+    ).all(taskId) as Row[];
+    return rows.map(toOrganizerAction);
+  }
+
   reportProgress(
     taskId: string,
     summary: string,
@@ -1658,6 +1776,52 @@ export class TasksRepo {
     })();
     this.notifyCancelledTask(terminal);
     return terminal.task;
+  }
+
+  /** Caller owns the outer transaction; notifications are deferred until it commits. */
+  redispatchTaskWithinTransaction(taskId: string): RedispatchTaskResult {
+    const initial = this.getTask(taskId);
+    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+    const current = this.getTask(taskId);
+    if (!current || current.workspaceId !== initial.workspaceId) {
+      throw new Error(`Task not found or terminal: ${taskId}`);
+    }
+    this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
+    const terminal = this.cancelTaskWithinWorkspaceLock(current, true);
+    const nextAttempt = current.attempt + 1;
+    const replacement = this.createTaskWithinWorkspaceLock({
+      agentId: current.agentId,
+      taskKind: current.taskKind,
+      runtimeId: null,
+      issueId: current.issueId,
+      issueSessionId: current.issueSessionId,
+      chatSessionId: current.chatSessionId,
+      triggerCommentId: current.triggerCommentId,
+      triggerSummary: current.triggerSummary,
+      workspaceId: current.workspaceId,
+      priority: current.priority,
+      prompt: current.prompt,
+      resetProviderSession: true,
+      attempt: nextAttempt,
+      maxAttempts: Math.max(current.maxAttempts, nextAttempt),
+      parentTaskId: current.id,
+      delegationId: current.delegationId,
+      delegatedByAgentId: current.delegatedByAgentId,
+      assignmentSourceEventId: current.assignmentSourceEventId,
+    });
+    if (replacement.chatSessionId) {
+      this.ctx.db.run(
+        "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
+        [replacement.id, nowIso(), replacement.chatSessionId],
+      );
+    }
+    return { cancelled: terminal.task, replacement };
+  }
+
+  notifyRedispatchedTask(result: RedispatchTaskResult): void {
+    this.ctx.notifyTaskEvent("task:cancelled", result.cancelled);
+    this.ctx.notifyTaskEnqueued(result.replacement);
   }
 
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {
@@ -2014,6 +2178,7 @@ export class TasksRepo {
     status: "completed" | "failed" | "cancelled",
     body: string | null,
     workspaceLockHeld = false,
+    replacementPlanned = false,
   ): TaskTerminalFollowUps {
     const now = nowIso();
     if (
@@ -2135,7 +2300,7 @@ export class TasksRepo {
           : this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, event);
         if (status === "completed") this.promoteSessionAgentLane(task);
         else if (!retry) this.resetSessionAgentLane(task.issueSessionId, task.agentId);
-        if (!retry) {
+        if (!retry && !replacementPlanned) {
           const wakeup = workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
                 sourceTaskId: task.id,
@@ -2155,7 +2320,7 @@ export class TasksRepo {
       // Compute status after the return task is present. Otherwise the child
       // completion can mark the Issue done and the queued leader follow-up is
       // deliberately unable to reopen that explicit terminal state.
-      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status, retry != null);
+      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status, retry != null || replacementPlanned);
       if (issueStatus) {
         if (workspaceLockHeld) this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus);
         else this.syncIssueStatusFromTask(task, issueStatus);
@@ -2244,7 +2409,7 @@ export class TasksRepo {
   }
 
   /** Caller holds the task workspace lifecycle lock. */
-  private cancelTaskWithinWorkspaceLock(current: MultiremiTask): {
+  private cancelTaskWithinWorkspaceLock(current: MultiremiTask, replacementPlanned = false): {
     task: MultiremiTask;
     followUps: TaskTerminalFollowUps;
   } {
@@ -2259,7 +2424,7 @@ export class TasksRepo {
     const cancelled = this.getTask(current.id)!;
     return {
       task: cancelled,
-      followUps: this.afterTaskTerminal(cancelled, "cancelled", null, true),
+      followUps: this.afterTaskTerminal(cancelled, "cancelled", null, true, replacementPlanned),
     };
   }
 
@@ -2677,6 +2842,8 @@ function toTask(row: Row): MultiremiTask {
     issue_session_id: nullableString(row.issue_session_id),
     issueSessionGeneration: row.issue_session_generation == null ? null : Number(row.issue_session_generation),
     issue_session_generation: row.issue_session_generation == null ? null : Number(row.issue_session_generation),
+    holdsWorkspace: Boolean(Number(row.holds_workspace ?? 1)),
+    holds_workspace: Boolean(Number(row.holds_workspace ?? 1)),
     chatSessionId: nullableString(row.chat_session_id),
     autopilotRunId: nullableString(row.autopilot_run_id),
     triggerCommentId: nullableString(row.trigger_comment_id),
@@ -2724,6 +2891,17 @@ function toTask(row: Row): MultiremiTask {
     completedAt: nullableString(row.completed_at),
     failedAt: nullableString(row.failed_at),
     cancelledAt: nullableString(row.cancelled_at),
+  };
+}
+
+function toTaskQueueBlocker(row: Row): MultiremiTaskQueueBlocker {
+  return {
+    taskId: String(row.task_id),
+    agentId: String(row.agent_id),
+    agentName: String(row.agent_name),
+    issueSessionId: nullableString(row.issue_session_id),
+    issueSessionTitle: nullableString(row.issue_session_title),
+    reason: String(row.blocker_reason) as MultiremiTaskQueueBlocker["reason"],
   };
 }
 
@@ -2869,6 +3047,22 @@ function toTaskSteerMessage(row: Row): MultiremiTaskSteerMessage {
     content: String(row.content ?? ""),
     createdAt: String(row.created_at),
     consumedAt: nullableString(row.consumed_at),
+  };
+}
+
+function toOrganizerAction(row: Row): MultiremiOrganizerAction {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    supervisorTaskId: String(row.supervisor_task_id),
+    supervisorAgentId: String(row.supervisor_agent_id),
+    targetTaskId: String(row.target_task_id),
+    targetIssueId: nullableString(row.target_issue_id),
+    replacementTaskId: nullableString(row.replacement_task_id),
+    reportIssueId: String(row.report_issue_id),
+    action: String(row.action) as MultiremiOrganizerAction["action"],
+    reason: String(row.reason),
+    createdAt: String(row.created_at),
   };
 }
 

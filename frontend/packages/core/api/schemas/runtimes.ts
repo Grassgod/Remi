@@ -7,6 +7,11 @@ import type {
   DaemonInventoryResponse,
   DaemonRetirementPlanResponse,
   RetireDaemonResponse,
+  RuntimeProvision,
+  RuntimeProvisionListResponse,
+  RuntimeProvisionResponse,
+  RuntimeProvisionState,
+  RuntimeProvisionStatesResponse,
   SshMeshOverview,
   SshMeshTestResponse,
 } from "../../runtimes/types";
@@ -46,6 +51,92 @@ export const EMPTY_CLOUD_RUNTIME_NODE: CloudRuntimeNode = {
   metadata: {},
   created_at: "",
   updated_at: "",
+};
+
+const RuntimeProvisionSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  kind: z.string(),
+  enabled: z.boolean(),
+  package: z.string().nullable().default(null),
+  version: z.string().nullable().default(null),
+  version_check: z.boolean().default(true),
+  bin: z.string().nullable().default(null),
+  registry: z.string().nullable().default(null),
+  command: z.string().nullable().default(null),
+  args: z.array(z.string()).default([]),
+  trigger_kinds: z.array(z.string()).default([]),
+  cron_expression: z.string().nullable().default(null),
+  timezone: z.string().nullable().default(null),
+  next_run_at: z.string().nullable().default(null),
+  last_fired_at: z.string().nullable().default(null),
+  timeout_ms: z.number().default(0),
+  created_by: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+const RuntimeProvisionStateSchema = z.object({
+  provision_id: z.string(),
+  runtime_id: z.string(),
+  status: z.string(),
+  observed_version: z.string().nullable().default(null),
+  last_command_request_id: z.string().nullable().default(null),
+  last_checked_at: z.string().nullable().default(null),
+  last_error: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const RuntimeProvisionListResponseSchema = z.object({
+  provisions: z.array(RuntimeProvisionSchema).default([]),
+}).loose();
+
+export const RuntimeProvisionResponseSchema = z.object({
+  provision: RuntimeProvisionSchema,
+}).loose();
+
+export const RuntimeProvisionStatesResponseSchema = z.object({
+  states: z.array(RuntimeProvisionStateSchema).default([]),
+}).loose();
+
+export const EMPTY_RUNTIME_PROVISION_LIST: RuntimeProvisionListResponse = { provisions: [] };
+export const EMPTY_RUNTIME_PROVISION_STATES: RuntimeProvisionStatesResponse = { states: [] };
+export const EMPTY_RUNTIME_PROVISION: RuntimeProvision = {
+  id: "",
+  workspace_id: "",
+  kind: "unknown",
+  enabled: false,
+  package: null,
+  version: null,
+  version_check: true,
+  bin: null,
+  registry: null,
+  command: null,
+  args: [],
+  trigger_kinds: [],
+  cron_expression: null,
+  timezone: null,
+  next_run_at: null,
+  last_fired_at: null,
+  timeout_ms: 0,
+  created_by: null,
+  created_at: "",
+  updated_at: "",
+};
+export const EMPTY_RUNTIME_PROVISION_STATE: RuntimeProvisionState = {
+  provision_id: "",
+  runtime_id: "",
+  status: "unknown",
+  observed_version: null,
+  last_command_request_id: null,
+  last_checked_at: null,
+  last_error: null,
+  created_at: "",
+  updated_at: "",
+};
+export const EMPTY_RUNTIME_PROVISION_RESPONSE: RuntimeProvisionResponse = {
+  provision: EMPTY_RUNTIME_PROVISION,
 };
 
 // Fleet model catalog (`GET /api/models`) — feeds the machine-less create
@@ -119,6 +210,12 @@ const RuntimeUsageSchema = z.object({
   output_tokens: z.number(),
   cache_read_tokens: z.number(),
   cache_write_tokens: z.number(),
+  // Context-occupancy total from pre-0.2.49 daemons, which reported no
+  // input/output split. OPTIONAL on purpose: these endpoints parse with
+  // `parseStrictResponse`, so requiring it would hard-fail every server
+  // that doesn't emit it yet. Absent → the row contributes no total-only
+  // tokens, which is the honest reading of "we weren't told".
+  total_tokens: z.number().optional(),
 }).loose();
 
 export const RuntimeUsageListSchema = z.array(RuntimeUsageSchema);

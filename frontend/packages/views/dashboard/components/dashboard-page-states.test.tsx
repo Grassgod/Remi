@@ -101,10 +101,10 @@ vi.mock("../../runtimes/components/charts", () => ({
   WeeklyTasksChart: () => <div data-testid="chart" />,
 }));
 
-// The pricing-gap banner has its own tests on the runtime page; stub it so
-// this suite doesn't drag the whole usage-section module graph in.
-vi.mock("../../runtimes/components/usage-section", () => ({
-  UnmappedPricingNotice: () => null,
+// Keep UnmappedPricingNotice real so dashboard-specific filtering is covered.
+// The dialog itself is outside this suite's scope and need not mount its form.
+vi.mock("../../runtimes/components/custom-pricing-dialog", () => ({
+  CustomPricingDialog: () => null,
 }));
 
 import { DashboardPage } from "./dashboard-page";
@@ -119,6 +119,7 @@ function usageRow(overrides: Record<string, unknown> = {}) {
     output_tokens: 0,
     cache_read_tokens: 0,
     cache_write_tokens: 0,
+    total_tokens: 1_000_000,
     task_count: 2,
     ...overrides,
   };
@@ -171,7 +172,112 @@ describe("DashboardPage — normal values", () => {
     expect(screen.getAllByText("1M").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("10m").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Across 2 tasks")).toBeTruthy();
+    expect(
+      screen.getByText("Input 1M · Output 0 · Cache read 0 · Cache write 0"),
+    ).toBeTruthy();
     expect(screen.queryByText("—")).toBeNull();
+  });
+
+  it("shows total-only history without fabricating a cost", () => {
+    const totalOnly = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 5_181_880,
+      task_count: 27,
+    };
+    setStates({
+      daily: { data: [usageRow(totalOnly)] },
+      "by-agent": {
+        data: [usageRow({ ...totalOnly, agent_id: "agent-1" })],
+      },
+      "agent-runtime": {
+        data: [{ ...RUN_TIME_ROW, task_count: 27 }],
+      },
+      "runtime-daily": {
+        data: [{ ...RUN_TIME_DAILY_ROW, task_count: 27 }],
+      },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    expect(screen.getAllByText("5.2M").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("~5.2M")).toBeTruthy();
+    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(screen.queryByText("$0.00")).toBeNull();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not offer custom pricing for total-only usage on an unpriced model", () => {
+    const totalOnly = {
+      model: "gpt-5.6-sol",
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 5_181_880,
+      task_count: 27,
+    };
+    setStates({
+      daily: { data: [usageRow(totalOnly)] },
+      "by-agent": {
+        data: [usageRow({ ...totalOnly, agent_id: "agent-1" })],
+      },
+      "agent-runtime": {
+        data: [{ ...RUN_TIME_ROW, task_count: 27 }],
+      },
+      "runtime-daily": {
+        data: [{ ...RUN_TIME_DAILY_ROW, task_count: 27 }],
+      },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(screen.queryByText(/model has no maintained price/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Set custom prices" })).toBeNull();
+  });
+
+  it("keeps both notices when an unpriced model has split and total-only usage", () => {
+    const totalOnly = usageRow({
+      model: "gpt-5.6-sol",
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 5_181_880,
+      task_count: 27,
+    });
+    const split = usageRow({
+      model: "gpt-5.6-sol",
+      input_tokens: 536,
+      output_tokens: 174_228,
+      cache_read_tokens: 24_578_049,
+      cache_write_tokens: 763_702,
+      total_tokens: 26_179_959,
+      task_count: 12,
+    });
+    setStates({
+      daily: { data: [totalOnly, split] },
+      "by-agent": {
+        data: [
+          { ...totalOnly, agent_id: "agent-1" },
+          { ...split, agent_id: "agent-1" },
+        ],
+      },
+      "agent-runtime": {
+        data: [{ ...RUN_TIME_ROW, task_count: 39 }],
+      },
+      "runtime-daily": {
+        data: [{ ...RUN_TIME_DAILY_ROW, task_count: 39 }],
+      },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(screen.getByText(/1 model has no maintained price/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Set custom prices" })).toBeTruthy();
   });
 });
 
@@ -347,6 +453,7 @@ describe("DashboardPage — cost without pricing", () => {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            total_tokens: 0,
             task_count: 0,
           }),
         ],

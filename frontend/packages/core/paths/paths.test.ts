@@ -35,6 +35,9 @@ describe("paths.workspace(slug)", () => {
     expect(ws.inbox()).toBe("/acme/inbox");
     expect(ws.myIssues()).toBe("/acme/my-issues");
     expect(ws.runtimes()).toBe("/acme/runtimes");
+    expect(ws.runtimeMachine("local:daemon-1")).toBe(
+      "/acme/runtimes?machine=local%3Adaemon-1",
+    );
     expect(ws.plugins()).toBe("/acme/plugins");
     expect(ws.pluginDetail("plugin_123")).toBe("/acme/plugins/plugin_123");
     expect(ws.skills()).toBe("/acme/skills");
@@ -61,6 +64,9 @@ describe("paths.workspace(slug)", () => {
     );
     expect(ws.pluginDetail("plugin with space")).toBe(
       "/acme/plugins/plugin%20with%20space",
+    );
+    expect(ws.runtimeMachine("machine with space")).toBe(
+      "/acme/runtimes?machine=machine%20with%20space",
     );
   });
 

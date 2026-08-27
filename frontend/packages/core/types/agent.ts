@@ -76,6 +76,17 @@ export interface AgentTask {
   issue_id: string;
   /** Product Session under the Issue. Empty/missing for legacy tasks. */
   issue_session_id?: string;
+  /** Immutable snapshot of whether this task owns the shared Issue workspace. */
+  holds_workspace?: boolean;
+  /** Direct active task currently preventing this queued task from being claimed. */
+  queue_blocker?: {
+    task_id: string;
+    agent_id: string;
+    agent_name: string;
+    issue_session_id: string | null;
+    issue_session_title: string | null;
+    reason: "session" | "issue_workspace" | "legacy_issue" | "agent_capacity";
+  } | null;
   // `waiting_local_directory` is the daemon-emitted hold state for the
   // local_directory flow: a task that has been dispatched but is parked
   // because another task currently owns the same on-disk path lock.
@@ -520,6 +531,10 @@ export interface RuntimeUsage {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  /** Context tokens consumed, from daemons that reported no input/output
+   *  split (older servers omit it). Counts toward token volume but can
+   *  never be priced — see `getTotalOnlyTokens` in views/runtimes/utils. */
+  total_tokens?: number;
 }
 
 export interface RuntimeHourlyActivity {
@@ -582,6 +597,7 @@ export interface DashboardUsageDaily {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  total_tokens: number;
   task_count: number;
 }
 
@@ -595,6 +611,7 @@ export interface DashboardUsageByAgent {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  total_tokens: number;
   task_count: number;
 }
 

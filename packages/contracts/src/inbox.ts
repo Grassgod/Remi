@@ -13,6 +13,7 @@ export const INBOX_ROUTE_BY_TYPE = {
   autopilot_run_completed: "inbox_ledger",
   autopilot_run_failed: "inbox_ledger",
   autopilot_run_overdue: "inbox_ledger",
+  organizer_action: "inbox_ledger",
 } as const satisfies Record<string, RegisteredInboxRoute>;
 
 export type RegisteredInboxType = keyof typeof INBOX_ROUTE_BY_TYPE;

@@ -281,6 +281,92 @@ describe("issue archive cache updates", () => {
   });
 });
 
+describe("generated issue cache invalidation", () => {
+  const SOURCE_ISSUE_ID = "source-1";
+  const NEW_SOURCE_ISSUE_ID = "source-2";
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient();
+  });
+
+  it("invalidates the source issue's generated list when an issue is created", () => {
+    qc.setQueryData(issueKeys.generated(WS_ID, SOURCE_ISSUE_ID), {
+      issues: [],
+    });
+
+    onIssueCreated(qc, WS_ID, {
+      ...baseIssue,
+      source_issue_id: SOURCE_ISSUE_ID,
+    });
+
+    expectInvalidated(qc, issueKeys.generated(WS_ID, SOURCE_ISSUE_ID));
+  });
+
+  it("does not invalidate generated lists when the created issue has no source", () => {
+    qc.setQueryData(issueKeys.generated(WS_ID, SOURCE_ISSUE_ID), {
+      issues: [],
+    });
+
+    onIssueCreated(qc, WS_ID, baseIssue);
+
+    expect(qc.getQueryState(issueKeys.generated(WS_ID, SOURCE_ISSUE_ID))?.isInvalidated)
+      .toBe(false);
+  });
+
+  it("invalidates both old and new generated lists when an issue changes source", () => {
+    qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), {
+      ...baseIssue,
+      source_issue_id: SOURCE_ISSUE_ID,
+    });
+    qc.setQueryData(issueKeys.generated(WS_ID, SOURCE_ISSUE_ID), {
+      issues: [baseIssue],
+    });
+    qc.setQueryData(issueKeys.generated(WS_ID, NEW_SOURCE_ISSUE_ID), {
+      issues: [],
+    });
+
+    onIssueUpdated(qc, WS_ID, {
+      id: ISSUE_ID,
+      source_issue_id: NEW_SOURCE_ISSUE_ID,
+    });
+
+    expectInvalidated(qc, issueKeys.generated(WS_ID, SOURCE_ISSUE_ID));
+    expectInvalidated(qc, issueKeys.generated(WS_ID, NEW_SOURCE_ISSUE_ID));
+  });
+
+  it("invalidates the cached source's generated list on other issue updates", () => {
+    qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), {
+      ...baseIssue,
+      source_issue_id: SOURCE_ISSUE_ID,
+    });
+    qc.setQueryData(issueKeys.generated(WS_ID, SOURCE_ISSUE_ID), {
+      issues: [baseIssue],
+    });
+
+    onIssueUpdated(qc, WS_ID, {
+      id: ISSUE_ID,
+      title: "Updated title",
+    });
+
+    expectInvalidated(qc, issueKeys.generated(WS_ID, SOURCE_ISSUE_ID));
+  });
+
+  it("invalidates the generated list when the deleted issue's source is cached", () => {
+    qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), {
+      ...baseIssue,
+      source_issue_id: SOURCE_ISSUE_ID,
+    });
+    qc.setQueryData(issueKeys.generated(WS_ID, SOURCE_ISSUE_ID), {
+      issues: [baseIssue],
+    });
+
+    onIssueDeleted(qc, WS_ID, ISSUE_ID);
+
+    expectInvalidated(qc, issueKeys.generated(WS_ID, SOURCE_ISSUE_ID));
+  });
+});
+
 describe("onIssueDeleted", () => {
   let qc: QueryClient;
 

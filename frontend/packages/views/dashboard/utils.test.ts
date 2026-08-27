@@ -23,6 +23,7 @@ describe("aggregateByDate on dashboard rows", () => {
         output_tokens: 500_000,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 1_000_000,
         task_count: 3,
       },
       {
@@ -32,6 +33,7 @@ describe("aggregateByDate on dashboard rows", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 1_000_000,
         task_count: 1,
       },
     ];
@@ -55,11 +57,37 @@ describe("aggregateByDate on dashboard rows", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 999_999_999,
         task_count: 0,
       },
     ];
     const { dailyCostStack: result } = aggregateByDate(rows);
     expect(result[0]?.total).toBe(0);
+  });
+
+  it("keeps total-only history as a separate unpriced token segment", () => {
+    const rows: DashboardUsageDaily[] = [
+      {
+        date: "2026-08-25",
+        model: "claude-sonnet-5",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 5_181_880,
+        task_count: 27,
+      },
+    ];
+
+    const { dailyTokens, dailyCostStack } = aggregateByDate(rows);
+    expect(dailyTokens[0]).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalOnly: 5_181_880,
+    });
+    expect(dailyCostStack[0]?.total).toBe(0);
   });
 });
 
@@ -73,6 +101,7 @@ describe("aggregateAgentTokens", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 100_000,
         task_count: 1,
       },
       {
@@ -82,6 +111,7 @@ describe("aggregateAgentTokens", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 5_000_000,
         task_count: 3,
       },
       {
@@ -91,6 +121,7 @@ describe("aggregateAgentTokens", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 1_000_000,
         task_count: 2,
       },
     ]);
@@ -99,6 +130,38 @@ describe("aggregateAgentTokens", () => {
     expect(rows[0]?.taskCount).toBe(5);
     // big-spender across two models — verify cost > small-spender's.
     expect(rows[0]!.cost).toBeGreaterThan(rows[1]!.cost);
+  });
+
+  it("uses total_tokens only when every split is zero", () => {
+    const rows = aggregateAgentTokens([
+      {
+        agent_id: "agent-a",
+        model: "claude-sonnet-5",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 5_181_880,
+        task_count: 27,
+      },
+      {
+        agent_id: "agent-a",
+        model: "claude-sonnet-5",
+        input_tokens: 536,
+        output_tokens: 174_228,
+        cache_read_tokens: 24_578_049,
+        cache_write_tokens: 763_702,
+        total_tokens: 26_179_959,
+        task_count: 12,
+      },
+    ]);
+
+    expect(rows[0]).toMatchObject({
+      tokens: 30_698_395,
+      totalOnlyTokens: 5_181_880,
+      taskCount: 39,
+    });
+    expect(rows[0]!.cost).toBeGreaterThan(0);
   });
 });
 
@@ -112,6 +175,7 @@ describe("computeDailyTotals", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 1_000_000,
         task_count: 2,
       },
       {
@@ -121,12 +185,32 @@ describe("computeDailyTotals", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 2_000_000,
         task_count: 3,
       },
     ]);
     expect(totals.input).toBe(3_000_000);
     expect(totals.cost).toBe(9); // 3M × $3/M
     expect(totals.taskCount).toBe(5);
+  });
+
+  it("adds total-only history without treating it as input or cost", () => {
+    const totals = computeDailyTotals([
+      {
+        date: "2026-08-25",
+        model: "claude-sonnet-5",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 5_181_880,
+        task_count: 27,
+      },
+    ]);
+
+    expect(totals.totalOnly).toBe(5_181_880);
+    expect(totals.input).toBe(0);
+    expect(totals.cost).toBe(0);
   });
 });
 
@@ -143,6 +227,7 @@ describe("mergeAgentDashboardRows", () => {
         cost: 12,
         taskCount: 2, // overcounted because (model-1: 1) + (model-2: 1)
         unpricedTokens: 0,
+        totalOnlyTokens: 0,
       },
     ];
     const runTimeRows = [
@@ -164,7 +249,14 @@ describe("mergeAgentDashboardRows", () => {
     // rollup is silent on this agent. Keep the token-side estimate
     // instead of dropping the agent from the table entirely.
     const merged = mergeAgentDashboardRows(
-      [{ agentId: "agent-b", tokens: 100, cost: 0.5, taskCount: 1, unpricedTokens: 0 }],
+      [{
+        agentId: "agent-b",
+        tokens: 100,
+        cost: 0.5,
+        taskCount: 1,
+        unpricedTokens: 0,
+        totalOnlyTokens: 0,
+      }],
       [],
     );
     expect(merged[0]!.taskCount).toBe(1);
@@ -188,9 +280,9 @@ describe("mergeAgentDashboardRows", () => {
   it("sorts by cost desc with run-time as a tiebreaker", () => {
     const merged = mergeAgentDashboardRows(
       [
-        { agentId: "low", tokens: 100, cost: 1, taskCount: 1, unpricedTokens: 0 },
-        { agentId: "high", tokens: 100, cost: 9, taskCount: 1, unpricedTokens: 0 },
-        { agentId: "zero-cost-long", tokens: 0, cost: 0, taskCount: 0, unpricedTokens: 0 },
+        { agentId: "low", tokens: 100, cost: 1, taskCount: 1, unpricedTokens: 0, totalOnlyTokens: 0 },
+        { agentId: "high", tokens: 100, cost: 9, taskCount: 1, unpricedTokens: 0, totalOnlyTokens: 0 },
+        { agentId: "zero-cost-long", tokens: 0, cost: 0, taskCount: 0, unpricedTokens: 0, totalOnlyTokens: 0 },
       ],
       [
         { agent_id: "zero-cost-long", total_seconds: 1000, task_count: 5, failed_count: 0 },
@@ -329,6 +421,7 @@ describe("usage availability flags (MUL-93)", () => {
         output_tokens: 500,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 1_500,
         task_count: 1,
       },
       {
@@ -338,6 +431,7 @@ describe("usage availability flags (MUL-93)", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 2_000,
         task_count: 1,
       },
     ]);
@@ -355,6 +449,7 @@ describe("usage availability flags (MUL-93)", () => {
           cost: 0,
           taskCount: 1,
           unpricedTokens: 5_000,
+          totalOnlyTokens: 0,
         },
       ],
       [],
@@ -372,6 +467,7 @@ describe("usage availability flags (MUL-93)", () => {
           cost: 0,
           taskCount: 0,
           unpricedTokens: 0,
+          totalOnlyTokens: 0,
         },
       ],
       [],
@@ -403,11 +499,65 @@ describe("usage availability flags (MUL-93)", () => {
           cost: 0.5,
           taskCount: 1,
           unpricedTokens: 0,
+          totalOnlyTokens: 0,
         },
       ],
       [],
     );
     expect(merged[0]!.hasRunTime).toBe(false);
     expect(merged[0]!.seconds).toBe(0);
+  });
+
+  it("shows total-only tokens but marks their cost unavailable", () => {
+    const tokenRows = aggregateAgentTokens([
+      {
+        agent_id: "agent-history",
+        model: "claude-sonnet-5",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 5_181_880,
+        task_count: 27,
+      },
+    ]);
+
+    const merged = mergeAgentDashboardRows(tokenRows, []);
+    expect(merged[0]).toMatchObject({
+      tokens: 5_181_880,
+      totalOnlyTokens: 5_181_880,
+      tokensUnavailable: false,
+      costUnavailable: true,
+    });
+  });
+
+  it("prices only split rows when an agent has mixed history", () => {
+    const tokenRows = aggregateAgentTokens([
+      {
+        agent_id: "agent-mixed",
+        model: "claude-sonnet-5",
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 5_181_880,
+        task_count: 27,
+      },
+      {
+        agent_id: "agent-mixed",
+        model: "claude-sonnet-5",
+        input_tokens: 536,
+        output_tokens: 174_228,
+        cache_read_tokens: 24_578_049,
+        cache_write_tokens: 763_702,
+        total_tokens: 26_179_959,
+        task_count: 12,
+      },
+    ]);
+
+    const merged = mergeAgentDashboardRows(tokenRows, []);
+    expect(merged[0]!.cost).toBeCloseTo(12.852, 3);
+    expect(merged[0]!.costUnavailable).toBe(false);
+    expect(merged[0]!.totalOnlyTokens).toBe(5_181_880);
   });
 });

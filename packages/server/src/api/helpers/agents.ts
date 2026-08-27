@@ -29,12 +29,69 @@ import { canCurrentUserUseRuntime } from "./runtimes.js";
 import {
   fleetModelsResponse,
   type FleetModelResponse,
+  type FleetModelThinkingResponse,
   type FleetProviderModelsResponse,
 } from "../wire/runtimes.js";
 import { ATLAS_AGENT_NAME } from "../../repository-wiki/atlas.js";
 import { currentTaskIssueCreationRestricted } from "./issues.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
+
+type ClaudeModelFamily = "opus" | "sonnet" | "haiku";
+
+function claudeModelFamily(modelId: string): ClaudeModelFamily | undefined {
+  const normalized = modelId.toLowerCase().replace(/\[1m\]$/, "");
+  return normalized.match(
+    /^(?:claude-)?(opus|sonnet|haiku)(?:-\d+(?:-\d+)*)?$/,
+  )?.[1] as ClaudeModelFamily | undefined;
+}
+
+function thinkingLevelsKey(thinking: FleetModelThinkingResponse): string {
+  return JSON.stringify([...thinking.supported_levels].sort((a, b) =>
+    a.value.localeCompare(b.value)
+      || a.label.localeCompare(b.label)
+      || (a.description ?? "").localeCompare(b.description ?? "")
+  ));
+}
+
+function familyThinkingConsensus(models: FleetModelResponse[]): FleetModelThinkingResponse | undefined {
+  const first = models[0]?.thinking;
+  const firstKey = first
+    ? `${thinkingLevelsKey(first)}\0${first.default_level ?? ""}`
+    : undefined;
+  if (!models.every((model) => {
+    if (!model.thinking) return firstKey === undefined;
+    return `${thinkingLevelsKey(model.thinking)}\0${model.thinking.default_level ?? ""}` === firstKey;
+  })) return undefined;
+  return first;
+}
+
+/**
+ * Last-resort tier for gateway models with no exact and no family counterpart
+ * (e.g. `claude-fable-5`, which has no runtime id at all): if every effort-capable
+ * runtime model of this provider agrees on one level set, assume a new model of the
+ * same provider shares it. This is a heuristic, so it fails closed on any
+ * disagreement — Codex, whose runtimes expose 4- and 6-level sets, never reaches a
+ * consensus here. It never propagates `default`; only an exact or unambiguous family
+ * hit may do that. Revisit if a future Claude model ships an effort set that diverges
+ * from its siblings — it would be given the consensus set rather than its own.
+ */
+function providerThinkingConsensus(models: FleetModelResponse[]): FleetModelThinkingResponse | undefined {
+  const capable = models.flatMap((model) =>
+    model.thinking?.supported_levels.length ? [model.thinking] : []
+  );
+  const first = capable[0];
+  if (!first) return undefined;
+  const levelsKey = thinkingLevelsKey(first);
+  if (!capable.every((thinking) => thinkingLevelsKey(thinking) === levelsKey)) return undefined;
+  const defaultLevel = capable.every((thinking) => thinking.default_level === first.default_level)
+    ? first.default_level
+    : undefined;
+  return {
+    supported_levels: first.supported_levels,
+    ...(defaultLevel ? { default_level: defaultLevel } : {}),
+  };
+}
 
 function reservedAtlasAgentName(c: Context, name: string): Response | null {
   if (name !== ATLAS_AGENT_NAME) return null;
@@ -79,15 +136,45 @@ export function overlayGatewayModels(
     // gateway/token invalidates the old catalog until rediscovery catches up.
     if (snapshot.sourceRevision !== engineConfig.revision) continue;
     const existing = byEngine.get(engine);
-    const runtimeModels = new Map(existing?.models.map((model) => [model.id, model]));
+    const existingModels = existing?.models ?? [];
+    const runtimeModels = new Map(existingModels.map((model) => [model.id, model]));
+    const familyModels = new Map<ClaudeModelFamily, FleetModelResponse[]>();
+    const gatewayFamilyCounts = new Map<ClaudeModelFamily, number>();
+    if (engine === "claude") {
+      for (const model of existingModels) {
+        const family = claudeModelFamily(model.id);
+        if (family) familyModels.set(family, [...(familyModels.get(family) ?? []), model]);
+      }
+      for (const model of snapshot.models) {
+        const family = claudeModelFamily(model.id);
+        if (family) gatewayFamilyCounts.set(family, (gatewayFamilyCounts.get(family) ?? 0) + 1);
+      }
+    }
+    const providerThinking = providerThinkingConsensus(existingModels);
     const models = snapshot.models.map((model): FleetModelResponse => {
       const runtimeModel = runtimeModels.get(model.id);
+      const family = engine === "claude" ? claudeModelFamily(model.id) : undefined;
+      const matchingFamilyModels = family ? familyModels.get(family) ?? [] : [];
+      const familyMatched = matchingFamilyModels.length > 0;
+      // A match with no thinking metadata is a negative result and must not
+      // continue to the broader provider fallback (notably for Claude Haiku).
+      const thinking = runtimeModel
+        ? runtimeModel.thinking
+        : familyMatched
+        ? familyThinkingConsensus(matchingFamilyModels)
+        : providerThinking;
+      const isDefault = runtimeModel
+        ? runtimeModel.default === true
+        : family !== undefined
+          && familyMatched
+          && gatewayFamilyCounts.get(family) === 1
+          && matchingFamilyModels.filter((candidate) => candidate.default).length === 1;
       return {
         id: model.id,
         label: model.label,
         provider: engine,
-        ...(runtimeModel?.default ? { default: true } : {}),
-        ...(runtimeModel?.thinking ? { thinking: runtimeModel.thinking } : {}),
+        ...(isDefault ? { default: true } : {}),
+        ...(thinking ? { thinking } : {}),
       };
     });
     byEngine.set(engine, {

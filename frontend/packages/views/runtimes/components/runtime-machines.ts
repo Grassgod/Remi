@@ -18,6 +18,9 @@ export interface RuntimeMachine {
   subtitle: string | null;
   deviceInfo: string | null;
   cliVersion: string | null;
+  cliVersions: string[];
+  cliManagedByDesktop: boolean;
+  cliUpdateRuntimeId: string | null;
   mode: AgentRuntime["runtime_mode"];
   section: RuntimeMachineSection;
   isCurrent: boolean;
@@ -137,6 +140,9 @@ function inventoryOnlyMachine(
     subtitle: null,
     deviceInfo: null,
     cliVersion: null,
+    cliVersions: [],
+    cliManagedByDesktop: false,
+    cliUpdateRuntimeId: null,
     mode: "local",
     section: isCurrent ? "local" : "remote",
     isCurrent,
@@ -162,6 +168,9 @@ function placeholderLocalMachine(
     subtitle: null,
     deviceInfo: null,
     cliVersion: null,
+    cliVersions: [],
+    cliManagedByDesktop: false,
+    cliUpdateRuntimeId: null,
     mode: "local",
     section: "local",
     isCurrent: true,
@@ -273,6 +282,8 @@ function finalizeRuntimeMachine(
     },
     { runningCount: 0, queuedCount: 0 },
   );
+  const cliVersions = reportedCliVersions(runtimes);
+  const cliUpdateRuntime = selectMachineUpdateRuntime(runtimes, options.now);
 
   return {
     id: draft.id,
@@ -280,7 +291,12 @@ function finalizeRuntimeMachine(
     title,
     subtitle,
     deviceInfo,
-    cliVersion: commonCliVersion(runtimes),
+    cliVersion: cliVersions.length === 1 ? cliVersions[0] ?? null : null,
+    cliVersions,
+    cliManagedByDesktop: runtimes.some(
+      (runtime) => runtime.metadata?.launched_by === "desktop",
+    ),
+    cliUpdateRuntimeId: cliUpdateRuntime?.id ?? null,
     mode: draft.mode,
     section: isCurrent ? "local" : draft.mode === "cloud" ? "cloud" : "remote",
     isCurrent,
@@ -295,7 +311,7 @@ function finalizeRuntimeMachine(
   };
 }
 
-function runtimeMachineId(runtime: AgentRuntime): string {
+export function runtimeMachineId(runtime: AgentRuntime): string {
   if (runtime.daemon_id) return `${runtime.runtime_mode}:${runtime.daemon_id}`;
   const deviceName = runtimeDeviceName(runtime);
   if (deviceName) return `${runtime.runtime_mode}:device:${deviceName}`;
@@ -393,7 +409,7 @@ function latestLastSeenAt(runtimes: AgentRuntime[]): string | null {
   return latest;
 }
 
-function commonCliVersion(runtimes: AgentRuntime[]): string | null {
+function reportedCliVersions(runtimes: AgentRuntime[]): string[] {
   const versions = new Set<string>();
   for (const runtime of runtimes) {
     const version = runtime.metadata?.cli_version;
@@ -401,7 +417,21 @@ function commonCliVersion(runtimes: AgentRuntime[]): string | null {
       versions.add(version.trim());
     }
   }
-  return versions.size === 1 ? Array.from(versions)[0] ?? null : null;
+  return Array.from(versions).sort((a, b) => a.localeCompare(b));
+}
+
+export function selectMachineUpdateRuntime(
+  runtimes: AgentRuntime[],
+  now: number,
+): AgentRuntime | null {
+  return (
+    runtimes
+      .filter((runtime) => deriveRuntimeHealth(runtime, now) === "online")
+      .toSorted(
+        (a, b) =>
+          a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
+      )[0] ?? null
+  );
 }
 
 function shortDaemonId(daemonId: string): string {

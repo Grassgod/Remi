@@ -50,7 +50,8 @@
     "actions_aria": "Machine actions",
     "tabs": {
       "runtimes": "Runtimes",
-      "ssh_mesh": "SSH access"
+      "ssh_mesh": "SSH access",
+      "provisions": "Provisions"
     },
     "retire": {
       "action": "Deactivate and remove",
@@ -238,6 +239,8 @@
     "no_agents": "No agents are bound to this runtime yet.",
     "diagnostics_title": "Diagnostics",
     "diagnostics_cli": "CLI",
+    "diagnostics_cli_shared": "Shared by machine",
+    "diagnostics_cli_view_machine": "View machine",
     "diagnostics_visibility": "Visibility",
     "visibility_label": {
       "private": "Private",
@@ -376,6 +379,10 @@
     "version_unknown": "unknown",
     "managed_by_desktop": "Managed by Desktop",
     "managed_by_desktop_title": "The CLI binary is managed by Multiremi Desktop — update Desktop to upgrade the CLI.",
+    "versions_reconciling": "Versions reconciling",
+    "versions_reconciling_title": "Providers currently report {{versions}}. Updates resume after the machine reports one shared version.",
+    "machine_offline_title": "This machine has no online runtime available to start the update.",
+    "failure_details": "CLI update failed",
     "latest": "Latest",
     "available": "available",
     "action": "Update",
@@ -426,7 +433,8 @@
     "kpi_cache_label": "Cache savings · {{days}}D",
     "kpi_cache_hint": "{{pct}}% hit · {{reads}} reads",
     "kpi_tokens_label": "Tokens · {{days}}D",
-    "kpi_tokens_hint": "in {{input}} · out {{output}}",
+    "kpi_tokens_hint": "in {{input}} · out {{output}} · cache {{cache}}",
+    "kpi_tokens_hint_total_only": "in {{input}} · out {{output}} · cache {{cache}} · {{totalOnly}} total only",
     "when_title": "When this runtime spent",
     "when_tab_daily": "Daily",
     "when_tab_weekly": "Weekly",
@@ -439,6 +447,7 @@
     "legend_output": "Output",
     "legend_cache_read": "Cache read",
     "legend_cache_write": "Cache write",
+    "legend_total_only": "Total only",
     "empty_no_usage": "No usage in this period.",
     "empty_pricing_missing": "Tokens recorded but pricing missing for:",
     "empty_pricing_hint": "Set a custom rate to include them in cost totals.",
@@ -476,9 +485,86 @@
     "table_cache_w": "Cache W",
     "no_data": "No usage data yet",
     "kpi_cost_unpriced": "No pricing for the models used — cost unavailable",
+    "kpi_cost_total_only": "Only total tokens were recorded — cost unavailable",
     "error_title": "Usage data unavailable",
     "error_body": "Usage data failed to load. This does not mean usage is zero.",
     "retry": "Retry",
-    "kpi_cache_unpriced": "No pricing for the models used — savings can't be calculated"
+    "kpi_cache_unpriced": "No pricing for the models used — savings can't be calculated",
+    "kpi_cache_total_only": "Only total tokens were recorded — savings can't be calculated"
+  },
+  "provisions": {
+    "title": "Runtime provisions",
+    "subtitle": "Workspace declarations and their latest state on every runtime.",
+    "add": "Add provision",
+    "filter_label": "Provision kind",
+    "filters": { "all": "All" },
+    "kinds": { "npm_global": "npm global", "command": "Command", "unknown": "Unknown" },
+    "load_failed": "Couldn't load runtime provisions",
+    "retry": "Retry",
+    "empty": "No provisions",
+    "empty_hint": "Workspace runtime declarations will appear here.",
+    "filter_empty": "No provisions match this filter.",
+    "enabled_label": "Enabled",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "edit": "Edit provision",
+    "cancel": "Cancel",
+    "save": "Save",
+    "not_available": "Not available",
+    "summary": "{{converged}} converged · {{attention}} need attention · {{total}} total",
+    "triggers": {
+      "on_register": "On runtime connect",
+      "on_change": "On change",
+      "cron": "Schedule"
+    },
+    "status": {
+      "pending": "Pending",
+      "converged": "Converged",
+      "drifted": "Drifted",
+      "failed": "Failed",
+      "unknown": "Unknown"
+    },
+    "matrix": {
+      "select": "Select a provision to inspect runtime state.",
+      "title": "Runtime state",
+      "load_failed": "Couldn't load runtime state.",
+      "empty": "No runtime state has been recorded.",
+      "error_details": "Show failure details"
+    },
+    "form": {
+      "create_title": "Add runtime provision",
+      "edit_title": "Edit runtime provision",
+      "description": "Apply one workspace declaration across its runtimes.",
+      "kind": "Kind",
+      "package": "Package",
+      "version": "Version",
+      "bin": "Binary",
+      "registry": "Registry",
+      "version_check": "Require a successful --version check",
+      "current_command": "Current redacted command",
+      "replacement_command": "Replacement command",
+      "command": "Command",
+      "leave_unchanged": "Leave blank to keep the current command",
+      "args": "Arguments",
+      "args_placeholder": "One argument per line",
+      "triggers": "Triggers",
+      "timeout": "Timeout (ms)",
+      "timeout_invalid": "Enter a positive timeout in milliseconds.",
+      "npm_required": "Package, version, and binary are required.",
+      "command_required": "Command is required."
+    },
+    "delete": {
+      "action": "Delete provision",
+      "title": "Delete this provision?",
+      "description": "{{target}} will no longer be managed across this workspace.",
+      "confirm": "Delete provision"
+    },
+    "toast": {
+      "created": "Provision created",
+      "updated": "Provision updated",
+      "deleted": "Provision deleted",
+      "save_failed": "Failed to save provision",
+      "delete_failed": "Failed to delete provision"
+    }
   }
 }

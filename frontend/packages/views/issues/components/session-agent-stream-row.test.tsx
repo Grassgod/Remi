@@ -96,6 +96,28 @@ describe("session agent stream row", () => {
     expect(screen.queryByText("Agent a1 is working")).not.toBeInTheDocument();
   });
 
+  it("names the active task blocking a queued run", async () => {
+    listTasksByIssue.mockResolvedValue([task({
+      status: "queued",
+      runtime_id: null,
+      started_at: null,
+      queue_blocker: {
+        task_id: "tsk_blocking123",
+        agent_id: "a2",
+        agent_name: "Builder",
+        issue_session_id: "ses-work",
+        issue_session_title: "Implementation",
+        reason: "issue_workspace",
+      },
+    })]);
+
+    renderRow();
+
+    expect(await screen.findByText(
+      "Waiting for Builder in Implementation (tsk_blocking123)",
+    )).toBeInTheDocument();
+  });
+
   it("shows an agent waiting for review instead of calling it working", async () => {
     listTasksByIssue.mockResolvedValue([task({ status: "awaiting_human" })]);
 

@@ -54,7 +54,83 @@ const CLAUDE_BASH_COMPLETED = {
 };
 
 describe("daemon task-message mapper", () => {
-  it("keeps the claude terminal placeholder out of the tool_use and lands the real command on the result", () => {
+  it("classifies only standalone claude compaction status chunks", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    const statuses = [
+      "Compacting...",
+      "\n\nCompacting completed.",
+      "\n\nCompacting failed.",
+      "\n\nCompacting failed: context window unavailable",
+    ];
+
+    for (const text of statuses) {
+      expect(map(event({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
+      }))).toEqual([{ type: "compaction", content: text, meta: undefined }]);
+    }
+
+    const prose = "The logs say Compacting... but this sentence is the answer.";
+    expect(map(event({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: prose },
+    }))).toEqual([{ type: "text", content: prose, meta: undefined }]);
+
+    expect(map(event({
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Compacting..." },
+    }))).toEqual([{ type: "thinking", content: "Compacting...", meta: undefined }]);
+  });
+
+  /**
+   * codex-acp@1.1.14 has two compaction paths and only one is safe by
+   * construction. `thread/compacted` (dist/index.js:23726 → :24056) re-emits the
+   * banner as a bare `agent_message_chunk`, exactly the claude failure mode, so
+   * it needs the same classification; the `contextCompaction` thread item
+   * (:22924-22951) is a real `tool_call` and must keep rendering as a tool step.
+   */
+  it("classifies the codex compaction banner and leaves its tool-call path alone", () => {
+    const map = createEventMapper(createAdapter("codex"));
+    const banner = "*Context compacted to fit the model's context window.*\n\n";
+
+    expect(map(event({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: banner },
+    }))).toEqual([{ type: "compaction", content: banner, meta: undefined }]);
+
+    const prose = "I compacted the config: *Context compacted to fit the model's context window.* — see below.";
+    expect(map(event({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: prose },
+    }))).toEqual([{ type: "text", content: prose, meta: undefined }]);
+
+    const start = map(event({
+      sessionUpdate: "tool_call",
+      toolCallId: "item_compaction_1",
+      kind: "other",
+      title: "Context compacting",
+      status: "in_progress",
+      _meta: { contextCompaction: true },
+    }));
+    expect(start).toHaveLength(1);
+    expect(start[0]!.type).toBe("tool_use");
+    expect(start[0]!.tool).toBe("Context compacting");
+    // No `parent_tool_call_id`: the time-window heuristic is claude-only, so a
+    // compaction step never nests itself into an unrelated open tool call.
+    expect(start[0]!.meta?.parent_tool_call_id).toBeUndefined();
+
+    const done = map(event({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "item_compaction_1",
+      title: "Context compacted",
+      status: "completed",
+      _meta: { contextCompaction: true },
+    }));
+    expect(done.map((m) => m.type)).toEqual(["tool_result"]);
+    expect(done[0]!.status).toBe("completed");
+  });
+
+  it("publishes late claude input while the call is running without repeating it on the result", () => {
     const map = createEventMapper(createAdapter("claude"));
 
     const initial = map(event(CLAUDE_BASH_INITIAL));
@@ -69,9 +145,22 @@ describe("daemon task-message mapper", () => {
     expect(use.input).toBeUndefined();
     expect(use.meta).toMatchObject({ title: "Terminal", kind: "execute", terminal_id: "term_42" });
 
-    // The refining update carries the args but no output and no terminal
-    // status, so it emits nothing on its own.
-    expect(map(event(CLAUDE_BASH_REFINE))).toEqual([]);
+    // The refining update carries the real args before the call finishes, so a
+    // second tool_use refreshes the live step under the same call id.
+    const refined = map(event(CLAUDE_BASH_REFINE));
+    expect(refined).toHaveLength(1);
+    expect(refined[0]).toMatchObject({
+      type: "tool_use",
+      toolCallId: use.toolCallId,
+      status: "pending",
+      tool: "Bash",
+      input: {
+        command: "echo hello_from_acp_test",
+        description: "Echo test string",
+        terminal_id: "term_42",
+      },
+      meta: { title: "echo hello_from_acp_test", kind: "execute" },
+    });
     // The toolResponse-only frame carries neither output nor status either.
     expect(map(event(CLAUDE_BASH_TOOL_RESPONSE))).toEqual([]);
 
@@ -82,12 +171,9 @@ describe("daemon task-message mapper", () => {
     expect(result.toolCallId).toBe(use.toolCallId);
     expect(result.status).toBe("completed");
     expect(result.output).toBe(JSON.stringify("hello_from_acp_test"));
-    // The merged input reaches the UI through the result (the use had none).
-    expect(result.input).toMatchObject({
-      command: "echo hello_from_acp_test",
-      description: "Echo test string",
-      terminal_id: "term_42",
-    });
+    // The running refresh already published this exact input, so the terminal
+    // frame does not repeat it.
+    expect(result.input).toBeUndefined();
     expect(typeof result.meta?.duration_ms).toBe("number");
 
     // Fingerprint idempotency: a repeat of the same terminal frame stays silent.
@@ -129,16 +215,18 @@ describe("daemon task-message mapper", () => {
 
     map(event(CLAUDE_BASH_INITIAL));
     map(event({ ...CLAUDE_BASH_REFINE, rawInput: { command: "echo first", description: "first" } }));
-    map(event({ ...CLAUDE_BASH_REFINE, rawInput: { command: "echo second" } }));
+    const refined = map(event({ ...CLAUDE_BASH_REFINE, rawInput: { command: "echo second" } }));
     const finished = map(event(CLAUDE_BASH_COMPLETED));
 
+    expect(refined).toHaveLength(1);
     expect(finished).toHaveLength(1);
     // Last writer wins per key; keys no later event mentions survive.
-    expect(finished[0]?.input).toMatchObject({
+    expect(refined[0]?.input).toMatchObject({
       command: "echo second",
       description: "first",
       terminal_id: "term_42",
     });
+    expect(finished[0]?.input).toBeUndefined();
   });
 });
 

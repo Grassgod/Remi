@@ -93,10 +93,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 546,
-      exempt: 71,
+      mapped: 561,
+      exempt: 75,
       missing: 0,
-      total: 617,
+      total: 636,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);

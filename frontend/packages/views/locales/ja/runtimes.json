@@ -48,7 +48,8 @@
     "actions_aria": "マシン操作",
     "tabs": {
       "runtimes": "ランタイム",
-      "ssh_mesh": "SSH 接続"
+      "ssh_mesh": "SSH 接続",
+      "provisions": "プロビジョン"
     },
     "retire": {
       "action": "無効化して削除",
@@ -225,6 +226,8 @@
     "no_agents": "まだこのランタイムに紐づいたエージェントがありません。",
     "diagnostics_title": "診断",
     "diagnostics_cli": "CLI",
+    "diagnostics_cli_shared": "マシン全体で共有",
+    "diagnostics_cli_view_machine": "マシンを表示",
     "diagnostics_visibility": "公開範囲",
     "visibility_label": {
       "private": "非公開",
@@ -356,6 +359,10 @@
     "version_unknown": "不明",
     "managed_by_desktop": "デスクトップで管理",
     "managed_by_desktop_title": "CLI バイナリは Multiremi Desktop で管理されています。CLI をアップグレードするには Desktop を更新してください。",
+    "versions_reconciling": "バージョンを同期中",
+    "versions_reconciling_title": "各 provider は現在 {{versions}} を報告しています。マシン全体が同じバージョンを報告すると更新を再開できます。",
+    "machine_offline_title": "更新を開始できるオンラインのランタイムがこのマシンにありません。",
+    "failure_details": "CLI の更新に失敗しました",
     "latest": "最新",
     "available": "利用可能",
     "action": "更新",
@@ -406,7 +413,8 @@
     "kpi_cache_label": "キャッシュによる節約 · {{days}} 日",
     "kpi_cache_hint": "ヒット率 {{pct}}% · 読み取り {{reads}}",
     "kpi_tokens_label": "トークン · {{days}} 日",
-    "kpi_tokens_hint": "入力 {{input}} · 出力 {{output}}",
+    "kpi_tokens_hint": "入力 {{input}} · 出力 {{output}} · キャッシュ {{cache}}",
+    "kpi_tokens_hint_total_only": "入力 {{input}} · 出力 {{output}} · キャッシュ {{cache}} · 総量のみ {{totalOnly}}",
     "when_title": "このランタイムでコストが発生した時期",
     "when_tab_daily": "日別",
     "when_tab_weekly": "週別",
@@ -419,6 +427,7 @@
     "legend_output": "出力",
     "legend_cache_read": "キャッシュ読み取り",
     "legend_cache_write": "キャッシュ書き込み",
+    "legend_total_only": "総量のみ",
     "empty_no_usage": "この期間には使用量がありません。",
     "empty_pricing_missing": "トークンは記録されましたが、次のモデルの価格情報がありません:",
     "empty_pricing_hint": "コスト合計に含めるには、カスタム単価を設定してください。",
@@ -453,9 +462,86 @@
     "table_cache_w": "キャッシュ W",
     "no_data": "まだ使用量データがありません",
     "kpi_cost_unpriced": "使用モデルの価格情報がないため、費用を算出できません",
+    "kpi_cost_total_only": "トークン総量のみが記録されているため、費用を算出できません",
     "error_title": "使用量データを利用できません",
     "error_body": "使用量データの読み込みに失敗しました。使用量が 0 という意味ではありません。",
     "retry": "再試行",
-    "kpi_cache_unpriced": "使用モデルの価格情報がないため、節約額を算出できません"
+    "kpi_cache_unpriced": "使用モデルの価格情報がないため、節約額を算出できません",
+    "kpi_cache_total_only": "トークン総量のみが記録されているため、節約額を算出できません"
+  },
+  "provisions": {
+    "title": "ランタイムプロビジョン",
+    "subtitle": "ワークスペース宣言と各ランタイムの最新状態。",
+    "add": "プロビジョンを追加",
+    "filter_label": "プロビジョン種別",
+    "filters": { "all": "すべて" },
+    "kinds": { "npm_global": "npm グローバル", "command": "コマンド", "unknown": "不明" },
+    "load_failed": "ランタイムプロビジョンを読み込めませんでした",
+    "retry": "再試行",
+    "empty": "プロビジョンがありません",
+    "empty_hint": "ワークスペースのランタイム宣言がここに表示されます。",
+    "filter_empty": "このフィルターに一致するプロビジョンはありません。",
+    "enabled_label": "有効",
+    "enabled": "有効",
+    "disabled": "無効",
+    "edit": "プロビジョンを編集",
+    "cancel": "キャンセル",
+    "save": "保存",
+    "not_available": "利用不可",
+    "summary": "収束 {{converged}} · 要対応 {{attention}} · 合計 {{total}}",
+    "triggers": {
+      "on_register": "ランタイム接続時",
+      "on_change": "変更時",
+      "cron": "スケジュール"
+    },
+    "status": {
+      "pending": "保留中",
+      "converged": "収束済み",
+      "drifted": "ドリフト",
+      "failed": "失敗",
+      "unknown": "不明"
+    },
+    "matrix": {
+      "select": "プロビジョンを選択してランタイム状態を確認します。",
+      "title": "ランタイム状態",
+      "load_failed": "ランタイム状態を読み込めませんでした。",
+      "empty": "ランタイム状態はまだ記録されていません。",
+      "error_details": "失敗の詳細を表示"
+    },
+    "form": {
+      "create_title": "ランタイムプロビジョンを追加",
+      "edit_title": "ランタイムプロビジョンを編集",
+      "description": "1 つのワークスペース宣言を所属ランタイムに適用します。",
+      "kind": "種別",
+      "package": "パッケージ",
+      "version": "バージョン",
+      "bin": "バイナリ",
+      "registry": "レジストリ",
+      "version_check": "--version チェックの成功を必須にする",
+      "current_command": "現在のコマンド（マスク済み）",
+      "replacement_command": "置換コマンド",
+      "command": "コマンド",
+      "leave_unchanged": "空欄の場合は現在のコマンドを維持",
+      "args": "引数",
+      "args_placeholder": "1 行に 1 つの引数",
+      "triggers": "トリガー",
+      "timeout": "タイムアウト（ミリ秒）",
+      "timeout_invalid": "正のタイムアウト値をミリ秒で入力してください。",
+      "npm_required": "パッケージ、バージョン、バイナリは必須です。",
+      "command_required": "コマンドは必須です。"
+    },
+    "delete": {
+      "action": "プロビジョンを削除",
+      "title": "このプロビジョンを削除しますか？",
+      "description": "{{target}} はこのワークスペースで管理されなくなります。",
+      "confirm": "プロビジョンを削除"
+    },
+    "toast": {
+      "created": "プロビジョンを作成しました",
+      "updated": "プロビジョンを更新しました",
+      "deleted": "プロビジョンを削除しました",
+      "save_failed": "プロビジョンを保存できませんでした",
+      "delete_failed": "プロビジョンを削除できませんでした"
+    }
   }
 }

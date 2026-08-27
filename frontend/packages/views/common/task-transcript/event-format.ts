@@ -43,6 +43,8 @@ export function getEventLabel(item: TimelineItem): string {
       return "Agent";
     case "thinking":
       return "Thinking";
+    case "compaction":
+      return "Compaction";
     case "tool_use":
       return item.tool ?? "Tool";
     case "tool_result":

@@ -6,6 +6,7 @@ import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiTask,
   MultiremiTaskMessage,
+  MultiremiTaskQueueBlocker,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
 } from "@multiremi/contracts/types.js";
@@ -54,6 +55,7 @@ export function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): R
   if (ack.pending_directory_scan) response.pending_directory_scan = ack.pending_directory_scan;
   if (ack.pending_local_skill_import) response.pending_local_skill_import = ack.pending_local_skill_import;
   if (ack.pending_local_skill_imports?.length) response.pending_local_skill_imports = ack.pending_local_skill_imports;
+  if (ack.pending_command) response.pending_command = ack.pending_command;
   if (ack.ssh_mesh) response.ssh_mesh = ack.ssh_mesh;
   if (ack.drain) response.drain = ack.drain;
   return response;
@@ -101,7 +103,11 @@ export function taskRealtimePayload(task: MultiremiTask): Record<string, unknown
   return payload;
 }
 
-export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: MultiremiTaskTriggerMetadata | null = null): Omit<
+export function taskCompatibilityResponse(
+  task: MultiremiTask,
+  triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
+  queueBlocker: MultiremiTaskQueueBlocker | null = null,
+): Omit<
   MultiremiTask,
   "result" | InternalTaskField
 > & {
@@ -221,6 +227,16 @@ export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: 
     response.new_comment_count = triggerMetadata.newCommentCount;
     if (triggerMetadata.newCommentsSince) response.new_comments_since = triggerMetadata.newCommentsSince;
   }
+  if (queueBlocker) {
+    (response as Record<string, unknown>).queue_blocker = {
+      task_id: queueBlocker.taskId,
+      agent_id: queueBlocker.agentId,
+      agent_name: queueBlocker.agentName,
+      issue_session_id: queueBlocker.issueSessionId,
+      issue_session_title: queueBlocker.issueSessionTitle,
+      reason: queueBlocker.reason,
+    };
+  }
   return response;
 }
 
@@ -233,6 +249,7 @@ export function daemonTaskWireResponse(
     agent_id: task.agentId,
     runtime_id: task.runtimeId ?? "",
     issue_id: task.issueId ?? "",
+    holds_workspace: task.holdsWorkspace,
     workspace_id: task.workspaceId,
     status: task.status,
     priority: task.priority,

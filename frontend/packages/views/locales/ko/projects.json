@@ -97,6 +97,8 @@
     "summary": "워크스페이스 Bootstrap 및 Delta Prompt 뒤에 추가되는 프로젝트 지침입니다.",
     "empty": "아직 프로젝트 지침이 없습니다.",
     "edit": "편집",
+    "expand": "전체 보기",
+    "collapse": "접기",
     "dialog_title": "프로젝트 지침 편집",
     "dialog_description": "프로젝트 전체 지침을 Markdown으로 작성하세요.",
     "inheritance_notice": "워크스페이스 지침은 계속 적용되며 프로젝트 지침은 이를 대체하지 않고 추가됩니다.",

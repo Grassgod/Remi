@@ -92,6 +92,84 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.runtime-provision.list": {
+      "command": "remi workspace runtime-provision list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.runtime-provision.get": {
+      "command": "remi workspace runtime-provision get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.runtime-provision.states": {
+      "command": "remi workspace runtime-provision states",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.states",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.runtime-provision.create": {
+      "command": "remi workspace runtime-provision create",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.runtime-provision.update": {
+      "command": "remi workspace runtime-provision update",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.runtime-provision.delete": {
+      "command": "remi workspace runtime-provision delete",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.runtime-provision.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.env.get": {
       "command": "remi workspace env get",
       "auth": [
@@ -112,6 +190,31 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "workspace.env.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.organizer.get": {
+      "command": "remi workspace organizer get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.organizer.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.organizer.update": {
+      "command": "remi workspace organizer update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.organizer.update",
       "output": [
         "table",
         "json",
@@ -2458,6 +2561,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "task.redispatch": {
+      "command": "remi task redispatch",
+      "auth": [
+        "task"
+      ],
+      "capability": "task.redispatch",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "task.steer": {
       "command": "remi task steer",
       "auth": [
@@ -2491,6 +2606,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "task.message.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "task.inspect": {
+      "command": "remi task inspect",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "task.inspect",
       "output": [
         "table",
         "json",
@@ -2582,6 +2710,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "agent.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "agent.supervisor.set": {
+      "command": "remi agent supervisor set",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.supervisor.set",
       "output": [
         "table",
         "json",
@@ -3403,6 +3543,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "runtime.release.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.command.run": {
+      "command": "remi runtime command run",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.command.run",
       "output": [
         "table",
         "json",

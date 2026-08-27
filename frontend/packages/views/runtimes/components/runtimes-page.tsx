@@ -54,6 +54,7 @@ import { ProviderLogo } from "./provider-logo";
 import { RuntimeList, buildWorkloadIndex } from "./runtime-list";
 import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import { SshMeshPanel } from "./ssh-mesh-panel";
+import { RuntimeProvisionsPanel } from "./runtime-provisions-panel";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
@@ -62,6 +63,8 @@ import {
   type RuntimeMachineFilter,
 } from "./runtime-machines";
 import { HealthDot, HealthIcon, useHealthLabel } from "./shared";
+import { MachineCliUpdate } from "./update-section";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 const MACHINE_FILTERS: RuntimeMachineFilter[] = ["all", "online", "issues"];
@@ -115,6 +118,8 @@ export function RuntimesPage({
   const currentUserId = useAuthStore((s) => s.user?.id);
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
+  const { searchParams } = useNavigation();
+  const requestedMachineId = searchParams.get("machine");
   const [machineFilter, setMachineFilter] =
     useState<RuntimeMachineFilter>("all");
   const [machineSearch, setMachineSearch] = useState("");
@@ -125,6 +130,7 @@ export function RuntimesPage({
   // auto-default keeps preferring the Local section (which on desktop may
   // appear later than remotes — `localDaemonId` is fetched async).
   const userSelectedRef = useRef(false);
+  const appliedRequestedMachineRef = useRef<string | null>(null);
   const handleSelectMachine = useCallback((id: string) => {
     userSelectedRef.current = true;
     setSelectedMachineId(id);
@@ -213,6 +219,20 @@ export function RuntimesPage({
     const nextId = local?.id ?? filteredMachines[0]?.id ?? null;
     if (nextId !== selectedMachineId) setSelectedMachineId(nextId);
   }, [filteredMachines, selectedMachineId]);
+
+  useEffect(() => {
+    if (!requestedMachineId) {
+      appliedRequestedMachineRef.current = null;
+      return;
+    }
+    if (appliedRequestedMachineRef.current === requestedMachineId) return;
+    if (!machines.some((machine) => machine.id === requestedMachineId)) return;
+    appliedRequestedMachineRef.current = requestedMachineId;
+    userSelectedRef.current = true;
+    setMachineFilter("all");
+    setMachineSearch("");
+    setSelectedMachineId(requestedMachineId);
+  }, [machines, requestedMachineId]);
 
   const selectedMachine =
     machines.find((machine) => machine.id === selectedMachineId) ??
@@ -790,7 +810,24 @@ function MachineDetail({
       {workloadLabel}
     </span>,
   ];
-  if (machine.cliVersion) {
+  if (machine.mode === "local" && runtimeTotal > 0) {
+    metaParts.push(
+      // Keyed by machine so selecting another machine remounts the control.
+      // MachineDetail is reused across selections, so without this the update
+      // flow's running/failed state would carry over to the next machine and
+      // its retry would fire against the newly selected runtime. Keying on the
+      // machine (not cliUpdateRuntimeId) is deliberate: the representative
+      // runtime legitimately changes mid-update when the daemon restarts, and
+      // resetting there would discard a healthy update's own progress.
+      <MachineCliUpdate
+        key={`cli-${machine.id}`}
+        runtimeId={machine.cliUpdateRuntimeId}
+        currentVersion={machine.cliVersion}
+        cliVersions={machine.cliVersions}
+        managedByDesktop={machine.cliManagedByDesktop}
+      />,
+    );
+  } else if (machine.cliVersion) {
     metaParts.push(
       <span key="cli" className="font-mono">
         {machine.cliVersion}
@@ -852,6 +889,9 @@ function MachineDetail({
           <TabsTrigger value="ssh-mesh">
             {t(($) => $.machine.tabs.ssh_mesh)}
           </TabsTrigger>
+          <TabsTrigger value="provisions">
+            {t(($) => $.machine.tabs.provisions)}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="runtimes" className="min-h-0 flex-1 overflow-hidden">
           <RuntimeList
@@ -865,6 +905,9 @@ function MachineDetail({
             sourceDaemonId={machine.daemonId}
             sourceName={machine.title}
           />
+        </TabsContent>
+        <TabsContent value="provisions" className="min-h-0 flex-1 overflow-hidden">
+          <RuntimeProvisionsPanel />
         </TabsContent>
       </Tabs>
     </main>

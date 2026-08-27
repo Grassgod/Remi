@@ -50,7 +50,8 @@
     "actions_aria": "기기 작업",
     "tabs": {
       "runtimes": "런타임",
-      "ssh_mesh": "SSH 연결"
+      "ssh_mesh": "SSH 연결",
+      "provisions": "프로비저닝"
     },
     "retire": {
       "action": "비활성화하고 제거",
@@ -238,6 +239,8 @@
     "no_agents": "아직 이 런타임에 연결된 에이전트가 없습니다.",
     "diagnostics_title": "진단",
     "diagnostics_cli": "CLI",
+    "diagnostics_cli_shared": "기기 전체에서 공유",
+    "diagnostics_cli_view_machine": "기기 보기",
     "diagnostics_visibility": "공개 범위",
     "visibility_label": {
       "private": "비공개",
@@ -376,6 +379,10 @@
     "version_unknown": "알 수 없음",
     "managed_by_desktop": "데스크톱에서 관리",
     "managed_by_desktop_title": "CLI 바이너리는 Multiremi Desktop에서 관리합니다. CLI를 업그레이드하려면 Desktop을 업데이트하세요.",
+    "versions_reconciling": "버전 동기화 중",
+    "versions_reconciling_title": "각 provider가 현재 {{versions}} 버전을 보고합니다. 기기 전체가 같은 버전을 보고하면 업데이트를 다시 시작할 수 있습니다.",
+    "machine_offline_title": "이 기기에 업데이트를 시작할 수 있는 온라인 런타임이 없습니다.",
+    "failure_details": "CLI 업데이트 실패",
     "latest": "최신",
     "available": "사용 가능",
     "action": "업데이트",
@@ -426,7 +433,8 @@
     "kpi_cache_label": "캐시 절감 · {{days}}일",
     "kpi_cache_hint": "적중률 {{pct}}% · 읽기 {{reads}}",
     "kpi_tokens_label": "토큰 · {{days}}일",
-    "kpi_tokens_hint": "입력 {{input}} · 출력 {{output}}",
+    "kpi_tokens_hint": "입력 {{input}} · 출력 {{output}} · 캐시 {{cache}}",
+    "kpi_tokens_hint_total_only": "입력 {{input}} · 출력 {{output}} · 캐시 {{cache}} · 총량만 {{totalOnly}}",
     "when_title": "런타임 비용 발생 시점",
     "when_tab_daily": "일별",
     "when_tab_weekly": "주별",
@@ -439,6 +447,7 @@
     "legend_output": "출력",
     "legend_cache_read": "캐시 읽기",
     "legend_cache_write": "캐시 쓰기",
+    "legend_total_only": "총량만",
     "empty_no_usage": "이 기간에는 사용량이 없습니다.",
     "empty_pricing_missing": "토큰은 기록됐지만 가격 정보가 없습니다:",
     "empty_pricing_hint": "비용 합계에 포함하려면 사용자 지정 단가를 설정하세요.",
@@ -476,9 +485,86 @@
     "table_cache_w": "캐시 W",
     "no_data": "아직 사용량 데이터가 없습니다",
     "kpi_cost_unpriced": "사용한 모델의 가격 정보가 없어 비용을 계산할 수 없습니다",
+    "kpi_cost_total_only": "토큰 총량만 기록되어 비용을 계산할 수 없습니다",
     "error_title": "사용량 데이터를 불러올 수 없음",
     "error_body": "사용량 데이터를 불러오지 못했습니다. 사용량이 0이라는 뜻이 아닙니다.",
     "retry": "다시 시도",
-    "kpi_cache_unpriced": "사용한 모델의 가격 정보가 없어 절감액을 계산할 수 없습니다"
+    "kpi_cache_unpriced": "사용한 모델의 가격 정보가 없어 절감액을 계산할 수 없습니다",
+    "kpi_cache_total_only": "토큰 총량만 기록되어 절감액을 계산할 수 없습니다"
+  },
+  "provisions": {
+    "title": "런타임 프로비저닝",
+    "subtitle": "워크스페이스 선언과 각 런타임의 최신 상태입니다.",
+    "add": "프로비저닝 추가",
+    "filter_label": "프로비저닝 종류",
+    "filters": { "all": "전체" },
+    "kinds": { "npm_global": "npm 전역", "command": "명령", "unknown": "알 수 없음" },
+    "load_failed": "런타임 프로비저닝을 불러올 수 없음",
+    "retry": "다시 시도",
+    "empty": "프로비저닝 없음",
+    "empty_hint": "워크스페이스 런타임 선언이 여기에 표시됩니다.",
+    "filter_empty": "이 필터와 일치하는 프로비저닝이 없습니다.",
+    "enabled_label": "활성화",
+    "enabled": "활성화됨",
+    "disabled": "비활성화됨",
+    "edit": "프로비저닝 편집",
+    "cancel": "취소",
+    "save": "저장",
+    "not_available": "사용할 수 없음",
+    "summary": "수렴 {{converged}} · 확인 필요 {{attention}} · 총 {{total}}",
+    "triggers": {
+      "on_register": "런타임 연결 시",
+      "on_change": "변경 시",
+      "cron": "일정"
+    },
+    "status": {
+      "pending": "대기 중",
+      "converged": "수렴됨",
+      "drifted": "드리프트됨",
+      "failed": "실패",
+      "unknown": "알 수 없음"
+    },
+    "matrix": {
+      "select": "프로비저닝을 선택해 런타임 상태를 확인하세요.",
+      "title": "런타임 상태",
+      "load_failed": "런타임 상태를 불러올 수 없습니다.",
+      "empty": "기록된 런타임 상태가 없습니다.",
+      "error_details": "실패 상세 보기"
+    },
+    "form": {
+      "create_title": "런타임 프로비저닝 추가",
+      "edit_title": "런타임 프로비저닝 편집",
+      "description": "하나의 워크스페이스 선언을 소속 런타임에 적용합니다.",
+      "kind": "종류",
+      "package": "패키지",
+      "version": "버전",
+      "bin": "바이너리",
+      "registry": "레지스트리",
+      "version_check": "--version 확인 성공 필수",
+      "current_command": "현재 명령(마스킹됨)",
+      "replacement_command": "대체 명령",
+      "command": "명령",
+      "leave_unchanged": "비워 두면 현재 명령 유지",
+      "args": "인수",
+      "args_placeholder": "한 줄에 인수 하나",
+      "triggers": "트리거",
+      "timeout": "제한 시간(밀리초)",
+      "timeout_invalid": "양의 제한 시간을 밀리초로 입력하세요.",
+      "npm_required": "패키지, 버전, 바이너리는 필수입니다.",
+      "command_required": "명령은 필수입니다."
+    },
+    "delete": {
+      "action": "프로비저닝 삭제",
+      "title": "이 프로비저닝을 삭제할까요?",
+      "description": "{{target}} 항목은 이 워크스페이스에서 더 이상 관리되지 않습니다.",
+      "confirm": "프로비저닝 삭제"
+    },
+    "toast": {
+      "created": "프로비저닝 생성됨",
+      "updated": "프로비저닝 업데이트됨",
+      "deleted": "프로비저닝 삭제됨",
+      "save_failed": "프로비저닝을 저장하지 못했습니다",
+      "delete_failed": "프로비저닝을 삭제하지 못했습니다"
+    }
   }
 }

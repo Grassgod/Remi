@@ -54,7 +54,13 @@ import {
   repoCacheTimeoutOverrides,
   type MultiremiRepoSyncResult,
 } from "@multiremi/repo-cache.js";
-import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
+import {
+  classifyDaemonTaskFailure,
+  classifyPoisonedOutput,
+  TaskFailureReason,
+  type TaskFailureReasonValue,
+} from "./task-failure.js";
+import { executeRuntimeCommand } from "./runtime-command.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
   writeTaskContext,
@@ -112,7 +118,11 @@ import {
   resolveTaskWorkDir,
   type ResolvedTaskWorkDir,
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
-import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
+import {
+  discussionSessionLifecycleKey,
+  runWorkspaceGcOnce,
+  type MultiremiDaemonGcSummary,
+} from "@daemon/agent-runtime/workspace/gc.js";
 import { resolveWorkspaceGcPolicy, type WorkspaceGcPolicy } from "@daemon/agent-runtime/workspace/gc-policy.js";
 import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 import {
@@ -155,6 +165,10 @@ import {
   TaskProgressSummarizer,
   type ProgressRunOutcome,
 } from "./progress-summarizer.js";
+import {
+  MultiremiCliUpdateCoordinator,
+  type MultiremiCliUpdatePauseResult,
+} from "./cli-update-coordinator.js";
 
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
@@ -338,6 +352,18 @@ export interface MultiremiDaemonOptions {
   gitWorktreeInspector?: GitWorktreeInspector;
   /** Maximum uncompressed provider history accepted for one Issue snapshot. */
   sessionArchiveMaxSourceBytes?: number;
+  /** Operator-trusted API origin used only for Session Archive content uploads. */
+  sessionArchiveUploadBaseUrl?: string | null;
+  /** Largest archive allowed through the control-plane proxy fallback. */
+  sessionArchiveProxyMaxBytes?: number;
+  /** TTL for positive and negative direct-route HEAD attestations. */
+  sessionArchiveDirectProbeTtlMs?: number;
+  /** Maximum duration of a direct-route HEAD attestation. */
+  sessionArchiveDirectProbeTimeoutMs?: number;
+  /** Maximum total duration of one archive content upload. */
+  sessionArchiveUploadTimeoutMs?: number;
+  /** Maximum duration of best-effort upload failure reporting. */
+  sessionArchiveFailureReportTimeoutMs?: number;
   /** Runtime-global immutable Agent Plugin cache. */
   pluginCacheRoot?: string;
   /** Injectable provider capability probe; production uses the native CLI and ACP bridge. */
@@ -368,6 +394,8 @@ export interface MultiremiDaemonOptions {
   supervisorReady?: () => boolean;
   /** Updates the shared provider readiness barrier. */
   onReadyChange?: (ready: boolean) => void;
+  /** Shared machine-level gate for the CLI binary used by co-resident providers. */
+  cliUpdateCoordinator?: MultiremiCliUpdateCoordinator;
   /** Full path of the durable report-outbox database (tests use ":memory:"). */
   outboxPath?: string;
   /** Injectable retry schedule for outbox delivery tests. */
@@ -387,6 +415,7 @@ interface RunSummary {
   sessionId: string | null;
   workDir: string | null;
   usage: TaskUsageEntry[];
+  failureReason?: TaskFailureReasonValue;
   /** True when the run loop already finalized the task server-side (progress,
    *  usage and completeTask) — done inside runAgent so a steer racing
    *  completion can still be injected while the provider session is open. */
@@ -502,7 +531,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -534,6 +563,7 @@ export class MultiremiDaemon {
   private startedAt = new Date();
   private ready = false;
   private activeTaskCount = 0;
+  private pendingClaimCount = 0;
   private inflight = new Set<Promise<void>>();
   private activeTaskAborts = new Set<AbortController>();
   private claimsPaused = false;
@@ -567,6 +597,7 @@ export class MultiremiDaemon {
   private readonly workspaceRootFence: (() => void) | null;
   private readonly supervisorReady: () => boolean;
   private readonly onReadyChange: (ready: boolean) => void;
+  private readonly cliUpdateCoordinator: MultiremiCliUpdateCoordinator | null;
   private workspaceOwnershipLost = false;
   private terminalAuthorityCleanup: Promise<void> | null = null;
   private terminalAuthorityCleanupRetryWake: (() => void) | null = null;
@@ -612,6 +643,7 @@ export class MultiremiDaemon {
     this.workspaceRootFence = options.workspaceRootFence ?? null;
     this.supervisorReady = options.supervisorReady ?? (() => this.ready);
     this.onReadyChange = options.onReadyChange ?? (() => {});
+    this.cliUpdateCoordinator = options.cliUpdateCoordinator ?? null;
     this.options = {
       token: options.token ?? process.env.MULTIREMI_TOKEN ?? null,
       runtimeId,
@@ -655,6 +687,14 @@ export class MultiremiDaemon {
     this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
     this.onRestartRequested = options.onRestartRequested ?? null;
+    this.cliUpdateCoordinator?.register({
+      provider: this.options.provider,
+      activeTaskCount: () => this.activeTaskCount,
+      pendingClaimCount: () => this.pendingClaimCount,
+      claimsPaused: () => this.claimsPaused,
+      pauseClaims: () => { this.claimsPaused = true; },
+      releaseClaims: () => this.releaseLocalUpdateClaimPause(),
+    });
     this.agentPluginProviderPreflight = options.agentPluginProviderPreflight
       ?? ((provider, signal) => preflightAgentPluginProvider(provider, {}, signal));
     const cleanupRetryDelays = (options.terminalAuthorityCleanupRetryDelaysMs ?? [])
@@ -664,7 +704,21 @@ export class MultiremiDaemon {
       ? cleanupRetryDelays
       : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
-    this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token);
+    this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token, {
+      sessionArchiveUploadBaseUrl: options.sessionArchiveUploadBaseUrl === undefined
+        ? process.env.MULTIREMI_ARCHIVE_UPLOAD_BASE_URL ?? null
+        : options.sessionArchiveUploadBaseUrl,
+      sessionArchiveProxyMaxBytes: options.sessionArchiveProxyMaxBytes
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_PROXY_MAX_BYTES, 8 * 1024 * 1024),
+      sessionArchiveDirectProbeTtlMs: options.sessionArchiveDirectProbeTtlMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_DIRECT_PROBE_TTL_MS, 5 * 60 * 1_000),
+      sessionArchiveDirectProbeTimeoutMs: options.sessionArchiveDirectProbeTimeoutMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_DIRECT_PROBE_TIMEOUT_MS, 10_000),
+      sessionArchiveUploadTimeoutMs: options.sessionArchiveUploadTimeoutMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_UPLOAD_TIMEOUT_MS, 15 * 60 * 1_000),
+      sessionArchiveFailureReportTimeoutMs: options.sessionArchiveFailureReportTimeoutMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_FAILURE_REPORT_TIMEOUT_MS, 10_000),
+    });
     this.sshMeshManager = options.sshMeshManager ?? new SshMeshManager({
       workspaceId: this.options.workspaceId ?? "local",
       daemonId: this.options.daemonId ?? this.options.runtimeName,
@@ -790,7 +844,7 @@ export class MultiremiDaemon {
           if (this.options.once) {
             // One-shot mode (tests, single runs) stays strictly serial:
             // claim one task, run it to completion, return.
-            const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
+            const task = await this.claimTask(this.options.runtimeId!);
             if (!task) return;
             await this.handleTask(task);
             return;
@@ -808,7 +862,7 @@ export class MultiremiDaemon {
             && !this.serverDrainActive
             && this.supervisorReady()
           ) {
-            const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
+            const task = await this.claimTask(this.options.runtimeId!);
             if (!task) break;
             const run = this.handleTask(task).catch((err) => {
               // handleTask routes task failures to failTask itself; this guards
@@ -993,6 +1047,9 @@ export class MultiremiDaemon {
     if (ack.pending_directory_scan) {
       await this.handleRuntimeDirectoryScan(runtimeId, ack.pending_directory_scan);
     }
+    if (ack.pending_command) {
+      await this.handleRuntimeCommand(runtimeId, ack.pending_command);
+    }
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
     }
@@ -1069,10 +1126,11 @@ export class MultiremiDaemon {
       });
       return;
     }
-    if (!this.tryPauseClaimsForUpdate()) {
+    const claimPause = this.tryPauseClaimsForUpdate(scope);
+    if (!claimPause.ok) {
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, {
         status: "failed",
-        error: "daemon is busy; retry update when idle",
+        error: claimPause.error,
       });
       return;
     }
@@ -1089,7 +1147,7 @@ export class MultiremiDaemon {
       });
       this.requestRestartAfterUpdate();
     } catch (err) {
-      this.releaseUpdateClaimPause();
+      this.releaseUpdateClaimPause(scope);
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, {
         status: "failed",
         error: err instanceof Error ? err.message : String(err),
@@ -1147,6 +1205,25 @@ export class MultiremiDaemon {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async handleRuntimeCommand(
+    runtimeId: string,
+    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_command"]>,
+  ): Promise<void> {
+    const result = await executeRuntimeCommand({
+      command: request.command,
+      args: request.args,
+      timeoutMs: request.timeout_ms,
+    });
+    await this.client.reportRuntimeCommandResult(runtimeId, request.id, {
+      status: result.status,
+      exit_code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      duration_ms: result.durationMs,
+      ...(result.error ? { error: result.error } : {}),
+    });
   }
 
   private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
@@ -1876,13 +1953,35 @@ export class MultiremiDaemon {
     return this.outbox?.stats() ?? null;
   }
 
-  private tryPauseClaimsForUpdate(): boolean {
-    if (this.claimsPaused || this.activeTaskCount > 0) return false;
+  private tryPauseClaimsForUpdate(scope: MultiremiRuntimeUpdateScope): MultiremiCliUpdatePauseResult {
+    if (scope === "cli" && this.cliUpdateCoordinator) {
+      return this.cliUpdateCoordinator.tryPauseClaims();
+    }
+    if (this.claimsPaused || this.activeTaskCount > 0) {
+      return { ok: false, error: "daemon is busy; retry update when idle" };
+    }
     this.claimsPaused = true;
-    return true;
+    return { ok: true };
   }
 
-  private releaseUpdateClaimPause(): void {
+  private async claimTask(runtimeId: string): Promise<MultiremiTaskWithAgent | null> {
+    this.pendingClaimCount++;
+    try {
+      return await this.client.claimTask(runtimeId) as MultiremiTaskWithAgent | null;
+    } finally {
+      this.pendingClaimCount--;
+    }
+  }
+
+  private releaseUpdateClaimPause(scope: MultiremiRuntimeUpdateScope): void {
+    if (scope === "cli" && this.cliUpdateCoordinator) {
+      this.cliUpdateCoordinator.releaseClaims();
+      return;
+    }
+    this.releaseLocalUpdateClaimPause();
+  }
+
+  private releaseLocalUpdateClaimPause(): void {
     if (!this.restartRequestedFlag) this.claimsPaused = false;
   }
 
@@ -1919,9 +2018,13 @@ export class MultiremiDaemon {
     try {
       this.assertWorkspaceRootOwner();
       if (task.issueId) {
-        // GC uses this same lease for its deletion-time snapshot, upload and rm.
-        // Holding it for the full task lifecycle makes provider exit the archive barrier.
-        releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquire(task.issueId);
+        // Shared Issue roots and private discussion Session roots have separate
+        // lifecycle keys, so each is protected from GC without serializing them
+        // against one another.
+        const lifecycleKey = task.holdsWorkspace === false
+          ? discussionSessionLifecycleKey(task.issueSessionId ?? "")
+          : task.issueId;
+        releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquire(lifecycleKey);
         this.assertWorkspaceRootOwner();
       }
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
@@ -1937,7 +2040,7 @@ export class MultiremiDaemon {
         // materialization or provider-native JSONL can write through it.
         await ensureProviderHomeDirectory(providerHome);
       }
-      if (task.issueId) {
+      if (task.issueId && task.holdsWorkspace !== false) {
         // Establish the Issue lifecycle before provider setup can create JSONL.
         // This also covers repository-free Issues and preparation failures, so
         // GC can never mistake their history for an unowned directory.
@@ -2012,18 +2115,18 @@ export class MultiremiDaemon {
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
-        // The run loop only leaves a task unfinalized when the output was
-        // classified as poisoned (see runAgent's finalize path).
-        const poisonedReason = classifyPoisonedOutput(summary.output) ?? "agent_fallback_message";
+        const failureReason = summary.failureReason
+          ?? classifyPoisonedOutput(summary.output)
+          ?? TaskFailureReason.AgentFallbackMessage;
         if (summary.usage.length) this.enqueueTaskReport(task.id, "usage", { usage: summary.usage });
         this.enqueueTaskReport(task.id, "fail", {
           error: summary.output,
           sessionId: summary.sessionId,
           workDir: summary.workDir,
-          failureReason: poisonedReason,
+          failureReason,
         });
-        log.warn(`Failed task ${task.id} with poisoned output: ${poisonedReason}`);
-        this.finalizeTaskProgress(progressSummarizer, "failed", poisonedReason);
+        log.warn(`Failed task ${task.id} with unusable output: ${failureReason}`);
+        this.finalizeTaskProgress(progressSummarizer, "failed", failureReason);
         await this.awaitTaskReportDrain(task.id);
         return;
       }
@@ -2223,6 +2326,7 @@ export class MultiremiDaemon {
     syncResults: MultiremiRepoSyncResult[],
     signal: AbortSignal,
   ): Promise<PreparedIssueWorkspace> {
+    if (task.holdsWorkspace === false) return { checkouts: [], repos: [], warnings: [] };
     if (task.issue?.issueKind !== "intake") {
       const prepared = await this.autoCheckoutTaskRepos(task, resolvedWorkDir, syncResults, signal);
       if (!resolvedWorkDir.localDirectory) {
@@ -2296,7 +2400,7 @@ export class MultiremiDaemon {
     workspaceRepos: MultiremiIssueWorkspaceRepo[],
   ): Promise<void> {
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
-    if (!task.issueId || !runtimeId) return;
+    if (!task.issueId || task.holdsWorkspace === false || !runtimeId) return;
     if (task.issue?.issueKind === "intake") {
       // A degraded intake run keeps its error repos; the final report must not
       // paper over them with "ready" or the workspace status would contradict
@@ -2568,7 +2672,7 @@ export class MultiremiDaemon {
     // preparation unchanged, including for any task that also carries Chat
     // metadata but is anchored to an Issue workspace.
     const homepageChat = Boolean(task.chatSessionId && !task.issueId);
-    const repoSyncResults = homepageChat
+    const repoSyncResults = homepageChat || task.holdsWorkspace === false
       ? []
       : await this.registerTaskRepos(task.workspaceId, task.repos ?? [], signal);
     const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir, repoSyncResults, signal);
@@ -2620,6 +2724,7 @@ export class MultiremiDaemon {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
     let output = "";
+    let sawCompaction = false;
     let seq = 1;
     const nextSeq = () => seq++;
     const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, nextSeq);
@@ -2718,6 +2823,7 @@ export class MultiremiDaemon {
             // tool_use + tool_result). Each gets its own seq so none collides.
             const emitted = toMessages(event).map((m) => ({ ...m, seq: nextSeq() }));
             for (const message of emitted) {
+              if (message.type === "compaction") sawCompaction = true;
               // Assistant text becomes the task result / issue activity body.
               if (message.type === "text" && message.content) output += message.content;
             }
@@ -2768,6 +2874,17 @@ export class MultiremiDaemon {
         // Finalize while the provider session is still open, so a steer that
         // races completion (completeTask steer barrier → 409 steer_pending)
         // can still be injected as another turn instead of failing the run.
+        if (!output.trim() && !(last?.text ?? "").trim() && sawCompaction) {
+          await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+          return {
+            output: "Agent returned empty output after compaction.",
+            sessionId: finalSessionId,
+            workDir,
+            usage,
+            completed: false,
+            failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
+          };
+        }
         const candidate = output.trim() || last?.text || "Task completed.";
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);

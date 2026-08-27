@@ -388,6 +388,7 @@ describe("dashboard + runtime usage schema drift", () => {
         output_tokens: 5,
         cache_read_tokens: 1,
         cache_write_tokens: 2,
+        total_tokens: 108,
         task_count: 3,
       },
     ]);
@@ -459,6 +460,7 @@ describe("dashboard + runtime usage schema drift", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        total_tokens: 0,
         task_count: 0,
         region: "us-east",
       },
@@ -536,6 +538,7 @@ describe("IssueSessionListSchema", () => {
     expect(parsed[0]).toMatchObject({
       id: "sess_1",
       is_default: false,
+      holds_workspace: true,
       summary: null,
       participants: [],
     });

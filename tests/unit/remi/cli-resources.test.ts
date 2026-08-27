@@ -62,6 +62,7 @@ describe("native CLI resource contracts", () => {
       "member.list",
       "invite.list",
       "token.list",
+      "workspace.organizer.update",
     ]) {
       expect(inventory.get(id)?.auth, id).toEqual(["human"]);
     }
@@ -125,6 +126,35 @@ describe("native CLI resource contracts", () => {
     expect(body).toEqual({ name: "Explicit", description: "file description" });
   });
 
+  it("passes the explicit Runtime provision version-check opt-out", async () => {
+    useCliEnv();
+    const spec = specById("workspace.runtime-provision.create");
+    let body: unknown;
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") {
+        return Response.json({ id: "ws_1", name: "Workspace" });
+      }
+      if (path === "/api/workspaces/ws_1/runtime-provisions" && request.method === "POST") {
+        body = await request.json();
+        return Response.json({ provision: { id: "prov_1", ...(body as object) } }, { status: 201 });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+
+    await execute(spec, [
+      "ws_1",
+      "--kind", "npm-global",
+      "--package", "example-tool",
+      "--version", "latest",
+      "--bin", "example-tool",
+      "--no-version-check",
+      "--output", "json",
+    ]);
+
+    expect(body).toMatchObject({ version_check: false });
+  });
+
   it("updates workspace prompts and issue archive settings through explicit commands", async () => {
     useCliEnv();
     const bodies = new Map<string, unknown>();
@@ -156,6 +186,21 @@ describe("native CLI resource contracts", () => {
     globalThis.fetch = mockFetch(archive.id, [], handler);
     await execute(archive, ["ws_1", "--ttl-ms", "86400000", "--sweep-interval-ms", "60000", "--output", "json"]);
     expect(bodies.get("/api/workspaces/ws_1/issue-archive")).toEqual({ ttl_ms: 86400000, sweep_interval_ms: 60000 });
+
+    const organizer = specById("workspace.organizer.update");
+    globalThis.fetch = mockFetch(organizer.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1" && request.method === "GET") {
+        return Response.json({ id: "ws_1", name: "Workspace" });
+      }
+      if (path === "/api/workspaces/ws_1/organizer" && request.method === "PUT") {
+        bodies.set(path, await request.json());
+        return Response.json({ workspace_id: "ws_1", mode: "act" });
+      }
+      throw new Error(`unexpected request ${request.method} ${path}`);
+    });
+    await execute(organizer, ["ws_1", "--mode", "act", "--output", "json"]);
+    expect(bodies.get("/api/workspaces/ws_1/organizer")).toEqual({ mode: "act" });
   });
 
   it("reads the platform prompt template through the workspace command", async () => {

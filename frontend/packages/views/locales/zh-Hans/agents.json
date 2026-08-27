@@ -437,6 +437,7 @@
     "sort_newest_first": "最新在前",
     "plan": "计划",
     "command_not_recorded": "命令未记录（旧版本任务）",
+    "tool_running": "执行中…",
     "nested_steps_other": "{{count}} 个步骤",
     "collab_activity_hidden": "子智能体的内部过程不可见",
     "step_not_finished": "未完成",

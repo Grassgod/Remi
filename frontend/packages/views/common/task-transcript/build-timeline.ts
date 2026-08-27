@@ -9,6 +9,8 @@ export interface TimelineItem {
     | "tool_result"
     | "thinking"
     | "text"
+    /** Bridge context-compaction status, kept visible but never the final answer. */
+    | "compaction"
     | "steer"
     | "error"
     | "permission_request"

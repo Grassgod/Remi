@@ -50,6 +50,7 @@ function workspaceScoped(slug: string) {
     myIssues: () => `${ws}/my-issues`,
     workbench: () => `${ws}/workbench`,
     runtimes: () => `${ws}/runtimes`,
+    runtimeMachine: (id: string) => `${ws}/runtimes?machine=${encode(id)}`,
     runtimeDetail: (id: string) => `${ws}/runtimes/${encode(id)}`,
     plugins: () => `${ws}/plugins`,
     pluginDetail: (id: string) => `${ws}/plugins/${encode(id)}`,

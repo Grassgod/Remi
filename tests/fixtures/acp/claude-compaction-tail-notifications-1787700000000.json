@@ -1,0 +1,41 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-compaction-tail-1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Implemented the fix and verified the targeted tests."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-compaction-tail-1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Compacting..."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-compaction-tail-1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nCompacting completed."
+        }
+      }
+    }
+  }
+]

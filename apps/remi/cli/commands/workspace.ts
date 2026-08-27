@@ -9,6 +9,7 @@ import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
   YES_OPTION,
+  booleanOption,
   clientFor,
   commandOptions,
   encodePath,
@@ -28,6 +29,23 @@ const WORKSPACE_FIELDS: readonly CliOptionSpec[] = [
   { name: "description", type: "string", valueName: "text", description: "Workspace description" },
   { name: "context", type: "string", valueName: "text", description: "Workspace context" },
   { name: "issue-prefix", type: "string", valueName: "prefix", description: "Issue key prefix" },
+];
+
+const RUNTIME_PROVISION_FIELDS: readonly CliOptionSpec[] = [
+  { name: "kind", type: "string", valueName: "npm-global|command", description: "Provision kind" },
+  { name: "enabled", type: "boolean", description: "Enable or disable the provision" },
+  { name: "disabled", type: "boolean", description: "Disable the provision" },
+  { name: "package", type: "string", valueName: "package", description: "Global npm package" },
+  { name: "version", type: "string", valueName: "version", description: "Expected npm package version" },
+  { name: "version-check", type: "boolean", description: "Verify the binary with --version" },
+  { name: "bin", type: "string", valueName: "binary", description: "Binary used for readiness checks" },
+  { name: "registry", type: "string", valueName: "url", description: "HTTPS npm registry" },
+  { name: "command", type: "string", valueName: "shell", description: "Shell command" },
+  { name: "arg", type: "string", valueName: "value", repeatable: true, description: "Command argument" },
+  { name: "trigger", type: "string", valueName: "kind", repeatable: true, description: "cron, on_register, or on_change" },
+  { name: "cron-expression", type: "string", valueName: "cron", description: "Cron expression" },
+  { name: "timezone", type: "string", valueName: "iana", description: "IANA timezone" },
+  { name: "timeout-ms", type: "integer", valueName: "ms", description: "Execution deadline" },
 ];
 
 export function workspaceCommandSpecs(): CommandSpec[] {
@@ -70,10 +88,50 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       const response = await client.request({ method: "POST", path: `/api/workspaces/${encodePath(String(workspace.id))}/leave`, body: {} });
       renderResource(invocation, response.data);
     }),
+    readSpec("workspace.runtime-provision.list", ["workspace", "runtime-provision", "list"], "List Runtime provisions", [refPositional("workspace")], async (invocation) => {
+      const { client, workspaceId } = await runtimeProvisionScope(invocation);
+      const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(workspaceId)}/runtime-provisions` });
+      renderResource(invocation, response.data, ["provisions"]);
+    }),
+    readSpec("workspace.runtime-provision.get", ["workspace", "runtime-provision", "get"], "Get a Runtime provision", [refPositional("workspace"), refPositional("provision")], async (invocation) => {
+      const { client, workspaceId } = await runtimeProvisionScope(invocation);
+      const provisionId = positional(invocation, 1, "provision");
+      const response = await client.request({ method: "GET", path: runtimeProvisionPath(workspaceId, provisionId) });
+      renderResource(invocation, response.data);
+    }),
+    readSpec("workspace.runtime-provision.states", ["workspace", "runtime-provision", "states"], "List per-Runtime provision states", [refPositional("workspace"), refPositional("provision")], async (invocation) => {
+      const { client, workspaceId } = await runtimeProvisionScope(invocation);
+      const provisionId = positional(invocation, 1, "provision");
+      const response = await client.request({ method: "GET", path: `${runtimeProvisionPath(workspaceId, provisionId)}/states` });
+      renderResource(invocation, response.data, ["states"]);
+    }),
+    writeSpec("workspace.runtime-provision.create", ["workspace", "runtime-provision", "create"], "Create a Runtime provision", [refPositional("workspace")], RUNTIME_PROVISION_FIELDS, async (invocation) => {
+      const { client, workspaceId } = await runtimeProvisionScope(invocation);
+      const body = await runtimeProvisionBody(invocation);
+      const response = await client.request({ method: "POST", path: `/api/workspaces/${encodePath(workspaceId)}/runtime-provisions`, body });
+      renderResource(invocation, response.data);
+    }),
+    writeSpec("workspace.runtime-provision.update", ["workspace", "runtime-provision", "update"], "Update a Runtime provision", [refPositional("workspace"), refPositional("provision")], RUNTIME_PROVISION_FIELDS, async (invocation) => {
+      const { client, workspaceId } = await runtimeProvisionScope(invocation);
+      const provisionId = positional(invocation, 1, "provision");
+      const body = await runtimeProvisionBody(invocation);
+      const response = await client.request({ method: "PATCH", path: runtimeProvisionPath(workspaceId, provisionId), body });
+      renderResource(invocation, response.data);
+    }),
+    destructiveSpec("workspace.runtime-provision.delete", ["workspace", "runtime-provision", "delete"], "Delete a Runtime provision", [refPositional("workspace"), refPositional("provision")], async (invocation) => {
+      const { client, workspaceId } = await runtimeProvisionScope(invocation);
+      const provisionId = positional(invocation, 1, "provision");
+      const response = await client.request({ method: "DELETE", path: runtimeProvisionPath(workspaceId, provisionId) });
+      renderResource(invocation, response.data);
+    }),
     scopedRead("workspace.env.get", ["workspace", "env", "get"], "Read workspace environment", "/env"),
     scopedWrite("workspace.env.update", ["workspace", "env", "update"], "Replace workspace environment", "/env", "PUT", [
       { name: "set", type: "string", valueName: "key=value", repeatable: true, description: "Set an environment entry" },
     ], envBody),
+    scopedRead("workspace.organizer.get", ["workspace", "organizer", "get"], "Read Organizer mode", "/organizer"),
+    scopedWrite("workspace.organizer.update", ["workspace", "organizer", "update"], "Update Organizer mode", "/organizer", "PUT", [
+      { name: "mode", type: "string", valueName: "report_only|act", description: "Organizer action mode" },
+    ], organizerBody),
     scopedRead("workspace.ssh-mesh.get", ["workspace", "ssh-mesh", "get"], "Read SSH mesh settings", "/ssh-mesh"),
     scopedWrite("workspace.ssh-mesh.update", ["workspace", "ssh-mesh", "update"], "Update SSH mesh settings", "/ssh-mesh", "PUT"),
     scopedWrite("workspace.ssh-mesh.rotate", ["workspace", "ssh-mesh", "rotate"], "Rotate SSH mesh key material", "/ssh-mesh/rotate", "POST"),
@@ -127,7 +185,7 @@ function groupSpec(): CommandSpec {
     path: ["workspace"],
     description: "Manage workspaces and workspace settings",
     parse: "passthrough",
-    run: async () => { throw new CliError("usage", "usage: remi workspace list|get|create|update|delete|leave|env|ssh-mesh|relay ..."); },
+    run: async () => { throw new CliError("usage", "usage: remi workspace list|get|create|update|delete|leave|runtime-provision|env|ssh-mesh|relay ..."); },
   };
 }
 
@@ -250,6 +308,36 @@ async function workspaceBody(invocation: CommandInvocation): Promise<Record<stri
   });
 }
 
+async function runtimeProvisionScope(invocation: CommandInvocation) {
+  const client = await clientFor(invocation);
+  const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+  return { client, workspaceId: String(workspace.id) };
+}
+
+function runtimeProvisionPath(workspaceId: string, provisionId: string): string {
+  return `/api/workspaces/${encodePath(workspaceId)}/runtime-provisions/${encodePath(provisionId)}`;
+}
+
+async function runtimeProvisionBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const args = stringOptions(invocation, "arg");
+  const triggers = stringOptions(invocation, "trigger");
+  return requestBody(invocation, {
+    kind: stringOption(invocation, "kind") ?? undefined,
+    enabled: booleanOption(invocation, "disabled") === true ? false : booleanOption(invocation, "enabled") ?? undefined,
+    package: stringOption(invocation, "package") ?? undefined,
+    version: stringOption(invocation, "version") ?? undefined,
+    version_check: booleanOption(invocation, "version-check") ?? undefined,
+    bin: stringOption(invocation, "bin") ?? undefined,
+    registry: stringOption(invocation, "registry") ?? undefined,
+    command: rawStringOption(invocation, "command"),
+    args: args.length ? args : undefined,
+    trigger_kinds: triggers.length ? triggers : undefined,
+    cron_expression: stringOption(invocation, "cron-expression") ?? undefined,
+    timezone: stringOption(invocation, "timezone") ?? undefined,
+    timeout_ms: integerOption(invocation, "timeout-ms") ?? undefined,
+  });
+}
+
 async function envBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
   const body = await requestBody(invocation);
   const pairs = stringOptions(invocation, "set");
@@ -280,6 +368,14 @@ async function issueArchiveBody(invocation: CommandInvocation): Promise<Record<s
   });
   if (!Number.isSafeInteger(body.ttl_ms) || !Number.isSafeInteger(body.sweep_interval_ms)) {
     throw new CliError("usage", "workspace issue-archive update requires --ttl-ms and --sweep-interval-ms or input JSON");
+  }
+  return body;
+}
+
+async function organizerBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const body = await requestBody(invocation, { mode: stringOption(invocation, "mode") ?? undefined });
+  if (body.mode !== "report_only" && body.mode !== "act") {
+    throw new CliError("usage", "workspace organizer update requires --mode report_only|act or input JSON");
   }
   return body;
 }

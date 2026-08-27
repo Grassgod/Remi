@@ -72,12 +72,14 @@ export class IssueSessionsRepo {
     const now = nowIso();
     const createdByType = input.createdByType ?? input.created_by_type ?? "member";
     const createdById = input.createdById ?? input.created_by_id ?? null;
+    const holdsWorkspace = input.holdsWorkspace ?? input.holds_workspace ?? true;
+    if (typeof holdsWorkspace !== "boolean") throw new Error("holds_workspace must be a boolean");
     this.ctx.db.run(
       `INSERT INTO multiremi_issue_sessions (
-         id, issue_id, workspace_id, title, status, is_default,
+         id, issue_id, workspace_id, title, status, is_default, holds_workspace,
          created_by_type, created_by_id, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?)`,
-      [id, issueId, issue.workspaceId, title, createdByType, createdById, now, now],
+       ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?)`,
+      [id, issueId, issue.workspaceId, title, holdsWorkspace ? 1 : 0, createdByType, createdById, now, now],
     );
     if (createdById && (createdByType === "member" || createdByType === "agent")) {
       this.addSessionParticipant(id, {
@@ -401,6 +403,7 @@ function toIssueSession(row: Row): MultiremiIssueSession {
   const issueId = String(row.issue_id);
   const workspaceId = String(row.workspace_id ?? "local");
   const isDefault = Boolean(Number(row.is_default ?? 0));
+  const holdsWorkspace = Boolean(Number(row.holds_workspace ?? 1));
   const createdByType = String(row.created_by_type ?? "member");
   const createdById = nullableString(row.created_by_id);
   const createdAt = String(row.created_at);
@@ -415,6 +418,8 @@ function toIssueSession(row: Row): MultiremiIssueSession {
     status: String(row.status ?? "active") as MultiremiIssueSession["status"],
     isDefault,
     is_default: isDefault,
+    holdsWorkspace,
+    holds_workspace: holdsWorkspace,
     summary: nullableString(row.summary),
     createdByType,
     created_by_type: createdByType,

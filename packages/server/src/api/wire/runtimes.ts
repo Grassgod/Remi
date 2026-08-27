@@ -6,6 +6,7 @@ import type {
   MultiremiRuntime,
   MultiremiRuntimeDirectoryCandidate,
   MultiremiRuntimeDirectoryScanRequest,
+  MultiremiRuntimeCommandRequest,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeLocalSkillSummary,
@@ -190,6 +191,34 @@ export function runtimeUpdateRequestCompatibilityResponse(request: MultiremiRunt
   return response;
 }
 
+export function runtimeCommandRequestResponse(request: MultiremiRuntimeCommandRequest): Record<string, unknown> {
+  return {
+    id: request.id,
+    runtimeId: request.runtimeId,
+    runtime_id: request.runtimeId,
+    command: request.redactedCommand,
+    args: request.redactedArgs,
+    timeoutMs: request.timeoutMs,
+    timeout_ms: request.timeoutMs,
+    createdBy: request.createdBy,
+    created_by: request.createdBy,
+    status: request.status,
+    exitCode: request.exitCode,
+    exit_code: request.exitCode,
+    stdout: request.stdout,
+    stderr: request.stderr,
+    durationMs: request.durationMs,
+    duration_ms: request.durationMs,
+    error: request.error,
+    runStartedAt: request.runStartedAt,
+    run_started_at: request.runStartedAt,
+    createdAt: request.createdAt,
+    created_at: request.createdAt,
+    updatedAt: request.updatedAt,
+    updated_at: request.updatedAt,
+  };
+}
+
 function runtimeLocalSkillSummaryCompatibilityResponse(skill: MultiremiRuntimeLocalSkillSummary): Record<string, unknown> {
   const response: Record<string, unknown> = {
     key: skill.key,
@@ -278,6 +307,7 @@ export function runtimeUsageDailyCompatibilityResponse(row: {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  totalTokens: number;
 }): Record<string, unknown> {
   return {
     runtime_id: row.runtimeId ?? null,
@@ -288,6 +318,11 @@ export function runtimeUsageDailyCompatibilityResponse(row: {
     output_tokens: row.outputTokens,
     cache_read_tokens: row.cacheReadTokens,
     cache_write_tokens: row.cacheWriteTokens,
+    // Pre-0.2.49 daemons only reported the context-occupancy total; keep it on
+    // the wire so historical rows (splits all zero) remain distinguishable
+    // from genuinely empty days. Mirrors `dashboardUsageDailyWire`, which reads
+    // the same `listUsageDaily` rollup.
+    total_tokens: row.totalTokens,
   };
 }
 
@@ -304,6 +339,7 @@ export function runtimeUsageByAgentCompatibilityResponse(row: {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  totalTokens: number;
   taskCount: number;
 }): Record<string, unknown> {
   return {
@@ -313,6 +349,9 @@ export function runtimeUsageByAgentCompatibilityResponse(row: {
     output_tokens: row.outputTokens,
     cache_read_tokens: row.cacheReadTokens,
     cache_write_tokens: row.cacheWriteTokens,
+    // Same pre-0.2.49 total-only history as the daily rollup; see
+    // `runtimeUsageDailyCompatibilityResponse` and `dashboardUsageByAgentWire`.
+    total_tokens: row.totalTokens,
     task_count: row.taskCount,
   };
 }

@@ -97,6 +97,8 @@
     "summary": "Project additions to the workspace Bootstrap and Delta prompts.",
     "empty": "No project instructions yet.",
     "edit": "Edit",
+    "expand": "Show all",
+    "collapse": "Show less",
     "dialog_title": "Edit project instructions",
     "dialog_description": "Write project-wide guidance in Markdown.",
     "inheritance_notice": "Workspace instructions remain active. These project instructions are appended and do not replace them.",

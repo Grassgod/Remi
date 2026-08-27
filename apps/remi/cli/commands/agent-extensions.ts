@@ -102,6 +102,20 @@ function agentSpecs(): CommandSpec[] {
       legacyAlias(["multiremi", "agent", "edit"], "remi agent update"),
       legacyAlias(["multiremi", "agent", "update"], "remi agent update"),
     ]),
+    spec("agent.supervisor.set", ["agent", "supervisor", "set"], "Grant or revoke supervisor authority", "write", HUMAN, [ref("agent")], [
+      { name: "enabled", type: "boolean", description: "Grant supervisor authority", conflictsWith: ["disabled"] },
+      { name: "disabled", type: "boolean", description: "Revoke supervisor authority", conflictsWith: ["enabled"] },
+    ], async (invocation) => {
+      const { client, id } = await agentTarget(invocation);
+      const enabled = invocation.options.enabled === true
+        ? true
+        : invocation.options.disabled === true
+          ? false
+          : null;
+      if (enabled === null) throw new CliError("usage", "agent supervisor set requires --enabled or --disabled");
+      const response = await client.request({ method: "PUT", path: `/api/agents/${encodePath(id)}/supervisor`, body: { enabled } });
+      renderResource(invocation, response.data);
+    }),
     spec("agent.archive", ["agent", "archive"], "Archive an agent", "destructive", HUMAN, [ref("agent")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       const client = await clientFor(invocation);
