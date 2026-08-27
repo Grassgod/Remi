@@ -93,8 +93,16 @@ function providerThinkingConsensus(models: FleetModelResponse[]): FleetModelThin
   };
 }
 
-function reservedAtlasAgentName(c: Context, name: string): Response | null {
-  if (name !== ATLAS_AGENT_NAME) return null;
+/**
+ * Guard the Atlas identity against forgery: no *other* agent may take the
+ * reserved name. An agent that already holds it is the platform agent itself,
+ * so an update carrying its unchanged name is an ordinary edit rather than an
+ * identity grab — `currentName` exempts it. Without that exemption the Atlas
+ * agent was uneditable, because every edit surface submits the whole record
+ * (name included) even when only the model or description changed.
+ */
+function reservedAtlasAgentName(c: Context, name: string, currentName?: string): Response | null {
+  if (name !== ATLAS_AGENT_NAME || currentName === ATLAS_AGENT_NAME) return null;
   return c.json({
     error: `${ATLAS_AGENT_NAME} is reserved for the platform Repository Wiki agent`,
     code: "atlas_identity_reserved",
@@ -465,7 +473,7 @@ export function withAgentUpdateRequestContext(
   if (hasRequestField(input, "name")) {
     const name = cleanString(typeof input.name === "string" ? input.name : null);
     if (!name) return c.json({ error: "name is required" }, 400);
-    const reserved = reservedAtlasAgentName(c, name);
+    const reserved = reservedAtlasAgentName(c, name, current.name);
     if (reserved) return reserved;
     const conflict = store.getAgentByWorkspaceAndName(targetWorkspaceId, name);
     if (conflict && conflict.id !== current.id) return agentNameConflict(c, name);

@@ -1203,6 +1203,67 @@ describe("SCM connection and canonical event store", () => {
     expect(claim).not.toHaveProperty("scm_revision");
   });
 
+  it("keeps the platform Atlas agent and Wiki automation editable under their own identity", async () => {
+    // The forgery guard used to fire on any payload carrying the reserved name,
+    // including the platform record's own unchanged one. Every edit surface
+    // submits the whole record, so changing the Atlas agent's model or the Wiki
+    // automation's description came back 409 and the platform's own records were
+    // frozen. Acquiring an identity you already hold is not forgery.
+    const { store } = seedConnection();
+    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const wiki = store.createAutopilot({
+      title: "Atlas · Repository Wiki",
+      workspaceId: "local",
+      assigneeId: atlas.id,
+      executionMode: "run_only",
+      description: "Update the repository wiki",
+    });
+    const ownerToken = await store.createAccessToken({
+      name: "Atlas self-edit owner",
+      type: "pat",
+      workspaceId: "local",
+      userId: "local",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: `Bearer ${ownerToken.token}`, "Content-Type": "application/json" };
+
+    const agentResponse = await app.request(`/api/agents/${atlas.id}`, {
+      method: "PUT",
+      headers,
+      // Whitespace padding included: the edit form trims, but the guard also
+      // normalizes, so both spellings must resolve to "unchanged".
+      body: JSON.stringify({ name: " Atlas · LLM Wiki ", description: "Repository and project Wiki" }),
+    });
+    expect(agentResponse.status).toBe(200);
+    expect(store.getAgent(atlas.id)).toMatchObject({
+      name: "Atlas · LLM Wiki",
+      description: "Repository and project Wiki",
+    });
+
+    const autopilotResponse = await app.request(`/api/autopilots/${wiki.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ title: "Atlas · Repository Wiki", description: "Incremental repository Wiki update" }),
+    });
+    expect(autopilotResponse.status).toBe(200);
+    expect(store.getAutopilot(wiki.id)).toMatchObject({
+      title: "Atlas · Repository Wiki",
+      description: "Incremental repository Wiki update",
+    });
+
+    // The exemption is scoped to the holder — a different record reaching for
+    // the same identity is still forgery.
+    const impostor = store.createAgent({ name: "Wiki impostor", provider: "claude" });
+    const forged = await app.request(`/api/agents/${impostor.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ name: "Atlas · LLM Wiki" }),
+    });
+    expect(forged.status).toBe(409);
+    expect(await forged.json()).toMatchObject({ code: "atlas_identity_reserved" });
+    expect(store.getAgent(impostor.id)?.name).toBe("Wiki impostor");
+  });
+
   it("collapses Wiki revisions without exposing them to ordinary SCM automation claims", async () => {
     const { store, connection } = seedConnection();
     const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });

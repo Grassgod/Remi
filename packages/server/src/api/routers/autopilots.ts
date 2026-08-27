@@ -82,8 +82,15 @@ function taskTokenSecretCreationDenied(c: Context, triggerKind: string | null | 
   return null;
 }
 
-function reservedAtlasAutopilotTitle(c: Context, title: unknown): Response | null {
+/**
+ * Same shape as the reserved-agent-name guard: block another automation from
+ * acquiring the Atlas title, but let one that already carries it keep being
+ * edited. An update whose title is unchanged acquires nothing, and rejecting
+ * those froze the platform's own Repository Wiki automation.
+ */
+function reservedAtlasAutopilotTitle(c: Context, title: unknown, currentTitle?: string): Response | null {
   if (cleanString(typeof title === "string" ? title : null) !== ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE) return null;
+  if (currentTitle === ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE) return null;
   return c.json({
     error: `${ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE} is reserved for the platform Repository Wiki automation`,
     code: "atlas_identity_reserved",
@@ -251,7 +258,7 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
       body.executionMode ?? loaded.autopilot.executionMode,
     );
     if (issueDenied) return issueDenied;
-    const reserved = reservedAtlasAutopilotTitle(c, body.title);
+    const reserved = reservedAtlasAutopilotTitle(c, body.title, loaded.autopilot.title);
     if (reserved) return reserved;
     try {
       const autopilot = store.updateAutopilot(c.req.param("id"), { ...body, ...policy });
@@ -405,7 +412,7 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
       input.executionMode ?? loaded.autopilot.executionMode,
     );
     if (issueDenied) return issueDenied;
-    const reserved = reservedAtlasAutopilotTitle(c, input.title);
+    const reserved = reservedAtlasAutopilotTitle(c, input.title, loaded.autopilot.title);
     if (reserved) return reserved;
     try {
       const autopilot = store.updateAutopilot(c.req.param("id"), { ...input, ...policy });
