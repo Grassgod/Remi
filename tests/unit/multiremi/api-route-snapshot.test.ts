@@ -40,6 +40,12 @@ describe("api route golden snapshot", () => {
     expect(scrubString("https://unknown:6120/api \\\\unknown\\share", identity)).toBe(
       "https://<hostname>:6120/api \\\\<hostname>\\share",
     );
+    expect(scrubString(
+      "local-1767225600243 local-contact-1767225600244 local-lark-1767225600257 local-cs_snapshot",
+      identity,
+    )).toBe(
+      "local-<timestamp> local-contact-<timestamp> local-lark-<timestamp> local-cs_snapshot",
+    );
   });
 
   it("runs green and matches the golden route inventory", async () => {

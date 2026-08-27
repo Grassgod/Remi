@@ -55,6 +55,7 @@
     ],
     "normalizer": [
       "ISO-8601 timestamps (anywhere in a string) -> \"<timestamp>\"",
+      "local timestamp ids (local[-contact|-lark]-<epoch>) -> \"<timestamp>\" suffix",
       "epoch-millisecond numbers (1.5e12..4e12) and *_ms/duration/elapsed/uptime/latency numeric keys -> 0",
       "absolute machine paths (repo root, $HOME, $TMPDIR, upload dir) -> \"<repo>\"/\"<home>\"/\"<tmp>\"/\"<uploads>\"",
       "hostname in URL/UNC authorities -> \"<hostname>\"; username in Unix/Windows home paths -> \"<user>\"",
@@ -3036,7 +3037,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600243",
+        "order_id": "local-<timestamp>",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -22878,7 +22879,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600244",
+        "id": "local-contact-<timestamp>",
         "status": "received",
         "mode": "local",
         "request": {
@@ -24162,7 +24163,7 @@
       "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600251",
+        "session_id": "local-lark-<timestamp>",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,
