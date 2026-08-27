@@ -19,6 +19,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { CreateTaskInput } from "@multiremi/contracts/types.js";
+import { createId } from "@multiremi/ids.js";
 import { TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
@@ -79,12 +80,37 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       assignment_source_event_id: _assignmentSourceEventIdSnake,
       ...publicInput
     } = body;
-    return c.json({
-      task: taskPublicResponse(store.createTask({
-        ...publicInput,
-        parentTaskId: currentTaskParentId(c),
-      })),
-    }, 201);
+    const taskToken = currentTaskAccessToken(c);
+    const sourceTask = taskToken?.taskId ? store.getTask(taskToken.taskId) : null;
+    const issueId = cleanString(publicInput.issueId);
+    const issue = issueId ? store.getIssue(issueId) : null;
+    const requestedIssueSessionId = cleanString(publicInput.issueSessionId ?? publicInput.issue_session_id);
+    const inheritedIssueSessionId = requestedIssueSessionId ?? sourceTask?.issueSessionId ?? null;
+    const leaderDelegation = Boolean(
+      taskToken
+      && sourceTask
+      && issue
+      && store.isSquadLeaderDelegation({
+        issue,
+        sourceTask,
+        authorAgentId: taskToken.agentId,
+        targetAgentId: agent.id,
+        issueSessionId: inheritedIssueSessionId,
+      })
+    );
+    const createInput: CreateTaskInput = {
+      ...publicInput,
+      parentTaskId: currentTaskParentId(c),
+      ...(leaderDelegation
+        ? {
+          issueSessionId: inheritedIssueSessionId,
+          delegationId: createId("dlg"),
+          delegatedByAgentId: sourceTask!.agentId,
+        }
+        : {}),
+    };
+    const task = store.createTask(createInput);
+    return c.json({ task: taskPublicResponse(task) }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
     const task = store.getTaskWithAgent(c.req.param("id"));

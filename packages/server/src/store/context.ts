@@ -176,6 +176,13 @@ export interface IssuesSurface {
   restoreIssue(id: string): MultiremiIssue;
   archiveEligibleIssues(now?: Date): MultiremiIssue[];
   issueArchiveSweepIntervalMs(): number;
+  isSquadLeaderDelegation(input: {
+    issue: MultiremiIssue;
+    sourceTask: MultiremiTask | null;
+    authorAgentId: string | null;
+    targetAgentId: string;
+    issueSessionId: string | null;
+  }): boolean;
 }
 
 export interface AgentsSurface {

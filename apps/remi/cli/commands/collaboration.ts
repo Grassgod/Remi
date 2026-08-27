@@ -488,7 +488,7 @@ function taskCommandSpecs(): CommandSpec[] {
     nativeSpec("task.get", ["task", "get"], "Get a task", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/multiremi/tasks/${encodePath(positional(invocation, 0, "task"))}`);
     }),
-    nativeSpec("task.create", ["task", "create"], "Create a task", "write", HUMAN, [], [...INPUT_OPTIONS, ...agentPromptOptions(),
+    nativeSpec("task.create", ["task", "create"], "Create a task", "write", HUMAN_TASK, [], [...INPUT_OPTIONS, ...agentPromptOptions(),
       { name: "issue", type: "string", valueName: "issue-id", description: "Related issue" },
       { name: "chat", type: "string", valueName: "chat-id", description: "Related chat" },
     ], async (invocation) => {

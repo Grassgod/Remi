@@ -126,6 +126,40 @@ describe("formatActivity", () => {
     );
   });
 
+  it("explains delegation returns and skipped return reasons", () => {
+    expect(formatActivity(activity("delegation_return_triggered"), t)).toBe(
+      "activity.delegation_return_triggered",
+    );
+    expect(
+      formatActivity(
+        activity("delegation_return_skipped", { details: { reason: "already_covered" } }),
+        t,
+      ),
+    ).toBe(
+      'activity.delegation_return_skipped {"reason":"activity.delegation_return_reason_already_covered"}',
+    );
+    expect(
+      formatActivity(
+        activity("delegation_return_skipped", { details: { reason: "new_reason" } }),
+        t,
+      ),
+    ).toBe('activity.delegation_return_skipped {"reason":"new_reason"}');
+  });
+
+  it("explains why an agent comment mention was skipped", () => {
+    expect(
+      formatActivity(
+        activity("comment_mention_skipped", { details: { reason: "target_unavailable" } }),
+        t,
+      ),
+    ).toBe(
+      'activity.comment_mention_skipped {"reason":"activity.comment_mention_reason_target_unavailable"}',
+    );
+    expect(formatActivity(activity("comment_mention_skipped", { details: {} }), t)).toBe(
+      'activity.comment_mention_skipped {"reason":"activity.reason_unknown"}',
+    );
+  });
+
   it("keeps the squad leader's reason when it has one", () => {
     expect(
       formatActivity(
