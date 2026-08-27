@@ -25,6 +25,8 @@ import type { RouterDeps } from "./deps.js";
 
 const DEFAULT_WORKSPACE_TTL_MS = 72 * 60 * 60 * 1_000;
 const DEFAULT_GC_INTERVAL_MS = 15 * 60 * 1_000;
+const DIRECT_ARCHIVE_RESPONSE_HEADER = "X-Remi-Archive-Direct";
+const DIRECT_ARCHIVE_ROUTE_HEADER = "X-Remi-Archive-Direct-Route";
 
 type InitBody = {
   source_revision?: unknown;
@@ -116,6 +118,17 @@ function requiredUploadAttempt(c: Context): number {
     );
   }
   return attempt;
+}
+
+function isDirectArchiveRoute(c: Context, directBaseUrl: string | null): boolean {
+  if (!directBaseUrl || c.req.header(DIRECT_ARCHIVE_ROUTE_HEADER)?.trim() !== "1") return false;
+  const directBase = new URL(directBaseUrl);
+  const requestAuthority = c.req.header("Host")?.trim() || new URL(c.req.url).host;
+  try {
+    return new URL(`${directBase.protocol}//${requestAuthority}`).host === directBase.host;
+  } catch {
+    return false;
+  }
 }
 
 function workspaceArchiveSettings(settings: Record<string, unknown> | null | undefined): {
@@ -381,7 +394,13 @@ export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void 
         c.req.param("archiveId"),
         requiredUploadAttempt(c),
       );
-      return c.body(null, 204);
+      return c.body(
+        null,
+        204,
+        isDirectArchiveRoute(c, deps.daemonDirectBaseUrl)
+          ? { [DIRECT_ARCHIVE_RESPONSE_HEADER]: "1" }
+          : undefined,
+      );
     } catch (error) {
       return archiveError(c, error);
     }
