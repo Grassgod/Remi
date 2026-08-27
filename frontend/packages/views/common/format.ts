@@ -96,10 +96,19 @@ export function formatElapsedSince(
 }
 
 /**
- * Compact token count: `1.5K` / `2M` / `842`. Near-integer readings drop the
- * decimal ("2K", not "2.0K") because the extra digit is noise at that scale.
+ * Compact token count: `1.5K` / `2M` / `1.4B` / `1T` / `842`. Near-integer
+ * readings drop the decimal ("2K", not "2.0K") because the extra digit is
+ * noise at that scale.
  */
 export function formatTokens(n: number): string {
+  if (n >= 1_000_000_000_000) {
+    const t = n / 1_000_000_000_000;
+    return t % 1 < 0.05 ? `${Math.round(t)}T` : `${t.toFixed(1)}T`;
+  }
+  if (n >= 1_000_000_000) {
+    const b = n / 1_000_000_000;
+    return b % 1 < 0.05 ? `${Math.round(b)}B` : `${b.toFixed(1)}B`;
+  }
   if (n >= 1_000_000) {
     const m = n / 1_000_000;
     return m % 1 < 0.05 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;

@@ -398,6 +398,27 @@ describe("StackedBarChart", () => {
 
 describe("token charts", () => {
   it.each([
+    ["daily", <DailyTokensChart key="daily-total" data={[DAILY_TOKENS]} />],
+    ["weekly", <WeeklyTokensChart key="weekly-total" data={[WEEKLY_TOKENS]} />],
+  ])(
+    "uses localized series labels and a compact tooltip total in the %s chart",
+    (_name, chart) => {
+      rechartsState.tooltipPayload = [
+        tooltipEntry("input", 259_600),
+        tooltipEntry("output", 4_000_000),
+        tooltipEntry("cacheRead", 630_300_000),
+        tooltipEntry("cacheWrite", 24_345_453),
+      ];
+
+      const { getByText, queryByText } = render(chart);
+
+      expect(getByText("Cache read")).toBeTruthy();
+      expect(queryByText("cacheRead")).toBeNull();
+      expect(getByText("658.9M")).toBeTruthy();
+    }
+  );
+
+  it.each([
     ["daily", <DailyTokensChart key="daily-zero" data={[DAILY_TOKENS]} />],
     ["weekly", <WeeklyTokensChart key="weekly-zero" data={[WEEKLY_TOKENS]} />],
   ])("omits the zero total-only series from the %s chart", (_name, chart) => {

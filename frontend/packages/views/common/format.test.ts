@@ -107,5 +107,18 @@ describe("formatTokens", () => {
   it("has a millions tier — 2.4M must not render as 2400.0k", () => {
     expect(formatTokens(2_400_000)).toBe("2.4M");
     expect(formatTokens(2_000_000)).toBe("2M");
+    expect(formatTokens(658_905_053)).toBe("658.9M");
+    expect(formatTokens(999_999_999)).toBe("1000.0M");
+  });
+
+  it("uses a billions tier at one billion", () => {
+    expect(formatTokens(1_000_000_000)).toBe("1B");
+    expect(formatTokens(1_415_100_000)).toBe("1.4B");
+    expect(formatTokens(1_999_999_999)).toBe("2.0B");
+    expect(formatTokens(2_000_000_000)).toBe("2B");
+  });
+
+  it("uses a trillions tier at one trillion", () => {
+    expect(formatTokens(1_000_000_000_000)).toBe("1T");
   });
 });
