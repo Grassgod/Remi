@@ -603,6 +603,7 @@ function platformSpecs(): CommandSpec[] {
       ["platform.health", ["platform", "health"], "/health", "Get platform health"],
       ["platform.ready", ["platform", "ready"], "/readyz", "Get platform readiness"],
       ["platform.realtime", ["platform", "realtime"], "/health/realtime", "Get realtime transport health"],
+      ["platform.config", ["platform", "config"], "/api/multiremi/platform/config", "Get effective platform configuration and degradation status"],
       ["platform.status", ["platform", "status"], "/api/multiremi/platform/status", "Get platform deployment status"],
       ["platform.operation.list", ["platform", "operation", "list"], "/api/multiremi/platform/operations", "List platform operations"],
       ["platform.feedback.list", ["platform", "feedback", "list"], "/api/multiremi/feedback", "List product feedback"],

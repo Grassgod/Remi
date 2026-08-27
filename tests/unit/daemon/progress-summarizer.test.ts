@@ -6,6 +6,7 @@ import {
   buildSummaryPrompt,
   digestTaskMessage,
   parseSummaryText,
+  pickTaskStartupLine,
   PROGRESS_SUMMARY_DEFAULTS,
   readCodexAuthApiKey,
   resolveProgressSummaryConfig,
@@ -13,6 +14,7 @@ import {
   resolveTaskProgressSummaryConfig,
   TaskProgressSummarizer,
   TaskProgressTracker,
+  TASK_STARTUP_LINES,
   type ProgressSummaryConfig,
   type ProgressSummaryResult,
   type SummaryCliSpawn,
@@ -823,5 +825,43 @@ describe("TaskProgressSummarizer", () => {
     expect(reported).toEqual([{ summary: "API 摘要" }]);
     expect(apiCalls).toBe(1);
     expect(cliCalls).toBe(0);
+  });
+});
+
+describe("task startup line", () => {
+  const at = (index: number) => () => index / TASK_STARTUP_LINES.length;
+
+  it("picks a distinct opener per run, spoken by the running agent", () => {
+    const picked = TASK_STARTUP_LINES.map((_, index) => pickTaskStartupLine("干活小弟", at(index)));
+    expect(picked).toEqual(TASK_STARTUP_LINES.map((line) => line.replace("{name}", "干活小弟")));
+    expect(new Set(picked).size).toBe(TASK_STARTUP_LINES.length);
+    expect(picked.every((line) => line.startsWith("干活小弟 ") && !line.includes("{name}"))).toBe(true);
+  });
+
+  it("falls back to the Remi persona when the task carries no agent name", () => {
+    for (const name of [undefined, null, "", "   "]) {
+      expect(pickTaskStartupLine(name, at(0))).toBe(TASK_STARTUP_LINES[0]!.replace("{name}", "Remi"));
+    }
+  });
+
+  it("clamps a long agent name so the line stays one row", () => {
+    const line = pickTaskStartupLine("超级无敌宇宙第一勤劳的干活小弟本弟", at(1));
+    expect(line).toBe(TASK_STARTUP_LINES[1]!.replace("{name}", "超级无敌宇宙第一勤劳的干活小弟本"));
+  });
+
+  it("clamps degenerate random values to a real line", () => {
+    expect(pickTaskStartupLine("Remi", () => 0)).toBe(TASK_STARTUP_LINES[0]!.replace("{name}", "Remi"));
+    // Math.random() is [0,1), but a stubbed or drifting source must not yield undefined.
+    const last = TASK_STARTUP_LINES[TASK_STARTUP_LINES.length - 1]!.replace("{name}", "Remi");
+    expect(pickTaskStartupLine("Remi", () => 1)).toBe(last);
+    expect(pickTaskStartupLine("Remi", () => -1)).toBe(TASK_STARTUP_LINES[0]!.replace("{name}", "Remi"));
+  });
+
+  it("keeps every opener a named one-liner short enough for the progress row", () => {
+    for (const line of TASK_STARTUP_LINES) {
+      expect(line.trim()).toBe(line);
+      expect(line.startsWith("{name} ")).toBe(true);
+      expect(line.replace("{name}", "带头大哥").length).toBeLessThanOrEqual(24);
+    }
   });
 });

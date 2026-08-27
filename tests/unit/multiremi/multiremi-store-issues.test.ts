@@ -547,6 +547,51 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.listIssueComments(issue.id).find((comment) => comment.id === reply.id)?.reactions).toHaveLength(1);
   });
 
+  it("claims attachments referenced by issue descriptions and comment bodies", () => {
+    const store = createStore();
+    const issueAttachment = store.createAttachment({
+      filename: "issue.png",
+      url: "/api/attachments/att_issue_markdown/content",
+      contentType: "image/png",
+      sizeBytes: 101,
+      id: "att_issue_markdown",
+    });
+    const issue = store.createIssue({
+      title: "Markdown attachments",
+      description: `![issue](/api/attachments/${issueAttachment.id}/content)`,
+    });
+    expect(store.listAttachmentsForIssue(issue.id).map((attachment) => attachment.id)).toEqual([issueAttachment.id]);
+
+    const updatedAttachment = store.createAttachment({
+      filename: "updated.png",
+      url: "/api/attachments/att_issue_updated/content",
+      contentType: "image/png",
+      sizeBytes: 202,
+      id: "att_issue_updated",
+    });
+    store.updateIssue(issue.id, {
+      description: `![updated](/api/attachments/${updatedAttachment.id}/content)`,
+    });
+    expect(store.listAttachmentsForIssue(issue.id).map((attachment) => attachment.id)).toEqual([
+      issueAttachment.id,
+      updatedAttachment.id,
+    ]);
+
+    const commentAttachment = store.createAttachment({
+      filename: "comment.png",
+      url: "/api/attachments/att_comment_markdown/content",
+      contentType: "image/png",
+      sizeBytes: 303,
+      id: "att_comment_markdown",
+    });
+    const comment = store.createIssueComment(issue.id, {
+      body: `![comment](/api/attachments/${commentAttachment.id}/content)`,
+    });
+    expect(store.listAttachmentsForComment(comment.id).map((attachment) => attachment.id)).toEqual([
+      commentAttachment.id,
+    ]);
+  });
+
   it("serves Go-style issue comment list windows and cursors", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });

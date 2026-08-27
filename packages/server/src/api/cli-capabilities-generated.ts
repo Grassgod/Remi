@@ -2175,7 +2175,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
       ]
     },
     "issue.attachment.download": {
-      "command": "remi issue attachment download",
+      "command": "remi attachment download",
       "auth": [
         "human",
         "task"
@@ -4940,6 +4940,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "platform.realtime",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.config": {
+      "command": "remi platform config",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "platform.config",
       "output": [
         "table",
         "json",

@@ -147,9 +147,39 @@ describe("Multiremi session archives", () => {
     });
 
     expect(initialized.status).toBe(201);
-    expect((await initialized.json() as any).upload_url).toStartWith(
+    const body = await initialized.json() as any;
+    expect(body.upload_url).toStartWith(
       `https://api-direct.example:7443${base}/`,
     );
+    const directPreflight = await app.request(body.upload_url, {
+      method: "HEAD",
+      headers: {
+        Authorization: daemonHeaders.Authorization,
+        "X-Remi-Archive-Direct-Route": "1",
+      },
+    });
+    expect(directPreflight.status).toBe(204);
+    expect(directPreflight.headers.get("X-Remi-Archive-Direct")).toBe("1");
+
+    const sameHostViaNextPreflight = await app.request(body.upload_url, {
+      method: "HEAD",
+      headers: { Authorization: daemonHeaders.Authorization },
+    });
+    expect(sameHostViaNextPreflight.status).toBe(204);
+    expect(sameHostViaNextPreflight.headers.get("X-Remi-Archive-Direct")).toBeNull();
+
+    const nextRewritePreflight = await app.request(
+      new URL(new URL(body.upload_url).pathname + new URL(body.upload_url).search, "http://api:6120"),
+      {
+        method: "HEAD",
+        headers: {
+          Authorization: daemonHeaders.Authorization,
+          "X-Remi-Archive-Direct-Route": "1",
+        },
+      },
+    );
+    expect(nextRewritePreflight.status).toBe(204);
+    expect(nextRewritePreflight.headers.get("X-Remi-Archive-Direct")).toBeNull();
 
     await expect(fixture("https://api-direct.example/prefixed"))
       .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
@@ -157,27 +187,37 @@ describe("Multiremi session archives", () => {
       .rejects.toThrow("MULTIREMI_DAEMON_DIRECT_BASE_URL");
   });
 
-  it("streams a 12 MiB daemon upload directly into the API and completes SHA-256 verification", async () => {
-    const { store, app, issue, runtime, token } = await fixture(null, 64 * 1024 * 1024);
-    const archivePath = join(archiveRoot!, "daemon-source.tar.gz");
-    const bytes = Buffer.alloc(12 * 1024 * 1024 + 29, 0x41);
-    const digest = sha256(bytes);
-    writeFileSync(archivePath, bytes);
+  it("attests a configured direct API route and streams a 12 MiB daemon upload through it", async () => {
+    let directApp: ReturnType<typeof createMultiremiApp> | null = null;
+    let headAttested = false;
+    let putCount = 0;
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch: async (request) => {
-        const response = await app.fetch(request);
-        if (request.method !== "HEAD") return response;
-        const headers = new Headers(response.headers);
-        headers.set("X-Remi-Archive-Direct", "1");
-        return new Response(null, { status: response.status, headers });
+        if (!directApp) return new Response("API not ready", { status: 503 });
+        const headers = new Headers(request.headers);
+        headers.set("X-Remi-Archive-Direct-Route", "1");
+        const response = await directApp.fetch(new Request(request, { headers }));
+        if (request.method === "HEAD") {
+          headAttested = response.headers.get("X-Remi-Archive-Direct") === "1";
+        } else if (request.method === "PUT") {
+          putCount += 1;
+        }
+        return response;
       },
     });
     try {
       const origin = `http://127.0.0.1:${server.port}`;
+      const fixtureData = await fixture(origin, 64 * 1024 * 1024);
+      const { store, app, issue, runtime, token } = fixtureData;
+      directApp = app;
+      const archivePath = join(archiveRoot!, "daemon-source.tar.gz");
+      const bytes = Buffer.alloc(12 * 1024 * 1024 + 29, 0x41);
+      const digest = sha256(bytes);
+      writeFileSync(archivePath, bytes);
       const client = new MultiremiDaemonClient(origin, token.token, {
-        sessionArchiveUploadBaseUrl: origin,
+        sessionArchiveProxyMaxBytes: 8 * 1024 * 1024,
       });
       const initialized = await client.initIssueSessionArchive(runtime.id, issue.id, {
         sourceRevision: "api-stream-v1",
@@ -199,6 +239,9 @@ describe("Multiremi session archives", () => {
 
       expect(uploaded).toMatchObject({ status: "uploading", size_bytes: bytes.byteLength });
       expect(completed).toMatchObject({ status: "ready", sha256: digest, size_bytes: bytes.byteLength });
+      expect(new URL(initialized.upload_url!).origin).toBe(origin);
+      expect(headAttested).toBe(true);
+      expect(putCount).toBe(1);
       expect(store.getSessionArchive(initialized.archive.id)).toMatchObject({
         status: "ready",
         sha256: digest,

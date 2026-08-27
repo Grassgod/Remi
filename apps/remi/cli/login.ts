@@ -283,7 +283,7 @@ export async function runLogin(_args: string[]): Promise<void> {
   console.log("🎉 Setup complete!\n");
   console.log("  Config saved to: " + getConfigPath());
   console.log("  Next steps:");
-  console.log("    remi doctor   — Verify everything is configured");
-  console.log("    remi start    — Start Remi services");
+  console.log("    remi doctor          — Verify everything is configured");
+  console.log("    remi daemon start    — Start Remi services");
   console.log("");
 }

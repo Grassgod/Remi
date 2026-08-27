@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { configStore } from "@multiremi/core/config";
@@ -104,10 +104,33 @@ describe("ConnectRemoteDialog", () => {
       ),
     );
     expect(baseElement).toHaveTextContent("MULTIREMI_BASE_URL=http://localhost:3000");
+    expect(baseElement).not.toHaveTextContent("--device-name");
     expect(provisionDaemonCredential).toHaveBeenCalledWith({
       workspace_id: "ws-test",
       name: expect.stringMatching(/^Remi daemon \d{4}-\d{2}-\d{2}$/),
     });
+  });
+
+  it("shell-quotes an optional computer name in the setup command", async () => {
+    const { baseElement, getByLabelText } = renderDialog();
+
+    await waitFor(() => expect(getByLabelText("Computer name (optional)")).toBeEnabled());
+    fireEvent.change(getByLabelText("Computer name (optional)"), {
+      target: { value: "Alice's laptop" },
+    });
+
+    expect(baseElement).toHaveTextContent("--device-name 'Alice'\\''s laptop'");
+    expect(baseElement).toHaveTextContent("MULTIREMI_BASE_URL=http://localhost:3000");
+    expect(baseElement).not.toHaveTextContent("MULTIREMI_BASE_URL='Alice");
+  });
+
+  it("renders canonical daemon troubleshooting commands", async () => {
+    const { baseElement } = renderDialog();
+
+    await waitFor(() => expect(baseElement).toHaveTextContent("remi daemon status"));
+    expect(baseElement).toHaveTextContent("remi daemon logs -f");
+    expect(baseElement).not.toHaveTextContent("remi status");
+    expect(baseElement).not.toHaveTextContent("remi logs -f");
   });
 
   it("uses self-host daemon URLs from runtime config", async () => {

@@ -502,6 +502,7 @@ function mappedOperationsCommand(route: string): string | null {
     "GET /readyz": "platform.ready",
     "GET /health/realtime": "platform.realtime",
     "GET /api/multiremi/health": "platform.health",
+    "GET /api/multiremi/platform/config": "platform.config",
     "GET /api/multiremi/platform/status": "platform.status",
     "GET /api/multiremi/platform/operations": "platform.operation.list",
     "POST /api/multiremi/platform/operations": "platform.operation.create",

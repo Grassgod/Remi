@@ -3038,9 +3038,9 @@
       "migration_status": "native"
     },
     "issue.attachment.download": {
-      "command": "remi issue attachment download",
+      "command": "remi attachment download",
       "aliases": [
-        "remi attachment download"
+        "remi issue attachment download"
       ],
       "auth": [
         "human",
@@ -6990,6 +6990,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "platform.config": {
+      "command": "remi platform config",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "platform.config",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "platform.status": {
       "command": "remi platform status",
       "aliases": [],
@@ -7838,10 +7855,10 @@
       "replacement": "remi session archive retry",
       "hidden": false
     },
-    "remi attachment download": {
+    "remi issue attachment download": {
       "command": "issue.attachment.download",
       "deprecated_since": "0.3.0",
-      "replacement": "remi issue attachment download",
+      "replacement": "remi attachment download",
       "hidden": false
     },
     "remi task messages": {
@@ -8639,6 +8656,9 @@
     },
     "GET /api/multiremi/pins": {
       "command": "pin.list"
+    },
+    "GET /api/multiremi/platform/config": {
+      "command": "platform.config"
     },
     "GET /api/multiremi/platform/operations": {
       "command": "platform.operation.list"

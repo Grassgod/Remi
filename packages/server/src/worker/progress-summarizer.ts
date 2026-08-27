@@ -286,6 +286,49 @@ export class TaskProgressTracker {
   }
 }
 
+/**
+ * Opening line written the moment a run starts, before the first model summary
+ * exists. The dual trigger (N messages AND T ms) means this line owns the first
+ * ~45s of every run, so it is real product copy rather than a status code: the
+ * agent speaks as itself, in the same voice as the model summaries (short,
+ * spoken Chinese, no tool jargon), picked at random so consecutive runs don't
+ * read like a stuck screen. `{name}` is the running agent's own name.
+ */
+export const TASK_STARTUP_LINES: readonly string[] = [
+  "{name} 正在摸鱼：）马上开工",
+  "{name} 已上线，正在读题",
+  "{name} 端起咖啡，开始看需求",
+  "{name} 正在把需求读第三遍",
+  "{name} 卷起袖子，准备动手",
+  "{name} 先摸清地形，再下笔",
+  "{name} 正在装载上下文，别催",
+  "{name} 深呼吸，打开了工程",
+  "{name} 正在把需求翻译成人话",
+  "{name} 刚接单，正在理头绪",
+  "{name} 正在找线头，马上有进展",
+  "{name} 已就位，键盘擦干净了",
+];
+
+/** Fallback persona when a task carries no agent record. */
+const DEFAULT_STARTUP_ACTOR = "Remi";
+/** Keep the rendered line inside one progress row even with a long agent name. */
+const MAX_STARTUP_ACTOR_CHARS = 16;
+
+/**
+ * Random opener for a fresh run, spoken by `agentName`. `random` is injectable
+ * so tests stay deterministic.
+ */
+export function pickTaskStartupLine(
+  agentName?: string | null,
+  random: () => number = Math.random,
+): string {
+  const trimmed = agentName?.replace(/\s+/g, " ").trim() ?? "";
+  const actor = (trimmed || DEFAULT_STARTUP_ACTOR).slice(0, MAX_STARTUP_ACTOR_CHARS);
+  const index = Math.floor(random() * TASK_STARTUP_LINES.length);
+  const bounded = Math.min(Math.max(index, 0), TASK_STARTUP_LINES.length - 1);
+  return TASK_STARTUP_LINES[bounded]!.replace("{name}", actor);
+}
+
 export type ProgressRunOutcome = "completed" | "failed" | "cancelled";
 
 /** Narrow fetch shape so tests can inject a plain async function. */

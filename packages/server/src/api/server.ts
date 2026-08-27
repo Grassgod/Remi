@@ -50,6 +50,10 @@ import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
+import {
+  evaluateStartupEnv,
+  normalizeDaemonDirectBaseUrl,
+} from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
 import type { RouterDeps } from "./routers/deps.js";
@@ -185,28 +189,6 @@ function recordTaskTokenWrite(
 function envEnabled(value: string | undefined, fallback = true): boolean {
   if (value === undefined) return fallback;
   return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
-}
-
-function normalizeDaemonDirectBaseUrl(value: string | null | undefined): string | null {
-  const raw = value?.trim();
-  if (!raw) return null;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("MULTIREMI_DAEMON_DIRECT_BASE_URL must be an absolute http(s) URL");
-  }
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:")
-    || url.username
-    || url.password
-    || url.search
-    || url.hash
-    || (url.pathname !== "/" && url.pathname !== "")
-  ) {
-    throw new Error("MULTIREMI_DAEMON_DIRECT_BASE_URL must be an http(s) origin without credentials, path, query, or fragment");
-  }
-  return url.origin;
 }
 
 export interface MultiremiApiOptions {
@@ -631,6 +613,26 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 }
 
 export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
+  const startupEnv = {
+    ...process.env,
+    ...(options.authToken !== undefined
+      ? { MULTIREMI_TOKEN: options.authToken ?? undefined }
+      : {}),
+    ...(options.daemonDirectBaseUrl !== undefined
+      ? { MULTIREMI_DAEMON_DIRECT_BASE_URL: options.daemonDirectBaseUrl ?? undefined }
+      : {}),
+  };
+  const startupConfig = evaluateStartupEnv(startupEnv);
+  if (startupConfig.missingRequired.length > 0) {
+    const message = `Missing required production environment variables: ${startupConfig.missingRequired.join(", ")}`;
+    log.error(`[startup-env] ${message}`);
+    throw new Error(message);
+  }
+  log.info(`[effective-config] ${JSON.stringify(startupConfig.effective)}`);
+  for (const degradation of startupConfig.degradations) {
+    log.warn(`[configuration-degradation] ${degradation.message}`);
+  }
+
   const store = options.store ?? new MultiremiStore();
   const feishuSidecarEndpoints = options.feishuSidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
   const backgroundJobs = options.backgroundJobs
