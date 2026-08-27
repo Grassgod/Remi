@@ -202,6 +202,7 @@
     "section_generated_issues": "生成された issue · {{count}}",
     "section_source_intake": "エージェントから作成",
     "generated_issues_empty": "エージェントがこの依頼をトリアージしています。",
+    "generated_issues_empty_terminal": "トリアージは完了しました。実行用 issue は作成されませんでした。",
     "workspace_status_label": "状態",
     "workspace_mode": "モード",
     "workspace_read_only_snapshot": "読み取り専用プロジェクトスナップショット",

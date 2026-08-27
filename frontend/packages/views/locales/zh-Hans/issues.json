@@ -202,6 +202,7 @@
     "section_generated_issues": "生成的 issue · {{count}}",
     "section_source_intake": "由智能体创建",
     "generated_issues_empty": "智能体正在分诊这个需求。",
+    "generated_issues_empty_terminal": "分诊已完成，未产出执行单。",
     "workspace_status_label": "状态",
     "workspace_mode": "模式",
     "workspace_read_only_snapshot": "只读项目快照",

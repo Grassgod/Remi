@@ -204,6 +204,7 @@
     "section_generated_issues": "Generated issues · {{count}}",
     "section_source_intake": "Created through agent",
     "generated_issues_empty": "The agent is still triaging this request.",
+    "generated_issues_empty_terminal": "Triage is complete. No execution issues were created.",
     "workspace_status_label": "Status",
     "workspace_mode": "Mode",
     "workspace_read_only_snapshot": "Read-only project snapshot",
