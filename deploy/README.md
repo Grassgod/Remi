@@ -87,9 +87,14 @@ The updater may use this Compose file after cutover. Set
 still appear in the service status panel.
 
 Feishu message ingestion uses an operator-owned endpoint registry instead of
-accepting arbitrary URLs from users or agents. See
+accepting arbitrary URLs from users or agents. The `feishu-sidecar` service in
+`compose.application.yml` is inert until `COMPOSE_PROFILES=feishu-sidecar` and
+`REMI_FEISHU_SIDECAR_ENDPOINTS` are set in the platform env file; it shares the
+API container's network namespace and publishes no port. The updater removes and
+recreates it around every API container replacement, and a sidecar that fails to
+start degrades ingestion without failing the release. See
 [`docs/feishu-message-ingestion.md`](../docs/feishu-message-ingestion.md) for
-the fail-closed environment contract and a review-only Compose sidecar example.
+the fail-closed environment contract, the rollout runbook, and rollback.
 
 ## Direct Session Archive uploads (MUL-144)
 
