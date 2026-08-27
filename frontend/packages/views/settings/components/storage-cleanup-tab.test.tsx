@@ -27,6 +27,7 @@ const statusRef = vi.hoisted(() => ({
       ready_archives: 2,
       pending_archives: 0,
       failed_archives: 1,
+      exhausted_archives: 1,
       total_bytes: 1_024,
     },
     last_failure: null as null | {
@@ -118,6 +119,7 @@ describe("StorageCleanupTab", () => {
     expect(screen.getByText("~/.remi/multiremi/session-archives")).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace retention")).toHaveValue(72);
     expect(screen.getByLabelText("Cleanup scan interval")).toHaveValue(15);
+    expect(screen.getByText("Automatic retries stopped")).toBeInTheDocument();
   });
 
   it("saves exact millisecond values through the controlled endpoint", async () => {

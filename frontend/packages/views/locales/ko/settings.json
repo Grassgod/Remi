@@ -487,6 +487,7 @@
     "ready": "준비됨",
     "pending": "대기 중",
     "failed": "실패",
+    "exhausted": "자동 재시도 중지됨",
     "space_used": "사용 공간",
     "last_failure": "최근 아카이브 실패",
     "cleanup_title": "작업 공간 정리",

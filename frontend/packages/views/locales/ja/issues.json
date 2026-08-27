@@ -189,6 +189,9 @@
     "session_archive_files": "{{count}} ファイル · {{size}}",
     "session_archive_verify": "アーカイブを検証",
     "session_archive_retry": "アーカイブを再試行",
+    "session_archive_attempts": "{{count}} 回試行",
+    "session_archive_next_retry": "次回の再試行 {{time}}",
+    "session_archive_stopped": "自動再試行を停止済み",
     "session_archive_status": {
       "ready": "準備完了",
       "failed": "失敗",

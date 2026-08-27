@@ -189,6 +189,9 @@
     "session_archive_files": "{{count}} 个文件 · {{size}}",
     "session_archive_verify": "校验归档",
     "session_archive_retry": "重试归档",
+    "session_archive_attempts": "已尝试 {{count}} 次",
+    "session_archive_next_retry": "下次重试 {{time}}",
+    "session_archive_stopped": "已停止自动重试",
     "session_archive_status": {
       "ready": "已就绪",
       "failed": "失败",

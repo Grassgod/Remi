@@ -487,6 +487,7 @@
     "ready": "已就绪",
     "pending": "等待中",
     "failed": "失败",
+    "exhausted": "已停止自动重试",
     "space_used": "占用空间",
     "last_failure": "最近一次归档失败",
     "cleanup_title": "工作目录清理",

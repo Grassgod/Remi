@@ -16,6 +16,9 @@ export const SessionArchiveSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).default({}),
   attempt_count: z.number().default(0),
   last_error: z.string().nullable().default(null),
+  next_retry_at: z.string().nullable().default(null),
+  retry_exhausted_at: z.string().nullable().default(null),
+  retry_state: z.enum(["eligible", "backoff", "exhausted"]).catch("eligible").default("eligible"),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
   completed_at: z.string().nullable().default(null),
@@ -38,6 +41,7 @@ const SessionArchiveUsageSchema = z.object({
   ready_archives: z.number().default(0),
   failed_archives: z.number().default(0),
   pending_archives: z.number().default(0),
+  exhausted_archives: z.number().default(0),
   total_bytes: z.number().default(0),
 }).loose();
 
@@ -64,6 +68,7 @@ export const WorkspaceSessionArchiveStatusSchema = z.object({
     ready_archives: 0,
     failed_archives: 0,
     pending_archives: 0,
+    exhausted_archives: 0,
     total_bytes: 0,
   }),
   last_failure: SessionArchiveFailureSchema.nullable().default(null),
@@ -94,6 +99,7 @@ export const EMPTY_WORKSPACE_SESSION_ARCHIVE_STATUS: WorkspaceSessionArchiveStat
     ready_archives: 0,
     failed_archives: 0,
     pending_archives: 0,
+    exhausted_archives: 0,
     total_bytes: 0,
   },
   last_failure: null,

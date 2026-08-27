@@ -487,6 +487,7 @@
     "ready": "Ready",
     "pending": "Pending",
     "failed": "Failed",
+    "exhausted": "Automatic retries stopped",
     "space_used": "Space used",
     "last_failure": "Latest archive failure",
     "cleanup_title": "Workspace cleanup",

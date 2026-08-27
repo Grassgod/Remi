@@ -191,6 +191,9 @@
     "session_archive_files": "{{count}} files · {{size}}",
     "session_archive_verify": "Verify archive",
     "session_archive_retry": "Retry archive",
+    "session_archive_attempts": "{{count}} attempts",
+    "session_archive_next_retry": "Next retry {{time}}",
+    "session_archive_stopped": "Automatic retries stopped",
     "session_archive_status": {
       "ready": "Ready",
       "failed": "Failed",
