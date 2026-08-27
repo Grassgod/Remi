@@ -450,7 +450,6 @@ function TroubleshootingDetails({
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_check_status)}</span>
             {/* CLI command — literal shell string, not i18n content. */}
-            {/* eslint-disable-next-line i18next/no-literal-string */}
             <code
               className={cn(
                 "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
@@ -463,7 +462,6 @@ function TroubleshootingDetails({
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_view_logs)}</span>
             {/* CLI command — literal shell string, not i18n content. */}
-            {/* eslint-disable-next-line i18next/no-literal-string */}
             <code
               className={cn(
                 "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
