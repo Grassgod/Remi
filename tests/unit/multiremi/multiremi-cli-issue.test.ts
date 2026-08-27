@@ -371,6 +371,15 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       ], { programName: "multiremi" });
       const missingOutputDir = join(tmp, "missing", "downloads");
       const exactOutput = join(tmp, "renamed", "custom-name.bin");
+      await expect(runMultiremi([
+        "attachment",
+        "download",
+        "att_1",
+        "-o",
+        exactOutput,
+      ], { programName: "multiremi" })).rejects.toThrow(
+        "usage: remi attachment download <attachment-id> [--output <file> | --output-dir <dir>]",
+      );
       await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output-dir", missingOutputDir], { programName: "multiremi" });
       await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output", exactOutput], { programName: "multiremi" });
 

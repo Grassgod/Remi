@@ -82,13 +82,17 @@ describe("native collaboration CLI contracts", () => {
       ["issue", "comment", "list", "iss_1", "--thread", "cmt_1", "--output", "json"],
       ["issue", "comment", "add", "iss_1", "--parent", "cmt_1", "--content-stdin"],
       ["issue", "session", "result", "publish", "iss_1", "--session", "ises_1", "--content-stdin"],
-      ["attachment", "download", "att_1", "--output-dir", "/tmp"],
     ];
     for (const argv of cases) {
       const invocation = registry.resolve(argv);
       expect(invocation?.spec.id, argv.join(" ")).toBe(`legacy.${argv[0]}`);
       expect(invocation?.rawArgs, argv.join(" ")).toEqual(argv.slice(1));
     }
+
+    const attachmentDownload = registry.resolve(["attachment", "download", "att_1", "--output-dir", "/tmp"]);
+    expect(attachmentDownload?.spec.id).toBe("issue.attachment.download");
+    expect(attachmentDownload?.positionals).toEqual(["att_1"]);
+    expect(attachmentDownload?.options["output-dir"]).toBe("/tmp");
 
     const inventory = specs.flatMap((spec) => spec.aliases ?? []);
     for (const path of compatibilityPaths) {
