@@ -13,7 +13,9 @@ import {
 } from "@multiremi/store/repos/platform-maintenance-repo.js";
 import {
   PlatformOperationNotCancellableError,
+  PlatformOperationConflictError,
 } from "@multiremi/store/repos/platform-operations-repo.js";
+import { isValidDailyScheduleTime, isValidIanaTimezone } from "@multiremi/store/schedule.js";
 import { loadCurrentWorkspaceRole, readJson } from "../helpers.js";
 import { currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
@@ -44,6 +46,7 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
       latestRelease: state.latestRelease,
       updateAvailable: isReleaseNewer(state.latestRelease, state.currentRelease),
       autoUpdateStable: state.autoUpdateStable,
+      autoUpdateSchedule: autoUpdateScheduleWire(state),
       updaterStatus: heartbeatAge <= 90_000 ? "ready" : heartbeatAge <= 300_000 ? "stale" : "offline",
       updaterHeartbeatAt: state.updaterHeartbeatAt,
       services: state.services,
@@ -97,9 +100,24 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
   app.patch("/api/multiremi/platform/settings", async (c) => {
     const requester = loadCurrentWorkspaceRole(c, store, "local", ["owner", "admin"]);
     if (requester instanceof Response) return requester;
-    const body = await readJson<{ autoUpdateStable?: boolean }>(c);
-    if (typeof body.autoUpdateStable !== "boolean") return c.json({ error: "autoUpdateStable is required" }, 400);
-    return c.json({ state: store.setPlatformAutoUpdateStable(body.autoUpdateStable) });
+    const body = await readJson<{
+      autoUpdateStable?: boolean;
+      autoUpdate?: { enabled?: boolean; time?: string; timezone?: string };
+    }>(c);
+    const current = store.getPlatformState();
+    const enabled = body.autoUpdate?.enabled ?? body.autoUpdateStable ?? current.autoUpdateStable;
+    const time = clean(body.autoUpdate?.time) ?? current.autoUpdateTime;
+    const timezone = clean(body.autoUpdate?.timezone) ?? current.autoUpdateTimezone;
+    const hasUpdate = body.autoUpdateStable !== undefined
+      || body.autoUpdate?.enabled !== undefined
+      || body.autoUpdate?.time !== undefined
+      || body.autoUpdate?.timezone !== undefined;
+    if (!hasUpdate) return c.json({ error: "autoUpdate settings are required" }, 400);
+    if (typeof enabled !== "boolean") return c.json({ error: "autoUpdate.enabled must be a boolean" }, 400);
+    if (!isValidDailyScheduleTime(time)) return c.json({ error: "autoUpdate.time must use HH:mm" }, 400);
+    if (!isValidIanaTimezone(timezone)) return c.json({ error: "autoUpdate.timezone must be an IANA timezone" }, 400);
+    const state = store.setPlatformAutoUpdateSettings({ enabled, time, timezone });
+    return c.json({ state: { autoUpdateStable: state.autoUpdateStable, autoUpdate: autoUpdateScheduleWire(state) } });
   });
 
   app.post("/api/platform-updater/heartbeat", async (c) => {
@@ -120,20 +138,11 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
       recentReleases: body.recentReleases,
       services: body.services,
     });
-    if (
-      state.autoUpdateStable
-      && isReleaseNewer(state.latestRelease, state.currentRelease)
-      && state.latestRelease?.manifestUrl
-      && !store.getActivePlatformOperation()
-      && !hasRecentFailedAutoUpdate(store.listPlatformOperations(100), state.latestRelease.version)
-    ) {
-      store.createPlatformOperation({
-        kind: "update",
-        targetVersion: state.latestRelease.version,
-        targetRef: state.latestRelease.manifestUrl,
-      }, "system:auto-update");
+    const due = store.claimDuePlatformAutoUpdateCheck();
+    if (due) {
+      store.setPlatformAutoUpdateResult(runScheduledUpdateDecision(store, due));
     }
-    return c.json({ state });
+    return c.json({ state: store.getPlatformState() });
   });
 
   app.post("/api/platform-updater/operations/claim", (c) => {
@@ -153,6 +162,9 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
     // updater dies before its own release call. Release is idempotent.
     if (["succeeded", "failed", "cancelled", "rolled_back"].includes(operation.status)) {
       store.releasePlatformDrain(operation.id);
+      if (operation.requestedBy === "system:auto-update") {
+        store.setPlatformAutoUpdateResult(operation.status === "succeeded" ? "updated" : "failed");
+      }
     }
     return c.json({ operation });
   });
@@ -209,6 +221,40 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
     if (!operationId) return c.json({ error: "operation_id is required" }, 400);
     return c.json({ maintenance: store.releasePlatformDrain(operationId) });
   });
+}
+
+function runScheduledUpdateDecision(
+  store: RouterDeps["store"],
+  state: ReturnType<RouterDeps["store"]["getPlatformState"]>,
+) {
+  if (!isReleaseNewer(state.latestRelease, state.currentRelease)) return "no_update" as const;
+  if (!state.latestRelease?.manifestUrl) return "blocked" as const;
+  if (store.getActivePlatformOperation()) return "busy" as const;
+  if (hasRecentFailedAutoUpdate(store.listPlatformOperations(100), state.latestRelease.version)) {
+    return "blocked" as const;
+  }
+  try {
+    store.createPlatformOperation({
+      kind: "update",
+      targetVersion: state.latestRelease.version,
+      targetRef: state.latestRelease.manifestUrl,
+    }, "system:auto-update");
+    return "update_queued" as const;
+  } catch (error) {
+    if (error instanceof PlatformOperationConflictError) return "busy" as const;
+    throw error;
+  }
+}
+
+function autoUpdateScheduleWire(state: ReturnType<RouterDeps["store"]["getPlatformState"]>) {
+  return {
+    enabled: state.autoUpdateStable,
+    time: state.autoUpdateTime,
+    timezone: state.autoUpdateTimezone,
+    nextCheckAt: state.autoUpdateNextCheckAt,
+    lastCheckedAt: state.autoUpdateLastCheckedAt,
+    lastResult: state.autoUpdateLastResult,
+  };
 }
 
 function drainStatusWire(store: RouterDeps["store"]): Record<string, unknown> {

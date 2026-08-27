@@ -89,6 +89,14 @@ function platformStatus(overrides: Partial<PlatformStatus> = {}): PlatformStatus
     latestRelease: null,
     updateAvailable: false,
     autoUpdateStable: false,
+    autoUpdateSchedule: {
+      enabled: false,
+      time: "05:00",
+      timezone: "Asia/Shanghai",
+      nextCheckAt: null,
+      lastCheckedAt: null,
+      lastResult: null,
+    },
     updaterStatus: "ready",
     updaterHeartbeatAt: null,
     services: [],
@@ -312,5 +320,22 @@ describe("PlatformTab upgrade lifecycle", () => {
 
     expect(screen.getByText("Pausing new tasks (5/5 daemons acknowledged)")).toBeInTheDocument();
     expect(screen.queryByText(/running task/)).not.toBeInTheDocument();
+  });
+
+  it("saves the platform-owned daily update schedule", async () => {
+    const user = userEvent.setup();
+    render(<PlatformTab />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("switch", { name: "Automatically install stable releases" }));
+    await user.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    expect(settingsMutationRef.mutate).toHaveBeenCalledWith({
+      enabled: true,
+      time: "05:00",
+      timezone: "Asia/Shanghai",
+    }, expect.objectContaining({
+      onSuccess: expect.any(Function),
+      onError: expect.any(Function),
+    }));
   });
 });

@@ -17169,6 +17169,14 @@
         "latestRelease": null,
         "updateAvailable": false,
         "autoUpdateStable": false,
+        "autoUpdateSchedule": {
+          "enabled": false,
+          "time": "05:00",
+          "timezone": "Asia/Shanghai",
+          "nextCheckAt": null,
+          "lastCheckedAt": null,
+          "lastResult": null
+        },
         "updaterStatus": "offline",
         "updaterHeartbeatAt": null,
         "services": [],

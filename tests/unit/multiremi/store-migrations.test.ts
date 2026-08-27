@@ -112,6 +112,50 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_notification_deliveries")).toEqual(expect.arrayContaining([
       "claim_seq", "leased_until",
     ]));
+    expect(columnNames(database, "multiremi_platform_state")).toEqual(expect.arrayContaining([
+      "auto_update_time",
+      "auto_update_timezone",
+      "auto_update_next_check_at",
+      "auto_update_last_checked_at",
+      "auto_update_last_result",
+    ]));
+  });
+
+  it("adds the automatic update schedule to a legacy platform state table", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_platform_state (
+        id TEXT PRIMARY KEY,
+        driver TEXT NOT NULL DEFAULT 'systemd_release',
+        current_release TEXT,
+        latest_release TEXT,
+        recent_releases TEXT NOT NULL DEFAULT '[]',
+        services TEXT NOT NULL DEFAULT '[]',
+        auto_update_stable INTEGER NOT NULL DEFAULT 0,
+        updater_heartbeat_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO multiremi_platform_state (
+        id, driver, auto_update_stable, created_at, updated_at
+      ) VALUES (
+        'platform', 'docker_compose', 1,
+        '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_platform_state")).toEqual(expect.arrayContaining([
+      "auto_update_time",
+      "auto_update_timezone",
+      "auto_update_next_check_at",
+      "auto_update_last_checked_at",
+      "auto_update_last_result",
+    ]));
+    expect(database.query(
+      "SELECT auto_update_time, auto_update_timezone FROM multiremi_platform_state WHERE id = 'platform'",
+    ).get()).toEqual({ auto_update_time: "05:00", auto_update_timezone: "Asia/Shanghai" });
   });
 
   it("backfills retry budgets for legacy failures and stalled uploads", () => {

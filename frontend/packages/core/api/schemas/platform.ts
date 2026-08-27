@@ -64,6 +64,15 @@ export const PlatformServiceSchema = z.object({
   checkedAt: z.string().nullable().default(null),
 }).loose();
 
+export const PlatformAutoUpdateScheduleSchema = z.object({
+  enabled: z.boolean().default(false),
+  time: z.string().default("05:00"),
+  timezone: z.string().default("Asia/Shanghai"),
+  nextCheckAt: z.string().nullable().default(null),
+  lastCheckedAt: z.string().nullable().default(null),
+  lastResult: z.string().nullable().default(null),
+}).loose();
+
 export const PlatformStatusSchema = z.object({
   canManage: z.boolean().default(false),
   driver: z.string().default("systemd_release"),
@@ -71,6 +80,14 @@ export const PlatformStatusSchema = z.object({
   latestRelease: PlatformReleaseSchema.nullable().default(null),
   updateAvailable: z.boolean().default(false),
   autoUpdateStable: z.boolean().default(false),
+  autoUpdateSchedule: PlatformAutoUpdateScheduleSchema.default({
+    enabled: false,
+    time: "05:00",
+    timezone: "Asia/Shanghai",
+    nextCheckAt: null,
+    lastCheckedAt: null,
+    lastResult: null,
+  }),
   updaterStatus: z.string().default("offline"),
   updaterHeartbeatAt: z.string().nullable().default(null),
   services: z.array(PlatformServiceSchema).default([]),
@@ -92,7 +109,10 @@ export const PlatformOperationResponseSchema = z.object({
 }).loose();
 
 export const PlatformSettingsResponseSchema = z.object({
-  state: z.object({ autoUpdateStable: z.boolean().default(false) }).loose(),
+  state: z.object({
+    autoUpdateStable: z.boolean().default(false),
+    autoUpdate: PlatformAutoUpdateScheduleSchema,
+  }).loose(),
 }).loose();
 
 export type PlatformRelease = z.infer<typeof PlatformReleaseSchema>;
@@ -100,6 +120,7 @@ export type PlatformOperation = z.infer<typeof PlatformOperationSchema>;
 export type PlatformDrainProgress = z.infer<typeof PlatformDrainProgressSchema>;
 export type PlatformMaintenance = z.infer<typeof PlatformMaintenanceSchema>;
 export type PlatformService = z.infer<typeof PlatformServiceSchema>;
+export type PlatformAutoUpdateSchedule = z.infer<typeof PlatformAutoUpdateScheduleSchema>;
 export type PlatformStatus = z.infer<typeof PlatformStatusSchema>;
 
 export const EMPTY_PLATFORM_STATUS: PlatformStatus = {
@@ -109,6 +130,14 @@ export const EMPTY_PLATFORM_STATUS: PlatformStatus = {
   latestRelease: null,
   updateAvailable: false,
   autoUpdateStable: false,
+  autoUpdateSchedule: {
+    enabled: false,
+    time: "05:00",
+    timezone: "Asia/Shanghai",
+    nextCheckAt: null,
+    lastCheckedAt: null,
+    lastResult: null,
+  },
   updaterStatus: "offline",
   updaterHeartbeatAt: null,
   services: [],
