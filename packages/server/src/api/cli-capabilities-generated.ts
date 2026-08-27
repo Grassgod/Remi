@@ -4872,6 +4872,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "platform.config": {
+      "command": "remi platform config",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "platform.config",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "platform.status": {
       "command": "remi platform status",
       "auth": [

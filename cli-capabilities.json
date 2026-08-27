@@ -6892,6 +6892,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "platform.config": {
+      "command": "remi platform config",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "platform.config",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "platform.status": {
       "command": "remi platform status",
       "aliases": [],
@@ -8538,6 +8555,9 @@
     },
     "GET /api/multiremi/pins": {
       "command": "pin.list"
+    },
+    "GET /api/multiremi/platform/config": {
+      "command": "platform.config"
     },
     "GET /api/multiremi/platform/operations": {
       "command": "platform.operation.list"

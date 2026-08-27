@@ -1,14 +1,14 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 636,
+    "routeCount": 637,
     "routeCountByPrefix": {
-      "native": 204,
+      "native": 205,
       "compat": 419,
       "root": 13
     },
-    "getRoutes": 273,
-    "getRoutesWithBody": 270,
+    "getRoutes": 274,
+    "getRoutesWithBody": 271,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
@@ -277,6 +277,7 @@
     "GET /api/multiremi/notification-deliveries",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
+    "GET /api/multiremi/platform/config",
     "GET /api/multiremi/platform/operations",
     "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
@@ -906,6 +907,7 @@
     "GET /api/multiremi/notification-deliveries",
     "GET /api/multiremi/notification-preferences",
     "GET /api/multiremi/pins",
+    "GET /api/multiremi/platform/config",
     "GET /api/multiremi/platform/operations",
     "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
@@ -9072,6 +9074,17 @@
             "id": "pin.reorder",
             "command": "remi pin reorder",
             "capability": "pin.reorder",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "platform.config",
+            "command": "remi platform config",
+            "capability": "platform.config",
             "outputs": [
               "table",
               "json",
@@ -17455,6 +17468,22 @@
       "body": {
         "pins": [],
         "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/platform/config",
+      "route": "GET /api/multiremi/platform/config",
+      "path": "/api/multiremi/platform/config",
+      "status": 200,
+      "body": {
+        "degradations": [
+          {
+            "id": "session_archive_direct_upload",
+            "status": "disabled",
+            "effectiveValue": null,
+            "detail": "Session Archive direct upload disabled, falling back to 8 MiB proxy limit"
+          }
+        ]
       }
     },
     {
