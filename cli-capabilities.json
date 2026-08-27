@@ -7733,16 +7733,6 @@
       "hidden": false,
       "migration_status": "legacy_passthrough"
     },
-    "legacy.serve": {
-      "command": "remi serve",
-      "aliases": [],
-      "auth": [],
-      "capability": null,
-      "mutation": "read",
-      "output": [],
-      "hidden": true,
-      "migration_status": "legacy_passthrough"
-    },
     "legacy.git-credential": {
       "command": "remi git-credential",
       "aliases": [],

@@ -21,7 +21,6 @@
       "@shared/*": ["./packages/shared/src/*"],
       "@acp/*": ["./packages/acp/src/*"],
       "@memory/*": ["./packages/memory/src/*"],
-      "@queue/*": ["./packages/queue/src/*"],
       "@connectors/*": ["./packages/connectors/src/*"],
       "@auth/*": ["./packages/auth/src/*"],
       "@daemon/*": ["./packages/daemon/src/*"],

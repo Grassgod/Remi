@@ -237,27 +237,6 @@ export function closeDb(): void {
   }
 }
 
-// ── KV helpers ──
-
-export function kvGet(key: string): string | null {
-  const db = getDb();
-  const row = db.query("SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | null;
-  return row?.value ?? null;
-}
-
-export function kvSet(key: string, value: string): void {
-  const db = getDb();
-  db.run(
-    "INSERT INTO kv (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-    [key, value]
-  );
-}
-
-export function kvDelete(key: string): void {
-  const db = getDb();
-  db.run("DELETE FROM kv WHERE key = ?", [key]);
-}
-
 // ── Conversations helpers ──
 
 /** Phase 1: Insert a "processing" record when message arrives. Returns row id. */

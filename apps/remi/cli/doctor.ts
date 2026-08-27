@@ -2,7 +2,7 @@
  * `remi doctor` — Health check for Remi installation.
  *
  * Checks three dimensions:
- * 1. Runtime: Bun, PM2, Claude CLI installed and version OK
+ * 1. Runtime: Bun and Claude CLI installed and version OK
  * 2. Config: DB has required fields
  * 3. Auth: Claude logged in, Feishu tokens valid, optional API keys
  */
@@ -39,15 +39,6 @@ function checkBun(): CheckResult {
     return { status: "pass", message: `Bun ${version}` };
   } catch {
     return { status: "fail", message: "Bun not found — install from https://bun.sh" };
-  }
-}
-
-function checkPM2(): CheckResult {
-  try {
-    const version = execVersion("pm2 --version");
-    return { status: "pass", message: `PM2 ${version}` };
-  } catch {
-    return { status: "fail", message: "PM2 not found — install with: bun add -g pm2" };
   }
 }
 
@@ -177,25 +168,6 @@ function checkEmbeddingKey(): CheckResult {
   return { status: "warn", message: "Embedding API key not configured (vector search disabled)" };
 }
 
-// ── PM2 Service Checks ───────────────────────────────────────
-
-function checkPM2Services(): CheckResult {
-  try {
-    const output = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 10_000 });
-    const apps = JSON.parse(output) as Array<{ name: string; pm2_env?: { status?: string }; pid?: number }>;
-    if (apps.length === 0) {
-      return { status: "warn", message: "No PM2 services running" };
-    }
-    const summary = apps.map((a) => {
-      const status = a.pm2_env?.status ?? "unknown";
-      return `${a.name}(${status})`;
-    }).join(", ");
-    return { status: "pass", message: `PM2 services: ${summary}` };
-  } catch {
-    return { status: "warn", message: "PM2 not running or no services" };
-  }
-}
-
 // ── Storage Checks ───────────────────────────────────────────
 
 function checkStorage(): CheckResult {
@@ -231,7 +203,6 @@ export async function runDoctor(_args: string[]): Promise<void> {
   // Runtime
   ui.header("Runtime");
   render(check(checkBun));
-  render(check(checkPM2));
   render(check(checkClaudeCLI));
 
   // Config
@@ -245,10 +216,6 @@ export async function runDoctor(_args: string[]): Promise<void> {
   render(check(checkFeishuTokens));
   render(check(checkGeminiKey));
   render(check(checkEmbeddingKey));
-
-  // Services
-  ui.header("Services");
-  render(check(checkPM2Services));
 
   // Storage
   ui.header("Storage");

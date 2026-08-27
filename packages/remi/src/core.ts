@@ -10,10 +10,9 @@
  * 6. Response dispatch — return AgentResponse via originating connector
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { spawn } from "node:child_process";
 import type { RemiConfig } from "@shared/config.js";
 import { MEMORY_DIR, SESSIONS_FILE } from "@shared/config.js";
 import { GroupConfigStore } from "./group/store.js";
@@ -24,19 +23,17 @@ import { createAgentResponse, type AgentResponse, type Provider, type ProviderEv
 import { AcpProvider } from "@acp/index.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { FeishuConnector } from "@connectors/feishu/index.js";
-import { flushDedupCacheSync, MenuSyncer } from "@connectors/feishu/sdk.js";
+import { MenuSyncer } from "@connectors/feishu/sdk.js";
 
 import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
 import type { TokenSyncRule } from "@auth/token-sync.js";
 import { PluginRegistry } from "@daemon/agent-runtime/plugins/registry.js";
 import { MemoryStore } from "@memory/store.js";
-import { RemiQueueManager } from "@queue/index.js";
 import { MetricsCollector } from "@shared/metrics/collector.js";
 import { getDb } from "@shared/db/index.js";
 import * as sessDb from "@shared/db/sessions.js";
 import { createLogger, flushLogs } from "@shared/logger.js";
 import { TraceCollector } from "@shared/tracing.js";
-import { writeEcosystem, runBuildsSync, getEcosystemPath } from "@daemon/pm2.js";
 
 import { handleMessageStream, processStream } from "./core/message-stream.js";
 
@@ -52,7 +49,6 @@ export class Remi {
   memory: MemoryStore;
   metrics: MetricsCollector;
   traceCollector: TraceCollector;
-  queue: RemiQueueManager;
   authStore: AuthStore | null = null;
   _configManager: any = null; // ConfigManager instance
   _providers = new Map<string, Provider>();
@@ -63,7 +59,6 @@ export class Remi {
   readonly _scheduler = new LaneScheduler();
   readonly _activeAborts = new Map<string, AbortController>();
   readonly _runtime = new AgentRuntime();
-  _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
 
   constructor(config: RemiConfig) {
     this.config = config;
@@ -78,7 +73,6 @@ export class Remi {
     this.memory = new MemoryStore(MEMORY_DIR, vectorStore);
     this.metrics = new MetricsCollector(dirname(MEMORY_DIR));
     this.traceCollector = new TraceCollector();
-    this.queue = new RemiQueueManager();
     this._migrateSessionsJson();
   }
 
@@ -112,21 +106,6 @@ export class Remi {
 
   addConnector(connector: Connector): void {
     this._connectors.push(connector);
-  }
-
-  /** Look up a registered connector by name. */
-  getConnector(name: string): Connector | undefined {
-    return this._connectors.find((c) => c.name === name);
-  }
-
-  /** Get the Feishu connector (for mission pipeline streaming). */
-  getFeishuConnector(): import("@connectors/feishu/index.js").FeishuConnector | null {
-    return (this._connectors.find((c) => c.name === "feishu") as any) ?? null;
-  }
-
-  /** Register a callback that fires when /restart is invoked. */
-  onRestart(cb: (info: { chatId: string; connectorName?: string }) => void): void {
-    this._onRestart = cb;
   }
 
   /** Abort active processing for a session (called by /esc). */
@@ -248,7 +227,7 @@ export class Remi {
     const provider = Remi._buildProvider(config);
     remi.addProvider(provider);
 
-    // Auto-register the other ACP agent so /switch claude ↔ /switch codex works
+    // Register both configured ACP agents for group-level provider routing.
     const otherType = config.provider.default === "claude" ? "codex" : "claude";
     if (!remi._providers.has(`acp:${otherType}`)) {
       try {
@@ -296,9 +275,6 @@ export class Remi {
     configManager.ensureAllProjects();
     configManager.ensureGlobals();
 
-    // 5. Restart handler
-    remi.onRestart((info) => remi._handleRestart(info));
-
     return remi;
   }
 
@@ -327,74 +303,6 @@ export class Remi {
           env: Object.entries(e.env ?? {}).map(([name, value]) => ({ name, value })),
         })),
     });
-  }
-
-  // ── Restart / notify ──────────────────────────────────────
-
-  private static get _restartNotifyPath(): string {
-    return join(homedir(), ".remi", "restart-notify.json");
-  }
-
-  private _handleRestart(info: { chatId: string; connectorName?: string }): void {
-    log.info("Restart requested — rebuilding services and triggering PM2 restart...");
-
-    // Save notify info so post-restart we can notify the user
-    const dir = join(homedir(), ".remi");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(Remi._restartNotifyPath, JSON.stringify(info));
-
-    flushDedupCacheSync();
-    runBuildsSync(this.config);
-    writeEcosystem(this.config);
-
-    const child = spawn("pm2", ["restart", getEcosystemPath(), "--update-env"], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  }
-
-  /** After startup, check if we need to notify someone that restart succeeded. */
-  async sendRestartNotify(): Promise<void> {
-    const filePath = Remi._restartNotifyPath;
-    if (!existsSync(filePath)) return;
-
-    let info: { chatId: string; connectorName?: string };
-    try {
-      const raw = readFileSync(filePath, "utf-8");
-      info = JSON.parse(raw);
-      unlinkSync(filePath);
-      log.info(`Restart notify: connector=${info.connectorName}, chatId=${info.chatId}`);
-    } catch (e) {
-      log.warn("Restart notify: failed to read file:", e);
-      if (existsSync(filePath)) unlinkSync(filePath);
-      return;
-    }
-
-    const connector = this._connectors.find(
-      (c) => c.name === (info.connectorName ?? ""),
-    );
-    if (!connector) {
-      log.warn(
-        `Restart notify: connector "${info.connectorName}" not found (available: ${this._connectors.map((c) => c.name).join(", ")})`,
-      );
-      return;
-    }
-
-    const maxRetries = 3;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await connector.reply(info.chatId, { text: "Remi 重启成功，已上线。" });
-        log.info(`Restart notification sent to ${info.connectorName}:${info.chatId}`);
-        return;
-      } catch (e) {
-        log.warn(`Restart notify attempt ${attempt}/${maxRetries} failed: ${String(e)}`);
-        if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, 3000));
-        }
-      }
-    }
-    log.error("Restart notification failed after all retries.");
   }
 
   // ── Lifecycle ─────────────────────────────────────────────

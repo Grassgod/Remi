@@ -24,7 +24,7 @@ const REMI_HOME = join(homedir(), ".remi");
 
 const SECTIONS = [
   "provider", "feishu", "plugins", "pluginConfigs", "auth",
-  "tokenSync", "cronJobs", "services", "botMenu", "proxy",
+  "tokenSync", "botMenu", "proxy",
   "embedding", "google", "mcp", "tracing", "logLevel",
 ] as const;
 
@@ -111,8 +111,6 @@ export class ConfigStore {
       pluginConfigs: (data.pluginConfigs ?? defaults.pluginConfigs) as Record<string, Record<string, unknown>>,
       auth: (data.auth ?? defaults.auth) as AuthConfig,
       tokenSync: (data.tokenSync ?? defaults.tokenSync) as RemiConfig["tokenSync"],
-      cronJobs: (data.cronJobs ?? defaults.cronJobs) as RemiConfig["cronJobs"],
-      services: (data.services ?? defaults.services) as RemiConfig["services"],
       botMenu: (data.botMenu ?? defaults.botMenu) as RemiConfig["botMenu"],
       proxy: (data.proxy ?? defaults.proxy) as ProxyConfig,
       embedding: (data.embedding as RemiConfig["embedding"]) ?? defaults.embedding,

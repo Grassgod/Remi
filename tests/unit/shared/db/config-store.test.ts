@@ -80,11 +80,9 @@ describe("ConfigStore", () => {
   it("save preserves all sections", () => {
     const config = defaultRemiConfig();
     config.mcp = [{ name: "test", command: "echo" }];
-    config.cronJobs = [{ id: "j1", handler: "h1" }];
     store.save(config);
 
     const loaded = store.load();
     expect(loaded.mcp).toEqual([{ name: "test", command: "echo" }]);
-    expect(loaded.cronJobs[0].id).toBe("j1");
   });
 });

@@ -1,8 +1,8 @@
 /**
  * Remi core — slash-command handling.
  *
- * The `/clear`, `/new`, `/switch`, `/restart`, `/project`, `/p`, `/context`,
- * `/compact`, `/sessions` and `/status` command table was moved verbatim out of
+ * The `/clear`, `/new`, `/project`, `/p`, `/context`, `/compact`, `/sessions`
+ * and `/status` command table was moved out of
  * `core.ts`; `processStream` calls `tryCommand` before routing to a provider.
  */
 
@@ -13,19 +13,9 @@ import type { Remi } from "../core.js";
 import { ProjectStore } from "../project/store.js";
 import type { IncomingMessage } from "@connectors/base.js";
 import { type AgentResponse, type Provider } from "@shared/contracts/provider-types.js";
-import type { SessionModeState } from "@shared/contracts/acp-protocol.js";
 import * as sessDb from "@shared/db/sessions.js";
-import {
-  availableSwitchModes,
-  buildSwitchTarget,
-  defaultSwitchMode,
-  isKnownSwitchMode,
-  parseSwitchArgs,
-  providerLabel,
-  resolveSwitchProviderAlias,
-} from "@acp/switch-mode.js";
 
-const COMMANDS = new Set(["clear", "new", "status", "restart", "project", "p", "context", "compact", "switch", "sessions"]);
+const COMMANDS = new Set(["clear", "new", "status", "project", "p", "context", "compact", "sessions"]);
 
 export async function tryCommand(remi: Remi, text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
   const trimmed = text.trim();
@@ -49,94 +39,6 @@ export async function tryCommand(remi: Remi, text: string, msg: IncomingMessage)
         await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
       }
       return { text: "上下文已清除，开始新对话。" };
-    }
-    case "switch": {
-      const groupCfg = remi._getGroupConfig(msg.chatId);
-      if (groupCfg?.provider) {
-        return { text: `此群 provider 已由管理员固定为 ${providerLabel(groupCfg.provider)}，无法通过 /switch 切换。` };
-      }
-      const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
-
-      if (!args) {
-        // Show current state + available options
-        const switchSessRow = sessDb.getSession(sessionKey);
-        const curProvider = resolveSwitchProviderAlias(switchSessRow?.provider ?? `acp:${remi.config.provider.default}`);
-        const curMode = switchSessRow?.mode ?? defaultSwitchMode(curProvider) ?? "agent default";
-        const lines = [
-          `当前: **${providerLabel(curProvider)} · ${curMode === "bypassPermissions" ? "bypass" : curMode}**`,
-          "",
-          "可用组合:",
-          "  `/switch claude` 或 `/switch claude:auto` — ACP Claude Auto（默认，若 agent 不支持会回退 default）",
-          "  `/switch claude:default` — ACP Claude 标准权限确认",
-          "  `/switch claude:acceptEdits` — ACP Claude 自动接受编辑",
-          "  `/switch claude:plan` — ACP Claude Plan 模式",
-          "  `/switch claude:dontAsk` — ACP Claude 不询问，未预批准则拒绝",
-          "  `/switch claude:bypass` — ACP Claude 跳过权限检查",
-          "  `/switch cli:bypass` — 旧 Claude CLI 全权限",
-        ];
-        if (remi._providers.has("acp:codex")) {
-          lines.push("  `/switch codex[:mode]` — ACP Codex（mode 由 agent 定义）");
-        }
-        return { text: lines.join("\n") };
-      }
-
-      // Parse provider:mode. Use the last colon so "acp:claude:auto" also works.
-      const { providerAlias, modeArg } = parseSwitchArgs(args);
-      const target = buildSwitchTarget(providerAlias, modeArg);
-      const providerName = target.providerName;
-      let provider: Provider;
-      try {
-        provider = remi._getProvider(providerName);
-      } catch {
-        return { text: `Provider "${providerAlias}" 不可用。可选: claude, codex, cli` };
-      }
-
-      // The agent's own list wins when we already have a live session for
-      // this chat: claude only advertises `bypassPermissions` off-root and
-      // `auto` on models that support it, and codex uses entirely different ids.
-      const advertised = (provider as Provider & {
-        advertisedModes?: (chatId: string) => SessionModeState | undefined;
-      }).advertisedModes?.(sessionKey);
-      if (target.mode && !isKnownSwitchMode(providerName, target.mode, advertised)) {
-        const available = availableSwitchModes(providerName, advertised).join(", ");
-        return { text: `模式 "${modeArg}" 对 ${providerLabel(providerName)} 不可用。可选: ${available}` };
-      }
-
-      const curProviderName = resolveSwitchProviderAlias(sessDb.getSession(sessionKey)?.provider ?? `acp:${remi.config.provider.default}`);
-      const providerChanged = curProviderName !== providerName;
-
-      if (providerChanged) {
-        // Switching provider — clear old session (sessionId is provider-specific)
-        let oldProvider: Provider | null = null;
-        try { oldProvider = remi._getProvider(curProviderName); } catch {}
-        if (oldProvider && "clearSession" in oldProvider && typeof (oldProvider as any).clearSession === "function") {
-          await (oldProvider as any).clearSession(sessionKey);
-        }
-        sessDb.clearSessionId(sessionKey);
-      } else {
-        // Same provider, mode change only — kill process but keep sessionId for resume
-        if (provider && "clearSession" in provider && typeof (provider as any).clearSession === "function") {
-          await (provider as any).clearSession(sessionKey);
-        }
-        // Don't clear session — preserve sessionId for --resume
-      }
-
-      sessDb.upsertSessionSettings(sessionKey, {
-        provider: providerName,
-        mode: target.storedMode,
-        clearSessionId: providerChanged,
-      });
-
-      const resumeNote = !providerChanged ? "（上下文保留）" : "（新对话）";
-      return { text: `已切换到 **${providerLabel(providerName)} · ${target.modeLabel}** ${resumeNote}` };
-    }
-    case "restart": {
-      // Delay restart so the response gets sent first
-      if (remi._onRestart) {
-        const info = { chatId: msg.chatId, connectorName: msg.connectorName };
-        setTimeout(() => remi._onRestart!(info), 500);
-      }
-      return { text: "正在重启 Remi..." };
     }
     case "project":
     case "p": {
@@ -259,4 +161,3 @@ export async function tryCommand(remi: Remi, text: string, msg: IncomingMessage)
       return null;
   }
 }
-

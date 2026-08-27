@@ -115,8 +115,6 @@ function makeConfig(tmpDir: string): RemiConfig {
       triggerUserIds: [],
     },
     tokenSync: [],
-    cronJobs: [],
-    services: [],
     botMenu: {},
     mcp: [],
     proxy: { http: "", noProxy: "" },

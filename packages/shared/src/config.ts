@@ -10,7 +10,6 @@ const REMI_HOME = join(homedir(), ".remi");
 export const MEMORY_DIR = join(REMI_HOME, "memory");
 export const SESSIONS_FILE = join(REMI_HOME, "sessions.json");
 export const PID_FILE = join(REMI_HOME, "remi.pid");
-export const QUEUE_DIR = join(REMI_HOME, "queue");
 
 /** Per-agent ACP configuration. */
 export interface AcpAgentConfig {
@@ -46,50 +45,6 @@ export interface FeishuConfig {
   userAccessToken: string;
   /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
   triggerUserIds: string[];
-}
-
-/**
- * New unified cron job config — replaces fragmented [scheduler] + [[scheduled_skills]].
- * Stored as cronJobs section in ConfigStore.
- */
-export interface CronJobConfig {
-  id: string;
-  name?: string;
-  handler: string;
-  enabled?: boolean;
-  /** Cron expression (5/6-field). Mutually exclusive with `every` and `at`. */
-  cron?: string;
-  /** Timezone for cron expression. */
-  tz?: string;
-  /** Fixed interval (e.g. "5m", "300s"). Mutually exclusive with `cron` and `at`. */
-  every?: string | number;
-  /** One-shot ISO timestamp. Mutually exclusive with `cron` and `every`. */
-  at?: string;
-  /** Timeout in ms (default: 300000). */
-  timeoutMs?: number;
-  /** Delete job after successful run (useful for one-shots). */
-  deleteAfterRun?: boolean;
-  /** Arbitrary config passed to the handler function. */
-  handlerConfig?: Record<string, any>;
-}
-
-export interface ServiceConfig {
-  /** Display name (used as PM2 app name). */
-  name: string;
-  /** Main script/file to run. */
-  script: string;
-  /** Runtime interpreter: bun, python3, node, etc. */
-  interpreter: string;
-  /** Arguments passed after the script. */
-  args: string[];
-  /** Working directory. */
-  cwd: string;
-  /** Optional shell command to run before starting (e.g. build step). */
-  build: string;
-  /** Optional port number (for display/monitoring). */
-  port: number | null;
-  /** Whether this service is enabled (default: true). */
-  enabled: boolean;
 }
 
 /**
@@ -218,10 +173,6 @@ export interface RemiConfig {
   auth: AuthConfig;
   /** Token sync rules for distributing tokens to external tools. */
   tokenSync: TokenSyncRuleConfig[];
-  /** Unified cron jobs. */
-  cronJobs: CronJobConfig[];
-  /** Registered services managed by PM2. */
-  services: ServiceConfig[];
   /** Bot menu config (千人千面菜单). */
   botMenu: BotMenuConfig;
   /** Proxy settings for outbound HTTP requests. */
@@ -267,8 +218,6 @@ export function defaultRemiConfig(): RemiConfig {
     provider: defaultProviderConfig(),
     feishu: defaultFeishuConfig(),
     tokenSync: [],
-    cronJobs: [],
-    services: [],
     botMenu: {},
     proxy: { http: "", noProxy: "" },
     plugins: { dir: join(homedir(), ".remi", "plugins"), enabled: [], allowExternal: true },
