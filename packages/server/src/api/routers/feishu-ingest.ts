@@ -7,6 +7,11 @@ import type {
   ResolveMultiremiFeishuMessageInput,
   UpdateMultiremiFeishuSourceInput,
 } from "@multiremi/contracts/types.js";
+import {
+  FeishuChatDirectoryError,
+  normalizeFeishuChatQuery,
+  normalizeFeishuChatScope,
+} from "@multiremi/feishu-ingest/chat-directory.js";
 import { publishIssueCreated } from "../helpers/store-bridge.js";
 import {
   denyCurrentUserWorkspaceAccess,
@@ -121,6 +126,34 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
       name: source.name,
     });
     return c.json({ deleted: true });
+  });
+
+  // Candidate chats for the allowlist picker. An empty allowlist ingests nothing, so
+  // the dashboard cannot bootstrap one from already-ingested messages — the lookup is
+  // proxied through a *registered endpoint name*, never a caller-supplied URL.
+  app.get("/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats", async (c) => {
+    const loaded = loadSource(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    try {
+      const limit = parseLimit(c.req.query("limit")) ?? 20;
+      const chats = await deps.feishuChatDirectory.search({
+        endpointName: loaded.source.endpointName,
+        scope: normalizeFeishuChatScope(c.req.query("scope")),
+        query: normalizeFeishuChatQuery(c.req.query("q")),
+        limit,
+      });
+      const allowlist = new Set(loaded.source.allowlist.map((entry) => entry.chatId));
+      return c.json({
+        chats: chats.map((chat) => ({ ...chat, inAllowlist: allowlist.has(chat.chatId) })),
+        total: chats.length,
+        limit,
+      });
+    } catch (error) {
+      if (error instanceof FeishuChatDirectoryError) {
+        return c.json({ error: "Feishu chat lookup failed", code: error.code }, error.status);
+      }
+      return feishuIngestErrorResponse(c, error);
+    }
   });
 
   app.get("/api/workspaces/:workspaceId/feishu/messages", (c) => {

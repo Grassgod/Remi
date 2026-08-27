@@ -9,6 +9,7 @@ import type { SessionArchiveService } from "@multiremi/session-archive/service.j
 import type { ScmConnectionVerifier } from "@multiremi/scm/verification.js";
 import type { FeishuSidecarEndpointRegistry } from "@multiremi/feishu-ingest/endpoints.js";
 import type { FeishuEndpointHealthChecker } from "@multiremi/feishu-ingest/health.js";
+import type { FeishuChatDirectory } from "@multiremi/feishu-ingest/chat-directory.js";
 import type { retitleIssue } from "@multiremi/issue-title/service.js";
 
 /**
@@ -33,5 +34,6 @@ export interface RouterDeps {
   verifyScmConnection: ScmConnectionVerifier;
   feishuSidecarEndpoints: FeishuSidecarEndpointRegistry;
   feishuEndpointHealth: FeishuEndpointHealthChecker;
+  feishuChatDirectory: FeishuChatDirectory;
   issueRetitle: typeof retitleIssue;
 }
