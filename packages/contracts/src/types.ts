@@ -2919,6 +2919,16 @@ export interface MultiremiFeishuMessage {
   lastRetryAt: string | null;
 }
 
+export interface MultiremiFeishuChat {
+  sourceId: string;
+  chatId: string;
+  chatName: string | null;
+  chatType: string | null;
+  messageCount: number;
+  lastMessageAt: string;
+  inAllowlist: boolean;
+}
+
 export interface MultiremiFeishuSourceStatus {
   sourceId: string;
   unprocessedCount: number;
@@ -3000,6 +3010,21 @@ export interface MultiremiFeishuIssueProposal {
   resolvedAt: string | null;
   resolvedBy: string | null;
   createdAt: string;
+}
+
+export interface MultiremiFeishuIssueProposalMessageSummary {
+  messageId: string;
+  sourceId: string;
+  chatId: string;
+  chatName: string | null;
+  sender: Record<string, unknown>;
+  searchableText: string;
+  messageAppLink: string | null;
+  createdAt: string;
+}
+
+export interface MultiremiFeishuIssueProposalListItem extends MultiremiFeishuIssueProposal {
+  message: MultiremiFeishuIssueProposalMessageSummary;
 }
 
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import type { RepositoryWikiServiceContract } from "@multiremi/repository-wiki/s
 import type { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { ScmConnectionVerifier } from "@multiremi/scm/verification.js";
 import type { FeishuSidecarEndpointRegistry } from "@multiremi/feishu-ingest/endpoints.js";
+import type { FeishuEndpointHealthChecker } from "@multiremi/feishu-ingest/health.js";
 import type { retitleIssue } from "@multiremi/issue-title/service.js";
 
 /**
@@ -31,5 +32,6 @@ export interface RouterDeps {
   daemonDirectBaseUrl: string | null;
   verifyScmConnection: ScmConnectionVerifier;
   feishuSidecarEndpoints: FeishuSidecarEndpointRegistry;
+  feishuEndpointHealth: FeishuEndpointHealthChecker;
   issueRetitle: typeof retitleIssue;
 }

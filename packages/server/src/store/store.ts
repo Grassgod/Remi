@@ -1418,6 +1418,10 @@ runMigrations(this.db);
     return this.feishuIngest.updateSource(id, input);
   }
 
+  deleteFeishuSource(id: string): boolean {
+    return this.feishuIngest.deleteSource(id);
+  }
+
   getFeishuSyncCursor(sourceId: string, stream: string): MultiremiFeishuSyncCursor | null {
     return this.feishuIngest.getSyncCursor(sourceId, stream);
   }
@@ -1444,17 +1448,45 @@ runMigrations(this.db);
 
   listFeishuMessages(input: {
     workspaceId: string;
+    sourceId?: string | null;
+    query?: string | null;
+    processed?: boolean;
     unprocessed?: boolean;
     since?: string | null;
     until?: string | null;
     chatId?: string | null;
     limit?: number;
+    offset?: number;
   }): MultiremiFeishuMessage[] {
+    return this.feishuIngest.listMessages({
+      ...input,
+      processed: input.processed ?? (input.unprocessed === true ? false : undefined),
+    }).messages;
+  }
+
+  listFeishuMessagesPage(input: Parameters<FeishuIngestRepo["listMessages"]>[0]): {
+    messages: MultiremiFeishuMessage[];
+    total: number;
+  } {
     return this.feishuIngest.listMessages(input);
   }
 
   listFeishuMessageOutcomes(messageId: string): MultiremiFeishuMessageOutcome[] {
     return this.feishuIngest.listMessageOutcomes(messageId);
+  }
+
+  listFeishuMessageOutcomesByMessageIds(messageIds: readonly string[]): MultiremiFeishuMessageOutcome[] {
+    return this.feishuIngest.listMessageOutcomesByMessageIds(messageIds);
+  }
+
+  listFeishuChats(workspaceId: string): ReturnType<FeishuIngestRepo["listChats"]> {
+    return this.feishuIngest.listChats(workspaceId);
+  }
+
+  listFeishuIssueProposals(
+    input: Parameters<FeishuIngestRepo["listIssueProposals"]>[0],
+  ): ReturnType<FeishuIngestRepo["listIssueProposals"]> {
+    return this.feishuIngest.listIssueProposals(input);
   }
 
   getFeishuSourceStatus(sourceId: string, now?: Date): MultiremiFeishuSourceStatus {

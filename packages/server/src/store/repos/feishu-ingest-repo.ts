@@ -7,10 +7,13 @@ import type {
   CreateIssueFromMultiremiFeishuMessageInput,
   CreateMultiremiFeishuSourceInput,
   MultiremiFeishuAllowlistEntry,
+  MultiremiFeishuChat,
   MultiremiFeishuMessage,
   MultiremiFeishuMessageOutcome,
   MultiremiFeishuMessageOutcomeKind,
   MultiremiFeishuIssueProposal,
+  MultiremiFeishuIssueProposalListItem,
+  MultiremiFeishuIssueProposalStatus,
   MultiremiFeishuSource,
   MultiremiFeishuSyncCursor,
   MultiremiInboxItem,
@@ -127,6 +130,36 @@ export interface ReconcileFeishuUnprocessedResult {
   retried: number;
   dismissed: number;
   eventId: string | null;
+}
+
+export interface ListFeishuMessagesInput {
+  workspaceId: string;
+  sourceId?: string | null;
+  query?: string | null;
+  processed?: boolean;
+  since?: string | null;
+  until?: string | null;
+  chatId?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListFeishuMessagesResult {
+  messages: MultiremiFeishuMessage[];
+  total: number;
+}
+
+export interface ListFeishuIssueProposalsInput {
+  workspaceId: string;
+  status?: MultiremiFeishuIssueProposalStatus;
+  sourceId?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListFeishuIssueProposalsResult {
+  proposals: MultiremiFeishuIssueProposalListItem[];
+  total: number;
 }
 
 const OUTCOME_KINDS = new Set<MultiremiFeishuMessageOutcomeKind>([
@@ -246,6 +279,22 @@ export class FeishuIngestRepo {
       ],
     );
     return this.getSource(id)!;
+  }
+
+  deleteSource(id: string): boolean {
+    return this.ctx.db.transaction(() => {
+      if (!this.getSource(id)) return false;
+      // Keep cascade behavior deterministic even when a SQLite connection has
+      // not enabled foreign-key enforcement.
+      this.ctx.db.run(
+        `DELETE FROM multiremi_feishu_message_outcomes
+         WHERE message_id IN (SELECT message_id FROM multiremi_feishu_messages WHERE source_id = ?)`,
+        [id],
+      );
+      this.ctx.db.run("DELETE FROM multiremi_feishu_messages WHERE source_id = ?", [id]);
+      this.ctx.db.run("DELETE FROM multiremi_feishu_sync_cursors WHERE source_id = ?", [id]);
+      return this.ctx.db.run("DELETE FROM multiremi_feishu_sources WHERE id = ?", [id]).changes === 1;
+    })();
   }
 
   getSyncCursor(sourceId: string, stream: string): MultiremiFeishuSyncCursor | null {
@@ -432,17 +481,22 @@ export class FeishuIngestRepo {
     return row ? toMessage(row) : null;
   }
 
-  listMessages(input: {
-    workspaceId: string;
-    unprocessed?: boolean;
-    since?: string | null;
-    until?: string | null;
-    chatId?: string | null;
-    limit?: number;
-  }): MultiremiFeishuMessage[] {
+  listMessages(input: ListFeishuMessagesInput): ListFeishuMessagesResult {
     const clauses = ["workspace_id = ?"];
     const args: unknown[] = [input.workspaceId];
-    if (input.unprocessed) clauses.push("processed_at IS NULL");
+    if (input.sourceId) {
+      clauses.push("source_id = ?");
+      args.push(input.sourceId);
+    }
+    if (input.processed !== undefined) {
+      clauses.push(input.processed ? "processed_at IS NOT NULL" : "processed_at IS NULL");
+    }
+    const query = input.query?.trim() ?? "";
+    if (query.length > 200) throw new Error("q must be at most 200 characters");
+    if (query) {
+      clauses.push("LOWER(searchable_text) LIKE LOWER(?) ESCAPE '\\'");
+      args.push(`%${escapeLikePattern(query)}%`);
+    }
     if (input.since) {
       clauses.push("created_at >= ?");
       args.push(normalizeTimestamp(input.since, "since"));
@@ -456,12 +510,16 @@ export class FeishuIngestRepo {
       args.push(input.chatId);
     }
     const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const totalRow = this.ctx.db.query(
+      `SELECT COUNT(*) AS count FROM multiremi_feishu_messages WHERE ${clauses.join(" AND ")}`,
+    ).get(...args) as Row;
     const rows = this.ctx.db.query(
       `SELECT * FROM multiremi_feishu_messages
        WHERE ${clauses.join(" AND ")}
-       ORDER BY created_at ASC, message_id ASC LIMIT ?`,
-    ).all(...args, limit) as Row[];
-    return rows.map(toMessage);
+       ORDER BY created_at ASC, message_id ASC LIMIT ? OFFSET ?`,
+    ).all(...args, limit, offset) as Row[];
+    return { messages: rows.map(toMessage), total: Number(totalRow.count ?? 0) };
   }
 
   listMessageOutcomes(messageId: string): MultiremiFeishuMessageOutcome[] {
@@ -469,6 +527,90 @@ export class FeishuIngestRepo {
       "SELECT * FROM multiremi_feishu_message_outcomes WHERE message_id = ? ORDER BY created_at ASC, id ASC",
     ).all(messageId) as Row[];
     return rows.map(toOutcome);
+  }
+
+  listMessageOutcomesByMessageIds(messageIds: readonly string[]): MultiremiFeishuMessageOutcome[] {
+    if (messageIds.length === 0) return [];
+    const placeholders = messageIds.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_feishu_message_outcomes
+       WHERE message_id IN (${placeholders}) ORDER BY created_at ASC, id ASC`,
+    ).all(...messageIds) as Row[];
+    return rows.map(toOutcome);
+  }
+
+  listChats(workspaceId: string): MultiremiFeishuChat[] {
+    const sources = new Map(this.listSources({ workspaceId }).map((source) => [source.id, source]));
+    const rows = this.ctx.db.query(
+      `SELECT source_id, chat_id, MAX(chat_name) AS chat_name, MAX(chat_type) AS chat_type,
+              COUNT(*) AS message_count, MAX(created_at) AS last_message_at
+       FROM multiremi_feishu_messages
+       WHERE workspace_id = ?
+       GROUP BY source_id, chat_id
+       ORDER BY last_message_at DESC, source_id ASC, chat_id ASC`,
+    ).all(workspaceId) as Row[];
+    return rows.map((row) => {
+      const sourceId = String(row.source_id);
+      const chatId = String(row.chat_id);
+      return {
+        sourceId,
+        chatId,
+        chatName: nullableString(row.chat_name),
+        chatType: nullableString(row.chat_type),
+        messageCount: Number(row.message_count ?? 0),
+        lastMessageAt: String(row.last_message_at),
+        inAllowlist: sources.get(sourceId)?.allowlist.some((entry) => entry.chatId === chatId) ?? false,
+      };
+    });
+  }
+
+  listIssueProposals(input: ListFeishuIssueProposalsInput): ListFeishuIssueProposalsResult {
+    const clauses = ["o.workspace_id = ?", "o.outcome_kind = 'issue_proposed'"];
+    const args: unknown[] = [input.workspaceId];
+    if (input.status) {
+      clauses.push("o.proposal_status = ?");
+      args.push(input.status);
+    }
+    if (input.sourceId) {
+      clauses.push("m.source_id = ?");
+      args.push(input.sourceId);
+    }
+    const where = clauses.join(" AND ");
+    const totalRow = this.ctx.db.query(
+      `SELECT COUNT(*) AS count
+       FROM multiremi_feishu_message_outcomes o
+       JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
+       WHERE ${where}`,
+    ).get(...args) as Row;
+    const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const rows = this.ctx.db.query(
+      `SELECT o.*, m.source_id AS summary_source_id, m.chat_id AS summary_chat_id,
+              m.chat_name AS summary_chat_name, m.sender AS summary_sender,
+              m.searchable_text AS summary_searchable_text,
+              m.message_app_link AS summary_message_app_link,
+              m.created_at AS summary_created_at
+       FROM multiremi_feishu_message_outcomes o
+       JOIN multiremi_feishu_messages m ON m.message_id = o.message_id
+       WHERE ${where}
+       ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`,
+    ).all(...args, limit, offset) as Row[];
+    return {
+      proposals: rows.map((row) => ({
+        ...toIssueProposal(row),
+        message: {
+          messageId: String(row.message_id),
+          sourceId: String(row.summary_source_id),
+          chatId: String(row.summary_chat_id),
+          chatName: nullableString(row.summary_chat_name),
+          sender: parseJson<Record<string, unknown>>(row.summary_sender, {}),
+          searchableText: String(row.summary_searchable_text ?? ""),
+          messageAppLink: nullableString(row.summary_message_app_link),
+          createdAt: String(row.summary_created_at),
+        },
+      })),
+      total: Number(totalRow.count ?? 0),
+    };
   }
 
   getSourceStatus(sourceId: string, now: Date = new Date()): MultiremiFeishuSourceStatus {
@@ -1208,6 +1350,10 @@ function normalizeAllowlist(
     normalized.set(chatId, { chatId, addedAt });
   }
   return [...normalized.values()].sort((left, right) => left.chatId.localeCompare(right.chatId));
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
 }
 
 function normalizeRetentionDays(value: unknown): number {

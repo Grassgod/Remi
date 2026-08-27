@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 636,
+    "routeCount": 641,
     "routeCountByPrefix": {
       "native": 204,
-      "compat": 419,
+      "compat": 424,
       "root": 13
     },
-    "getRoutes": 273,
-    "getRoutesWithBody": 270,
+    "getRoutes": 276,
+    "getRoutesWithBody": 273,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 363,
+    "mutationRoutes": 365,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -121,6 +121,7 @@
     "DELETE /api/workspaces/:id/repos/:repositoryId",
     "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "DELETE /api/workspaces/:id/runtime-provisions/:provisionId",
+    "DELETE /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -381,7 +382,10 @@
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/chats",
+    "GET /api/workspaces/:workspaceId/feishu/endpoints",
     "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/proposals",
     "GET /api/workspaces/:workspaceId/feishu/sources",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
@@ -645,6 +649,7 @@
     "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
+    "POST /api/workspaces/:workspaceId/feishu/endpoints/:name/check",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify",
@@ -1010,7 +1015,10 @@
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/chats",
+    "GET /api/workspaces/:workspaceId/feishu/endpoints",
     "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/proposals",
     "GET /api/workspaces/:workspaceId/feishu/sources",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
@@ -20434,13 +20442,49 @@
       }
     },
     {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/chats",
+      "route": "GET /api/workspaces/:workspaceId/feishu/chats",
+      "path": "/api/workspaces/local/feishu/chats",
+      "status": 200,
+      "body": {
+        "chats": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/endpoints",
+      "route": "GET /api/workspaces/:workspaceId/feishu/endpoints",
+      "path": "/api/workspaces/local/feishu/endpoints",
+      "status": 200,
+      "body": {
+        "configured": false,
+        "endpoints": []
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/messages",
       "route": "GET /api/workspaces/:workspaceId/feishu/messages",
       "path": "/api/workspaces/local/feishu/messages",
       "status": 200,
       "body": {
         "messages": [],
-        "total": 0
+        "total": 0,
+        "limit": 100,
+        "offset": 0,
+        "hasMore": false
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/proposals",
+      "route": "GET /api/workspaces/:workspaceId/feishu/proposals",
+      "path": "/api/workspaces/local/feishu/proposals",
+      "status": 200,
+      "body": {
+        "proposals": [],
+        "total": 0,
+        "limit": 100,
+        "offset": 0,
+        "hasMore": false
       }
     },
     {
