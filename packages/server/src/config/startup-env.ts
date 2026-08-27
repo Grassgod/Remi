@@ -67,9 +67,17 @@ export function evaluateStartupEnv(env: StartupEnvironment): StartupEnvResult {
   };
 }
 
+// An explicit development/test NODE_ENV wins over the database heuristic. Picking
+// Postgres is a storage choice, not a deployment mode, and `jwtSecret()` still hands
+// out DEFAULT_JWT_SECRET for those two values -- treating them as production here
+// would refuse to start a local Postgres server that has no JWT_SECRET, even though
+// the running code would have accepted the dev default. The heuristic still covers an
+// unset NODE_ENV, where `jwtSecret()` returns null and a configured database URL is
+// the only signal that this is a real deployment.
 export function isProductionEnvironment(env: StartupEnvironment): boolean {
-  return clean(env.NODE_ENV)?.toLowerCase() === "production"
-    || clean(env.MULTIREMI_DATABASE_URL) !== null;
+  const nodeEnv = clean(env.NODE_ENV)?.toLowerCase();
+  if (nodeEnv === "development" || nodeEnv === "test") return false;
+  return nodeEnv === "production" || clean(env.MULTIREMI_DATABASE_URL) !== null;
 }
 
 export function redactSecret(value: string | null | undefined): string {

@@ -23,6 +23,26 @@ describe("API startup environment", () => {
     expect(evaluateStartupEnv({ NODE_ENV: "test" }).missingRequired).toEqual([]);
   });
 
+  it("lets an explicit development/test NODE_ENV outrank a configured database URL", () => {
+    // Choosing Postgres locally is a storage choice, not a deployment. jwtSecret()
+    // still serves DEFAULT_JWT_SECRET here, so startup must not demand JWT_SECRET.
+    const local = { MULTIREMI_DATABASE_URL: "postgresql://dev:dev@127.0.0.1:5432/multiremi" };
+
+    expect(evaluateStartupEnv({ ...local, NODE_ENV: "development" }).missingRequired).toEqual([]);
+    expect(evaluateStartupEnv({ ...local, NODE_ENV: "test" }).missingRequired).toEqual([]);
+    expect(evaluateStartupEnv({ ...local, NODE_ENV: "Development" }).missingRequired).toEqual([]);
+    expect(evaluateStartupEnv({ ...local, NODE_ENV: "development" }).effective.mode).toBe("local");
+  });
+
+  it("still treats a configured database URL as production when NODE_ENV is unset", () => {
+    const result = evaluateStartupEnv({
+      MULTIREMI_DATABASE_URL: "postgresql://svc:pw@db.internal:5432/multiremi",
+    });
+
+    expect(result.effective.mode).toBe("production");
+    expect(result.missingRequired).toEqual(["MULTIREMI_TOKEN", "JWT_SECRET"]);
+  });
+
   it("emits the searchable Session Archive degradation when direct upload is unset", () => {
     const result = evaluateStartupEnv({ NODE_ENV: "test" });
 
