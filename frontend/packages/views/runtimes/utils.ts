@@ -213,17 +213,18 @@ const MODEL_PRICING: Record<
   "gpt-4o":             { input: 2.50, output: 10,   cacheRead: 1.25,  cacheWrite: 2.50 },
 
   // -- DeepSeek (api-docs.deepseek.com/quick_start/pricing).
-  //    The official catalog lists exactly two current SKUs; `deepseek-chat`
-  //    and `deepseek-reasoner` are aliases that route to `deepseek-v4-flash`
-  //    (non-thinking and thinking mode respectively) per the same page.
-  //    `deepseek-v4-pro` is currently under a 75%-off promo that ends
-  //    2026-05-31 15:59 UTC; we price at the post-promo standard rate
-  //    ($1.74/$3.48) so the dashboard does not jump 4× on June 1 — accept
-  //    a brief over-estimate during the promo over a sudden cliff after it. --
-  "deepseek-v4-flash":  { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
-  "deepseek-v4-pro":    { input: 1.74, output: 3.48, cacheRead: 0.0145, cacheWrite: 1.74 },
-  "deepseek-chat":      { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
-  "deepseek-reasoner":  { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
+  //    DeepSeek publishes peak and off-peak rates, but daily aggregate rows
+  //    do not retain request timestamps. Use the undiscounted peak rate so a
+  //    cost estimate never assumes the 50%-off window for traffic that may
+  //    have run at peak. `deepseek-chat` and `deepseek-reasoner` are retained
+  //    for historical usage; both aliases routed to `deepseek-v4-flash`.
+  //    Vision image tokens are converted to regular input tokens by DeepSeek,
+  //    so the vision SKU shares the Flash token rates. --
+  "deepseek-v4-flash":            { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
+  "deepseek-v4-pro":              { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 1.32 },
+  "deepseek-v4-flash-vision-exp": { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
+  "deepseek-chat":                { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
+  "deepseek-reasoner":            { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 },
 
   // -- Moonshot Kimi (kimi.com/resources/kimi-k2-6-pricing).
   //    Only K2.6 is on the official price sheet today; earlier K2 variants

@@ -300,21 +300,33 @@ describe("estimateCost", () => {
   // header comment. Pinning them in tests is what catches a future edit
   // that copies a price from a near-named neighbour by accident — the
   // mistake the previous attempt (PR #3170, closed) made.
-  it("prices deepseek-v4-flash at the official $0.14/$0.28 with ~50× cache-hit discount", () => {
-    // 1M input × $0.14 + 1M output × $0.28 + 1M cache read × $0.0028 = $0.4228.
-    const cost = estimateCost({
-      ...zeroUsage,
-      model: "deepseek-v4-flash",
-      input_tokens: 1_000_000,
-      output_tokens: 1_000_000,
-      cache_read_tokens: 1_000_000,
-    });
-    expect(cost).toBeCloseTo(0.14 + 0.28 + 0.0028, 5);
+  it("prices every current DeepSeek API SKU at the published peak rates", () => {
+    // The official sheet has time-based peak/off-peak rates. Aggregated usage
+    // cannot recover request time, so the maintained catalog uses peak rates
+    // rather than assuming every request received the 50%-off rate.
+    const cases = [
+      { model: "deepseek-v4-flash", input: 0.44, output: 1.32, cacheRead: 0.014 },
+      { model: "deepseek-v4-pro", input: 1.32, output: 3.96, cacheRead: 0.044 },
+      { model: "deepseek-v4-flash-vision-exp", input: 0.44, output: 1.32, cacheRead: 0.014 },
+    ] as const;
+
+    for (const { model, input, output, cacheRead } of cases) {
+      expect(
+        estimateCost({
+          ...zeroUsage,
+          model,
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+          cache_read_tokens: 1_000_000,
+        }),
+      ).toBeCloseTo(input + output + cacheRead, 5);
+      expect(isModelPriced(model)).toBe(true);
+    }
   });
 
   it("prices the deepseek-chat / deepseek-reasoner aliases at the same rate as deepseek-v4-flash", () => {
-    // The DeepSeek docs explicitly route both legacy names to v4-flash —
-    // they must hit the same numbers, not the older $0.27/$1.10 tier.
+    // The DeepSeek docs routed both legacy names to v4-flash. Historical rows
+    // using those aliases must hit the current Flash tier, not fall through.
     const flash = estimateCost({
       ...zeroUsage,
       model: "deepseek-v4-flash",
