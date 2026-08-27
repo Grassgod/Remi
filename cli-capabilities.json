@@ -3876,6 +3876,22 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "agent.role.set": {
+      "command": "remi agent role set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.role.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "agent.archive": {
       "command": "remi agent archive",
       "aliases": [],
@@ -9993,6 +10009,9 @@
     },
     "PUT /api/agents/:id/env": {
       "command": "agent.env.update"
+    },
+    "PUT /api/agents/:id/role": {
+      "command": "agent.role.set"
     },
     "PUT /api/agents/:id/skills": {
       "command": "agent.skill.set"

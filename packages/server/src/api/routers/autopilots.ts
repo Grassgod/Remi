@@ -47,7 +47,6 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
 import { listWorkspaceRepositories } from "../helpers/repositories.js";
-import { ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE } from "../../repository-wiki/atlas.js";
 
 function loadAutopilotForCurrentUser(
   c: Context,
@@ -80,14 +79,6 @@ function taskTokenSecretCreationDenied(c: Context, triggerKind: string | null | 
     return c.json({ error: "forbidden for task token", code: "task_token_hard_denied" }, 403);
   }
   return null;
-}
-
-function reservedAtlasAutopilotTitle(c: Context, title: unknown): Response | null {
-  if (cleanString(typeof title === "string" ? title : null) !== ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE) return null;
-  return c.json({
-    error: `${ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE} is reserved for the platform Repository Wiki automation`,
-    code: "atlas_identity_reserved",
-  }, 409);
 }
 
 function denyRestrictedTaskCreateIssueAutopilot(
@@ -187,8 +178,6 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (policy instanceof Response) return policy;
     const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, input.executionMode ?? input.execution_mode);
     if (issueDenied) return issueDenied;
-    const reserved = reservedAtlasAutopilotTitle(c, input.title);
-    if (reserved) return reserved;
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
     if (denied) return denied;
     try {
@@ -214,8 +203,6 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
       input.executionMode ?? input.execution_mode ?? "create_issue",
     );
     if (issueDenied) return issueDenied;
-    const reserved = reservedAtlasAutopilotTitle(c, input.title);
-    if (reserved) return reserved;
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
     if (denied) return denied;
     try {
@@ -251,8 +238,6 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
       body.executionMode ?? loaded.autopilot.executionMode,
     );
     if (issueDenied) return issueDenied;
-    const reserved = reservedAtlasAutopilotTitle(c, body.title);
-    if (reserved) return reserved;
     try {
       const autopilot = store.updateAutopilot(c.req.param("id"), { ...body, ...policy });
       scheduler?.sync();
@@ -405,8 +390,6 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
       input.executionMode ?? loaded.autopilot.executionMode,
     );
     if (issueDenied) return issueDenied;
-    const reserved = reservedAtlasAutopilotTitle(c, input.title);
-    if (reserved) return reserved;
     try {
       const autopilot = store.updateAutopilot(c.req.param("id"), { ...input, ...policy });
       scheduler?.sync();

@@ -206,6 +206,10 @@
     "title": "에이전트 편집",
     "description": "에이전트의 기본 정보, 엔진, 모델, 공개 범위, 동시 실행 수 및 지침을 업데이트합니다.",
     "instructions_placeholder": "클릭하여 지침 보기 또는 편집",
+    "role_label": "권한 역할",
+    "role_normal": "일반",
+    "role_maintainer": "유지 관리자",
+    "role_supervisor": "감독자",
     "save": "변경 사항 저장",
     "saving": "저장 중...",
     "cancel": "취소"

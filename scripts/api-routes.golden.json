@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 644,
+    "routeCount": 645,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 426,
+      "compat": 427,
       "root": 13
     },
     "getRoutes": 278,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 366,
+    "mutationRoutes": 367,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -670,6 +670,7 @@
     "POST /auth/verify-code",
     "PUT /api/agents/:id",
     "PUT /api/agents/:id/env",
+    "PUT /api/agents/:id/role",
     "PUT /api/agents/:id/skills",
     "PUT /api/agents/:id/supervisor",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
@@ -1292,6 +1293,7 @@
         "model": "",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "role": "normal",
         "supervisor": false,
         "owner_id": "local",
         "skills": [],
@@ -1328,6 +1330,7 @@
         "model": "claude-opus-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "role": "normal",
         "supervisor": false,
         "owner_id": "local",
         "skills": [],
@@ -1421,6 +1424,7 @@
         "model": "claude-opus-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "role": "normal",
         "supervisor": false,
         "owner_id": "local",
         "skills": [
@@ -1463,6 +1467,7 @@
         "model": "claude-opus-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "role": "normal",
         "supervisor": false,
         "owner_id": "local",
         "skills": [
@@ -1506,6 +1511,7 @@
           "model": "",
           "thinking_level": "",
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "owner_id": "local",
           "skills": [],
@@ -1552,6 +1558,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1620,6 +1627,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1694,6 +1702,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1735,6 +1744,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1811,6 +1821,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
@@ -2371,6 +2382,8 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot",
+          "managedKind": null,
+          "managed_kind": null,
           "description": null,
           "projectId": null,
           "project_id": null,
@@ -2423,6 +2436,8 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot patched",
+          "managedKind": null,
+          "managed_kind": null,
           "description": "Autopilot used by the snapshot",
           "projectId": "prj_snapshot",
           "project_id": "prj_snapshot",
@@ -2678,6 +2693,8 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot patched",
+          "managedKind": null,
+          "managed_kind": null,
           "description": "Autopilot used by the snapshot",
           "projectId": "prj_snapshot",
           "project_id": "prj_snapshot",
@@ -6016,6 +6033,7 @@
           "model": "claude-sonnet-4",
           "thinking_level": "",
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "owner_id": "local",
           "skills": [
@@ -6059,6 +6077,7 @@
         "model": "claude-sonnet-4",
         "thinking_level": "",
         "issue_creation_requires_proposal": false,
+        "role": "normal",
         "supervisor": false,
         "owner_id": "local",
         "skills": [
@@ -7018,6 +7037,17 @@
             "id": "agent.restore",
             "command": "remi agent restore",
             "capability": "agent.restore",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "agent.role.set",
+            "command": "remi agent role set",
+            "capability": "agent.role.set",
             "outputs": [
               "table",
               "json",
@@ -14634,6 +14664,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "role": "normal",
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -14703,6 +14734,7 @@
           "thinkingLevel": null,
           "issueCreationRequiresProposal": false,
           "issue_creation_requires_proposal": false,
+          "role": "normal",
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -15127,6 +15159,8 @@
             "workspaceId": "local",
             "workspace_id": "local",
             "title": "Snapshot autopilot",
+            "managedKind": null,
+            "managed_kind": null,
             "description": "Autopilot used by the snapshot",
             "projectId": "prj_snapshot",
             "project_id": "prj_snapshot",
@@ -15181,6 +15215,8 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Snapshot autopilot",
+          "managedKind": null,
+          "managed_kind": null,
           "description": "Autopilot used by the snapshot",
           "projectId": "prj_snapshot",
           "project_id": "prj_snapshot",
@@ -18680,6 +18716,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "role": "normal",
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -18872,6 +18909,7 @@
           "agent": {
             "id": "agt_snapshot",
             "name": "Snapshot Agent",
+            "role": "normal",
             "supervisor": false
           },
           "issue": {
@@ -19991,6 +20029,7 @@
           "agent": {
             "id": "agt_snapshot",
             "name": "Snapshot Agent",
+            "role": "normal",
             "supervisor": false
           },
           "issue": {
@@ -23397,6 +23436,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "role": "normal",
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -23469,6 +23509,7 @@
             "thinkingLevel": null,
             "issueCreationRequiresProposal": false,
             "issue_creation_requires_proposal": false,
+            "role": "normal",
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",

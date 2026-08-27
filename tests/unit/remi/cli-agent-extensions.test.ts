@@ -98,6 +98,27 @@ describe("agent extension CLI contracts", () => {
     expect(registryFor([spec]).inventory()[0]?.auth).toEqual(["human"]);
   });
 
+  it("sets an agent role through a human-only command", async () => {
+    useCliEnv();
+    const spec = specById("agent.role.set");
+    let body: unknown;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/agents") {
+        return Response.json({ agents: [{ id: "agt_123", name: "Atlas", provider: "codex" }] });
+      }
+      expect(request.method).toBe("PUT");
+      expect(url.pathname).toBe("/api/agents/agt_123/role");
+      body = await request.json();
+      return Response.json({ id: "agt_123", role: "maintainer" });
+    });
+    await capture(() => registryFor([spec]).execute([
+      "agent", "role", "set", "Atlas", "--role", "maintainer", "--output", "json",
+    ]));
+    expect(body).toEqual({ role: "maintainer" });
+    expect(registryFor([spec]).inventory()[0]?.auth).toEqual(["human"]);
+  });
+
   it("resolves squad names and requires confirmation before member removal", async () => {
     useCliEnv();
     const spec = specById("squad.member.remove");

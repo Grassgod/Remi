@@ -4,6 +4,7 @@ import { useId, useMemo, useState } from "react";
 import { Globe, Lock } from "lucide-react";
 import type {
   Agent,
+  AgentRole,
   AgentVisibility,
   UpdateAgentRequest,
 } from "@multiremi/core/types";
@@ -22,6 +23,13 @@ import {
 } from "@multiremi/ui/components/ui/dialog";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multiremi/ui/components/ui/select";
 import { useT } from "../../i18n";
 import { AvatarPicker } from "./avatar-picker";
 import { CharCounter } from "./char-counter";
@@ -39,10 +47,12 @@ const MAX_CONCURRENCY = 50;
 
 export function EditAgentDialog({
   agent,
+  canManageRole = false,
   onClose,
   onSave,
 }: {
   agent: Agent;
+  canManageRole?: boolean;
   onClose: () => void;
   onSave: (data: UpdateAgentRequest) => Promise<void>;
 }) {
@@ -53,6 +63,7 @@ export function EditAgentDialog({
   const descriptionId = `${fieldId}-description`;
   const visibilityLabelId = `${fieldId}-visibility-label`;
   const concurrencyId = `${fieldId}-concurrency`;
+  const roleId = `${fieldId}-role`;
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
@@ -70,6 +81,7 @@ export function EditAgentDialog({
     String(agent.max_concurrent_tasks),
   );
   const [instructions, setInstructions] = useState(agent.instructions ?? "");
+  const [role, setRole] = useState<AgentRole>(agent.role ?? "normal");
   const [saving, setSaving] = useState(false);
 
   const fleet = useFleetProviderModels(wsId ?? "", provider);
@@ -118,6 +130,7 @@ export function EditAgentDialog({
         visibility,
         max_concurrent_tasks: concurrency,
         instructions,
+        ...(canManageRole ? { role } : {}),
       });
       onClose();
     } catch {
@@ -216,6 +229,24 @@ export function EditAgentDialog({
                 />
               </div>
             </div>
+
+            {canManageRole && (
+              <div>
+                <Label htmlFor={roleId} className="text-xs text-muted-foreground">
+                  {t(($) => $.edit_dialog.role_label)}
+                </Label>
+                <Select value={role} onValueChange={(value) => setRole(value as AgentRole)}>
+                  <SelectTrigger id={roleId} className="mt-1 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">{t(($) => $.edit_dialog.role_normal)}</SelectItem>
+                    <SelectItem value="maintainer">{t(($) => $.edit_dialog.role_maintainer)}</SelectItem>
+                    <SelectItem value="supervisor">{t(($) => $.edit_dialog.role_supervisor)}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <EngineSelect
               wsId={wsId ?? ""}

@@ -390,13 +390,14 @@ describe("RepositoryWikiService OpenViking mode", () => {
     store.updateWorkspace("local", {
       repos: [{ id: "repo_bootstrap", name: "bootstrap", url: "git@github.com:example/bootstrap.git" }],
     });
-    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
       workspaceId: "local",
       assigneeId: atlas.id,
       executionMode: "run_only",
     });
+    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
     const run = store.runAutopilot(autopilot.id, {
       payload: { atlas_repository_id: "repo_bootstrap" },
     });

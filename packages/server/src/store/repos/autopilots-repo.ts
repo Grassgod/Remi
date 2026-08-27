@@ -204,6 +204,26 @@ export class AutopilotsRepo {
     return row ? toAutopilot(row) : null;
   }
 
+  setAutopilotManagedKind(
+    id: string,
+    managedKind: NonNullable<MultiremiAutopilot["managedKind"]>,
+  ): MultiremiAutopilot {
+    if (managedKind !== "atlas_project_knowledge" && managedKind !== "atlas_repository_wiki") {
+      throw new Error("Invalid managed Autopilot kind");
+    }
+    const current = this.getAutopilot(id);
+    if (!current) throw new Error(`Autopilot not found: ${id}`);
+    const conflict = this.ctx.db.query(
+      "SELECT id FROM multiremi_autopilots WHERE workspace_id = ? AND managed_kind = ? AND id != ?",
+    ).get(current.workspaceId, managedKind, id) as Row | null;
+    if (conflict) throw new Error(`Managed Autopilot already exists: ${managedKind}`);
+    this.ctx.db.run(
+      "UPDATE multiremi_autopilots SET managed_kind = ?, updated_at = ? WHERE id = ?",
+      [managedKind, nowIso(), id],
+    );
+    return this.getAutopilot(id)!;
+  }
+
   listAutopilots(workspaceId?: string | null): MultiremiAutopilot[] {
     const rows = workspaceId
       ? this.ctx.db.query("SELECT * FROM multiremi_autopilots WHERE workspace_id = ? AND status != 'archived' ORDER BY updated_at DESC").all(workspaceId) as Row[]
@@ -1993,11 +2013,14 @@ function toAutopilot(row: Row): MultiremiAutopilot {
   const lastRunAt = nullableString(row.last_run_at);
   const createdAt = String(row.created_at);
   const updatedAt = String(row.updated_at);
+  const managedKind = nullableString(row.managed_kind) as MultiremiAutopilot["managedKind"];
   return {
     id: String(row.id),
     workspaceId,
     workspace_id: workspaceId,
     title: String(row.title),
+    managedKind,
+    managed_kind: managedKind,
     description: nullableString(row.description),
     projectId,
     project_id: projectId,

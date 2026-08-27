@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { currentTaskAccessToken } from "../wire/index.js";
 
 export * from "../../organizer/settings.js";
@@ -20,7 +21,8 @@ export function supervisorTaskIdentity(c: Context, store: MultiremiStore): Super
   const agent = store.getAgent(token.agentId);
   if (
     !task
-    || !agent?.supervisor
+    || !agent
+    || !agentRoleAtLeast(agent.role, "supervisor")
     || task.agentId !== token.agentId
     || task.workspaceId !== token.workspaceId
     || agent.workspaceId !== token.workspaceId
@@ -90,7 +92,7 @@ export function organizerTaskInspection(store: MultiremiStore, task: MultiremiTa
       online: runtime.status === "online",
       last_heartbeat_at: runtime.lastHeartbeatAt,
     } : task.runtimeId ? { id: task.runtimeId, status: "missing", online: false, last_heartbeat_at: null } : null,
-    agent: agent ? { id: agent.id, name: agent.name, supervisor: agent.supervisor === true } : { id: task.agentId },
+    agent: agent ? { id: agent.id, name: agent.name, role: agent.role, supervisor: agent.supervisor === true } : { id: task.agentId },
     issue: issue ? { id: issue.id, key: issue.key, status: issue.status } : task.issueId ? { id: task.issueId } : null,
   };
 }

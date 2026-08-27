@@ -2767,6 +2767,18 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "agent.role.set": {
+      "command": "remi agent role set",
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.role.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "agent.archive": {
       "command": "remi agent archive",
       "auth": [
