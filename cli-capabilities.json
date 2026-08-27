@@ -3825,6 +3825,22 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "agent.role.set": {
+      "command": "remi agent role set",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "agent.role.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "agent.archive": {
       "command": "remi agent archive",
       "aliases": [],

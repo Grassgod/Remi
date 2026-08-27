@@ -206,6 +206,10 @@
     "title": "Edit Agent",
     "description": "Update the agent's identity, engine, model, visibility, capacity, and instructions.",
     "instructions_placeholder": "Click to view or edit instructions",
+    "role_label": "Permission role",
+    "role_normal": "Normal",
+    "role_maintainer": "Maintainer",
+    "role_supervisor": "Supervisor",
     "save": "Save changes",
     "saving": "Saving...",
     "cancel": "Cancel"

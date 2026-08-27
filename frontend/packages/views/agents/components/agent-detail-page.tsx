@@ -17,6 +17,7 @@ import {
   useWorkspacePresenceMap,
 } from "@multiremi/core/agents";
 import { api, ApiError } from "@multiremi/core/api";
+import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import {
@@ -64,6 +65,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const qc = useQueryClient();
+  const currentUser = useAuthStore((state) => state.user);
 
   const {
     data: agents = [],
@@ -73,6 +75,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   } = useQuery(agentListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const currentMemberRole = members.find((member) => member.user_id === currentUser?.id)?.role;
+  const canManageRole = !currentUser || currentMemberRole === "owner" || currentMemberRole === "admin";
 
   // Single workspace-level presence pass; this page just reads its slot.
   // The hook owns the 30s tick so the failed-window auto-clears here too.
@@ -351,6 +355,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       {showEdit && (
         <EditAgentDialog
           agent={agent}
+          canManageRole={canManageRole}
           onClose={() => setShowEdit(false)}
           onSave={(data) =>
             handleUpdate(

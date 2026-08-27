@@ -190,6 +190,7 @@ export async function createAgentFromTemplate(
     model: input.model ?? template.recommendedModel ?? null,
     maxConcurrentTasks: normalizeTemplateMaxConcurrentTasks(input.maxConcurrentTasks ?? input.max_concurrent_tasks),
     issueCreationRequiresProposal: input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal,
+    role: input.role,
     skills: [],
     thinkingLevel: input.thinkingLevel ?? input.thinking_level ?? null,
   });

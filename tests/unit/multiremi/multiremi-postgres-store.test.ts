@@ -213,12 +213,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   });
 
   it("checks repository Wiki publication without untyped nullable parameters", () => {
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
       assigneeId: agent.id,
       executionMode: "run_only",
     });
+    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
 
     const taskRun = store.runAutopilot(autopilot.id, {
       source: "api",

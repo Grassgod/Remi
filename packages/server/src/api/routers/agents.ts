@@ -40,7 +40,9 @@ import type {
   CreateAgentInput,
   SetAgentSkillsInput,
   UpdateAgentInput,
+  MultiremiAgentRole,
 } from "@multiremi/contracts/types.js";
+import { isAgentRole } from "@multiremi/store/agent-role.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
@@ -262,6 +264,20 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400);
     const agent = store.setAgentSupervisor(loaded.agent.id, body.enabled);
+    publishAgentLifecycleEvent(c, store, "agent:status", agent);
+    return c.json(agentCompatibilityResponse(store, agent, c));
+  });
+  app.put("/api/agents/:id/role", async (c) => {
+    const loaded = loadAgentForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const denied = requireHumanWorkspaceAdmin(c, store, loaded.agent.workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ role?: MultiremiAgentRole }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (!isAgentRole(body.role)) {
+      return c.json({ error: "role must be normal, maintainer, or supervisor" }, 400);
+    }
+    const agent = store.setAgentRole(loaded.agent.id, body.role);
     publishAgentLifecycleEvent(c, store, "agent:status", agent);
     return c.json(agentCompatibilityResponse(store, agent, c));
   });

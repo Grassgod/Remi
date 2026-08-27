@@ -513,6 +513,47 @@ describe("store migrations", () => {
     ).get()).toEqual({ count: 1 });
   });
 
+  it("backfills agent roles and stable Atlas Autopilot identities from legacy rows", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_agents DROP COLUMN role;
+      ALTER TABLE multiremi_autopilots DROP COLUMN managed_kind;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260827_agent_roles';
+      INSERT INTO multiremi_agents (id, name, provider, supervisor, created_at, updated_at)
+      VALUES
+        ('agt_atlas_legacy', 'Atlas · LLM Wiki', 'claude', 0, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('agt_supervisor_legacy', 'Organizer', 'codex', 1, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('agt_normal_legacy', 'Worker', 'codex', 0, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z');
+      INSERT INTO multiremi_autopilots (
+        id, title, workspace_id, assignee_type, assignee_id, status, execution_mode,
+        session_policy, workspace_policy, trigger_kind, created_by_type, created_by_id,
+        created_at, updated_at
+      ) VALUES
+        ('aut_atlas_project', 'Atlas · Project Knowledge', 'local', 'agent', 'agt_atlas_legacy',
+          'active', 'trigger_issue', 'new', 'reuse_issue', 'manual', 'member', 'local',
+          '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('aut_atlas_repo', 'Atlas · Repository Wiki', 'local', 'agent', 'agt_atlas_legacy',
+          'active', 'run_only', 'new', 'reuse_issue', 'manual', 'member', 'local',
+          '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    expect(database.query("SELECT id, role FROM multiremi_agents ORDER BY id").all()).toEqual([
+      { id: "agt_atlas_legacy", role: "maintainer" },
+      { id: "agt_normal_legacy", role: "normal" },
+      { id: "agt_supervisor_legacy", role: "supervisor" },
+    ]);
+    expect(database.query("SELECT id, managed_kind FROM multiremi_autopilots ORDER BY id").all()).toEqual([
+      { id: "aut_atlas_project", managed_kind: "atlas_project_knowledge" },
+      { id: "aut_atlas_repo", managed_kind: "atlas_repository_wiki" },
+    ]);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260827_agent_roles'",
+    ).get()).toEqual({ count: 1 });
+  });
+
   it("adds the task Issue proposal snapshot with an unrestricted legacy default", () => {
     const database = freshDb();
     migrate(database);

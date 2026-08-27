@@ -101,7 +101,8 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     || (/^\/api\/workspaces\/[^/]+\/leave$/.test(path) && method === "POST")) {
     return "workspace_lifecycle";
   }
-  if ((/^\/api\/agents\/[^/]+\/supervisor$/.test(path) && method === "PUT")
+  if ((/^\/api\/agents\/[^/]+\/(?:role|supervisor)$/.test(path) && method === "PUT")
+    || (/^\/api\/workspaces\/[^/]+\/repository-wikis\/atlas$/.test(path) && method === "POST")
     || (/^\/api\/workspaces\/[^/]+\/organizer$/.test(path) && method === "PUT")) {
     return "privilege_configuration";
   }

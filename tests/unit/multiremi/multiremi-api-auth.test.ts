@@ -25,6 +25,8 @@ describe("Multiremi API — authentication and token scoping", () => {
       ["POST", "/api/workspaces", "workspace_lifecycle"],
       ["DELETE", "/api/workspaces/local", "workspace_lifecycle"],
       ["PUT", "/api/agents/agt_1/supervisor", "privilege_configuration"],
+      ["PUT", "/api/agents/agt_1/role", "privilege_configuration"],
+      ["POST", "/api/workspaces/local/repository-wikis/atlas", "privilege_configuration"],
       ["PUT", "/api/workspaces/local/organizer", "privilege_configuration"],
       ["GET", "/api/cloud-billing/balance", "billing"],
       // Platform status is task-readable, but only via GET, and only that exact

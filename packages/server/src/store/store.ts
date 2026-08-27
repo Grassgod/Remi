@@ -1,6 +1,7 @@
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
+import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
@@ -707,7 +708,27 @@ runMigrations(this.db);
   }
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
-    return this.agents.updateAgent(id, input);
+    return this.db.transaction(() => {
+      const current = this.agents.getAgent(id);
+      if (!current) throw new Error(`Agent not found: ${id}`);
+      const agent = this.agents.updateAgent(id, input);
+      if (current.role !== agent.role) {
+        for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
+      }
+      return agent;
+    })();
+  }
+
+  setAgentRole(id: string, role: MultiremiAgent["role"]): MultiremiAgent {
+    return this.db.transaction(() => {
+      const current = this.agents.getAgent(id);
+      if (!current) throw new Error(`Agent not found: ${id}`);
+      const agent = this.agents.setAgentRole(id, role);
+      if (current.role !== agent.role) {
+        for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
+      }
+      return agent;
+    })();
   }
 
   setAgentSupervisor(id: string, supervisor: boolean): MultiremiAgent {
@@ -715,7 +736,7 @@ runMigrations(this.db);
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
       const agent = this.agents.setAgentSupervisor(id, supervisor);
-      if (current.supervisor !== agent.supervisor) {
+      if (current.role !== agent.role) {
         for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
       }
       return agent;
@@ -1755,7 +1776,21 @@ runMigrations(this.db);
     userId: string,
   ): Promise<MultiremiCreatedAccessToken> {
     const agent = this.getAgent(task.agentId);
-    const scopes = agent?.supervisor ? ["organizer:supervisor"] : [];
+    const scopes: string[] = [];
+    if (agent && agentRoleAtLeast(agent.role, "supervisor")) scopes.push("organizer:supervisor");
+    const storedTask = this.getTask(task.id);
+    const run = storedTask?.autopilotRunId ? this.getAutopilotRun(storedTask.autopilotRunId) : null;
+    const autopilot = run ? this.getAutopilot(run.autopilotId) : null;
+    if (
+      agent
+      && agentRoleAtLeast(agent.role, "maintainer")
+      && autopilot?.managedKind === "atlas_repository_wiki"
+      && autopilot.assigneeType === "agent"
+      && autopilot.assigneeId === agent.id
+      && autopilot.workspaceId === task.workspaceId
+    ) {
+      scopes.push("repository-wiki:maintainer");
+    }
     return this.accessTokens.createTaskAccessToken(task, userId, scopes);
   }
 
@@ -3176,6 +3211,13 @@ runMigrations(this.db);
     return this.autopilots.updateAutopilot(id, input);
   }
 
+  setAutopilotManagedKind(
+    id: string,
+    managedKind: NonNullable<MultiremiAutopilot["managedKind"]>,
+  ): MultiremiAutopilot {
+    return this.autopilots.setAutopilotManagedKind(id, managedKind);
+  }
+
   archiveAutopilot(id: string): MultiremiAutopilot {
     return this.autopilots.archiveAutopilot(id);
   }
@@ -3535,7 +3577,8 @@ runMigrations(this.db);
       const supervisorAgent = this.getAgent(input.supervisorAgentId);
       if (
         !supervisorTask
-        || !supervisorAgent?.supervisor
+        || !supervisorAgent
+        || !agentRoleAtLeast(supervisorAgent.role, "supervisor")
         || supervisorTask.agentId !== supervisorAgent.id
         || supervisorTask.workspaceId !== supervisorAgent.workspaceId
       ) {
@@ -3549,7 +3592,7 @@ runMigrations(this.db);
         throw new OrganizerActionError("organizer_self_action_forbidden", "a supervisor cannot act on its own task");
       }
       const targetAgent = this.getAgent(target.agentId);
-      if (targetAgent?.supervisor) {
+      if (targetAgent && agentRoleAtLeast(targetAgent.role, "supervisor")) {
         throw new OrganizerActionError("organizer_supervisor_target_forbidden", "a supervisor cannot act on another supervisor task");
       }
       const workspace = this.getWorkspace(supervisorTask.workspaceId);

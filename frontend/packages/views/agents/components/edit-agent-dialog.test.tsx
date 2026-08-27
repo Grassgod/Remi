@@ -8,6 +8,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type {
   Agent,
   RuntimeModelThinkingLevel,
@@ -171,12 +172,18 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 function renderDialog(
   agent = makeAgent(),
   locale: SupportedLocale = "en",
+  canManageRole = false,
 ) {
   const onSave = vi.fn().mockResolvedValue(undefined);
   const onClose = vi.fn();
   render(
     <I18nProvider locale={locale} resources={TEST_RESOURCES}>
-      <EditAgentDialog agent={agent} onClose={onClose} onSave={onSave} />
+      <EditAgentDialog
+        agent={agent}
+        canManageRole={canManageRole}
+        onClose={onClose}
+        onSave={onSave}
+      />
     </I18nProvider>,
   );
   return { onSave, onClose };
@@ -227,6 +234,18 @@ describe("EditAgentDialog", () => {
       instructions: "Verify every claim",
     });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets workspace admins update the permission role", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderDialog(makeAgent({ role: "normal" }), "en", true);
+
+    await user.click(screen.getByRole("combobox", { name: "Permission role" }));
+    await user.click(await screen.findByRole("option", { name: "Maintainer" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ role: "maintainer" });
   });
 
   it("clears engine-specific model and thinking settings on engine switch", async () => {

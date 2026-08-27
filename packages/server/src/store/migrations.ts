@@ -21,6 +21,7 @@ const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_pol
 const TASK_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_task_issue_proposal_policy";
 const AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_autopilot_issue_proposal_policy";
 const MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION = "20260827_markdown_attachment_ownership";
+const AGENT_ROLE_MIGRATION = "20260827_agent_roles";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -58,6 +59,7 @@ export function runMigrations(db: SqlDatabase): void {
       mcp_config TEXT,
       thinking_level TEXT,
       issue_creation_requires_proposal INTEGER NOT NULL DEFAULT 0,
+      role TEXT NOT NULL DEFAULT 'normal',
       supervisor INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       created_at TEXT NOT NULL,
@@ -1212,6 +1214,7 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE TABLE IF NOT EXISTS multiremi_autopilots (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
+      managed_kind TEXT,
       description TEXT,
       project_id TEXT,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -2022,6 +2025,32 @@ export function runMigrations(db: SqlDatabase): void {
     addColumnIfMissing(db, "multiremi_webhook_deliveries", "source_task_id TEXT");
   });
   addColumnIfMissing(db, "multiremi_agents", "supervisor INTEGER NOT NULL DEFAULT 0");
+  runMigrationOnce(db, AGENT_ROLE_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_agents", "role TEXT NOT NULL DEFAULT 'normal'");
+    addColumnIfMissing(db, "multiremi_autopilots", "managed_kind TEXT");
+    // Legacy names are used only to classify existing platform-owned rows.
+    // Runtime authorization uses role + managed_kind after this migration.
+    db.run(
+      `UPDATE multiremi_agents
+       SET role = CASE
+         WHEN supervisor = 1 THEN 'supervisor'
+         WHEN name = 'Atlas · LLM Wiki' THEN 'maintainer'
+         ELSE 'normal'
+       END`,
+    );
+    db.run(
+      `UPDATE multiremi_autopilots
+       SET managed_kind = CASE title
+         WHEN 'Atlas · Project Knowledge' THEN 'atlas_project_knowledge'
+         WHEN 'Atlas · Repository Wiki' THEN 'atlas_repository_wiki'
+         ELSE managed_kind
+       END
+       WHERE assignee_type = 'agent'
+         AND assignee_id IN (
+           SELECT id FROM multiremi_agents WHERE name = 'Atlas · LLM Wiki'
+         )`,
+    );
+  });
   addColumnIfMissing(db, "multiremi_squads", "avatar_url TEXT");
   addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");
   addColumnIfMissing(

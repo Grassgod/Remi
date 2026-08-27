@@ -1061,9 +1061,9 @@ describe("SCM connection and canonical event store", () => {
     expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
   });
 
-  it("rejects public Atlas identity forgery before SCM dispatch and claim", async () => {
+  it("keeps Atlas names display-only and gates repository scope by role plus managed identity", async () => {
     const { store, connection } = seedConnection();
-    const runtime = store.registerRuntime({ name: "Reserved identity runtime", provider: "claude" });
+    const runtime = store.registerRuntime({ name: "Role scope runtime", provider: "claude" });
     const caller = store.createAgent({
       name: "SCM automation owner",
       provider: "claude",
@@ -1072,109 +1072,85 @@ describe("SCM connection and canonical event store", () => {
     const probeTask = store.createTask({
       workspaceId: "local",
       agentId: caller.id,
-      prompt: "Probe reserved Atlas identities",
+      prompt: "Probe role boundaries",
     });
     const taskToken = await store.createTaskAccessToken(probeTask, "local");
     const ownerToken = await store.createAccessToken({
-      name: "Reserved identity owner",
+      name: "Role configuration owner",
       type: "pat",
       workspaceId: "local",
       userId: "local",
     });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const credentials = [taskToken.token, ownerToken.token];
-    const expectReserved = async (response: Response) => {
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({ code: "atlas_identity_reserved" });
-    };
-
-    for (const token of credentials) {
-      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-      for (const [path, body] of [
-        ["/api/multiremi/agents", { name: " Atlas · LLM Wiki ", provider: "claude" }],
-        ["/api/agents", { name: "Atlas · LLM Wiki", provider: "claude" }],
-        ["/api/multiremi/agents/from-template", {
-          templateSlug: "atlas-llm-wiki",
-          name: "Atlas · LLM Wiki",
-        }],
-        ["/api/agents/from-template", {
-          template_slug: "atlas-llm-wiki",
-          name: "Atlas · LLM Wiki",
-        }],
-      ] as const) {
-        await expectReserved(await app.request(path, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-        }));
-      }
-      await expectReserved(await app.request(`/api/multiremi/agents/${caller.id}`, {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({ name: "Atlas · LLM Wiki" }),
-      }));
-      await expectReserved(await app.request(`/api/agents/${caller.id}`, {
-        method: "PUT",
-        headers,
-        body: JSON.stringify({ name: " Atlas · LLM Wiki " }),
-      }));
-
-      await expectReserved(await app.request("/api/multiremi/autopilots", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          title: " Atlas · Repository Wiki ",
-          assigneeId: caller.id,
-          executionMode: "run_only",
-        }),
-      }));
-      await expectReserved(await app.request("/api/autopilots", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          title: "Atlas · Repository Wiki",
-          assignee_id: caller.id,
-          execution_mode: "run_only",
-        }),
-      }));
-    }
-
     const taskHeaders = {
       Authorization: `Bearer ${taskToken.token}`,
       "Content-Type": "application/json",
     };
+    const taskRoleResponse = await app.request(`/api/agents/${caller.id}/role`, {
+      method: "PUT",
+      headers: taskHeaders,
+      body: JSON.stringify({ role: "maintainer" }),
+    });
+    expect(taskRoleResponse.status).toBe(403);
+    expect(await taskRoleResponse.json()).toMatchObject({ code: "task_token_hard_denied" });
+    const taskGenericRoleResponse = await app.request(`/api/agents/${caller.id}`, {
+      method: "PUT",
+      headers: taskHeaders,
+      body: JSON.stringify({ name: caller.name, role: "maintainer" }),
+    });
+    expect(taskGenericRoleResponse.status).toBe(403);
+    expect(await taskGenericRoleResponse.json()).toMatchObject({ code: "human_admin_required" });
+    expect(store.getAgent(caller.id)?.role).toBe("normal");
+
+    const ownerHeaders = {
+      Authorization: `Bearer ${ownerToken.token}`,
+      "Content-Type": "application/json",
+    };
+    const atlasNameResponse = await app.request("/api/agents", {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({ name: " Atlas · LLM Wiki ", provider: "claude" }),
+    });
+    expect(atlasNameResponse.status).toBe(201);
+    expect(await atlasNameResponse.json()).toMatchObject({ name: "Atlas · LLM Wiki", role: "normal" });
+    const duplicateNameResponse = await app.request(`/api/agents/${caller.id}`, {
+      method: "PUT",
+      headers: ownerHeaders,
+      body: JSON.stringify({ name: "Atlas · LLM Wiki" }),
+    });
+    expect(duplicateNameResponse.status).toBe(409);
+    expect(await duplicateNameResponse.json()).toMatchObject({ code: "agent_name_conflict" });
+
     const ordinaryResponse = await app.request("/api/multiremi/autopilots", {
       method: "POST",
-      headers: taskHeaders,
+      headers: ownerHeaders,
       body: JSON.stringify({
-        title: "Merge announcer",
+        title: "Atlas · Repository Wiki",
         assigneeId: caller.id,
         executionMode: "run_only",
+        managedKind: "atlas_repository_wiki",
       }),
     });
     expect(ordinaryResponse.status).toBe(201);
     const ordinary = (await ordinaryResponse.json() as any).autopilot;
+    expect(ordinary).toMatchObject({ title: "Atlas · Repository Wiki", managedKind: null });
 
-    for (const token of credentials) {
-      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-      await expectReserved(await app.request(`/api/multiremi/autopilots/${ordinary.id}`, {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({ title: "Atlas · Repository Wiki" }),
-      }));
-      await expectReserved(await app.request(`/api/autopilots/${ordinary.id}`, {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({ title: " Atlas · Repository Wiki " }),
-      }));
-    }
-
-    expect(store.getAgentByWorkspaceAndName("local", "Atlas · LLM Wiki")).toBeNull();
-    expect(store.listAutopilots("local").some((autopilot) =>
-      autopilot.title === "Atlas · Repository Wiki"
-    )).toBe(false);
+    const roleResponse = await app.request(`/api/agents/${caller.id}/role`, {
+      method: "PUT",
+      headers: ownerHeaders,
+      body: JSON.stringify({ role: "normal" }),
+    });
+    expect(roleResponse.status).toBe(200);
+    expect(await roleResponse.json()).toMatchObject({ role: "normal", supervisor: false });
+    const genericRoleResponse = await app.request(`/api/agents/${caller.id}`, {
+      method: "PUT",
+      headers: ownerHeaders,
+      body: JSON.stringify({ name: caller.name, role: "maintainer" }),
+    });
+    expect(genericRoleResponse.status).toBe(200);
+    expect(await genericRoleResponse.json()).toMatchObject({ role: "maintainer", supervisor: false });
     expect(store.claimTask(runtime.id)?.id).toBe(probeTask.id);
-    store.completeTask(probeTask.id, { output: "reserved identity probe complete" });
+    store.completeTask(probeTask.id, { output: "role boundary probe complete" });
 
     store.createAutopilotTrigger(ordinary.id, {
       kind: "scm_event",
@@ -1186,7 +1162,7 @@ describe("SCM connection and canonical event store", () => {
     });
     const observedAt = new Date(Date.now() + 1_000).toISOString();
     recordChange(store, connection.id, {
-      logicalKey: "change.merged:reserved-identity-probe",
+      logicalKey: "change.merged:role-boundary-probe",
       observedAt,
     });
     const runs = store.dispatchPendingScmEvents(new Date(Date.parse(observedAt) + 1_000));
@@ -1201,11 +1177,38 @@ describe("SCM connection and canonical event store", () => {
     const claim = (await claimResponse.json() as any).task;
     expect(claim.id).toBe(runs[0]!.taskId);
     expect(claim).not.toHaveProperty("scm_revision");
+    const runTask = store.getTask(runs[0]!.taskId!);
+    const runToken = await store.createTaskAccessToken(runTask!, "local");
+    expect(runToken.scopes).not.toContain("repository-wiki:maintainer");
+  });
+
+  it("mints maintainer scope only for a managed Repository Wiki task and revokes it on demotion", async () => {
+    const store = createLocalStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Docs", provider: "claude", role: "maintainer" });
+    const autopilot = store.createAutopilot({
+      title: "Any display title",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
+    const run = store.runAutopilot(autopilot.id, {
+      payload: { atlas_repository_id: "repo_docs" },
+    });
+    const task = store.getTask(run.taskId!)!;
+
+    const maintainerToken = await store.createTaskAccessToken(task, "local");
+    expect(maintainerToken.scopes).toEqual(["repository-wiki:maintainer"]);
+
+    store.setAgentRole(agent.id, "normal");
+    expect(store.getAccessToken(maintainerToken.id)?.revokedAt).not.toBeNull();
+    const normalToken = await store.createTaskAccessToken(task, "local");
+    expect(normalToken.scopes).toEqual([]);
   });
 
   it("collapses Wiki revisions without exposing them to ordinary SCM automation claims", async () => {
     const { store, connection } = seedConnection();
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const runtime = store.registerRuntime({ name: "SCM claim runtime", provider: "claude" });
     const wiki = store.createAutopilot({
       title: "Atlas · Repository Wiki",
@@ -1214,6 +1217,7 @@ describe("SCM connection and canonical event store", () => {
       executionMode: "run_only",
       description: "Update the repository wiki",
     });
+    store.setAutopilotManagedKind(wiki.id, "atlas_repository_wiki");
     const wikiTrigger = store.createAutopilotTrigger(wiki.id, {
       kind: "scm_event",
       eventConfig: {
