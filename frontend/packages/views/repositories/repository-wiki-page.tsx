@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, BookOpen, ChevronRight, FileText, GitFork, History, Loader2, RefreshCw, Search } from "lucide-react";
+import { AlertCircle, BookOpen, ChevronRight, GitFork, History, Loader2, PanelLeft, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
@@ -22,10 +22,12 @@ import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import { Sheet, SheetContent, SheetTitle } from "@multiremi/ui/components/ui/sheet";
 import { cn } from "@multiremi/ui/lib/utils";
 import { AppLink } from "../navigation";
 import { DocRefs } from "../common/doc-refs";
 import { EmptyState } from "../common/empty-state";
+import { WikiDirectoryTree, WikiPathBreadcrumb } from "../common/wiki-directory-tree";
 import { TranscriptButton } from "../common/task-transcript";
 import { ReadonlyContent } from "../editor";
 import { PageHeader } from "../layout/page-header";
@@ -91,15 +93,18 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
   const docsQuery = useQuery(repositoryWikiDocsOptions(workspaceId, repositoryId));
   const summariesQuery = useQuery(repositoryWikiSummariesOptions(workspaceId));
   const [filter, setFilter] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const buildMutation = useBuildRepositoryWiki(workspaceId, repositoryId);
   const repository = repositoriesQuery.data?.repositories.find((item) => item.id === repositoryId);
   const summary = summariesQuery.data?.find((item) => item.repository_id === repositoryId);
   const docs = useMemo(() => docsQuery.data ?? [], [docsQuery.data]);
-  const filtered = useMemo(() => {
-    const query = filter.trim().toLowerCase();
-    return docs.filter((doc) => !query || [doc.title, doc.path, doc.summary ?? "", ...doc.tags].some((value) => value.toLowerCase().includes(query)));
-  }, [docs, filter]);
   const selected = docs.find((doc) => doc.path === wikiPath || doc.slug === wikiPath || doc.id === wikiPath) ?? docs[0] ?? null;
+  const treePages = useMemo(() => docs.map((doc) => ({
+    id: doc.id,
+    path: doc.path,
+    title: doc.title,
+    searchText: `${doc.summary ?? ""}\n${doc.tags.join(" ")}`,
+  })), [docs]);
 
   // The server-reported build state is the single source of truth — the page
   // never keeps its own "building" flag, so a refresh restores the state.
@@ -157,25 +162,53 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
 
   const buildDisabled = building || buildMutation.isPending;
   const buildPending = building || buildMutation.isPending;
+  const sidebar = (
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <div className="shrink-0 border-b p-3">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={t(($) => $.wiki.search)} className="h-8 pl-8 text-sm" />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">{t(($) => $.wiki.page_count, { count: docs.length })}</p>
+      </div>
+      <nav className="min-h-0 flex-1 overflow-y-auto p-2">
+        <WikiDirectoryTree
+          pages={treePages}
+          selectedId={selected?.id}
+          filter={filter}
+          noMatches={t(($) => $.wiki.no_match)}
+          hrefFor={(page) => paths.repositoryWikiPage(repositoryId, page.path)}
+          onNavigate={() => setSidebarOpen(false)}
+        />
+      </nav>
+    </div>
+  );
 
-  const buildButton = (variant: "default" | "outline", rebuild: boolean) => (
+  const buildButton = (variant: "default" | "outline", rebuild: boolean, compact = false) => (
     <Button
       type="button"
       size={variant === "outline" ? "sm" : undefined}
       variant={variant}
       disabled={buildDisabled}
       onClick={handleBuild}
+      aria-label={buildPending
+        ? t(($) => $.wiki.building_action)
+        : rebuild
+          ? t(($) => $.wiki.rebuild_action)
+          : t(($) => $.wiki.build_action)}
     >
       {buildPending
         ? <Loader2 className="size-4 animate-spin" />
         : rebuild
           ? <RefreshCw className="size-4" />
           : <BookOpen className="size-4" />}
-      {buildPending
-        ? t(($) => $.wiki.building_action)
-        : rebuild
-          ? t(($) => $.wiki.rebuild_action)
-          : t(($) => $.wiki.build_action)}
+      <span className={cn(compact && "hidden md:inline")}>
+        {buildPending
+          ? t(($) => $.wiki.building_action)
+          : rebuild
+            ? t(($) => $.wiki.rebuild_action)
+            : t(($) => $.wiki.build_action)}
+      </span>
     </Button>
   );
 
@@ -185,11 +218,24 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader className="justify-between px-5">
+      <PageHeader className="justify-between px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2 text-sm">
+          {docs.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="-ml-2 lg:hidden"
+              onClick={() => setSidebarOpen(true)}
+              aria-label={t(($) => $.wiki.title)}
+              title={t(($) => $.wiki.title)}
+            >
+              <PanelLeft className="size-4" />
+            </Button>
+          )}
           <AppLink href={paths.repositories()} className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
             <GitFork className="size-4" />
-            {repository?.name ?? t(($) => $.page.title)}
+            <span className="hidden sm:inline">{repository?.name ?? t(($) => $.page.title)}</span>
           </AppLink>
           <ChevronRight className="size-3.5 text-muted-foreground" />
           <span className="truncate font-medium">{t(($) => $.wiki.title)}</span>
@@ -199,7 +245,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
           {building && buildTask && (
             <TranscriptButton task={buildTask} agentName="Atlas" isLive title={t(($) => $.wiki.view_build_log)} />
           )}
-          {docs.length > 0 && buildButton("outline", true)}
+          {docs.length > 0 && buildButton("outline", true, true)}
         </div>
       </PageHeader>
 
@@ -227,35 +273,21 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
           action={buildButton("default", buildFailed)}
         />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col xl:grid xl:grid-cols-[280px_minmax(0,1fr)]">
-          <aside className="shrink-0 border-b xl:min-h-0 xl:border-b-0 xl:border-r">
-            <div className="border-b p-3">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={t(($) => $.wiki.search)} className="pl-8" />
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground">{t(($) => $.wiki.page_count, { count: docs.length })}</p>
-            </div>
-            <nav className="flex max-h-52 gap-1 overflow-auto p-2 xl:max-h-none xl:flex-col">
-              {filtered.length ? filtered.map((doc) => (
-                <AppLink
-                  key={doc.id}
-                  href={paths.repositoryWikiPage(repositoryId, doc.path)}
-                  className={cn("flex min-w-48 items-center gap-2 rounded-md px-2 py-1.5 text-sm xl:min-w-0", selected?.id === doc.id ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground")}
-                >
-                  <FileText className="size-3.5 shrink-0" />
-                  <span className="truncate" title={doc.title}>{doc.title}</span>
-                </AppLink>
-              )) : <p className="p-2 text-xs text-muted-foreground">{t(($) => $.wiki.no_match)}</p>}
-            </nav>
-          </aside>
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <aside className="hidden min-h-0 border-r lg:flex">{sidebar}</aside>
+          <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+            <SheetContent side="left" className="w-[280px] gap-0 p-0" showCloseButton={false}>
+              <SheetTitle className="sr-only">{t(($) => $.wiki.title)}</SheetTitle>
+              {sidebar}
+            </SheetContent>
+          </Sheet>
 
           {selected && (
             <main className="min-h-0 overflow-auto">
               <article className="mx-auto max-w-3xl px-6 py-6">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <p className="truncate font-mono text-xs text-muted-foreground">{selected.path}</p>
+                    <WikiPathBreadcrumb path={selected.path} />
                     <h1 className="mt-1 text-xl font-semibold">{selected.title}</h1>
                     {selected.summary && <p className="mt-1 text-sm text-muted-foreground">{selected.summary}</p>}
                   </div>
