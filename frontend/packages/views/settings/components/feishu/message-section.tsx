@@ -8,6 +8,7 @@ import {
   feishuMessagesOptions,
   isFeishuMessageProcessed,
   pendingProposalCount,
+  safeFeishuAppLink,
   useApproveFeishuProposal,
   useRejectFeishuProposal,
   type FeishuMessage,
@@ -411,6 +412,9 @@ function MessageCard({ message, workspaceId, onAction }: {
   const timeAgo = useTimeAgo();
   const processed = isFeishuMessageProcessed(message);
   const pendingProposals = pendingProposalCount(message);
+  // The link comes straight out of the Feishu payload; anything that is not an
+  // absolute https: URL is dropped rather than handed to an `href`.
+  const appLink = safeFeishuAppLink(message.messageAppLink);
 
   return (
     <Card>
@@ -429,13 +433,13 @@ function MessageCard({ message, workspaceId, onAction }: {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            {message.messageAppLink !== null && message.messageAppLink !== "" && (
+            {appLink !== null && (
               <Button
                 variant="ghost"
                 size="icon"
                 className="min-h-11 min-w-11 md:min-h-8 md:min-w-8"
                 aria-label={t(($) => $.feishu.messages.open_in_feishu)}
-                render={<a href={message.messageAppLink} target="_blank" rel="noreferrer noopener" />}
+                render={<a href={appLink} target="_blank" rel="noreferrer noopener" />}
               >
                 <ExternalLink className="size-4" aria-hidden />
               </Button>

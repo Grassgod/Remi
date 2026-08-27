@@ -31,6 +31,7 @@ import {
   useMarkInboxItemsRead,
 } from "@multiremi/core/inbox/mutations";
 
+import { FeishuInboxActions } from "./feishu-inbox-actions";
 import { IssueDetail } from "../../issues/components";
 import { ErrorBoundary } from "@multiremi/ui/components/common/error-boundary";
 import { EmptyState } from "../../common/empty-state";
@@ -534,6 +535,9 @@ export function InboxPage() {
           <p className="mt-1 whitespace-pre-wrap text-sm">{selected.details.original_prompt}</p>
         </div>
       )}
+      {/* Renders nothing for non-Feishu rows. Approve/reject/ignore live here,
+          in the stream, so a decision never requires a trip to Settings. */}
+      <FeishuInboxActions item={selected} onArchive={() => handleArchive(selected.id)} />
       <div className="mt-4 flex gap-2">
         {selected.type === "quick_create_failed" && (
           <Button

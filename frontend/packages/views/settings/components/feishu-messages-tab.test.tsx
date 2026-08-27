@@ -124,8 +124,12 @@ vi.mock("@tanstack/react-query", () => {
 
 vi.mock("@multiremi/core/feishu", async () => {
   const state = await import("@multiremi/core/feishu/state");
+  // The inbox helpers are pure functions with no query/mutation surface, so the
+  // real implementations are what we want under test.
+  const inbox = await import("@multiremi/core/feishu/inbox");
   return {
     ...state,
+    ...inbox,
     feishuEndpointsOptions: (_workspaceId: string, enabled = true) => {
       calls.endpoints.push({ enabled });
       return { __kind: "endpoints", enabled };

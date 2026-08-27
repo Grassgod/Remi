@@ -28,6 +28,7 @@
     "mark_group_read": "그룹을 읽음으로 표시",
     "mark_done_tooltip": "완료로 표시",
     "archive_tooltip": "보관",
+    "feishu_source": "Feishu 메시지",
     "time": {
       "just_now": "방금 전",
       "minutes": "{{count}}분",
@@ -66,7 +67,11 @@
     "autopilot_paused": "자동화 일시 중지됨",
     "autopilot_run_completed": "자동화 완료됨",
     "autopilot_run_failed": "자동화 실패함",
-    "autopilot_run_overdue": "자동화 기한 초과"
+    "autopilot_run_overdue": "자동화 기한 초과",
+    "feishu_message_notification": "Feishu 메시지",
+    "feishu_reply_draft": "Feishu 답장 초안",
+    "feishu_issue_proposal": "Feishu 이슈 제안",
+    "feishu_ingest_connection_alert": "Feishu 수집 경고"
   },
   "labels": {
     "set_status_to": "상태 변경:",
@@ -79,7 +84,29 @@
     "removed_due_date": "마감일 제거됨",
     "reacted_to_comment": "내 댓글에 {{emoji}} 반응을 남겼습니다",
     "created_with_agent": "에이전트가 생성: {{identifier}}",
-    "failed_with_detail": "실패: {{detail}}"
+    "failed_with_detail": "실패: {{detail}}",
+    "feishu_source_failing": "{{source}}이(가) {{failures}}회 연속 실패했습니다"
+  },
+  "feishu": {
+    "approve": "승인하고 이슈 생성",
+    "reject": "거부",
+    "ignore": "무시",
+    "mark_processed": "처리됨으로 표시",
+    "confirm": "확인",
+    "cancel": "취소",
+    "open_in_feishu": "Feishu에서 열기",
+    "open_settings": "Feishu 메시지 설정 열기",
+    "ignore_reason_label": "이 메시지를 무시하는 이유는 무엇인가요?",
+    "process_reason_label": "이 메시지를 어떻게 처리했나요?",
+    "reason_required": "사유를 입력하세요",
+    "approved": "제안을 승인했습니다",
+    "approved_with_issue": "{{identifier}}을(를) 생성했습니다",
+    "rejected": "제안을 거부했습니다",
+    "resolved": "메시지를 처리했습니다",
+    "action_failed": "작업에 실패했습니다",
+    "proposed_issue_title": "제안된 이슈",
+    "draft_not_sent": "이 초안은 아직 Feishu로 전송되지 않았습니다. 답장은 자동으로 전송되지 않습니다.",
+    "alert_error_code": "오류 코드: {{code}}"
   },
   "errors": {
     "mark_read_failed": "읽음 표시를 하지 못했습니다",

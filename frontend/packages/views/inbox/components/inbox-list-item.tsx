@@ -2,7 +2,8 @@
 
 import { StatusIcon } from "../../issues/components";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { Archive } from "lucide-react";
+import { Archive, MessageSquare } from "lucide-react";
+import { isFeishuInboxType } from "@multiremi/core/feishu/inbox";
 import type { InboxItem } from "@multiremi/core/types";
 import { InboxDetailLabel } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
@@ -85,9 +86,16 @@ export function InboxListItem({
             >
               <Archive className="h-3.5 w-3.5" />
             </span>
-            {item.issue_status && (
+            {item.issue_status ? (
               <StatusIcon status={item.issue_status} className="h-3.5 w-3.5 shrink-0" />
-            )}
+            ) : isFeishuInboxType(item.type) ? (
+              // Feishu rows carry no issue status, so the slot marks the source
+              // instead — enough to scan an ingested message out of the stream.
+              <MessageSquare
+                className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                aria-label={t(($) => $.list.feishu_source)}
+              />
+            ) : null}
           </div>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
