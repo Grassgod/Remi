@@ -69,6 +69,10 @@ import {
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
 } from "@multiremi/store/repos/runtimes-repo.js";
+import {
+  DaemonProfilesRepo,
+  type DaemonProfile,
+} from "@multiremi/store/repos/daemon-profiles-repo.js";
 import { RuntimeProvisionsRepo } from "@multiremi/store/repos/runtime-provisions-repo.js";
 import {
   DaemonRetirementRepo,
@@ -399,6 +403,7 @@ export class MultiremiStore {
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
   private runtimes: RuntimesRepo;
+  private daemonProfiles: DaemonProfilesRepo;
   private runtimeProvisions: RuntimeProvisionsRepo;
   private daemonRetirement: DaemonRetirementRepo;
   private sshMesh: SshMeshRepo;
@@ -452,6 +457,7 @@ export class MultiremiStore {
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
+    this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
     this.runtimeProvisions = new RuntimeProvisionsRepo(this.ctx);
     this.daemonRetirement = new DaemonRetirementRepo(this.ctx);
     this.sshMesh = new SshMeshRepo(this.ctx);
@@ -1951,7 +1957,10 @@ runMigrations(this.db);
     return runtime;
   }
 
-  registerDaemonRuntimeBatch(inputs: RegisterRuntimeInput[]): MultiremiRuntime[] {
+  registerDaemonRuntimeBatch(
+    inputs: RegisterRuntimeInput[],
+    options: { displayName?: string | null } = {},
+  ): MultiremiRuntime[] {
     if (inputs.length === 0) return [];
     const first = inputs[0];
     const workspaceId = String(first.workspaceId ?? first.workspace_id ?? "local").trim() || "local";
@@ -1976,6 +1985,12 @@ runMigrations(this.db);
         daemonId,
         requestedOwnerId,
       );
+      const displayName = String(options.displayName ?? "").trim();
+      if (displayName) {
+        this.daemonProfiles.upsertDisplayName(workspaceId, daemonId, displayName, {
+          customized: false,
+        });
+      }
       const runtimes = inputs.map((input) => this.runtimes.registerRuntimeWithinTransaction({
         ...input,
         workspaceId,
@@ -1999,6 +2014,26 @@ runMigrations(this.db);
 
   getDaemonIdentityOwnerUserId(workspaceId: string, daemonId: string): string | null {
     return this.daemonRetirement.getIdentityOwnerUserId(workspaceId, daemonId);
+  }
+
+  getDaemonProfile(workspaceId: string, daemonId: string): DaemonProfile | null {
+    return this.daemonProfiles.get(workspaceId, daemonId);
+  }
+
+  listDaemonProfiles(workspaceId: string): DaemonProfile[] {
+    return this.daemonProfiles.list(workspaceId);
+  }
+
+  updateDaemonDisplayName(
+    workspaceId: string,
+    daemonId: string,
+    displayName: string,
+    updatedBy: string | null,
+  ): DaemonProfile {
+    return this.daemonProfiles.upsertDisplayName(workspaceId, daemonId, displayName, {
+      customized: true,
+      updatedBy,
+    });
   }
 
   getDaemonRetirementPlan(workspaceId: string, daemonId: string): DaemonRetirementPlan {

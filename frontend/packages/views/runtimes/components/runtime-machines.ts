@@ -327,19 +327,30 @@ function runtimeDeviceName(runtime: AgentRuntime): string | null {
   return raw.split(" · ")[0]?.trim() || null;
 }
 
-function machineTitle(
+export function machineTitle(
   runtimes: AgentRuntime[],
   options: { isCurrent: boolean; localMachineName?: string | null },
 ): string {
-  if (options.isCurrent && options.localMachineName) {
-    return options.localMachineName;
+  const first = runtimes[0];
+  if (!first) {
+    return options.isCurrent && options.localMachineName
+      ? options.localMachineName
+      : "Unknown machine";
   }
 
-  const first = runtimes[0];
-  if (!first) return "Unknown machine";
+  const profileName = runtimes.find((runtime) => runtime.daemon_display_name?.trim())
+    ?.daemon_display_name?.trim();
+  if (profileName) return profileName;
 
-  const deviceName = runtimeDeviceName(first);
+  const deviceName = runtimes.map((runtime) => (
+    runtime.device_info?.split(" · ", 1)[0]?.trim() || null
+  )).find(Boolean);
   if (deviceName) return deviceName;
+
+  const legacyName = runtimes.map((runtime) => splitRuntimeName(runtime.name).hostname).find(Boolean);
+  if (legacyName) return legacyName;
+
+  if (options.isCurrent && options.localMachineName) return options.localMachineName;
 
   if (first.runtime_mode === "cloud") {
     return `${capitalize(first.provider)} cloud`;

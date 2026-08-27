@@ -20,6 +20,7 @@ const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4"
 const AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_agent_issue_proposal_policy";
 const TASK_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_task_issue_proposal_policy";
 const AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_autopilot_issue_proposal_policy";
+const DAEMON_PROFILES_MIGRATION = "20260827_daemon_profiles";
 const MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION = "20260827_markdown_attachment_ownership";
 const AGENT_ROLE_MIGRATION = "20260827_agent_roles";
 
@@ -2066,6 +2067,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "owner_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
   addColumnIfMissing(db, "multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
+  runMigrationOnce(db, DAEMON_PROFILES_MIGRATION, () => {
+    createDaemonProfilesAndBackfill(db);
+  });
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_generation INTEGER");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_at TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_reported_active_tasks INTEGER");
@@ -2701,6 +2705,72 @@ function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): voi
     if (claimed !== 1) return;
     migrate();
   })();
+}
+
+function createDaemonProfilesAndBackfill(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_daemon_profiles (
+      workspace_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      display_name_customized INTEGER NOT NULL DEFAULT 0,
+      updated_by TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(workspace_id, daemon_id)
+    );
+  `);
+
+  const rows = db.query(
+    `SELECT COALESCE(workspace_id, 'local') AS workspace_id,
+            daemon_id, device_info, name, updated_at
+     FROM multiremi_runtimes
+     WHERE daemon_id IS NOT NULL AND daemon_id <> ''
+     ORDER BY updated_at DESC`,
+  ).all() as Array<{
+    workspace_id: unknown;
+    daemon_id: unknown;
+    device_info: unknown;
+    name: unknown;
+    updated_at: unknown;
+  }>;
+  const candidates = new Map<string, {
+    workspaceId: string;
+    daemonId: string;
+    deviceName: string | null;
+    legacyName: string | null;
+    updatedAt: string;
+  }>();
+  for (const row of rows) {
+    const workspaceId = String(row.workspace_id ?? "local").trim() || "local";
+    const daemonId = String(row.daemon_id ?? "").trim();
+    if (!daemonId) continue;
+    const key = `${workspaceId}\u0000${daemonId}`;
+    const current = candidates.get(key) ?? {
+      workspaceId,
+      daemonId,
+      deviceName: null,
+      legacyName: null,
+      updatedAt: String(row.updated_at ?? new Date().toISOString()),
+    };
+    const deviceName = String(row.device_info ?? "").split(" · ", 1)[0]?.trim() || null;
+    const runtimeName = String(row.name ?? "").trim();
+    const legacyName = runtimeName.match(/^(.+?)\s+\(([^)]+)\)$/)?.[2]?.trim() || null;
+    if (!current.deviceName && deviceName) current.deviceName = deviceName;
+    if (!current.legacyName && legacyName) current.legacyName = legacyName;
+    candidates.set(key, current);
+  }
+
+  for (const candidate of candidates.values()) {
+    const displayName = candidate.deviceName ?? candidate.legacyName;
+    if (!displayName) continue;
+    db.run(
+      `INSERT OR IGNORE INTO multiremi_daemon_profiles (
+        workspace_id, daemon_id, display_name, display_name_customized,
+        updated_by, updated_at
+      ) VALUES (?, ?, ?, 0, NULL, ?)`,
+      [candidate.workspaceId, candidate.daemonId, displayName, candidate.updatedAt],
+    );
+  }
 }
 
 function backfillMarkdownAttachmentOwnership(db: SqlDatabase): void {

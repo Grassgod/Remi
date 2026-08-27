@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type {
+  AgentRuntime,
   FleetModelsResponse,
   RuntimeDirectoryScanRequest,
 } from "../../types";
 import type {
+  DaemonProfileResponse,
   DaemonInventoryResponse,
   DaemonRetirementPlanResponse,
   RetireDaemonResponse,
@@ -16,6 +18,46 @@ import type {
   SshMeshTestResponse,
 } from "../../runtimes/types";
 import type { CloudRuntimeNode } from "../../runtimes/cloud-runtime";
+
+export const AgentRuntimeSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  daemon_id: z.string().nullable(),
+  daemon_display_name: z.string().nullable().optional().default(null),
+  name: z.string(),
+  runtime_mode: z.enum(["local", "cloud"]),
+  provider: z.string(),
+  launch_header: z.string(),
+  status: z.enum(["online", "offline"]),
+  device_info: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  owner_id: z.string().nullable(),
+  visibility: z.enum(["private", "public"]).optional().default("private"),
+  last_seen_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
+export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
+
+export const DaemonProfileResponseSchema = z.object({
+  workspace_id: z.string(),
+  daemon_id: z.string(),
+  display_name: z.string().min(1).max(100),
+  display_name_customized: z.boolean(),
+  updated_by: z.string().nullable(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_DAEMON_PROFILE_RESPONSE: DaemonProfileResponse = {
+  workspace_id: "",
+  daemon_id: "",
+  display_name: "",
+  display_name_customized: false,
+  updated_by: null,
+  updated_at: "",
+};
 
 export const CloudRuntimeNodeSchema = z.object({
   id: z.string(),

@@ -310,12 +310,26 @@ export class RuntimesRepo {
   }
 
   getRuntime(id: string): MultiremiRuntime | null {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_runtimes WHERE id = ?").get(id) as Row | null;
+    const row = this.ctx.db.query(
+      `SELECT runtime.*, profile.display_name AS daemon_display_name
+       FROM multiremi_runtimes runtime
+       LEFT JOIN multiremi_daemon_profiles profile
+         ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
+        AND profile.daemon_id = runtime.daemon_id
+       WHERE runtime.id = ?`,
+    ).get(id) as Row | null;
     return row ? withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))) : null;
   }
 
   listRuntimes(): MultiremiRuntime[] {
-    const rows = this.ctx.db.query("SELECT * FROM multiremi_runtimes ORDER BY updated_at DESC").all() as Row[];
+    const rows = this.ctx.db.query(
+      `SELECT runtime.*, profile.display_name AS daemon_display_name
+       FROM multiremi_runtimes runtime
+       LEFT JOIN multiremi_daemon_profiles profile
+         ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
+        AND profile.daemon_id = runtime.daemon_id
+       ORDER BY runtime.updated_at DESC`,
+    ).all() as Row[];
     return rows.map((row) => withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))));
   }
 
@@ -1425,9 +1439,13 @@ export class RuntimesRepo {
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
     const rows = this.ctx.db
       .query(
-        `SELECT * FROM multiremi_runtimes
-         WHERE (daemon_id = ? OR legacy_daemon_id = ? OR id = ?)
-           AND (provider = ? OR provider = 'any')`,
+        `SELECT runtime.*, profile.display_name AS daemon_display_name
+         FROM multiremi_runtimes runtime
+         LEFT JOIN multiremi_daemon_profiles profile
+           ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
+          AND profile.daemon_id = runtime.daemon_id
+         WHERE (runtime.daemon_id = ? OR runtime.legacy_daemon_id = ? OR runtime.id = ?)
+           AND (runtime.provider = ? OR runtime.provider = 'any')`,
       )
       .all(daemonId, daemonId, daemonId, provider) as Row[];
     const runtimes = rows.map((row) => withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))));
@@ -1652,6 +1670,7 @@ function toRuntime(row: Row): MultiremiRuntime {
     provider: String(row.provider),
     daemonId: nullableString(row.daemon_id),
     legacyDaemonId: nullableString(row.legacy_daemon_id),
+    daemonDisplayName: nullableString(row.daemon_display_name),
     runtimeMode: String(row.runtime_mode ?? "local"),
     deviceInfo: String(row.device_info ?? ""),
     metadata: parseJson<Record<string, unknown>>(row.metadata, {}),

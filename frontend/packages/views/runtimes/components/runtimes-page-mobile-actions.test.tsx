@@ -52,6 +52,9 @@ vi.mock("@multiremi/core/realtime", () => ({ useWSEvent: vi.fn() }));
 vi.mock("@multiremi/core/runtimes/hooks", () => ({
   useUpdatableRuntimeIds: () => new Set<string>(),
 }));
+vi.mock("@multiremi/core/runtimes/mutations", () => ({
+  useUpdateDaemonDisplayName: () => ({ mutateAsync: vi.fn() }),
+}));
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({
   useIsMobile: () => true,
 }));

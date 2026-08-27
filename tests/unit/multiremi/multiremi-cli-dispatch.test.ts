@@ -10,7 +10,7 @@
  * The provider-detection describe at the bottom covers the other half of the
  * entrypoint: which daemon providers the CLI reports as available on PATH.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { delimiter, join } from "node:path";
 import { cliCommandInventory, dispatch } from "../../../apps/remi/cli/index.js";
 import { detectMultiremiProviders } from "../../../apps/remi/cli/multiremi.js";
@@ -24,11 +24,19 @@ interface DispatchResult {
 const realExit = process.exit;
 const realConsoleError = console.error;
 const realConsoleLog = console.log;
+let previousProjectId: string | undefined;
+
+beforeEach(() => {
+  previousProjectId = process.env.MULTIREMI_PROJECT_ID;
+  delete process.env.MULTIREMI_PROJECT_ID;
+});
 
 afterEach(() => {
   process.exit = realExit;
   console.error = realConsoleError;
   console.log = realConsoleLog;
+  if (previousProjectId === undefined) delete process.env.MULTIREMI_PROJECT_ID;
+  else process.env.MULTIREMI_PROJECT_ID = previousProjectId;
 });
 
 class ProcessExitError extends Error {

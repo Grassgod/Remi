@@ -43,6 +43,7 @@ import {
   pctChange,
 } from "../utils";
 import { splitRuntimeName } from "./runtime-machines";
+import { RuntimeNameEditor } from "./name-editor";
 import { useT } from "../../i18n";
 
 // Per-row data assembled at the page level. The columns reach into
@@ -99,7 +100,12 @@ export function createRuntimeColumns({
       id: "runtime",
       header: () => t(($) => $.list.col_runtime),
       size: COL_WIDTHS.runtime,
-      cell: ({ row }) => <RuntimeNameCell runtime={row.original.runtime} />,
+      cell: ({ row }) => (
+        <RuntimeNameCell
+          runtime={row.original.runtime}
+          canEdit={row.original.canDelete}
+        />
+      ),
     },
     {
       id: "health",
@@ -223,7 +229,13 @@ export function createRuntimeColumns({
 // Cell renderers
 // ---------------------------------------------------------------------------
 
-function RuntimeNameCell({ runtime }: { runtime: AgentRuntime }) {
+function RuntimeNameCell({
+  runtime,
+  canEdit,
+}: {
+  runtime: AgentRuntime;
+  canEdit: boolean;
+}) {
   const { base: baseName } = splitRuntimeName(runtime.name);
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -231,9 +243,13 @@ function RuntimeNameCell({ runtime }: { runtime: AgentRuntime }) {
         <ProviderLogo provider={runtime.provider} className="h-5 w-5" />
       </div>
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className="block min-w-0 shrink truncate text-sm font-medium">
-          {baseName}
-        </span>
+        {canEdit ? (
+          <RuntimeNameEditor runtime={runtime} displayValue={baseName} compact />
+        ) : (
+          <span className="block min-w-0 shrink truncate text-sm font-medium">
+            {baseName}
+          </span>
+        )}
         <VisibilityBadge runtime={runtime} />
       </div>
     </div>

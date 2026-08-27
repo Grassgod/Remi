@@ -15,6 +15,7 @@ import type {
 } from "../../types";
 import type {
   DaemonInventoryResponse,
+  DaemonProfileResponse,
   DaemonRetirementPlan,
   RetireDaemonResponse,
   RuntimeProvision,
@@ -37,6 +38,7 @@ import {
 import {
   type CliLatestVersionResponse,
   CliLatestVersionResponseSchema,
+  AgentRuntimeListSchema,
   CloudRuntimeNodeListSchema,
   CloudRuntimeNodeSchema,
   DaemonInventoryResponseSchema,
@@ -44,6 +46,7 @@ import {
   EMPTY_DAEMON_INVENTORY_RESPONSE,
   EMPTY_DAEMON_RETIREMENT_PLAN_RESPONSE,
   EMPTY_CLI_LATEST_VERSION,
+  EMPTY_AGENT_RUNTIME_LIST,
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_FLEET_MODELS,
@@ -54,6 +57,7 @@ import {
   EMPTY_RETIRE_DAEMON_RESPONSE,
   EMPTY_SSH_MESH_OVERVIEW,
   FleetModelsResponseSchema,
+  DaemonProfileResponseSchema,
   type RelayConfigResponse,
   RelayConfigResponseSchema,
   RuntimeDirectoryScanRequestSchema,
@@ -76,7 +80,10 @@ export class RuntimesEndpoints {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.owner) search.set("owner", params.owner);
-    return this.http.fetch(`/api/runtimes?${search}`);
+    const raw = await this.http.fetch<unknown>(`/api/runtimes?${search}`);
+    return parseWithFallback(raw, AgentRuntimeListSchema, EMPTY_AGENT_RUNTIME_LIST, {
+      endpoint: "GET /api/runtimes",
+    });
   }
 
   // Fleet-level model catalog: the union of the online runtimes' models,
@@ -454,6 +461,23 @@ export class RuntimesEndpoints {
     return this.http.fetch(`/api/runtimes/${runtimeId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+    });
+  }
+
+  async updateDaemonDisplayName(
+    workspaceId: string,
+    daemonId: string,
+    displayName: string,
+  ): Promise<DaemonProfileResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/daemons/${encodeURIComponent(daemonId)}?workspace_id=${encodeURIComponent(workspaceId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ display_name: displayName }),
+      },
+    );
+    return parseStrictResponse<DaemonProfileResponse>(raw, DaemonProfileResponseSchema, {
+      endpoint: "PATCH /api/daemons/:daemonId",
     });
   }
 

@@ -18,6 +18,8 @@ export interface RuntimeDevice {
   id: string;
   workspace_id: string;
   daemon_id: string | null;
+  /** Optional for compatibility with servers predating daemon profiles. */
+  daemon_display_name?: string | null;
   name: string;
   runtime_mode: AgentRuntimeMode;
   provider: string;

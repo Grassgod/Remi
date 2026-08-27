@@ -218,6 +218,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(registeredBody.runtimes[0]).toMatchObject({
       workspace_id: "local",
       daemon_id: "daemon-1",
+      daemon_display_name: "Laptop",
       runtime_mode: "local",
       provider: "codex",
       launch_header: "Codex",
@@ -228,6 +229,12 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
         launched_by: "desktop",
       },
       visibility: "private",
+    });
+    expect(registeredBody.runtimes[0].name).toBe("Codex local");
+    expect(registeredBody.runtimes[1].name).toBe("claude");
+    expect(store.getDaemonProfile("local", "daemon-1")).toMatchObject({
+      displayName: "Laptop",
+      displayNameCustomized: false,
     });
     expect(store.getRuntime(registeredBody.runtimes[0].id)?.status).toBe("online");
     expect(store.getRuntime(registeredBody.runtimes[0].id)?.daemonId).toBe("daemon-1");
@@ -240,6 +247,24 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     });
     expect(store.getRuntime(registeredBody.runtimes[1].id)?.status).toBe("offline");
     expect(store.getRuntime(registeredBody.runtimes[1].id)?.daemonId).toBe("daemon-1");
+
+    store.updateDaemonDisplayName("local", "daemon-1", "My workstation", "local");
+    const daemonRenameAttempt = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-1",
+        device_name: "Daemon reported name",
+        runtimes: [{ type: "codex", version: "1.0.0" }],
+      }),
+    });
+    expect(daemonRenameAttempt.status).toBe(200);
+    expect((await daemonRenameAttempt.json()).runtimes[0].daemon_display_name).toBe("My workstation");
+    expect(store.getDaemonProfile("local", "daemon-1")).toMatchObject({
+      displayName: "My workstation",
+      displayNameCustomized: true,
+    });
 
     const camelDeregisterRegistered = await app.request("/api/daemon/deregister", {
       method: "POST",

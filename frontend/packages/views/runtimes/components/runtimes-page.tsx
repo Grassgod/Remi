@@ -21,6 +21,7 @@ import {
   runtimeKeys,
 } from "@multiremi/core/runtimes/queries";
 import { useUpdatableRuntimeIds } from "@multiremi/core/runtimes/hooks";
+import { useUpdateDaemonDisplayName } from "@multiremi/core/runtimes/mutations";
 import { useWSEvent } from "@multiremi/core/realtime";
 import { agentListOptions } from "@multiremi/core/workspace/queries";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -66,6 +67,8 @@ import { HealthDot, HealthIcon, useHealthLabel } from "./shared";
 import { MachineCliUpdate } from "./update-section";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
+import { toast } from "sonner";
+import { NameEditor } from "./name-editor";
 
 const MACHINE_FILTERS: RuntimeMachineFilter[] = ["all", "online", "issues"];
 
@@ -245,6 +248,11 @@ export function RuntimesPage({
     selectedMachine?.mode === "local" &&
     !!selectedMachine.daemonId &&
     retireableDaemonIds.has(selectedMachine.daemonId);
+  const selectedMachineCanRename =
+    selectedMachine?.mode === "local" &&
+    !!selectedMachine.daemonId &&
+    selectedMachine.runtimes.some((runtime) => runtime.runtime_mode === "local") &&
+    retireableDaemonIds.has(selectedMachine.daemonId);
   const retiringMachine = retiringDaemonId
     ? machines.find((machine) => machine.daemonId === retiringDaemonId) ?? null
     : null;
@@ -301,6 +309,7 @@ export function RuntimesPage({
           />
           <MachineDetail
             machine={selectedMachine}
+            canRename={selectedMachineCanRename}
             updatableIds={updatableIds}
             now={now}
             bootstrapping={bootstrapping}
@@ -341,6 +350,7 @@ export function RuntimesPage({
             <ResizablePanel id="detail" minSize="45%">
               <MachineDetail
                 machine={selectedMachine}
+                canRename={selectedMachineCanRename}
                 onRetire={
                   selectedMachineCanRetire
                     ? () => setRetiringDaemonId(selectedMachine.daemonId)
@@ -743,6 +753,7 @@ function ProviderIconStack({ providers }: { providers: string[] }) {
 
 function MachineDetail({
   machine,
+  canRename,
   onRetire,
   updatableIds,
   now,
@@ -750,6 +761,7 @@ function MachineDetail({
   actions,
 }: {
   machine: RuntimeMachine | null;
+  canRename: boolean;
   onRetire?: () => void;
   updatableIds: Set<string>;
   now: number;
@@ -848,9 +860,13 @@ function MachineDetail({
         <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h2 className="truncate text-xl font-semibold tracking-tight">
-                {machine.title}
-              </h2>
+              {canRename && machine.daemonId ? (
+                <MachineNameEditor machine={machine} />
+              ) : (
+                <h2 className="truncate text-xl font-semibold tracking-tight">
+                  {machine.title}
+                </h2>
+              )}
               <span className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-0.5 text-xs text-muted-foreground">
                 <HealthIcon health={machine.health} />
                 {healthLabel(machine.health)}
@@ -911,6 +927,38 @@ function MachineDetail({
         </TabsContent>
       </Tabs>
     </main>
+  );
+}
+
+function MachineNameEditor({ machine }: { machine: RuntimeMachine }) {
+  const { t } = useT("runtimes");
+  const wsId = useWorkspaceId();
+  const updateName = useUpdateDaemonDisplayName(wsId);
+
+  return (
+    <NameEditor
+      value={machine.title}
+      displayAs="h2"
+      title={t(($) => $.machine.name_edit_hint)}
+      textClassName="text-xl font-semibold tracking-tight"
+      inputClassName="w-64 text-xl font-semibold"
+      onSave={async (displayName) => {
+        try {
+          await updateName.mutateAsync({
+            daemonId: machine.daemonId!,
+            displayName,
+          });
+          toast.success(t(($) => $.machine.name_toast_updated));
+        } catch (error) {
+          toast.error(
+            error instanceof Error && error.message
+              ? error.message
+              : t(($) => $.machine.name_toast_failed),
+          );
+          throw error;
+        }
+      }}
+    />
   );
 }
 

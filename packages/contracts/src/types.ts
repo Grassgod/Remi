@@ -600,6 +600,7 @@ export interface MultiremiRuntime {
   provider: MultiremiAgentProvider | "any";
   daemonId: string | null;
   legacyDaemonId: string | null;
+  daemonDisplayName: string | null;
   runtimeMode: string;
   deviceInfo: string;
   metadata: Record<string, unknown>;
