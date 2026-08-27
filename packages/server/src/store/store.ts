@@ -3582,7 +3582,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      });
+      }, { deferAgentMentionDispatch: true });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -3594,6 +3594,7 @@ runMigrations(this.db);
       return { task, replacementTask, message, audit, comment };
     })();
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+    this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
 

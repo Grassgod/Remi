@@ -2059,18 +2059,25 @@ export class TasksRepo {
     const requiredEventSeq = Number.isFinite(rawRequiredEventSeq)
       ? Math.max(1, Math.floor(rawRequiredEventSeq))
       : 1;
+    const delegationId = source.delegationId;
+    const delegatedByAgentId = source.delegatedByAgentId;
+    const hasDelegationId = Boolean(delegationId);
+    const hasDelegator = Boolean(delegatedByAgentId);
+    if (!hasDelegationId && !hasDelegator) {
+      return { task: null, created: false, covered: false };
+    }
     if (
       !source.issueId ||
       !source.issueSessionId ||
-      !source.delegationId ||
-      !source.delegatedByAgentId ||
+      !hasDelegationId ||
+      !hasDelegator ||
       source.agentId === source.delegatedByAgentId
     ) {
       this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "no_lineage");
       return { task: null, created: false, covered: false };
     }
 
-    const delegator = this.ctx.agents().getAgent(source.delegatedByAgentId);
+    const delegator = this.ctx.agents().getAgent(delegatedByAgentId!);
     if (!delegator || delegator.archivedAt || delegator.workspaceId !== source.workspaceId) {
       log.warn(`delegation ${source.delegationId} cannot return to unavailable agent ${source.delegatedByAgentId}`);
       this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "delegator_unavailable");

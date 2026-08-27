@@ -98,6 +98,10 @@ interface ReactionInput {
   emoji: string;
 }
 
+interface CreateIssueCommentOptions {
+  deferAgentMentionDispatch?: boolean;
+}
+
 /**
  * `table` and `parentColumn` are interpolated into SQL text. Both instances are module-level
  * constants that never see request input — do not widen them to accept caller-supplied strings.
@@ -1340,9 +1344,17 @@ export class IssuesRepo {
     return { issue: this.getIssue(issue.id)!, task };
   }
 
-  createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment {
+  createIssueComment(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: CreateIssueCommentOptions = {},
+  ): MultiremiIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
+    const authorType = input.authorType ?? "member";
+    if (options.deferAgentMentionDispatch && authorType !== "agent") {
+      throw new Error("Only agent comment mentions can be deferred");
+    }
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const parentId = input.parentId ?? input.parent_id ?? null;
@@ -1374,7 +1386,6 @@ export class IssuesRepo {
     if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     if (parentId) this.unresolveThreadRoot(parentId);
-    const authorType = input.authorType ?? "member";
     if (authorType === "agent" && input.authorId) {
       this.ctx.issueSessions().addSessionParticipant(issueSessionId, {
         participantType: "agent",
@@ -1433,9 +1444,32 @@ export class IssuesRepo {
       mentionedMemberIds,
       { comment_id: id, issue_session_id: issueSessionId },
     );
+    if (options.deferAgentMentionDispatch) return comment;
     const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq);
     this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
     return comment;
+  }
+
+  /**
+   * Dispatch mentions for an agent comment that was persisted by an outer
+   * transaction. PostgresSyncDatabase has no nested transaction/savepoint
+   * support, so task creation and enqueue notification must happen only after
+   * that caller commits.
+   */
+  dispatchDeferredAgentCommentMentions(commentId: string): MultiremiTask[] {
+    const comment = this.getIssueComment(commentId);
+    if (!comment || comment.authorType !== "agent") {
+      throw new Error(`Deferred agent comment not found: ${commentId}`);
+    }
+    const issue = this.getIssue(comment.issueId);
+    if (!issue) throw new Error(`Issue not found: ${comment.issueId}`);
+    const event = this.ctx.db.query(
+      `SELECT seq FROM multiremi_session_events
+       WHERE session_id = ? AND source_comment_id = ? AND kind = 'message'
+       ORDER BY seq DESC LIMIT 1`,
+    ).get(comment.issueSessionId, comment.id) as { seq: number } | null;
+    if (!event) throw new Error(`Session event not found for comment: ${comment.id}`);
+    return this.triggerCommentMentions(issue, comment, Number(event.seq));
   }
 
   /**

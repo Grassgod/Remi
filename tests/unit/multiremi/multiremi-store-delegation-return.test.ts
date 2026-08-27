@@ -132,6 +132,7 @@ describe("task-level agent delegation return", () => {
       agentId: qa.id,
       issueId: issue.id,
       prompt: "Verify the direct assignment.",
+      parentTaskId: "tsk_forged",
       delegationId: "dlg_forged",
       delegatedByAgentId: qa.id,
     };
@@ -159,12 +160,13 @@ describe("task-level agent delegation return", () => {
     expect(delegated).toMatchObject({
       delegatedByAgentId: leader.id,
       issueSessionId: leaderTask.issueSessionId,
+      parentTaskId: leaderTask.id,
     });
     expect(delegated.delegationId).toStartWith("dlg_");
     expect(delegated.delegationId).not.toBe("dlg_forged");
   });
 
-  it("audits a task-token task creation that does not qualify as delegation", async () => {
+  it("does not mislabel an ordinary task-token task creation as a skipped return", async () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
@@ -183,9 +185,9 @@ describe("task-level agent delegation return", () => {
     const taskId = ((await response.json()) as { task: { id: string } }).task.id;
     expect(store.getTask(taskId)).toMatchObject({ delegationId: null, delegatedByAgentId: null });
     expect(store.listIssueActivity(issue.id)
-      .find((activity) => activity.type === "delegation_return_skipped"
-        && (activity.data as Record<string, unknown>).taskId === taskId)?.data)
-      .toMatchObject({ reason: "no_lineage", stage: "task_creation", sourceTaskId: leaderTask.id });
+      .some((activity) => activity.type === "delegation_return_skipped"
+        && (activity.data as Record<string, unknown>).taskId === taskId))
+      .toBeFalse();
   });
 
   it("lets only the assigned squad leader richly mention a squad teammate", () => {
@@ -478,11 +480,30 @@ describe("task-level agent delegation return", () => {
       .toBeTrue();
   });
 
-  it("audits a return attempt with no delegation lineage", () => {
+  it("keeps ordinary tasks without delegation lineage out of the return audit", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Solo", provider: "claude" });
     const issue = store.createIssue({ title: "No lineage" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work." });
+
+    expect(store.cancelTask(task.id).status).toBe("cancelled");
+    expect(store.ensureDelegationWakeup({ sourceTaskId: task.id, requiredEventSeq: 1 })).toEqual({
+      task: null,
+      created: false,
+      covered: false,
+    });
+    expect(store.listIssueActivity(issue.id)
+      .some((activity) => activity.type === "delegation_return_skipped"
+        && (activity.data as Record<string, unknown>).reason === "no_lineage"))
+      .toBeFalse();
+  });
+
+  it("audits a malformed delegation lineage instead of silently dropping it", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Solo", provider: "claude" });
+    const issue = store.createIssue({ title: "Malformed lineage" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work." });
+    db!.run("UPDATE multiremi_tasks SET delegation_id = ? WHERE id = ?", ["dlg_incomplete", task.id]);
 
     expect(store.ensureDelegationWakeup({ sourceTaskId: task.id, requiredEventSeq: 1 })).toEqual({
       task: null,

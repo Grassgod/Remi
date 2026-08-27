@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -401,5 +401,75 @@ describe("Organizer supervisor privilege layer", () => {
     const redispatchComment = fixture.store.listIssueComments(fixture.patrolIssue.id).at(-1)!;
     expect(redispatchComment.body).toContain("Organizer action: redispatch");
     expect(redispatchComment.body).toContain(`Replacement task: ${redispatchedBody.replacement_task.id}`);
+  });
+
+  it("dispatches rich organizer comment mentions only after the outer transaction commits", async () => {
+    const fixture = await setup();
+    await grantSupervisor(fixture);
+    await setMode(fixture, "act");
+    const leader = fixture.store.createAgent({
+      name: "Squad leader",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "owner",
+    });
+    const squad = fixture.store.createSquad({
+      name: "Organizer squad",
+      leaderId: leader.id,
+      memberIds: [fixture.supervisorAgent.id],
+    });
+    const delegatedIssue = fixture.store.createIssue({
+      title: "Delegated organizer patrol",
+      workspaceId: "local",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    const delegatedSupervisorTask = fixture.store.createTask({
+      agentId: fixture.supervisorAgent.id,
+      issueId: delegatedIssue.id,
+      workspaceId: "local",
+      prompt: "inspect delegated tasks",
+      delegationId: "dlg_organizer_return",
+      delegatedByAgentId: leader.id,
+    });
+    const supervisorToken = await fixture.store.createTaskAccessToken(delegatedSupervisorTask, "owner");
+    const originalEnsure = fixture.store.ensureDelegationWakeup.bind(fixture.store);
+    let ensureObservedInTransaction: boolean | null = null;
+    const enqueueTransactionStates: boolean[] = [];
+    fixture.store.ensureDelegationWakeup = ((input) => {
+      ensureObservedInTransaction = db!.inTransaction;
+      return originalEnsure(input);
+    }) as typeof fixture.store.ensureDelegationWakeup;
+    const unsubscribe = fixture.store.onTaskEnqueued((task) => {
+      if (task.agentId === leader.id) {
+        enqueueTransactionStates.push(db!.inTransaction);
+      }
+    });
+
+    try {
+      const response = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/steer`, {
+        method: "POST",
+        headers: headers(supervisorToken.token),
+        body: JSON.stringify({
+          force_answer: true,
+          reason: `Needs a decision [@Squad leader](mention://agent/${leader.id})`,
+        }),
+      });
+      expect(response.status).toBe(201);
+    } finally {
+      fixture.store.ensureDelegationWakeup = originalEnsure;
+      unsubscribe();
+    }
+
+    expect(ensureObservedInTransaction).not.toBeNull();
+    expect(Boolean(ensureObservedInTransaction)).toBeFalse();
+    expect(enqueueTransactionStates).toEqual([false]);
+    expect(fixture.store.listTasksForIssue(delegatedIssue.id).find((task) =>
+      task.agentId === leader.id && task.parentTaskId === delegatedSupervisorTask.id
+    )).toBeDefined();
+    expect(fixture.store.listIssueActivity(delegatedIssue.id).some((activity) =>
+      activity.type === "delegation_return_triggered"
+      && (activity.data as Record<string, unknown>).sourceTaskId === delegatedSupervisorTask.id
+    )).toBeTrue();
   });
 });

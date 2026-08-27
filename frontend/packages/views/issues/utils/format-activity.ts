@@ -5,6 +5,34 @@ import type { useT } from "../../i18n";
 
 export type IssuesT = ReturnType<typeof useT<"issues">>["t"];
 
+function delegationReturnReason(reason: string | undefined, t: IssuesT): string {
+  switch (reason) {
+    case "no_lineage":
+      return t(($) => $.activity.delegation_return_reason_no_lineage);
+    case "delegator_unavailable":
+      return t(($) => $.activity.delegation_return_reason_delegator_unavailable);
+    case "already_covered":
+      return t(($) => $.activity.delegation_return_reason_already_covered);
+    default:
+      return reason?.trim() || t(($) => $.activity.reason_unknown);
+  }
+}
+
+function commentMentionReason(reason: string | undefined, t: IssuesT): string {
+  switch (reason) {
+    case "self_mention":
+      return t(($) => $.activity.comment_mention_reason_self_mention);
+    case "unsupported_direction":
+      return t(($) => $.activity.comment_mention_reason_unsupported_direction);
+    case "unlinked_agent_comment":
+      return t(($) => $.activity.comment_mention_reason_unlinked_agent_comment);
+    case "target_unavailable":
+      return t(($) => $.activity.comment_mention_reason_target_unavailable);
+    default:
+      return reason?.trim() || t(($) => $.activity.reason_unknown);
+  }
+}
+
 export function statusLabel(status: string, t: IssuesT): string {
   if (status in STATUS_CONFIG) {
     return t(($) => $.status[status as IssueStatus]);
@@ -70,6 +98,16 @@ export function formatActivity(
       return t(($) => $.activity.task_completed, { count: entry.coalesced_count ?? 1 });
     case "task_failed":
       return t(($) => $.activity.task_failed, { count: entry.coalesced_count ?? 1 });
+    case "delegation_return_triggered":
+      return t(($) => $.activity.delegation_return_triggered);
+    case "delegation_return_skipped":
+      return t(($) => $.activity.delegation_return_skipped, {
+        reason: delegationReturnReason(details.reason, t),
+      });
+    case "comment_mention_skipped":
+      return t(($) => $.activity.comment_mention_skipped, {
+        reason: commentMentionReason(details.reason, t),
+      });
     case "dispatch_skipped": {
       if (details.reason === "no_runnable_agent") {
         return t(($) => $.activity.dispatch_skipped_no_runnable_agent);

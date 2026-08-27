@@ -1258,7 +1258,7 @@
       "path": "/api/agents",
       "status": 201,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_nwk7j7pg419m",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1291,10 +1291,10 @@
     {
       "key": "agents-compat#001 PUT /api/agents/:id",
       "route": "PUT /api/agents/:id",
-      "path": "/api/agents/agt_vfs9viv2ilj6",
+      "path": "/api/agents/agt_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_nwk7j7pg419m",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1327,10 +1327,10 @@
     {
       "key": "agents-compat#002 PUT /api/agents/:id/env",
       "route": "PUT /api/agents/:id/env",
-      "path": "/api/agents/agt_vfs9viv2ilj6/env",
+      "path": "/api/agents/agt_nwk7j7pg419m/env",
       "status": 200,
       "body": {
-        "agent_id": "agt_vfs9viv2ilj6",
+        "agent_id": "agt_nwk7j7pg419m",
         "custom_env": {
           "A": "1"
         }
@@ -1339,7 +1339,7 @@
     {
       "key": "agents-compat#003 PUT /api/agents/:id/skills",
       "route": "PUT /api/agents/:id/skills",
-      "path": "/api/agents/agt_vfs9viv2ilj6/skills",
+      "path": "/api/agents/agt_nwk7j7pg419m/skills",
       "status": 200,
       "body": [
         {
@@ -1357,7 +1357,7 @@
     {
       "key": "agents-compat#004 POST /api/agents/:id/skills/add",
       "route": "POST /api/agents/:id/skills/add",
-      "path": "/api/agents/agt_vfs9viv2ilj6/skills/add",
+      "path": "/api/agents/agt_nwk7j7pg419m/skills/add",
       "status": 200,
       "body": [
         {
@@ -1375,7 +1375,7 @@
     {
       "key": "agents-compat#005 POST /api/agents/:id/cancel-tasks",
       "route": "POST /api/agents/:id/cancel-tasks",
-      "path": "/api/agents/agt_vfs9viv2ilj6/cancel-tasks",
+      "path": "/api/agents/agt_nwk7j7pg419m/cancel-tasks",
       "status": 200,
       "body": {
         "cancelled": 0
@@ -1384,10 +1384,10 @@
     {
       "key": "agents-compat#006 POST /api/agents/:id/archive",
       "route": "POST /api/agents/:id/archive",
-      "path": "/api/agents/agt_vfs9viv2ilj6/archive",
+      "path": "/api/agents/agt_nwk7j7pg419m/archive",
       "status": 200,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_nwk7j7pg419m",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1426,10 +1426,10 @@
     {
       "key": "agents-compat#007 POST /api/agents/:id/restore",
       "route": "POST /api/agents/:id/restore",
-      "path": "/api/agents/agt_vfs9viv2ilj6/restore",
+      "path": "/api/agents/agt_nwk7j7pg419m/restore",
       "status": 200,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_nwk7j7pg419m",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1472,7 +1472,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_wk1mrnyfwl4x",
+          "id": "agt_mmcj3uiam2jc",
           "workspace_id": "local",
           "runtime_id": "",
           "provider": "claude",
@@ -1512,7 +1512,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_vfs9viv2ilj6",
+          "id": "agt_nwk7j7pg419m",
           "name": "Native Agent",
           "description": "",
           "avatarUrl": null,
@@ -1695,7 +1695,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_va5q49t622xv",
+          "id": "agt_wk1mrnyfwl4x",
           "name": "Native From Template",
           "description": "Captures an architecture decision in the standard Context / Decision / Consequences format — so future-you knows why.",
           "avatarUrl": null,
@@ -1860,7 +1860,7 @@
       "status": 201,
       "body": {
         "attachment": {
-          "id": "att_vfs9viv2ilj6",
+          "id": "att_nwk7j7pg419m",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -1883,7 +1883,7 @@
       "status": 201,
       "body": {
         "attachment": {
-          "id": "att_mmcj3uiam2jc",
+          "id": "att_vfs9viv2ilj6",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -1902,12 +1902,12 @@
     {
       "key": "attachments#003 DELETE /api/attachments/:id",
       "route": "DELETE /api/attachments/:id",
-      "path": "/api/attachments/att_vfs9viv2ilj6",
+      "path": "/api/attachments/att_nwk7j7pg419m",
       "status": 200,
       "body": {
         "ok": true,
         "attachment": {
-          "id": "att_vfs9viv2ilj6",
+          "id": "att_nwk7j7pg419m",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -2041,7 +2041,7 @@
       "path": "/api/autopilots",
       "status": 201,
       "body": {
-        "id": "aut_vfs9viv2ilj6",
+        "id": "aut_nwk7j7pg419m",
         "workspace_id": "local",
         "title": "Compat autopilot",
         "description": null,
@@ -2066,10 +2066,10 @@
     {
       "key": "autopilots-compat#001 PATCH /api/autopilots/:id",
       "route": "PATCH /api/autopilots/:id",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6",
+      "path": "/api/autopilots/aut_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "aut_vfs9viv2ilj6",
+        "id": "aut_nwk7j7pg419m",
         "workspace_id": "local",
         "title": "Compat autopilot patched",
         "description": null,
@@ -2094,18 +2094,18 @@
     {
       "key": "autopilots-compat#002 POST /api/autopilots/:id/triggers",
       "route": "POST /api/autopilots/:id/triggers",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers",
+      "path": "/api/autopilots/aut_nwk7j7pg419m/triggers",
       "status": 201,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_mmcj3uiam2jc",
+        "autopilot_id": "aut_nwk7j7pg419m",
         "kind": "webhook",
         "enabled": true,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_va5q49t622xv8dim5r",
-        "webhook_path": "/api/webhooks/autopilots/awt_va5q49t622xv8dim5r",
+        "webhook_token": "awt_wk1mrnyfwl4xva5q49",
+        "webhook_path": "/api/webhooks/autopilots/awt_wk1mrnyfwl4xva5q49",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2123,18 +2123,18 @@
     {
       "key": "autopilots-compat#003 PATCH /api/autopilots/:id/triggers/:triggerId",
       "route": "PATCH /api/autopilots/:id/triggers/:triggerId",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x",
+      "path": "/api/autopilots/aut_nwk7j7pg419m/triggers/trg_mmcj3uiam2jc",
       "status": 200,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_mmcj3uiam2jc",
+        "autopilot_id": "aut_nwk7j7pg419m",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_va5q49t622xv8dim5r",
-        "webhook_path": "/api/webhooks/autopilots/awt_va5q49t622xv8dim5r",
+        "webhook_token": "awt_wk1mrnyfwl4xva5q49",
+        "webhook_path": "/api/webhooks/autopilots/awt_wk1mrnyfwl4xva5q49",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2152,18 +2152,18 @@
     {
       "key": "autopilots-compat#004 PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
       "route": "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x/signing-secret",
+      "path": "/api/autopilots/aut_nwk7j7pg419m/triggers/trg_mmcj3uiam2jc/signing-secret",
       "status": 200,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_mmcj3uiam2jc",
+        "autopilot_id": "aut_nwk7j7pg419m",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_va5q49t622xv8dim5r",
-        "webhook_path": "/api/webhooks/autopilots/awt_va5q49t622xv8dim5r",
+        "webhook_token": "awt_wk1mrnyfwl4xva5q49",
+        "webhook_path": "/api/webhooks/autopilots/awt_wk1mrnyfwl4xva5q49",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2181,18 +2181,18 @@
     {
       "key": "autopilots-compat#005 POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
       "route": "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x/rotate-webhook-token",
+      "path": "/api/autopilots/aut_nwk7j7pg419m/triggers/trg_mmcj3uiam2jc/rotate-webhook-token",
       "status": 200,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_mmcj3uiam2jc",
+        "autopilot_id": "aut_nwk7j7pg419m",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_24mzl27212d1hv48ko",
-        "webhook_path": "/api/webhooks/autopilots/awt_24mzl27212d1hv48ko",
+        "webhook_token": "awt_t622xv8dim5r24mzl2",
+        "webhook_path": "/api/webhooks/autopilots/awt_t622xv8dim5r24mzl2",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2210,26 +2210,26 @@
     {
       "key": "autopilots-compat#006 POST /api/autopilots/:id/trigger",
       "route": "POST /api/autopilots/:id/trigger",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/trigger",
+      "path": "/api/autopilots/aut_nwk7j7pg419m/trigger",
       "status": 200,
       "body": {
-        "id": "run_ntqjp15rt1ph",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "run_7212d1hv48ko",
+        "autopilot_id": "aut_nwk7j7pg419m",
         "trigger_id": null,
         "event_id": null,
         "source": "manual",
         "status": "running",
-        "issue_id": "iss_ibk9if0740q3",
-        "issue_session_id": "ises_3gq3rlr8o45b",
-        "task_id": "tsk_2ryujm2j4i6h",
+        "issue_id": "iss_ntqjp15rt1ph",
+        "issue_session_id": "ises_ic8dc9g1qpho",
+        "task_id": "tsk_3gq3rlr8o45b",
         "triggered_at": "<timestamp>",
         "completed_at": null,
         "failure_reason": null,
         "trigger_payload": null,
         "result": {
-          "taskId": "tsk_2ryujm2j4i6h",
-          "issueId": "iss_ibk9if0740q3",
-          "issueSessionId": "ises_3gq3rlr8o45b"
+          "taskId": "tsk_3gq3rlr8o45b",
+          "issueId": "iss_ntqjp15rt1ph",
+          "issueSessionId": "ises_ic8dc9g1qpho"
         },
         "created_at": "<timestamp>"
       }
@@ -2237,10 +2237,10 @@
     {
       "key": "autopilots-compat#007 PATCH /api/autopilots/:id",
       "route": "PATCH /api/autopilots/:id",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6",
+      "path": "/api/autopilots/aut_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "aut_vfs9viv2ilj6",
+        "id": "aut_nwk7j7pg419m",
         "workspace_id": "local",
         "title": "Compat autopilot patched",
         "description": null,
@@ -2265,13 +2265,13 @@
     {
       "key": "autopilots-compat#008 POST /api/autopilots/:id/deliveries/:deliveryId/replay",
       "route": "POST /api/autopilots/:id/deliveries/:deliveryId/replay",
-      "path": "/api/autopilots/apl_snapshot/deliveries/whd_u4c9m3gewz2d/replay",
+      "path": "/api/autopilots/apl_snapshot/deliveries/whd_ksk9u210lmg0/replay",
       "status": 201,
       "body": {
         "status": "accepted",
         "duplicate": false,
         "delivery": {
-          "id": "whd_3gdnj5pggzmd",
+          "id": "whd_zsxpe4iu5err",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2288,26 +2288,26 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_3gdnj5pggzmd\",\"runId\":\"run_jez2ujdp6d5n\"}",
-          "autopilotRunId": "run_jez2ujdp6d5n",
-          "replayedFromDeliveryId": "whd_u4c9m3gewz2d",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_zsxpe4iu5err\",\"runId\":\"run_3gdnj5pggzmd\"}",
+          "autopilotRunId": "run_3gdnj5pggzmd",
+          "replayedFromDeliveryId": "whd_ksk9u210lmg0",
           "error": null,
           "receivedAt": "<timestamp>",
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_3gdnj5pggzmd",
-        "delivery_id": "whd_3gdnj5pggzmd",
+        "deliveryId": "whd_zsxpe4iu5err",
+        "delivery_id": "whd_zsxpe4iu5err",
         "run": {
-          "id": "run_jez2ujdp6d5n",
+          "id": "run_3gdnj5pggzmd",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
           "status": "running",
-          "issueId": "iss_l30ikvaows9d",
-          "taskId": "tsk_mr804acwglzg",
+          "issueId": "iss_jez2ujdp6d5n",
+          "taskId": "tsk_4it58rkbvy1m",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_4it58rkbvy1m",
+          "issueSessionId": "ises_aw448dcq07dx",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2323,27 +2323,27 @@
             }
           },
           "result": {
-            "taskId": "tsk_mr804acwglzg",
-            "issueId": "iss_l30ikvaows9d",
-            "issueSessionId": "ises_4it58rkbvy1m"
+            "taskId": "tsk_4it58rkbvy1m",
+            "issueId": "iss_jez2ujdp6d5n",
+            "issueSessionId": "ises_aw448dcq07dx"
           },
           "createdAt": "<timestamp>"
         },
-        "runId": "run_jez2ujdp6d5n",
-        "run_id": "run_jez2ujdp6d5n"
+        "runId": "run_3gdnj5pggzmd",
+        "run_id": "run_3gdnj5pggzmd"
       }
     },
     {
       "key": "autopilots-compat#009 DELETE /api/autopilots/:id/triggers/:triggerId",
       "route": "DELETE /api/autopilots/:id/triggers/:triggerId",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x",
+      "path": "/api/autopilots/aut_nwk7j7pg419m/triggers/trg_mmcj3uiam2jc",
       "status": 204,
       "body": ""
     },
     {
       "key": "autopilots-compat#010 DELETE /api/autopilots/:id",
       "route": "DELETE /api/autopilots/:id",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6",
+      "path": "/api/autopilots/aut_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -2354,7 +2354,7 @@
       "status": 201,
       "body": {
         "autopilot": {
-          "id": "aut_vfs9viv2ilj6",
+          "id": "aut_nwk7j7pg419m",
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot",
@@ -2458,15 +2458,15 @@
       "status": 201,
       "body": {
         "run": {
-          "id": "run_wk1mrnyfwl4x",
+          "id": "run_mmcj3uiam2jc",
           "autopilotId": "apl_snapshot",
           "source": "manual",
           "status": "running",
-          "issueId": "iss_va5q49t622xv",
-          "taskId": "tsk_ntqjp15rt1ph",
+          "issueId": "iss_wk1mrnyfwl4x",
+          "taskId": "tsk_7212d1hv48ko",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_7212d1hv48ko",
+          "issueSessionId": "ises_8dim5r24mzl2",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2474,9 +2474,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_ntqjp15rt1ph",
-            "issueId": "iss_va5q49t622xv",
-            "issueSessionId": "ises_7212d1hv48ko"
+            "taskId": "tsk_7212d1hv48ko",
+            "issueId": "iss_wk1mrnyfwl4x",
+            "issueSessionId": "ises_8dim5r24mzl2"
           },
           "createdAt": "<timestamp>"
         }
@@ -2489,15 +2489,15 @@
       "status": 201,
       "body": {
         "run": {
-          "id": "run_2ryujm2j4i6h",
+          "id": "run_3gq3rlr8o45b",
           "autopilotId": "apl_snapshot",
           "source": "schedule",
           "status": "running",
-          "issueId": "iss_piqp1rpc1xal",
-          "taskId": "tsk_3gdnj5pggzmd",
+          "issueId": "iss_2ryujm2j4i6h",
+          "taskId": "tsk_zsxpe4iu5err",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_zsxpe4iu5err",
+          "issueSessionId": "ises_q5010won31uy",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2505,9 +2505,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_3gdnj5pggzmd",
-            "issueId": "iss_piqp1rpc1xal",
-            "issueSessionId": "ises_zsxpe4iu5err"
+            "taskId": "tsk_zsxpe4iu5err",
+            "issueId": "iss_2ryujm2j4i6h",
+            "issueSessionId": "ises_q5010won31uy"
           },
           "createdAt": "<timestamp>"
         }
@@ -2520,15 +2520,15 @@
       "status": 201,
       "body": {
         "run": {
-          "id": "run_4it58rkbvy1m",
+          "id": "run_aw448dcq07dx",
           "autopilotId": "apl_snapshot",
           "source": "api",
           "status": "running",
-          "issueId": "iss_mr804acwglzg",
-          "taskId": "tsk_btodjmtppou8",
+          "issueId": "iss_4it58rkbvy1m",
+          "taskId": "tsk_rmh8s6lkcse1",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_rmh8s6lkcse1",
+          "issueSessionId": "ises_c77isk189u85",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2536,9 +2536,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_btodjmtppou8",
-            "issueId": "iss_mr804acwglzg",
-            "issueSessionId": "ises_rmh8s6lkcse1"
+            "taskId": "tsk_rmh8s6lkcse1",
+            "issueId": "iss_4it58rkbvy1m",
+            "issueSessionId": "ises_c77isk189u85"
           },
           "createdAt": "<timestamp>"
         }
@@ -2553,7 +2553,7 @@
         "status": "rejected",
         "duplicate": false,
         "delivery": {
-          "id": "whd_950jhzoom893",
+          "id": "whd_jf9hexulk9s0",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2568,7 +2568,7 @@
           "contentType": "application/json",
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 401,
-          "responseBody": "{\"status\":\"rejected\",\"deliveryId\":\"whd_950jhzoom893\",\"reason\":\"missing_signature\"}",
+          "responseBody": "{\"status\":\"rejected\",\"deliveryId\":\"whd_jf9hexulk9s0\",\"reason\":\"missing_signature\"}",
           "autopilotRunId": null,
           "replayedFromDeliveryId": null,
           "error": "missing_signature",
@@ -2576,8 +2576,8 @@
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_950jhzoom893",
-        "delivery_id": "whd_950jhzoom893",
+        "deliveryId": "whd_jf9hexulk9s0",
+        "delivery_id": "whd_jf9hexulk9s0",
         "run": null,
         "runId": null,
         "run_id": null
@@ -2586,13 +2586,13 @@
     {
       "key": "autopilots-native#006 POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay",
       "route": "POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay",
-      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_u4c9m3gewz2d/replay",
+      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_ksk9u210lmg0/replay",
       "status": 201,
       "body": {
         "status": "accepted",
         "duplicate": false,
         "delivery": {
-          "id": "whd_80nhvnycarf2",
+          "id": "whd_950jhzoom893",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2609,26 +2609,26 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_80nhvnycarf2\",\"runId\":\"run_1ijxvp6uzepf\"}",
-          "autopilotRunId": "run_1ijxvp6uzepf",
-          "replayedFromDeliveryId": "whd_u4c9m3gewz2d",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_950jhzoom893\",\"runId\":\"run_80nhvnycarf2\"}",
+          "autopilotRunId": "run_80nhvnycarf2",
+          "replayedFromDeliveryId": "whd_ksk9u210lmg0",
           "error": null,
           "receivedAt": "<timestamp>",
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_80nhvnycarf2",
-        "delivery_id": "whd_80nhvnycarf2",
+        "deliveryId": "whd_950jhzoom893",
+        "delivery_id": "whd_950jhzoom893",
         "run": {
-          "id": "run_1ijxvp6uzepf",
+          "id": "run_80nhvnycarf2",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
           "status": "running",
-          "issueId": "iss_n03hpqa2j1gs",
-          "taskId": "tsk_m7768npxoima",
+          "issueId": "iss_1ijxvp6uzepf",
+          "taskId": "tsk_z9xe80gxork5",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_z9xe80gxork5",
+          "issueSessionId": "ises_d9havbvj3rg3",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2644,14 +2644,14 @@
             }
           },
           "result": {
-            "taskId": "tsk_m7768npxoima",
-            "issueId": "iss_n03hpqa2j1gs",
-            "issueSessionId": "ises_z9xe80gxork5"
+            "taskId": "tsk_z9xe80gxork5",
+            "issueId": "iss_1ijxvp6uzepf",
+            "issueSessionId": "ises_d9havbvj3rg3"
           },
           "createdAt": "<timestamp>"
         },
-        "runId": "run_1ijxvp6uzepf",
-        "run_id": "run_1ijxvp6uzepf"
+        "runId": "run_80nhvnycarf2",
+        "run_id": "run_80nhvnycarf2"
       }
     },
     {
@@ -2712,7 +2712,7 @@
       "path": "/api/chat/sessions",
       "status": 201,
       "body": {
-        "id": "chat_vfs9viv2ilj6",
+        "id": "chat_nwk7j7pg419m",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
         "creator_id": "local",
@@ -2726,28 +2726,28 @@
     {
       "key": "chat#001 POST /api/chat/sessions/:sessionId/messages",
       "route": "POST /api/chat/sessions/:sessionId/messages",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6/messages",
+      "path": "/api/chat/sessions/chat_nwk7j7pg419m/messages",
       "status": 201,
       "body": {
-        "message_id": "msg_mmcj3uiam2jc",
-        "task_id": "tsk_wk1mrnyfwl4x",
+        "message_id": "msg_vfs9viv2ilj6",
+        "task_id": "tsk_mmcj3uiam2jc",
         "created_at": "<timestamp>"
       }
     },
     {
       "key": "chat#002 POST /api/chat/sessions/:sessionId/read",
       "route": "POST /api/chat/sessions/:sessionId/read",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6/read",
+      "path": "/api/chat/sessions/chat_nwk7j7pg419m/read",
       "status": 204,
       "body": ""
     },
     {
       "key": "chat#003 PATCH /api/chat/sessions/:sessionId",
       "route": "PATCH /api/chat/sessions/:sessionId",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6",
+      "path": "/api/chat/sessions/chat_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "chat_vfs9viv2ilj6",
+        "id": "chat_nwk7j7pg419m",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
         "creator_id": "local",
@@ -2761,7 +2761,7 @@
     {
       "key": "chat#004 DELETE /api/chat/sessions/:sessionId",
       "route": "DELETE /api/chat/sessions/:sessionId",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6",
+      "path": "/api/chat/sessions/chat_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -2772,7 +2772,7 @@
       "status": 201,
       "body": {
         "session": {
-          "id": "chat_va5q49t622xv",
+          "id": "chat_wk1mrnyfwl4x",
           "workspaceId": "local",
           "creatorId": "local",
           "agentId": "agt_snapshot",
@@ -2809,16 +2809,16 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_7212d1hv48ko",
+          "latestTaskId": "tsk_8dim5r24mzl2",
           "unreadSince": null,
           "hasUnread": false,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
         "message": {
-          "id": "msg_8dim5r24mzl2",
+          "id": "msg_va5q49t622xv",
           "chatSessionId": "cht_snapshot",
-          "taskId": "tsk_7212d1hv48ko",
+          "taskId": "tsk_8dim5r24mzl2",
           "role": "user",
           "body": "native message",
           "failureReason": null,
@@ -2826,7 +2826,7 @@
           "createdAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_7212d1hv48ko",
+          "id": "tsk_8dim5r24mzl2",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -2904,7 +2904,7 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_7212d1hv48ko",
+          "latestTaskId": "tsk_8dim5r24mzl2",
           "unreadSince": null,
           "hasUnread": false,
           "createdAt": "<timestamp>",
@@ -2918,11 +2918,11 @@
       "path": "/api/cloud-runtime/nodes",
       "status": 201,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_nwk7j7pg419m",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_nwk7j7pg419m",
+        "instance_id": "local-crn_nwk7j7pg419m",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -2948,11 +2948,11 @@
       "path": "/api/cloud-runtime/nodes/status",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_nwk7j7pg419m",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_nwk7j7pg419m",
+        "instance_id": "local-crn_nwk7j7pg419m",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -2978,11 +2978,11 @@
       "path": "/api/cloud-runtime/nodes/start",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_nwk7j7pg419m",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_nwk7j7pg419m",
+        "instance_id": "local-crn_nwk7j7pg419m",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3008,11 +3008,11 @@
       "path": "/api/cloud-runtime/nodes/stop",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_nwk7j7pg419m",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_nwk7j7pg419m",
+        "instance_id": "local-crn_nwk7j7pg419m",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3038,11 +3038,11 @@
       "path": "/api/cloud-runtime/nodes/reboot",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_nwk7j7pg419m",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_nwk7j7pg419m",
+        "instance_id": "local-crn_nwk7j7pg419m",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3069,11 +3069,11 @@
       "status": 200,
       "body": {
         "node": {
-          "id": "crn_vfs9viv2ilj6",
+          "id": "crn_nwk7j7pg419m",
           "ownerId": "local",
           "owner_id": "local",
-          "instanceId": "local-crn_vfs9viv2ilj6",
-          "instance_id": "local-crn_vfs9viv2ilj6",
+          "instanceId": "local-crn_nwk7j7pg419m",
+          "instance_id": "local-crn_nwk7j7pg419m",
           "region": "local",
           "instanceType": "small",
           "instance_type": "small",
@@ -3093,7 +3093,7 @@
           "updated_at": "<timestamp>"
         },
         "exit_code": 0,
-        "stdout": "local cloud runtime node crn_vfs9viv2ilj6: uname -a",
+        "stdout": "local cloud runtime node crn_nwk7j7pg419m: uname -a",
         "stderr": ""
       }
     },
@@ -3137,7 +3137,7 @@
       "path": "/api/issues/iss_snapshot/comments",
       "status": 201,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_nwk7j7pg419m",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3158,10 +3158,10 @@
     {
       "key": "comments-compat#001 PUT /api/comments/:id",
       "route": "PUT /api/comments/:id",
-      "path": "/api/comments/cmt_vfs9viv2ilj6",
+      "path": "/api/comments/cmt_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_nwk7j7pg419m",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3182,11 +3182,11 @@
     {
       "key": "comments-compat#002 POST /api/comments/:id/reactions",
       "route": "POST /api/comments/:id/reactions",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/reactions",
+      "path": "/api/comments/cmt_nwk7j7pg419m/reactions",
       "status": 201,
       "body": {
-        "id": "rxn_zsxpe4iu5err",
-        "comment_id": "cmt_vfs9viv2ilj6",
+        "id": "rxn_piqp1rpc1xal",
+        "comment_id": "cmt_nwk7j7pg419m",
         "actor_type": "member",
         "actor_id": "local",
         "emoji": "tada",
@@ -3196,17 +3196,17 @@
     {
       "key": "comments-compat#003 DELETE /api/comments/:id/reactions",
       "route": "DELETE /api/comments/:id/reactions",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/reactions",
+      "path": "/api/comments/cmt_nwk7j7pg419m/reactions",
       "status": 204,
       "body": ""
     },
     {
       "key": "comments-compat#004 POST /api/comments/:id/resolve",
       "route": "POST /api/comments/:id/resolve",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/resolve",
+      "path": "/api/comments/cmt_nwk7j7pg419m/resolve",
       "status": 200,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_nwk7j7pg419m",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3227,10 +3227,10 @@
     {
       "key": "comments-compat#005 DELETE /api/comments/:id/resolve",
       "route": "DELETE /api/comments/:id/resolve",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/resolve",
+      "path": "/api/comments/cmt_nwk7j7pg419m/resolve",
       "status": 200,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_nwk7j7pg419m",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3251,7 +3251,7 @@
     {
       "key": "comments-compat#006 DELETE /api/comments/:id",
       "route": "DELETE /api/comments/:id",
-      "path": "/api/comments/cmt_vfs9viv2ilj6",
+      "path": "/api/comments/cmt_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -3262,7 +3262,7 @@
       "status": 201,
       "body": {
         "comment": {
-          "id": "cmt_vfs9viv2ilj6",
+          "id": "cmt_nwk7j7pg419m",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "issueSessionId": "ises_cdyoy133keds",
@@ -3296,11 +3296,11 @@
     {
       "key": "comments-native#001 PATCH /api/multiremi/comments/:id",
       "route": "PATCH /api/multiremi/comments/:id",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q",
       "status": 200,
       "body": {
         "comment": {
-          "id": "cmt_6ox44aeybxxg",
+          "id": "cmt_xgqkr5l2r04q",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "issueSessionId": "ises_cdyoy133keds",
@@ -3324,8 +3324,8 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_30x2827p9355",
-              "commentId": "cmt_6ox44aeybxxg",
+              "id": "rxn_kn3jgt7c45iv",
+              "commentId": "cmt_xgqkr5l2r04q",
               "workspaceId": "local",
               "actorType": "member",
               "actorId": "mem_snapshot_one",
@@ -3338,7 +3338,7 @@
               "id": "att_snapshot",
               "workspaceId": "local",
               "issueId": "iss_snapshot",
-              "commentId": "cmt_6ox44aeybxxg",
+              "commentId": "cmt_xgqkr5l2r04q",
               "chatSessionId": null,
               "chatMessageId": null,
               "uploaderType": "member",
@@ -3360,11 +3360,11 @@
     {
       "key": "comments-native#002 PUT /api/multiremi/comments/:id",
       "route": "PUT /api/multiremi/comments/:id",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q",
       "status": 200,
       "body": {
         "comment": {
-          "id": "cmt_6ox44aeybxxg",
+          "id": "cmt_xgqkr5l2r04q",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "issueSessionId": "ises_cdyoy133keds",
@@ -3388,8 +3388,8 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_30x2827p9355",
-              "commentId": "cmt_6ox44aeybxxg",
+              "id": "rxn_kn3jgt7c45iv",
+              "commentId": "cmt_xgqkr5l2r04q",
               "workspaceId": "local",
               "actorType": "member",
               "actorId": "mem_snapshot_one",
@@ -3402,7 +3402,7 @@
               "id": "att_snapshot",
               "workspaceId": "local",
               "issueId": "iss_snapshot",
-              "commentId": "cmt_6ox44aeybxxg",
+              "commentId": "cmt_xgqkr5l2r04q",
               "chatSessionId": null,
               "chatMessageId": null,
               "uploaderType": "member",
@@ -3424,12 +3424,12 @@
     {
       "key": "comments-native#003 POST /api/multiremi/comments/:id/reactions",
       "route": "POST /api/multiremi/comments/:id/reactions",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg/reactions",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q/reactions",
       "status": 201,
       "body": {
         "reaction": {
-          "id": "rxn_l30ikvaows9d",
-          "commentId": "cmt_6ox44aeybxxg",
+          "id": "rxn_3gdnj5pggzmd",
+          "commentId": "cmt_xgqkr5l2r04q",
           "workspaceId": "local",
           "actorType": "member",
           "actorId": "local",
@@ -3441,7 +3441,7 @@
     {
       "key": "comments-native#004 DELETE /api/multiremi/comments/:id/reactions",
       "route": "DELETE /api/multiremi/comments/:id/reactions",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg/reactions",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q/reactions",
       "status": 200,
       "body": {
         "ok": true
@@ -3450,11 +3450,11 @@
     {
       "key": "comments-native#005 POST /api/multiremi/comments/:id/resolve",
       "route": "POST /api/multiremi/comments/:id/resolve",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg/resolve",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q/resolve",
       "status": 200,
       "body": {
         "comment": {
-          "id": "cmt_6ox44aeybxxg",
+          "id": "cmt_xgqkr5l2r04q",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "issueSessionId": "ises_cdyoy133keds",
@@ -3478,8 +3478,8 @@
           "resolved_by_id": "local",
           "reactions": [
             {
-              "id": "rxn_30x2827p9355",
-              "commentId": "cmt_6ox44aeybxxg",
+              "id": "rxn_kn3jgt7c45iv",
+              "commentId": "cmt_xgqkr5l2r04q",
               "workspaceId": "local",
               "actorType": "member",
               "actorId": "mem_snapshot_one",
@@ -3492,7 +3492,7 @@
               "id": "att_snapshot",
               "workspaceId": "local",
               "issueId": "iss_snapshot",
-              "commentId": "cmt_6ox44aeybxxg",
+              "commentId": "cmt_xgqkr5l2r04q",
               "chatSessionId": null,
               "chatMessageId": null,
               "uploaderType": "member",
@@ -3514,11 +3514,11 @@
     {
       "key": "comments-native#006 DELETE /api/multiremi/comments/:id/resolve",
       "route": "DELETE /api/multiremi/comments/:id/resolve",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg/resolve",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q/resolve",
       "status": 200,
       "body": {
         "comment": {
-          "id": "cmt_6ox44aeybxxg",
+          "id": "cmt_xgqkr5l2r04q",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "issueSessionId": "ises_cdyoy133keds",
@@ -3542,8 +3542,8 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_30x2827p9355",
-              "commentId": "cmt_6ox44aeybxxg",
+              "id": "rxn_kn3jgt7c45iv",
+              "commentId": "cmt_xgqkr5l2r04q",
               "workspaceId": "local",
               "actorType": "member",
               "actorId": "mem_snapshot_one",
@@ -3556,7 +3556,7 @@
               "id": "att_snapshot",
               "workspaceId": "local",
               "issueId": "iss_snapshot",
-              "commentId": "cmt_6ox44aeybxxg",
+              "commentId": "cmt_xgqkr5l2r04q",
               "chatSessionId": null,
               "chatMessageId": null,
               "uploaderType": "member",
@@ -3578,7 +3578,7 @@
     {
       "key": "comments-native#007 DELETE /api/multiremi/comments/:id",
       "route": "DELETE /api/multiremi/comments/:id",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q",
       "status": 200,
       "body": {
         "ok": true
@@ -3594,7 +3594,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "1e47328fb8ccf862bd8fa9c3d3d65b8c67691d8206d16c86c1234af47a25892b",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -3619,32 +3619,32 @@
           "active_tasks": [],
           "queued_tasks": [
             {
-              "id": "tsk_8be626isk151",
+              "id": "tsk_9i3epsr6j5hf",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_8rcx9z88woyu"
+            },
+            {
+              "id": "tsk_qdrfz8sqy58x",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_i244sp2mewms"
+            },
+            {
+              "id": "tsk_qxjbfrxonmls",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
               "issue_id": null
             },
             {
-              "id": "tsk_8h6y20pl0vq6",
+              "id": "tsk_y5zie74khywp",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
               "issue_id": "iss_snapshot"
-            },
-            {
-              "id": "tsk_abrrt3qds322",
-              "status": "queued",
-              "agent_id": "agt_snapshot",
-              "runtime_id": "rt_snapshot",
-              "issue_id": "iss_r4ic9doizq3q"
-            },
-            {
-              "id": "tsk_k128jfpswkpm",
-              "status": "queued",
-              "agent_id": "agt_snapshot",
-              "runtime_id": "rt_snapshot",
-              "issue_id": "iss_2xbrsagogw63"
             }
           ],
           "local_directory_resources": [],
@@ -3693,7 +3693,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_vfs9viv2ilj6",
+          "id": "tsk_nwk7j7pg419m",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -3720,8 +3720,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_wk1mrnyfwl4x",
-          "assignment_event_id": "sevt_wk1mrnyfwl4x",
+          "assignmentEventId": "sevt_mmcj3uiam2jc",
+          "assignment_event_id": "sevt_mmcj3uiam2jc",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -3760,7 +3760,7 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_8h6y20pl0vq6",
+          "id": "tsk_y5zie74khywp",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_snapshot",
@@ -3779,11 +3779,11 @@
           "kind": "comment",
           "issue_session_id": "ises_cdyoy133keds",
           "issue_session_generation": 1,
-          "trigger_comment_id": "cmt_6ox44aeybxxg",
+          "trigger_comment_id": "cmt_xgqkr5l2r04q",
           "trigger_summary": "Snapshot comment body",
           "plugin_snapshot": [],
           "execution_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "trigger_thread_id": "cmt_6ox44aeybxxg",
+          "trigger_thread_id": "cmt_xgqkr5l2r04q",
           "trigger_comment_content": "Snapshot comment body",
           "trigger_author_type": "member",
           "trigger_author_name": "Snapshot Member",
@@ -3887,7 +3887,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 5,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_6ox44aeybxxg\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_vfs9viv2ilj6\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_nwk7j7pg419m\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}"
           },
           "issue_session_results": [
             {
@@ -3958,7 +3958,7 @@
           ],
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
-          "auth_token": "mat_43764dce2875d196da4a8d8b74e55a8271cf9294"
+          "auth_token": "mat_b038d9ca1bef6a33b05d4c6943764dce2875d196"
         }
       }
     },
@@ -3969,7 +3969,7 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_8be626isk151",
+          "id": "tsk_qxjbfrxonmls",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "",
@@ -4026,7 +4026,7 @@
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
-          "auth_token": "mat_9498a484831d3e7fa94971f34125617d7e9bec99"
+          "auth_token": "mat_a6fb5d92bb4ab5920d4959679498a484831d3e7f"
         }
       }
     },
@@ -4037,10 +4037,10 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_k128jfpswkpm",
+          "id": "tsk_qdrfz8sqy58x",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_2xbrsagogw63",
+          "issue_id": "iss_i244sp2mewms",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
@@ -4054,9 +4054,9 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_qdrfz8sqy58x",
+          "issue_session_id": "ises_j3m15clzy3p6",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_i244sp2mewms",
+          "autopilot_run_id": "run_sv8e5p1ut6x0",
           "plugin_snapshot": [],
           "execution_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "prompt": "snapshot run",
@@ -4094,7 +4094,7 @@
             "max_concurrent_tasks": 6
           },
           "issue": {
-            "id": "iss_2xbrsagogw63",
+            "id": "iss_i244sp2mewms",
             "workspace_id": "local",
             "number": 4,
             "identifier": "MUL-4",
@@ -4121,9 +4121,9 @@
             "labels": []
           },
           "issue_session": {
-            "id": "ises_qdrfz8sqy58x",
-            "issueId": "iss_2xbrsagogw63",
-            "issue_id": "iss_2xbrsagogw63",
+            "id": "ises_j3m15clzy3p6",
+            "issueId": "iss_i244sp2mewms",
+            "issue_id": "iss_i244sp2mewms",
             "workspaceId": "local",
             "workspace_id": "local",
             "title": "Main",
@@ -4143,12 +4143,12 @@
             "updated_at": "<timestamp>"
           },
           "session_projection": {
-            "session_id": "ises_qdrfz8sqy58x",
+            "session_id": "ises_j3m15clzy3p6",
             "target_agent_id": "agt_snapshot",
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_qdrfz8sqy58x\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_j3m15clzy3p6\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}"
           },
           "issue_session_results": [],
           "project_id": "prj_snapshot",
@@ -4214,7 +4214,7 @@
           "autopilot_source": "manual",
           "autopilot_title": "Snapshot autopilot",
           "autopilot_description": "Autopilot used by the snapshot",
-          "auth_token": "mat_307558b5f2a959a8b7e83edbcfa53f2c3c04959b"
+          "auth_token": "mat_c6e7b44f94d8ceb7ea542cc1307558b5f2a959a8"
         }
       }
     },
@@ -4225,10 +4225,10 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_abrrt3qds322",
+          "id": "tsk_9i3epsr6j5hf",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_r4ic9doizq3q",
+          "issue_id": "iss_8rcx9z88woyu",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "dispatched",
@@ -4242,9 +4242,9 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_9i3epsr6j5hf",
+          "issue_session_id": "ises_gbmah1mhgwob",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_8rcx9z88woyu",
+          "autopilot_run_id": "run_u4c9m3gewz2d",
           "plugin_snapshot": [],
           "execution_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
           "prompt": "Snapshot {{title}}",
@@ -4282,7 +4282,7 @@
             "max_concurrent_tasks": 6
           },
           "issue": {
-            "id": "iss_r4ic9doizq3q",
+            "id": "iss_8rcx9z88woyu",
             "workspace_id": "local",
             "number": 5,
             "identifier": "MUL-5",
@@ -4309,9 +4309,9 @@
             "labels": []
           },
           "issue_session": {
-            "id": "ises_9i3epsr6j5hf",
-            "issueId": "iss_r4ic9doizq3q",
-            "issue_id": "iss_r4ic9doizq3q",
+            "id": "ises_gbmah1mhgwob",
+            "issueId": "iss_8rcx9z88woyu",
+            "issue_id": "iss_8rcx9z88woyu",
             "workspaceId": "local",
             "workspace_id": "local",
             "title": "Main",
@@ -4331,12 +4331,12 @@
             "updated_at": "<timestamp>"
           },
           "session_projection": {
-            "session_id": "ises_9i3epsr6j5hf",
+            "session_id": "ises_gbmah1mhgwob",
             "target_agent_id": "agt_snapshot",
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_9i3epsr6j5hf\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_gbmah1mhgwob\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}"
           },
           "issue_session_results": [],
           "project_id": "prj_snapshot",
@@ -4411,7 +4411,7 @@
           },
           "autopilot_title": "Snapshot autopilot",
           "autopilot_description": "Autopilot used by the snapshot",
-          "auth_token": "mat_8536f23d011ba99c6dd52e1586b9fcb52420cc83"
+          "auth_token": "mat_b6abd6ae5beeb6a3701206c58536f23d011ba99c"
         }
       }
     },
@@ -4436,7 +4436,7 @@
     {
       "key": "daemon-task-lifecycle#007 POST /api/daemon/tasks/:taskId/wait-local-directory",
       "route": "POST /api/daemon/tasks/:taskId/wait-local-directory",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/wait-local-directory",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/wait-local-directory",
       "status": 400,
       "body": {
         "error": "mark task waiting_local_directory: no rows in result set"
@@ -4445,7 +4445,7 @@
     {
       "key": "daemon-task-lifecycle#008 POST /api/daemon/tasks/:taskId/start",
       "route": "POST /api/daemon/tasks/:taskId/start",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/start",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/start",
       "status": 400,
       "body": {
         "error": "start task: no rows in result set"
@@ -4454,7 +4454,7 @@
     {
       "key": "daemon-task-lifecycle#009 POST /api/daemon/tasks/:taskId/progress",
       "route": "POST /api/daemon/tasks/:taskId/progress",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/progress",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/progress",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4463,7 +4463,7 @@
     {
       "key": "daemon-task-lifecycle#010 POST /api/daemon/tasks/:taskId/messages",
       "route": "POST /api/daemon/tasks/:taskId/messages",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/messages",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/messages",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4472,10 +4472,10 @@
     {
       "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/prompt",
       "route": "POST /api/daemon/tasks/:taskId/prompt",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/prompt",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/prompt",
       "status": 200,
       "body": {
-        "task_id": "tsk_vfs9viv2ilj6",
+        "task_id": "tsk_nwk7j7pg419m",
         "mode": "bootstrap",
         "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
         "assembled_at": "<timestamp>"
@@ -4484,10 +4484,10 @@
     {
       "key": "daemon-task-lifecycle#012 GET /api/tasks/:taskId/prompt",
       "route": "GET /api/tasks/:taskId/prompt",
-      "path": "/api/tasks/tsk_vfs9viv2ilj6/prompt",
+      "path": "/api/tasks/tsk_nwk7j7pg419m/prompt",
       "status": 200,
       "body": {
-        "task_id": "tsk_vfs9viv2ilj6",
+        "task_id": "tsk_nwk7j7pg419m",
         "mode": "bootstrap",
         "prompt": "# Bootstrap Prompt\n\n## Current Request\nSnapshot lifecycle task",
         "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
@@ -4497,14 +4497,14 @@
     {
       "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/session",
       "route": "POST /api/daemon/tasks/:taskId/session",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/session",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/session",
       "status": 204,
       "body": ""
     },
     {
       "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/usage",
       "route": "POST /api/daemon/tasks/:taskId/usage",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/usage",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/usage",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4513,12 +4513,12 @@
     {
       "key": "daemon-task-lifecycle#015 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_gzmdjez2ujdp",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_5err3gdnj5pg",
+          "taskId": "tsk_nwk7j7pg419m",
           "kind": "permission",
           "payload": {
             "tool": "Bash"
@@ -4534,12 +4534,12 @@
     {
       "key": "daemon-task-lifecycle#016 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/multiremi/tasks/tsk_vfs9viv2ilj6/human-requests/hrq_gzmdjez2ujdp/respond",
+      "path": "/api/multiremi/tasks/tsk_nwk7j7pg419m/human-requests/hrq_5err3gdnj5pg/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_gzmdjez2ujdp",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_5err3gdnj5pg",
+          "taskId": "tsk_nwk7j7pg419m",
           "kind": "permission",
           "payload": {
             "tool": "Bash"
@@ -4555,12 +4555,12 @@
     {
       "key": "daemon-task-lifecycle#017 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_6d5nl30ikvao",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_gzmdjez2ujdp",
+          "taskId": "tsk_nwk7j7pg419m",
           "kind": "permission",
           "payload": {
             "tool": "Read"
@@ -4576,12 +4576,12 @@
     {
       "key": "daemon-task-lifecycle#018 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/tasks/tsk_vfs9viv2ilj6/human-requests/hrq_6d5nl30ikvao/respond",
+      "path": "/api/tasks/tsk_nwk7j7pg419m/human-requests/hrq_gzmdjez2ujdp/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_6d5nl30ikvao",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_gzmdjez2ujdp",
+          "taskId": "tsk_nwk7j7pg419m",
           "kind": "permission",
           "payload": {
             "tool": "Read"
@@ -4597,12 +4597,12 @@
     {
       "key": "daemon-task-lifecycle#019 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_ws9daw448dcq",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_6d5nl30ikvao",
+          "taskId": "tsk_nwk7j7pg419m",
           "kind": "permission",
           "payload": {
             "tool": "Write"
@@ -4618,12 +4618,12 @@
     {
       "key": "daemon-task-lifecycle#020 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
       "route": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests/hrq_ws9daw448dcq/expire",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/human-requests/hrq_6d5nl30ikvao/expire",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_ws9daw448dcq",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_6d5nl30ikvao",
+          "taskId": "tsk_nwk7j7pg419m",
           "kind": "permission",
           "payload": {
             "tool": "Write"
@@ -4639,10 +4639,10 @@
     {
       "key": "daemon-task-lifecycle#021 POST /api/daemon/tasks/:taskId/complete",
       "route": "POST /api/daemon/tasks/:taskId/complete",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/complete",
+      "path": "/api/daemon/tasks/tsk_nwk7j7pg419m/complete",
       "status": 200,
       "body": {
-        "id": "tsk_vfs9viv2ilj6",
+        "id": "tsk_nwk7j7pg419m",
         "agent_id": "agt_snapshot",
         "runtime_id": "rt_snapshot",
         "issue_id": "iss_snapshot",
@@ -4774,7 +4774,7 @@
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_8h6y20pl0vq6",
+          "id": "tsk_y5zie74khywp",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_snapshot",
@@ -4793,11 +4793,11 @@
           "kind": "comment",
           "issue_session_id": "ises_cdyoy133keds",
           "issue_session_generation": 1,
-          "trigger_comment_id": "cmt_6ox44aeybxxg",
+          "trigger_comment_id": "cmt_xgqkr5l2r04q",
           "trigger_summary": "Snapshot comment body",
           "plugin_snapshot": [],
           "execution_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-          "trigger_thread_id": "cmt_6ox44aeybxxg",
+          "trigger_thread_id": "cmt_xgqkr5l2r04q",
           "trigger_comment_content": "Snapshot comment body",
           "trigger_author_type": "member",
           "trigger_author_name": "Snapshot Member",
@@ -4901,7 +4901,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 4,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":4}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_6ox44aeybxxg\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":4}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}"
           },
           "issue_session_results": [
             {
@@ -4972,7 +4972,7 @@
           ],
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
-          "auth_token": "mat_b038d9ca1bef6a33b05d4c6943764dce2875d196"
+          "auth_token": "mat_ca16787f03d2122eca4a5b30b038d9ca1bef6a33"
         }
       }
     },
@@ -5008,7 +5008,7 @@
     {
       "key": "daemon#005 POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/models/rml_xtp8jpp4a7us/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/models/rml_cyvme8h5925t/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5021,7 +5021,7 @@
       "status": 200,
       "body": {
         "request": {
-          "id": "rds_95b5dwter7av",
+          "id": "rds_xtp8jpp4a7us",
           "runtimeId": "rt_snapshot",
           "status": "running",
           "params": {
@@ -5041,7 +5041,7 @@
     {
       "key": "daemon#007 POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/rds_95b5dwter7av/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/rds_xtp8jpp4a7us/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5059,7 +5059,7 @@
     {
       "key": "daemon#009 POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/rls_u7jlxs9tay5o/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/rls_95b5dwter7av/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5077,7 +5077,7 @@
     {
       "key": "daemon#011 POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/rli_s05boock1828/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/rli_u7jlxs9tay5o/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5095,7 +5095,7 @@
     {
       "key": "daemon#013 POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/update/rup_bbo9f1dxazyr/result",
+      "path": "/api/daemon/runtimes/rt_snapshot/update/rup_s05boock1828/result",
       "status": 200,
       "body": {
         "status": "ok"
@@ -5187,7 +5187,7 @@
       "status": 200,
       "body": [
         {
-          "id": "tsk_abrrt3qds322",
+          "id": "tsk_9i3epsr6j5hf",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5196,15 +5196,15 @@
           "plugin_snapshot": [],
           "executionFingerprint": null,
           "execution_fingerprint": null,
-          "issueId": "iss_r4ic9doizq3q",
-          "issueSessionId": "ises_9i3epsr6j5hf",
-          "issue_session_id": "ises_9i3epsr6j5hf",
+          "issueId": "iss_8rcx9z88woyu",
+          "issueSessionId": "ises_gbmah1mhgwob",
+          "issue_session_id": "ises_gbmah1mhgwob",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_8rcx9z88woyu",
+          "autopilotRunId": "run_u4c9m3gewz2d",
           "triggerCommentId": null,
           "triggerSummary": null,
           "workspaceId": "local",
@@ -5214,8 +5214,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_ngo6cdqkk9pi",
-          "assignment_event_id": "sevt_ngo6cdqkk9pi",
+          "assignmentEventId": "sevt_ccpewwo14x7v",
+          "assignment_event_id": "sevt_ccpewwo14x7v",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -5246,7 +5246,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_k128jfpswkpm",
+          "id": "tsk_qdrfz8sqy58x",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5255,15 +5255,15 @@
           "plugin_snapshot": [],
           "executionFingerprint": null,
           "execution_fingerprint": null,
-          "issueId": "iss_2xbrsagogw63",
-          "issueSessionId": "ises_qdrfz8sqy58x",
-          "issue_session_id": "ises_qdrfz8sqy58x",
+          "issueId": "iss_i244sp2mewms",
+          "issueSessionId": "ises_j3m15clzy3p6",
+          "issue_session_id": "ises_j3m15clzy3p6",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_i244sp2mewms",
+          "autopilotRunId": "run_sv8e5p1ut6x0",
           "triggerCommentId": null,
           "triggerSummary": null,
           "workspaceId": "local",
@@ -5273,8 +5273,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_58aij4tcn1m0",
-          "assignment_event_id": "sevt_58aij4tcn1m0",
+          "assignmentEventId": "sevt_ebtova4a347t",
+          "assignment_event_id": "sevt_ebtova4a347t",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -5305,7 +5305,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_8be626isk151",
+          "id": "tsk_qxjbfrxonmls",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5364,7 +5364,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_8h6y20pl0vq6",
+          "id": "tsk_y5zie74khywp",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -5382,7 +5382,7 @@
           "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
-          "triggerCommentId": "cmt_6ox44aeybxxg",
+          "triggerCommentId": "cmt_xgqkr5l2r04q",
           "triggerSummary": "Snapshot comment body",
           "workspaceId": "local",
           "status": "queued",
@@ -5391,8 +5391,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_ttgbd5jebyjy",
-          "assignment_event_id": "sevt_ttgbd5jebyjy",
+          "assignmentEventId": "sevt_uj5ra15g3kjw",
+          "assignment_event_id": "sevt_uj5ra15g3kjw",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -6035,7 +6035,7 @@
       "status": 200,
       "body": [
         {
-          "id": "tsk_abrrt3qds322",
+          "id": "tsk_9i3epsr6j5hf",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -6044,15 +6044,15 @@
           "plugin_snapshot": [],
           "executionFingerprint": null,
           "execution_fingerprint": null,
-          "issueId": "iss_r4ic9doizq3q",
-          "issueSessionId": "ises_9i3epsr6j5hf",
-          "issue_session_id": "ises_9i3epsr6j5hf",
+          "issueId": "iss_8rcx9z88woyu",
+          "issueSessionId": "ises_gbmah1mhgwob",
+          "issue_session_id": "ises_gbmah1mhgwob",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_8rcx9z88woyu",
+          "autopilotRunId": "run_u4c9m3gewz2d",
           "triggerCommentId": null,
           "triggerSummary": null,
           "workspaceId": "local",
@@ -6062,8 +6062,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_ngo6cdqkk9pi",
-          "assignment_event_id": "sevt_ngo6cdqkk9pi",
+          "assignmentEventId": "sevt_ccpewwo14x7v",
+          "assignment_event_id": "sevt_ccpewwo14x7v",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -6094,7 +6094,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_k128jfpswkpm",
+          "id": "tsk_qdrfz8sqy58x",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -6103,15 +6103,15 @@
           "plugin_snapshot": [],
           "executionFingerprint": null,
           "execution_fingerprint": null,
-          "issueId": "iss_2xbrsagogw63",
-          "issueSessionId": "ises_qdrfz8sqy58x",
-          "issue_session_id": "ises_qdrfz8sqy58x",
+          "issueId": "iss_i244sp2mewms",
+          "issueSessionId": "ises_j3m15clzy3p6",
+          "issue_session_id": "ises_j3m15clzy3p6",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
           "holds_workspace": true,
           "chatSessionId": null,
-          "autopilotRunId": "run_i244sp2mewms",
+          "autopilotRunId": "run_sv8e5p1ut6x0",
           "triggerCommentId": null,
           "triggerSummary": null,
           "workspaceId": "local",
@@ -6121,8 +6121,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_58aij4tcn1m0",
-          "assignment_event_id": "sevt_58aij4tcn1m0",
+          "assignmentEventId": "sevt_ebtova4a347t",
+          "assignment_event_id": "sevt_ebtova4a347t",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -6153,7 +6153,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_8be626isk151",
+          "id": "tsk_qxjbfrxonmls",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -6212,7 +6212,7 @@
           "cancelledAt": null
         },
         {
-          "id": "tsk_8h6y20pl0vq6",
+          "id": "tsk_y5zie74khywp",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -6230,7 +6230,7 @@
           "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
-          "triggerCommentId": "cmt_6ox44aeybxxg",
+          "triggerCommentId": "cmt_xgqkr5l2r04q",
           "triggerSummary": "Snapshot comment body",
           "workspaceId": "local",
           "status": "queued",
@@ -6239,8 +6239,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_ttgbd5jebyjy",
-          "assignment_event_id": "sevt_ttgbd5jebyjy",
+          "assignmentEventId": "sevt_uj5ra15g3kjw",
+          "assignment_event_id": "sevt_uj5ra15g3kjw",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -6373,7 +6373,7 @@
           "id": "att_snapshot",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
-          "commentId": "cmt_6ox44aeybxxg",
+          "commentId": "cmt_xgqkr5l2r04q",
           "chatSessionId": null,
           "chatMessageId": null,
           "uploaderType": "member",
@@ -6389,8 +6389,8 @@
         "workspaceId": "local",
         "issue_id": "iss_snapshot",
         "issueId": "iss_snapshot",
-        "comment_id": "cmt_6ox44aeybxxg",
-        "commentId": "cmt_6ox44aeybxxg",
+        "comment_id": "cmt_xgqkr5l2r04q",
+        "commentId": "cmt_xgqkr5l2r04q",
         "chat_session_id": null,
         "chatSessionId": null,
         "chat_message_id": null,
@@ -6498,15 +6498,15 @@
         },
         "triggers": [
           {
-            "id": "trg_sv4llynq4cfm",
+            "id": "trg_lv85f3t6oap5",
             "autopilot_id": "apl_snapshot",
             "kind": "webhook",
             "enabled": true,
             "cron_expression": null,
             "timezone": null,
             "next_run_at": null,
-            "webhook_token": "awt_aunci5sv8e5p1ut6x0",
-            "webhook_path": "/api/webhooks/autopilots/awt_aunci5sv8e5p1ut6x0",
+            "webhook_token": "awt_sv4llynq4cfmaunci5",
+            "webhook_path": "/api/webhooks/autopilots/awt_sv4llynq4cfmaunci5",
             "webhook_url": null,
             "provider": "github",
             "has_signing_secret": false,
@@ -6530,7 +6530,7 @@
       "status": 200,
       "body": [
         {
-          "id": "whd_u4c9m3gewz2d",
+          "id": "whd_ksk9u210lmg0",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -6547,8 +6547,8 @@
           "contentType": null,
           "rawBody": null,
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_u4c9m3gewz2d\",\"runId\":\"run_8rcx9z88woyu\"}",
-          "autopilotRunId": "run_8rcx9z88woyu",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_ksk9u210lmg0\",\"runId\":\"run_u4c9m3gewz2d\"}",
+          "autopilotRunId": "run_u4c9m3gewz2d",
           "replayedFromDeliveryId": null,
           "error": null,
           "receivedAt": "<timestamp>",
@@ -6560,10 +6560,10 @@
     {
       "key": "get-sweep GET /api/autopilots/:id/deliveries/:deliveryId",
       "route": "GET /api/autopilots/:id/deliveries/:deliveryId",
-      "path": "/api/autopilots/apl_snapshot/deliveries/whd_u4c9m3gewz2d",
+      "path": "/api/autopilots/apl_snapshot/deliveries/whd_ksk9u210lmg0",
       "status": 200,
       "body": {
-        "id": "whd_u4c9m3gewz2d",
+        "id": "whd_ksk9u210lmg0",
         "workspaceId": "local",
         "autopilotId": "apl_snapshot",
         "triggerId": "apl_snapshot",
@@ -6580,8 +6580,8 @@
         "contentType": null,
         "rawBody": "{\"action\":\"opened\"}",
         "responseStatus": 201,
-        "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_u4c9m3gewz2d\",\"runId\":\"run_8rcx9z88woyu\"}",
-        "autopilotRunId": "run_8rcx9z88woyu",
+        "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_ksk9u210lmg0\",\"runId\":\"run_u4c9m3gewz2d\"}",
+        "autopilotRunId": "run_u4c9m3gewz2d",
         "replayedFromDeliveryId": null,
         "error": null,
         "receivedAt": "<timestamp>",
@@ -6597,23 +6597,23 @@
       "body": {
         "runs": [
           {
-            "id": "run_8rcx9z88woyu",
+            "id": "run_u4c9m3gewz2d",
             "autopilot_id": "apl_snapshot",
             "trigger_id": null,
             "event_id": null,
             "source": "webhook",
             "status": "running",
-            "issue_id": "iss_r4ic9doizq3q",
-            "issue_session_id": "ises_9i3epsr6j5hf",
-            "task_id": "tsk_abrrt3qds322",
+            "issue_id": "iss_8rcx9z88woyu",
+            "issue_session_id": "ises_gbmah1mhgwob",
+            "task_id": "tsk_9i3epsr6j5hf",
             "triggered_at": "<timestamp>",
             "completed_at": null,
             "failure_reason": null,
             "trigger_payload": null,
             "result": {
-              "taskId": "tsk_abrrt3qds322",
-              "issueId": "iss_r4ic9doizq3q",
-              "issueSessionId": "ises_9i3epsr6j5hf"
+              "taskId": "tsk_9i3epsr6j5hf",
+              "issueId": "iss_8rcx9z88woyu",
+              "issueSessionId": "ises_gbmah1mhgwob"
             },
             "created_at": "<timestamp>",
             "trigger_summary": {
@@ -6629,23 +6629,23 @@
             }
           },
           {
-            "id": "run_i244sp2mewms",
+            "id": "run_sv8e5p1ut6x0",
             "autopilot_id": "apl_snapshot",
             "trigger_id": null,
             "event_id": null,
             "source": "manual",
             "status": "running",
-            "issue_id": "iss_2xbrsagogw63",
-            "issue_session_id": "ises_qdrfz8sqy58x",
-            "task_id": "tsk_k128jfpswkpm",
+            "issue_id": "iss_i244sp2mewms",
+            "issue_session_id": "ises_j3m15clzy3p6",
+            "task_id": "tsk_qdrfz8sqy58x",
             "triggered_at": "<timestamp>",
             "completed_at": null,
             "failure_reason": null,
             "trigger_payload": null,
             "result": {
-              "taskId": "tsk_k128jfpswkpm",
-              "issueId": "iss_2xbrsagogw63",
-              "issueSessionId": "ises_qdrfz8sqy58x"
+              "taskId": "tsk_qdrfz8sqy58x",
+              "issueId": "iss_i244sp2mewms",
+              "issueSessionId": "ises_j3m15clzy3p6"
             },
             "created_at": "<timestamp>",
             "trigger_summary": null
@@ -6657,26 +6657,26 @@
     {
       "key": "get-sweep GET /api/autopilots/:id/runs/:runId",
       "route": "GET /api/autopilots/:id/runs/:runId",
-      "path": "/api/autopilots/apl_snapshot/runs/run_i244sp2mewms",
+      "path": "/api/autopilots/apl_snapshot/runs/run_sv8e5p1ut6x0",
       "status": 200,
       "body": {
-        "id": "run_i244sp2mewms",
+        "id": "run_sv8e5p1ut6x0",
         "autopilot_id": "apl_snapshot",
         "trigger_id": null,
         "event_id": null,
         "source": "manual",
         "status": "running",
-        "issue_id": "iss_2xbrsagogw63",
-        "issue_session_id": "ises_qdrfz8sqy58x",
-        "task_id": "tsk_k128jfpswkpm",
+        "issue_id": "iss_i244sp2mewms",
+        "issue_session_id": "ises_j3m15clzy3p6",
+        "task_id": "tsk_qdrfz8sqy58x",
         "triggered_at": "<timestamp>",
         "completed_at": null,
         "failure_reason": null,
         "trigger_payload": null,
         "result": {
-          "taskId": "tsk_k128jfpswkpm",
-          "issueId": "iss_2xbrsagogw63",
-          "issueSessionId": "ises_qdrfz8sqy58x"
+          "taskId": "tsk_qdrfz8sqy58x",
+          "issueId": "iss_i244sp2mewms",
+          "issueSessionId": "ises_j3m15clzy3p6"
         },
         "created_at": "<timestamp>"
       }
@@ -6689,7 +6689,7 @@
       "body": {
         "tasks": [
           {
-            "task_id": "tsk_8be626isk151",
+            "task_id": "tsk_qxjbfrxonmls",
             "status": "queued",
             "chat_session_id": "cht_snapshot"
           }
@@ -6739,11 +6739,11 @@
       "status": 200,
       "body": [
         {
-          "id": "msg_qxjbfrxonmls",
+          "id": "msg_30x2827p9355",
           "chat_session_id": "cht_snapshot",
           "role": "user",
           "content": "Snapshot chat message",
-          "task_id": "tsk_8be626isk151",
+          "task_id": "tsk_qxjbfrxonmls",
           "created_at": "<timestamp>",
           "failure_reason": null,
           "elapsed_ms": null
@@ -6758,11 +6758,11 @@
       "body": {
         "messages": [
           {
-            "id": "msg_qxjbfrxonmls",
+            "id": "msg_30x2827p9355",
             "chat_session_id": "cht_snapshot",
             "role": "user",
             "content": "Snapshot chat message",
-            "task_id": "tsk_8be626isk151",
+            "task_id": "tsk_qxjbfrxonmls",
             "created_at": "<timestamp>",
             "failure_reason": null,
             "elapsed_ms": null
@@ -6779,7 +6779,7 @@
       "path": "/api/chat/sessions/cht_snapshot/pending-task",
       "status": 200,
       "body": {
-        "task_id": "tsk_8be626isk151",
+        "task_id": "tsk_qxjbfrxonmls",
         "status": "queued",
         "created_at": "<timestamp>"
       }
@@ -11531,7 +11531,7 @@
     {
       "key": "get-sweep GET /api/daemon/autopilot-runs/:runId/gc-check",
       "route": "GET /api/daemon/autopilot-runs/:runId/gc-check",
-      "path": "/api/daemon/autopilot-runs/run_i244sp2mewms/gc-check",
+      "path": "/api/daemon/autopilot-runs/run_sv8e5p1ut6x0/gc-check",
       "status": 200,
       "body": {
         "status": "running",
@@ -11594,7 +11594,7 @@
       "status": 200,
       "body": [
         {
-          "id": "tsk_8h6y20pl0vq6",
+          "id": "tsk_y5zie74khywp",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "iss_snapshot",
@@ -11613,15 +11613,15 @@
           "kind": "comment",
           "issue_session_id": "ises_cdyoy133keds",
           "issue_session_generation": 1,
-          "trigger_comment_id": "cmt_6ox44aeybxxg",
+          "trigger_comment_id": "cmt_xgqkr5l2r04q",
           "trigger_summary": "Snapshot comment body",
-          "trigger_thread_id": "cmt_6ox44aeybxxg",
+          "trigger_thread_id": "cmt_xgqkr5l2r04q",
           "trigger_comment_content": "Snapshot comment body",
           "trigger_author_type": "member",
           "trigger_author_name": "Snapshot Member"
         },
         {
-          "id": "tsk_8be626isk151",
+          "id": "tsk_qxjbfrxonmls",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
           "issue_id": "",
@@ -11641,10 +11641,10 @@
           "chat_session_id": "cht_snapshot"
         },
         {
-          "id": "tsk_k128jfpswkpm",
+          "id": "tsk_qdrfz8sqy58x",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_2xbrsagogw63",
+          "issue_id": "iss_i244sp2mewms",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
@@ -11658,15 +11658,15 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_qdrfz8sqy58x",
+          "issue_session_id": "ises_j3m15clzy3p6",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_i244sp2mewms"
+          "autopilot_run_id": "run_sv8e5p1ut6x0"
         },
         {
-          "id": "tsk_abrrt3qds322",
+          "id": "tsk_9i3epsr6j5hf",
           "agent_id": "agt_snapshot",
           "runtime_id": "rt_snapshot",
-          "issue_id": "iss_r4ic9doizq3q",
+          "issue_id": "iss_8rcx9z88woyu",
           "holds_workspace": true,
           "workspace_id": "local",
           "status": "queued",
@@ -11680,9 +11680,9 @@
           "max_attempts": 3,
           "created_at": "<timestamp>",
           "kind": "autopilot",
-          "issue_session_id": "ises_9i3epsr6j5hf",
+          "issue_session_id": "ises_gbmah1mhgwob",
           "issue_session_generation": 1,
-          "autopilot_run_id": "run_8rcx9z88woyu"
+          "autopilot_run_id": "run_u4c9m3gewz2d"
         }
       ]
     },
@@ -11872,7 +11872,7 @@
       "status": 200,
       "body": [
         {
-          "id": "inb_m21cp1q6gys4",
+          "id": "inb_zofbpdsnw9pi",
           "workspaceId": "local",
           "workspace_id": "local",
           "issueId": "iss_snapshot_blocked",
@@ -11946,10 +11946,10 @@
     {
       "key": "get-sweep GET /api/invitations/:id",
       "route": "GET /api/invitations/:id",
-      "path": "/api/invitations/inv_yy6thkeq1n3e",
+      "path": "/api/invitations/inv_bbo9f1dxazyr",
       "status": 200,
       "body": {
-        "id": "inv_yy6thkeq1n3e",
+        "id": "inv_bbo9f1dxazyr",
         "workspaceId": "local",
         "workspace_id": "local",
         "inviterId": "local",
@@ -12003,7 +12003,7 @@
             "labels": []
           },
           {
-            "id": "iss_r4ic9doizq3q",
+            "id": "iss_8rcx9z88woyu",
             "workspace_id": "local",
             "number": 5,
             "identifier": "MUL-5",
@@ -12030,7 +12030,7 @@
             "labels": []
           },
           {
-            "id": "iss_2xbrsagogw63",
+            "id": "iss_i244sp2mewms",
             "workspace_id": "local",
             "number": 4,
             "identifier": "MUL-4",
@@ -12187,7 +12187,7 @@
       "body": {
         "tasks": [
           {
-            "id": "tsk_8h6y20pl0vq6",
+            "id": "tsk_y5zie74khywp",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -12205,7 +12205,7 @@
             "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
-            "triggerCommentId": "cmt_6ox44aeybxxg",
+            "triggerCommentId": "cmt_xgqkr5l2r04q",
             "triggerSummary": "Snapshot comment body",
             "workspaceId": "local",
             "status": "queued",
@@ -12214,8 +12214,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_ttgbd5jebyjy",
-            "assignment_event_id": "sevt_ttgbd5jebyjy",
+            "assignmentEventId": "sevt_uj5ra15g3kjw",
+            "assignment_event_id": "sevt_uj5ra15g3kjw",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -12249,7 +12249,7 @@
             "issue_id": "iss_snapshot",
             "chat_session_id": null,
             "autopilot_run_id": null,
-            "trigger_comment_id": "cmt_6ox44aeybxxg",
+            "trigger_comment_id": "cmt_xgqkr5l2r04q",
             "trigger_summary": "Snapshot comment body",
             "workspace_id": "local",
             "max_attempts": 3,
@@ -12334,7 +12334,7 @@
       "status": 200,
       "body": [
         {
-          "id": "cmt_6ox44aeybxxg",
+          "id": "cmt_xgqkr5l2r04q",
           "issue_id": "iss_snapshot",
           "issue_session_id": "ises_cdyoy133keds",
           "author_type": "member",
@@ -12350,8 +12350,8 @@
           "resolved_by_id": null,
           "reactions": [
             {
-              "id": "rxn_30x2827p9355",
-              "comment_id": "cmt_6ox44aeybxxg",
+              "id": "rxn_kn3jgt7c45iv",
+              "comment_id": "cmt_xgqkr5l2r04q",
               "actor_type": "member",
               "actor_id": "mem_snapshot_one",
               "emoji": "eyes",
@@ -12363,7 +12363,7 @@
               "id": "att_snapshot",
               "workspace_id": "local",
               "issue_id": "iss_snapshot",
-              "comment_id": "cmt_6ox44aeybxxg",
+              "comment_id": "cmt_xgqkr5l2r04q",
               "chat_session_id": null,
               "chat_message_id": null,
               "uploader_type": "member",
@@ -12555,7 +12555,7 @@
               "updated_at": "<timestamp>"
             },
             {
-              "id": "spart_0ts9yveh51cp",
+              "id": "spart_6ox44aeybxxg",
               "session_id": "ises_cdyoy133keds",
               "participant_type": "member",
               "participant_id": "local",
@@ -12765,7 +12765,7 @@
       "status": 200,
       "body": [
         {
-          "id": "tsk_8h6y20pl0vq6",
+          "id": "tsk_y5zie74khywp",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -12783,7 +12783,7 @@
           "holds_workspace": true,
           "chatSessionId": null,
           "autopilotRunId": null,
-          "triggerCommentId": "cmt_6ox44aeybxxg",
+          "triggerCommentId": "cmt_xgqkr5l2r04q",
           "triggerSummary": "Snapshot comment body",
           "workspaceId": "local",
           "status": "queued",
@@ -12792,8 +12792,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_ttgbd5jebyjy",
-          "assignment_event_id": "sevt_ttgbd5jebyjy",
+          "assignmentEventId": "sevt_uj5ra15g3kjw",
+          "assignment_event_id": "sevt_uj5ra15g3kjw",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -12827,7 +12827,7 @@
           "issue_id": "iss_snapshot",
           "chat_session_id": null,
           "autopilot_run_id": null,
-          "trigger_comment_id": "cmt_6ox44aeybxxg",
+          "trigger_comment_id": "cmt_xgqkr5l2r04q",
           "trigger_summary": "Snapshot comment body",
           "workspace_id": "local",
           "max_attempts": 3,
@@ -13018,27 +13018,8 @@
           }
         },
         {
-          "type": "activity",
-          "id": "act_xgqkr5l2r04q",
-          "issue_session_id": null,
-          "actor_type": "system",
-          "actor_id": null,
-          "created_at": "<timestamp>",
-          "action": "delegation_return_skipped",
-          "details": {
-            "reason": "no_lineage",
-            "delegationId": null,
-            "sourceTaskId": "tsk_snapshot",
-            "delegatorAgentId": null,
-            "delegateAgentId": "agt_snapshot",
-            "requiredEventSeq": 2,
-            "triggerCommentId": null,
-            "terminalStatus": "completed"
-          }
-        },
-        {
           "type": "comment",
-          "id": "cmt_6ox44aeybxxg",
+          "id": "cmt_xgqkr5l2r04q",
           "issue_session_id": "ises_cdyoy133keds",
           "actor_type": "member",
           "actor_id": "mem_snapshot_one",
@@ -13050,8 +13031,8 @@
           "comment_type": "comment",
           "reactions": [
             {
-              "id": "rxn_30x2827p9355",
-              "comment_id": "cmt_6ox44aeybxxg",
+              "id": "rxn_kn3jgt7c45iv",
+              "comment_id": "cmt_xgqkr5l2r04q",
               "actor_type": "member",
               "actor_id": "mem_snapshot_one",
               "emoji": "eyes",
@@ -13063,7 +13044,7 @@
               "id": "att_snapshot",
               "workspace_id": "local",
               "issue_id": "iss_snapshot",
-              "comment_id": "cmt_6ox44aeybxxg",
+              "comment_id": "cmt_xgqkr5l2r04q",
               "chat_session_id": null,
               "chat_message_id": null,
               "uploader_type": "member",
@@ -13082,30 +13063,30 @@
         },
         {
           "type": "activity",
-          "id": "act_y5zie74khywp",
+          "id": "act_mz6wv4q14dqz",
           "issue_session_id": null,
           "actor_type": "member",
           "actor_id": "mem_snapshot_one",
           "created_at": "<timestamp>",
           "action": "comment_created",
           "details": {
-            "commentId": "cmt_6ox44aeybxxg"
+            "commentId": "cmt_xgqkr5l2r04q"
           }
         },
         {
           "type": "activity",
-          "id": "act_kn3jgt7c45iv",
+          "id": "act_lnktpkuv95wd",
           "issue_session_id": null,
           "actor_type": "system",
           "actor_id": null,
           "created_at": "<timestamp>",
           "action": "comment_assignee_triggered",
           "details": {
-            "commentId": "cmt_6ox44aeybxxg",
+            "commentId": "cmt_xgqkr5l2r04q",
             "assigneeType": "agent",
             "assigneeId": "agt_snapshot",
             "agentId": "agt_snapshot",
-            "taskId": "tsk_8h6y20pl0vq6"
+            "taskId": "tsk_y5zie74khywp"
           }
         }
       ]
@@ -13266,7 +13247,7 @@
             "assigneeId": null,
             "issues": [
               {
-                "id": "iss_r4ic9doizq3q",
+                "id": "iss_8rcx9z88woyu",
                 "key": "MUL-5",
                 "number": 5,
                 "title": "Snapshot {{title}}",
@@ -13294,7 +13275,7 @@
                 "updatedAt": "<timestamp>"
               },
               {
-                "id": "iss_2xbrsagogw63",
+                "id": "iss_i244sp2mewms",
                 "key": "MUL-4",
                 "number": 4,
                 "title": "snapshot run",
@@ -13390,7 +13371,7 @@
             "match_source": "title"
           },
           {
-            "id": "iss_r4ic9doizq3q",
+            "id": "iss_8rcx9z88woyu",
             "workspace_id": "local",
             "number": 5,
             "identifier": "MUL-5",
@@ -13417,7 +13398,7 @@
             "match_source": "title"
           },
           {
-            "id": "iss_2xbrsagogw63",
+            "id": "iss_i244sp2mewms",
             "workspace_id": "local",
             "number": 4,
             "identifier": "MUL-4",
@@ -13673,7 +13654,7 @@
       "body": {
         "tasks": [
           {
-            "id": "tsk_abrrt3qds322",
+            "id": "tsk_9i3epsr6j5hf",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -13682,15 +13663,15 @@
             "plugin_snapshot": [],
             "executionFingerprint": null,
             "execution_fingerprint": null,
-            "issueId": "iss_r4ic9doizq3q",
-            "issueSessionId": "ises_9i3epsr6j5hf",
-            "issue_session_id": "ises_9i3epsr6j5hf",
+            "issueId": "iss_8rcx9z88woyu",
+            "issueSessionId": "ises_gbmah1mhgwob",
+            "issue_session_id": "ises_gbmah1mhgwob",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_8rcx9z88woyu",
+            "autopilotRunId": "run_u4c9m3gewz2d",
             "triggerCommentId": null,
             "triggerSummary": null,
             "workspaceId": "local",
@@ -13700,8 +13681,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_ngo6cdqkk9pi",
-            "assignment_event_id": "sevt_ngo6cdqkk9pi",
+            "assignmentEventId": "sevt_ccpewwo14x7v",
+            "assignment_event_id": "sevt_ccpewwo14x7v",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -13732,7 +13713,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_k128jfpswkpm",
+            "id": "tsk_qdrfz8sqy58x",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -13741,15 +13722,15 @@
             "plugin_snapshot": [],
             "executionFingerprint": null,
             "execution_fingerprint": null,
-            "issueId": "iss_2xbrsagogw63",
-            "issueSessionId": "ises_qdrfz8sqy58x",
-            "issue_session_id": "ises_qdrfz8sqy58x",
+            "issueId": "iss_i244sp2mewms",
+            "issueSessionId": "ises_j3m15clzy3p6",
+            "issue_session_id": "ises_j3m15clzy3p6",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_i244sp2mewms",
+            "autopilotRunId": "run_sv8e5p1ut6x0",
             "triggerCommentId": null,
             "triggerSummary": null,
             "workspaceId": "local",
@@ -13759,8 +13740,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_58aij4tcn1m0",
-            "assignment_event_id": "sevt_58aij4tcn1m0",
+            "assignmentEventId": "sevt_ebtova4a347t",
+            "assignment_event_id": "sevt_ebtova4a347t",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -13791,7 +13772,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_8be626isk151",
+            "id": "tsk_qxjbfrxonmls",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -13850,7 +13831,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_8h6y20pl0vq6",
+            "id": "tsk_y5zie74khywp",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -13868,7 +13849,7 @@
             "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
-            "triggerCommentId": "cmt_6ox44aeybxxg",
+            "triggerCommentId": "cmt_xgqkr5l2r04q",
             "triggerSummary": "Snapshot comment body",
             "workspaceId": "local",
             "status": "queued",
@@ -13877,8 +13858,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_ttgbd5jebyjy",
-            "assignment_event_id": "sevt_ttgbd5jebyjy",
+            "assignmentEventId": "sevt_uj5ra15g3kjw",
+            "assignment_event_id": "sevt_uj5ra15g3kjw",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -14595,7 +14576,7 @@
       "body": {
         "tasks": [
           {
-            "id": "tsk_abrrt3qds322",
+            "id": "tsk_9i3epsr6j5hf",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14604,15 +14585,15 @@
             "plugin_snapshot": [],
             "executionFingerprint": null,
             "execution_fingerprint": null,
-            "issueId": "iss_r4ic9doizq3q",
-            "issueSessionId": "ises_9i3epsr6j5hf",
-            "issue_session_id": "ises_9i3epsr6j5hf",
+            "issueId": "iss_8rcx9z88woyu",
+            "issueSessionId": "ises_gbmah1mhgwob",
+            "issue_session_id": "ises_gbmah1mhgwob",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_8rcx9z88woyu",
+            "autopilotRunId": "run_u4c9m3gewz2d",
             "triggerCommentId": null,
             "triggerSummary": null,
             "workspaceId": "local",
@@ -14622,8 +14603,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_ngo6cdqkk9pi",
-            "assignment_event_id": "sevt_ngo6cdqkk9pi",
+            "assignmentEventId": "sevt_ccpewwo14x7v",
+            "assignment_event_id": "sevt_ccpewwo14x7v",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -14654,7 +14635,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_k128jfpswkpm",
+            "id": "tsk_qdrfz8sqy58x",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14663,15 +14644,15 @@
             "plugin_snapshot": [],
             "executionFingerprint": null,
             "execution_fingerprint": null,
-            "issueId": "iss_2xbrsagogw63",
-            "issueSessionId": "ises_qdrfz8sqy58x",
-            "issue_session_id": "ises_qdrfz8sqy58x",
+            "issueId": "iss_i244sp2mewms",
+            "issueSessionId": "ises_j3m15clzy3p6",
+            "issue_session_id": "ises_j3m15clzy3p6",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_i244sp2mewms",
+            "autopilotRunId": "run_sv8e5p1ut6x0",
             "triggerCommentId": null,
             "triggerSummary": null,
             "workspaceId": "local",
@@ -14681,8 +14662,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_58aij4tcn1m0",
-            "assignment_event_id": "sevt_58aij4tcn1m0",
+            "assignmentEventId": "sevt_ebtova4a347t",
+            "assignment_event_id": "sevt_ebtova4a347t",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -14713,7 +14694,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_8be626isk151",
+            "id": "tsk_qxjbfrxonmls",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14772,7 +14753,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_8h6y20pl0vq6",
+            "id": "tsk_y5zie74khywp",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -14790,7 +14771,7 @@
             "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
-            "triggerCommentId": "cmt_6ox44aeybxxg",
+            "triggerCommentId": "cmt_xgqkr5l2r04q",
             "triggerSummary": "Snapshot comment body",
             "workspaceId": "local",
             "status": "queued",
@@ -14799,8 +14780,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_ttgbd5jebyjy",
-            "assignment_event_id": "sevt_ttgbd5jebyjy",
+            "assignmentEventId": "sevt_uj5ra15g3kjw",
+            "assignment_event_id": "sevt_uj5ra15g3kjw",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -14935,7 +14916,7 @@
           "id": "att_snapshot",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
-          "commentId": "cmt_6ox44aeybxxg",
+          "commentId": "cmt_xgqkr5l2r04q",
           "chatSessionId": null,
           "chatMessageId": null,
           "uploaderType": "member",
@@ -15055,15 +15036,15 @@
         },
         "triggers": [
           {
-            "id": "trg_sv4llynq4cfm",
+            "id": "trg_lv85f3t6oap5",
             "autopilotId": "apl_snapshot",
             "kind": "webhook",
             "enabled": true,
             "cronExpression": null,
             "timezone": null,
             "nextRunAt": null,
-            "webhookToken": "awt_aunci5sv8e5p1ut6x0",
-            "webhookPath": "/api/webhooks/autopilots/awt_aunci5sv8e5p1ut6x0",
+            "webhookToken": "awt_sv4llynq4cfmaunci5",
+            "webhookPath": "/api/webhooks/autopilots/awt_sv4llynq4cfmaunci5",
             "webhookUrl": null,
             "provider": "github",
             "label": "snapshot trigger",
@@ -15080,8 +15061,8 @@
             "autopilot_id": "apl_snapshot",
             "cron_expression": null,
             "next_run_at": null,
-            "webhook_token": "awt_aunci5sv8e5p1ut6x0",
-            "webhook_path": "/api/webhooks/autopilots/awt_aunci5sv8e5p1ut6x0",
+            "webhook_token": "awt_sv4llynq4cfmaunci5",
+            "webhook_path": "/api/webhooks/autopilots/awt_sv4llynq4cfmaunci5",
             "webhook_url": null,
             "event_filters": null,
             "event_config": null,
@@ -15096,15 +15077,15 @@
         ],
         "runs": [
           {
-            "id": "run_8rcx9z88woyu",
+            "id": "run_u4c9m3gewz2d",
             "autopilotId": "apl_snapshot",
             "source": "webhook",
             "status": "running",
-            "issueId": "iss_r4ic9doizq3q",
-            "taskId": "tsk_abrrt3qds322",
+            "issueId": "iss_8rcx9z88woyu",
+            "taskId": "tsk_9i3epsr6j5hf",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_9i3epsr6j5hf",
+            "issueSessionId": "ises_gbmah1mhgwob",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -15120,22 +15101,22 @@
               }
             },
             "result": {
-              "taskId": "tsk_abrrt3qds322",
-              "issueId": "iss_r4ic9doizq3q",
-              "issueSessionId": "ises_9i3epsr6j5hf"
+              "taskId": "tsk_9i3epsr6j5hf",
+              "issueId": "iss_8rcx9z88woyu",
+              "issueSessionId": "ises_gbmah1mhgwob"
             },
             "createdAt": "<timestamp>"
           },
           {
-            "id": "run_i244sp2mewms",
+            "id": "run_sv8e5p1ut6x0",
             "autopilotId": "apl_snapshot",
             "source": "manual",
             "status": "running",
-            "issueId": "iss_2xbrsagogw63",
-            "taskId": "tsk_k128jfpswkpm",
+            "issueId": "iss_i244sp2mewms",
+            "taskId": "tsk_qdrfz8sqy58x",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_qdrfz8sqy58x",
+            "issueSessionId": "ises_j3m15clzy3p6",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -15143,16 +15124,16 @@
             "failureReason": null,
             "payload": null,
             "result": {
-              "taskId": "tsk_k128jfpswkpm",
-              "issueId": "iss_2xbrsagogw63",
-              "issueSessionId": "ises_qdrfz8sqy58x"
+              "taskId": "tsk_qdrfz8sqy58x",
+              "issueId": "iss_i244sp2mewms",
+              "issueSessionId": "ises_j3m15clzy3p6"
             },
             "createdAt": "<timestamp>"
           }
         ],
         "deliveries": [
           {
-            "id": "whd_u4c9m3gewz2d",
+            "id": "whd_ksk9u210lmg0",
             "workspaceId": "local",
             "autopilotId": "apl_snapshot",
             "triggerId": "apl_snapshot",
@@ -15169,8 +15150,8 @@
             "contentType": null,
             "rawBody": null,
             "responseStatus": 201,
-            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_u4c9m3gewz2d\",\"runId\":\"run_8rcx9z88woyu\"}",
-            "autopilotRunId": "run_8rcx9z88woyu",
+            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_ksk9u210lmg0\",\"runId\":\"run_u4c9m3gewz2d\"}",
+            "autopilotRunId": "run_u4c9m3gewz2d",
             "replayedFromDeliveryId": null,
             "error": null,
             "receivedAt": "<timestamp>",
@@ -15188,7 +15169,7 @@
       "body": {
         "deliveries": [
           {
-            "id": "whd_u4c9m3gewz2d",
+            "id": "whd_ksk9u210lmg0",
             "workspaceId": "local",
             "autopilotId": "apl_snapshot",
             "triggerId": "apl_snapshot",
@@ -15205,8 +15186,8 @@
             "contentType": null,
             "rawBody": null,
             "responseStatus": 201,
-            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_u4c9m3gewz2d\",\"runId\":\"run_8rcx9z88woyu\"}",
-            "autopilotRunId": "run_8rcx9z88woyu",
+            "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_ksk9u210lmg0\",\"runId\":\"run_u4c9m3gewz2d\"}",
+            "autopilotRunId": "run_u4c9m3gewz2d",
             "replayedFromDeliveryId": null,
             "error": null,
             "receivedAt": "<timestamp>",
@@ -15220,11 +15201,11 @@
     {
       "key": "get-sweep GET /api/multiremi/autopilots/:id/deliveries/:deliveryId",
       "route": "GET /api/multiremi/autopilots/:id/deliveries/:deliveryId",
-      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_u4c9m3gewz2d",
+      "path": "/api/multiremi/autopilots/apl_snapshot/deliveries/whd_ksk9u210lmg0",
       "status": 200,
       "body": {
         "delivery": {
-          "id": "whd_u4c9m3gewz2d",
+          "id": "whd_ksk9u210lmg0",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -15241,8 +15222,8 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_u4c9m3gewz2d\",\"runId\":\"run_8rcx9z88woyu\"}",
-          "autopilotRunId": "run_8rcx9z88woyu",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_ksk9u210lmg0\",\"runId\":\"run_u4c9m3gewz2d\"}",
+          "autopilotRunId": "run_u4c9m3gewz2d",
           "replayedFromDeliveryId": null,
           "error": null,
           "receivedAt": "<timestamp>",
@@ -15259,15 +15240,15 @@
       "body": {
         "runs": [
           {
-            "id": "run_8rcx9z88woyu",
+            "id": "run_u4c9m3gewz2d",
             "autopilotId": "apl_snapshot",
             "source": "webhook",
             "status": "running",
-            "issueId": "iss_r4ic9doizq3q",
-            "taskId": "tsk_abrrt3qds322",
+            "issueId": "iss_8rcx9z88woyu",
+            "taskId": "tsk_9i3epsr6j5hf",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_9i3epsr6j5hf",
+            "issueSessionId": "ises_gbmah1mhgwob",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -15283,22 +15264,22 @@
               }
             },
             "result": {
-              "taskId": "tsk_abrrt3qds322",
-              "issueId": "iss_r4ic9doizq3q",
-              "issueSessionId": "ises_9i3epsr6j5hf"
+              "taskId": "tsk_9i3epsr6j5hf",
+              "issueId": "iss_8rcx9z88woyu",
+              "issueSessionId": "ises_gbmah1mhgwob"
             },
             "createdAt": "<timestamp>"
           },
           {
-            "id": "run_i244sp2mewms",
+            "id": "run_sv8e5p1ut6x0",
             "autopilotId": "apl_snapshot",
             "source": "manual",
             "status": "running",
-            "issueId": "iss_2xbrsagogw63",
-            "taskId": "tsk_k128jfpswkpm",
+            "issueId": "iss_i244sp2mewms",
+            "taskId": "tsk_qdrfz8sqy58x",
             "triggerId": null,
             "eventId": null,
-            "issueSessionId": "ises_qdrfz8sqy58x",
+            "issueSessionId": "ises_j3m15clzy3p6",
             "repositoryId": null,
             "dedupeKey": null,
             "triggeredAt": "<timestamp>",
@@ -15306,9 +15287,9 @@
             "failureReason": null,
             "payload": null,
             "result": {
-              "taskId": "tsk_k128jfpswkpm",
-              "issueId": "iss_2xbrsagogw63",
-              "issueSessionId": "ises_qdrfz8sqy58x"
+              "taskId": "tsk_qdrfz8sqy58x",
+              "issueId": "iss_i244sp2mewms",
+              "issueSessionId": "ises_j3m15clzy3p6"
             },
             "createdAt": "<timestamp>"
           }
@@ -15334,7 +15315,7 @@
             "sessionRuntimeId": null,
             "sessionProvider": null,
             "sessionExecutionFingerprint": null,
-            "latestTaskId": "tsk_8be626isk151",
+            "latestTaskId": "tsk_qxjbfrxonmls",
             "unreadSince": null,
             "hasUnread": false,
             "createdAt": "<timestamp>",
@@ -15362,7 +15343,7 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_8be626isk151",
+          "latestTaskId": "tsk_qxjbfrxonmls",
           "unreadSince": null,
           "hasUnread": false,
           "createdAt": "<timestamp>",
@@ -15370,9 +15351,9 @@
         },
         "messages": [
           {
-            "id": "msg_qxjbfrxonmls",
+            "id": "msg_30x2827p9355",
             "chatSessionId": "cht_snapshot",
-            "taskId": "tsk_8be626isk151",
+            "taskId": "tsk_qxjbfrxonmls",
             "role": "user",
             "body": "Snapshot chat message",
             "failureReason": null,
@@ -15390,9 +15371,9 @@
       "body": {
         "messages": [
           {
-            "id": "msg_qxjbfrxonmls",
+            "id": "msg_30x2827p9355",
             "chatSessionId": "cht_snapshot",
-            "taskId": "tsk_8be626isk151",
+            "taskId": "tsk_qxjbfrxonmls",
             "role": "user",
             "body": "Snapshot chat message",
             "failureReason": null,
@@ -15405,7 +15386,7 @@
     {
       "key": "get-sweep GET /api/multiremi/comments/:id/attachments",
       "route": "GET /api/multiremi/comments/:id/attachments",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg/attachments",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q/attachments",
       "status": 200,
       "body": {
         "attachments": [
@@ -15413,7 +15394,7 @@
             "id": "att_snapshot",
             "workspaceId": "local",
             "issueId": "iss_snapshot",
-            "commentId": "cmt_6ox44aeybxxg",
+            "commentId": "cmt_xgqkr5l2r04q",
             "chatSessionId": null,
             "chatMessageId": null,
             "uploaderType": "member",
@@ -15430,13 +15411,13 @@
     {
       "key": "get-sweep GET /api/multiremi/comments/:id/reactions",
       "route": "GET /api/multiremi/comments/:id/reactions",
-      "path": "/api/multiremi/comments/cmt_6ox44aeybxxg/reactions",
+      "path": "/api/multiremi/comments/cmt_xgqkr5l2r04q/reactions",
       "status": 200,
       "body": {
         "reactions": [
           {
-            "id": "rxn_30x2827p9355",
-            "commentId": "cmt_6ox44aeybxxg",
+            "id": "rxn_kn3jgt7c45iv",
+            "commentId": "cmt_xgqkr5l2r04q",
             "workspaceId": "local",
             "actorType": "member",
             "actorId": "mem_snapshot_one",
@@ -15475,7 +15456,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "1e47328fb8ccf862bd8fa9c3d3d65b8c67691d8206d16c86c1234af47a25892b",
+          "snapshot": "7348ee703e7ef10efd441735ab0e774491c883102dfec19b0daee36b2b4380e1",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -15500,32 +15481,32 @@
           "active_tasks": [],
           "queued_tasks": [
             {
-              "id": "tsk_8be626isk151",
+              "id": "tsk_9i3epsr6j5hf",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_8rcx9z88woyu"
+            },
+            {
+              "id": "tsk_qdrfz8sqy58x",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_i244sp2mewms"
+            },
+            {
+              "id": "tsk_qxjbfrxonmls",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
               "issue_id": null
             },
             {
-              "id": "tsk_8h6y20pl0vq6",
+              "id": "tsk_y5zie74khywp",
               "status": "queued",
               "agent_id": "agt_snapshot",
               "runtime_id": "rt_snapshot",
               "issue_id": "iss_snapshot"
-            },
-            {
-              "id": "tsk_abrrt3qds322",
-              "status": "queued",
-              "agent_id": "agt_snapshot",
-              "runtime_id": "rt_snapshot",
-              "issue_id": "iss_r4ic9doizq3q"
-            },
-            {
-              "id": "tsk_k128jfpswkpm",
-              "status": "queued",
-              "agent_id": "agt_snapshot",
-              "runtime_id": "rt_snapshot",
-              "issue_id": "iss_2xbrsagogw63"
             }
           ],
           "local_directory_resources": [],
@@ -15579,7 +15560,7 @@
       "body": {
         "items": [
           {
-            "id": "inb_m21cp1q6gys4",
+            "id": "inb_zofbpdsnw9pi",
             "workspaceId": "local",
             "workspace_id": "local",
             "issueId": "iss_snapshot_blocked",
@@ -15715,7 +15696,7 @@
             "latestTaskId": null
           },
           {
-            "id": "iss_r4ic9doizq3q",
+            "id": "iss_8rcx9z88woyu",
             "key": "MUL-5",
             "number": 5,
             "title": "Snapshot {{title}}",
@@ -15743,10 +15724,10 @@
             "updatedAt": "<timestamp>",
             "taskCount": 1,
             "latestTaskStatus": "queued",
-            "latestTaskId": "tsk_abrrt3qds322"
+            "latestTaskId": "tsk_9i3epsr6j5hf"
           },
           {
-            "id": "iss_2xbrsagogw63",
+            "id": "iss_i244sp2mewms",
             "key": "MUL-4",
             "number": 4,
             "title": "snapshot run",
@@ -15774,7 +15755,7 @@
             "updatedAt": "<timestamp>",
             "taskCount": 1,
             "latestTaskStatus": "queued",
-            "latestTaskId": "tsk_k128jfpswkpm"
+            "latestTaskId": "tsk_qdrfz8sqy58x"
           },
           {
             "id": "iss_snapshot",
@@ -15816,7 +15797,7 @@
             "updatedAt": "<timestamp>",
             "taskCount": 2,
             "latestTaskStatus": "queued",
-            "latestTaskId": "tsk_8h6y20pl0vq6"
+            "latestTaskId": "tsk_y5zie74khywp"
           },
           {
             "id": "iss_snapshot_child",
@@ -15899,7 +15880,7 @@
           "updatedAt": "<timestamp>",
           "tasks": [
             {
-              "id": "tsk_8h6y20pl0vq6",
+              "id": "tsk_y5zie74khywp",
               "taskKind": "direct",
               "agentId": "agt_snapshot",
               "runtimeId": "rt_snapshot",
@@ -15917,7 +15898,7 @@
               "holds_workspace": true,
               "chatSessionId": null,
               "autopilotRunId": null,
-              "triggerCommentId": "cmt_6ox44aeybxxg",
+              "triggerCommentId": "cmt_xgqkr5l2r04q",
               "triggerSummary": "Snapshot comment body",
               "workspaceId": "local",
               "status": "queued",
@@ -15926,8 +15907,8 @@
               "attempt": 1,
               "maxAttempts": 3,
               "parentTaskId": null,
-              "assignmentEventId": "sevt_ttgbd5jebyjy",
-              "assignment_event_id": "sevt_ttgbd5jebyjy",
+              "assignmentEventId": "sevt_uj5ra15g3kjw",
+              "assignment_event_id": "sevt_uj5ra15g3kjw",
               "assignmentSourceEventId": null,
               "assignment_source_event_id": null,
               "projectionFromSeq": null,
@@ -16266,7 +16247,7 @@
         ],
         "comments": [
           {
-            "id": "cmt_6ox44aeybxxg",
+            "id": "cmt_xgqkr5l2r04q",
             "issueId": "iss_snapshot",
             "issue_id": "iss_snapshot",
             "issueSessionId": "ises_cdyoy133keds",
@@ -16290,8 +16271,8 @@
             "resolved_by_id": null,
             "reactions": [
               {
-                "id": "rxn_30x2827p9355",
-                "commentId": "cmt_6ox44aeybxxg",
+                "id": "rxn_kn3jgt7c45iv",
+                "commentId": "cmt_xgqkr5l2r04q",
                 "workspaceId": "local",
                 "actorType": "member",
                 "actorId": "mem_snapshot_one",
@@ -16304,7 +16285,7 @@
                 "id": "att_snapshot",
                 "workspaceId": "local",
                 "issueId": "iss_snapshot",
-                "commentId": "cmt_6ox44aeybxxg",
+                "commentId": "cmt_xgqkr5l2r04q",
                 "chatSessionId": null,
                 "chatMessageId": null,
                 "uploaderType": "member",
@@ -16395,49 +16376,30 @@
             "createdAt": "<timestamp>"
           },
           {
-            "id": "act_xgqkr5l2r04q",
-            "issueId": "iss_snapshot",
-            "actorType": "system",
-            "actorId": null,
-            "type": "delegation_return_skipped",
-            "body": "Delegation return skipped: no_lineage",
-            "data": {
-              "reason": "no_lineage",
-              "delegationId": null,
-              "sourceTaskId": "tsk_snapshot",
-              "delegatorAgentId": null,
-              "delegateAgentId": "agt_snapshot",
-              "requiredEventSeq": 2,
-              "triggerCommentId": null,
-              "terminalStatus": "completed"
-            },
-            "createdAt": "<timestamp>"
-          },
-          {
-            "id": "act_y5zie74khywp",
+            "id": "act_mz6wv4q14dqz",
             "issueId": "iss_snapshot",
             "actorType": "member",
             "actorId": "mem_snapshot_one",
             "type": "comment_created",
             "body": "Snapshot comment body",
             "data": {
-              "commentId": "cmt_6ox44aeybxxg"
+              "commentId": "cmt_xgqkr5l2r04q"
             },
             "createdAt": "<timestamp>"
           },
           {
-            "id": "act_kn3jgt7c45iv",
+            "id": "act_lnktpkuv95wd",
             "issueId": "iss_snapshot",
             "actorType": "system",
             "actorId": null,
             "type": "comment_assignee_triggered",
             "body": "Queued Snapshot Agent",
             "data": {
-              "commentId": "cmt_6ox44aeybxxg",
+              "commentId": "cmt_xgqkr5l2r04q",
               "assigneeType": "agent",
               "assigneeId": "agt_snapshot",
               "agentId": "agt_snapshot",
-              "taskId": "tsk_8h6y20pl0vq6"
+              "taskId": "tsk_y5zie74khywp"
             },
             "createdAt": "<timestamp>"
           }
@@ -16500,7 +16462,7 @@
       "body": {
         "comments": [
           {
-            "id": "cmt_6ox44aeybxxg",
+            "id": "cmt_xgqkr5l2r04q",
             "issueId": "iss_snapshot",
             "issue_id": "iss_snapshot",
             "issueSessionId": "ises_cdyoy133keds",
@@ -16524,8 +16486,8 @@
             "resolved_by_id": null,
             "reactions": [
               {
-                "id": "rxn_30x2827p9355",
-                "commentId": "cmt_6ox44aeybxxg",
+                "id": "rxn_kn3jgt7c45iv",
+                "commentId": "cmt_xgqkr5l2r04q",
                 "workspaceId": "local",
                 "actorType": "member",
                 "actorId": "mem_snapshot_one",
@@ -16538,7 +16500,7 @@
                 "id": "att_snapshot",
                 "workspaceId": "local",
                 "issueId": "iss_snapshot",
-                "commentId": "cmt_6ox44aeybxxg",
+                "commentId": "cmt_xgqkr5l2r04q",
                 "chatSessionId": null,
                 "chatMessageId": null,
                 "uploaderType": "member",
@@ -16805,29 +16767,8 @@
           }
         },
         {
-          "type": "activity",
-          "id": "act_xgqkr5l2r04q",
-          "actorType": "system",
-          "actor_type": "system",
-          "actorId": null,
-          "actor_id": null,
-          "createdAt": "<timestamp>",
-          "created_at": "<timestamp>",
-          "action": "delegation_return_skipped",
-          "details": {
-            "reason": "no_lineage",
-            "delegationId": null,
-            "sourceTaskId": "tsk_snapshot",
-            "delegatorAgentId": null,
-            "delegateAgentId": "agt_snapshot",
-            "requiredEventSeq": 2,
-            "triggerCommentId": null,
-            "terminalStatus": "completed"
-          }
-        },
-        {
           "type": "comment",
-          "id": "cmt_6ox44aeybxxg",
+          "id": "cmt_xgqkr5l2r04q",
           "issueSessionId": "ises_cdyoy133keds",
           "issue_session_id": "ises_cdyoy133keds",
           "actorType": "member",
@@ -16847,8 +16788,8 @@
           "comment_type": "comment",
           "reactions": [
             {
-              "id": "rxn_30x2827p9355",
-              "commentId": "cmt_6ox44aeybxxg",
+              "id": "rxn_kn3jgt7c45iv",
+              "commentId": "cmt_xgqkr5l2r04q",
               "workspaceId": "local",
               "actorType": "member",
               "actorId": "mem_snapshot_one",
@@ -16861,7 +16802,7 @@
               "id": "att_snapshot",
               "workspaceId": "local",
               "issueId": "iss_snapshot",
-              "commentId": "cmt_6ox44aeybxxg",
+              "commentId": "cmt_xgqkr5l2r04q",
               "chatSessionId": null,
               "chatMessageId": null,
               "uploaderType": "member",
@@ -16882,7 +16823,7 @@
         },
         {
           "type": "activity",
-          "id": "act_y5zie74khywp",
+          "id": "act_mz6wv4q14dqz",
           "actorType": "member",
           "actor_type": "member",
           "actorId": "mem_snapshot_one",
@@ -16891,12 +16832,12 @@
           "created_at": "<timestamp>",
           "action": "comment_created",
           "details": {
-            "commentId": "cmt_6ox44aeybxxg"
+            "commentId": "cmt_xgqkr5l2r04q"
           }
         },
         {
           "type": "activity",
-          "id": "act_kn3jgt7c45iv",
+          "id": "act_lnktpkuv95wd",
           "actorType": "system",
           "actor_type": "system",
           "actorId": null,
@@ -16905,11 +16846,11 @@
           "created_at": "<timestamp>",
           "action": "comment_assignee_triggered",
           "details": {
-            "commentId": "cmt_6ox44aeybxxg",
+            "commentId": "cmt_xgqkr5l2r04q",
             "assigneeType": "agent",
             "assigneeId": "agt_snapshot",
             "agentId": "agt_snapshot",
-            "taskId": "tsk_8h6y20pl0vq6"
+            "taskId": "tsk_y5zie74khywp"
           }
         }
       ]
@@ -17036,7 +16977,7 @@
             "assigneeId": null,
             "issues": [
               {
-                "id": "iss_r4ic9doizq3q",
+                "id": "iss_8rcx9z88woyu",
                 "key": "MUL-5",
                 "number": 5,
                 "title": "Snapshot {{title}}",
@@ -17064,7 +17005,7 @@
                 "updatedAt": "<timestamp>"
               },
               {
-                "id": "iss_2xbrsagogw63",
+                "id": "iss_i244sp2mewms",
                 "key": "MUL-4",
                 "number": 4,
                 "title": "snapshot run",
@@ -17162,7 +17103,7 @@
             "matchSource": "title"
           },
           {
-            "id": "iss_r4ic9doizq3q",
+            "id": "iss_8rcx9z88woyu",
             "key": "MUL-5",
             "number": 5,
             "title": "Snapshot {{title}}",
@@ -17191,7 +17132,7 @@
             "matchSource": "title"
           },
           {
-            "id": "iss_2xbrsagogw63",
+            "id": "iss_i244sp2mewms",
             "key": "MUL-4",
             "number": 4,
             "title": "snapshot run",
@@ -17736,10 +17677,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/directory-scans/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/directory-scans/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/directory-scans/rds_95b5dwter7av",
+      "path": "/api/multiremi/runtimes/rt_snapshot/directory-scans/rds_xtp8jpp4a7us",
       "status": 200,
       "body": {
-        "id": "rds_95b5dwter7av",
+        "id": "rds_xtp8jpp4a7us",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -17758,10 +17699,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/local-skills/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/local-skills/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/rls_u7jlxs9tay5o",
+      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/rls_95b5dwter7av",
       "status": 200,
       "body": {
-        "id": "rls_u7jlxs9tay5o",
+        "id": "rls_95b5dwter7av",
         "runtimeId": "rt_snapshot",
         "status": "running",
         "skills": [],
@@ -17775,10 +17716,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/local-skills/import/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/local-skills/import/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/import/rli_s05boock1828",
+      "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/import/rli_u7jlxs9tay5o",
       "status": 200,
       "body": {
-        "id": "rli_s05boock1828",
+        "id": "rli_u7jlxs9tay5o",
         "runtimeId": "rt_snapshot",
         "skillKey": "snapshot-skill",
         "name": "Snapshot skill",
@@ -17816,10 +17757,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/models/:requestId",
       "route": "GET /api/multiremi/runtimes/:id/models/:requestId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/models/rml_xtp8jpp4a7us",
+      "path": "/api/multiremi/runtimes/rt_snapshot/models/rml_cyvme8h5925t",
       "status": 200,
       "body": {
-        "id": "rml_xtp8jpp4a7us",
+        "id": "rml_cyvme8h5925t",
         "runtimeId": "rt_snapshot",
         "status": "running",
         "models": [],
@@ -17847,10 +17788,10 @@
     {
       "key": "get-sweep GET /api/multiremi/runtimes/:id/update/:updateId",
       "route": "GET /api/multiremi/runtimes/:id/update/:updateId",
-      "path": "/api/multiremi/runtimes/rt_snapshot/update/rup_bbo9f1dxazyr",
+      "path": "/api/multiremi/runtimes/rt_snapshot/update/rup_s05boock1828",
       "status": 200,
       "body": {
-        "id": "rup_bbo9f1dxazyr",
+        "id": "rup_s05boock1828",
         "runtimeId": "rt_snapshot",
         "status": "running",
         "scope": "agent",
@@ -18099,7 +18040,7 @@
       "body": {
         "tasks": [
           {
-            "id": "tsk_abrrt3qds322",
+            "id": "tsk_9i3epsr6j5hf",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18108,15 +18049,15 @@
             "plugin_snapshot": [],
             "executionFingerprint": null,
             "execution_fingerprint": null,
-            "issueId": "iss_r4ic9doizq3q",
-            "issueSessionId": "ises_9i3epsr6j5hf",
-            "issue_session_id": "ises_9i3epsr6j5hf",
+            "issueId": "iss_8rcx9z88woyu",
+            "issueSessionId": "ises_gbmah1mhgwob",
+            "issue_session_id": "ises_gbmah1mhgwob",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_8rcx9z88woyu",
+            "autopilotRunId": "run_u4c9m3gewz2d",
             "triggerCommentId": null,
             "triggerSummary": null,
             "workspaceId": "local",
@@ -18126,8 +18067,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_ngo6cdqkk9pi",
-            "assignment_event_id": "sevt_ngo6cdqkk9pi",
+            "assignmentEventId": "sevt_ccpewwo14x7v",
+            "assignment_event_id": "sevt_ccpewwo14x7v",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -18158,7 +18099,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_k128jfpswkpm",
+            "id": "tsk_qdrfz8sqy58x",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18167,15 +18108,15 @@
             "plugin_snapshot": [],
             "executionFingerprint": null,
             "execution_fingerprint": null,
-            "issueId": "iss_2xbrsagogw63",
-            "issueSessionId": "ises_qdrfz8sqy58x",
-            "issue_session_id": "ises_qdrfz8sqy58x",
+            "issueId": "iss_i244sp2mewms",
+            "issueSessionId": "ises_j3m15clzy3p6",
+            "issue_session_id": "ises_j3m15clzy3p6",
             "issueSessionGeneration": 1,
             "issue_session_generation": 1,
             "holdsWorkspace": true,
             "holds_workspace": true,
             "chatSessionId": null,
-            "autopilotRunId": "run_i244sp2mewms",
+            "autopilotRunId": "run_sv8e5p1ut6x0",
             "triggerCommentId": null,
             "triggerSummary": null,
             "workspaceId": "local",
@@ -18185,8 +18126,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_58aij4tcn1m0",
-            "assignment_event_id": "sevt_58aij4tcn1m0",
+            "assignmentEventId": "sevt_ebtova4a347t",
+            "assignment_event_id": "sevt_ebtova4a347t",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -18217,7 +18158,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_8be626isk151",
+            "id": "tsk_qxjbfrxonmls",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18276,7 +18217,7 @@
             "cancelledAt": null
           },
           {
-            "id": "tsk_8h6y20pl0vq6",
+            "id": "tsk_y5zie74khywp",
             "taskKind": "direct",
             "agentId": "agt_snapshot",
             "runtimeId": "rt_snapshot",
@@ -18294,7 +18235,7 @@
             "holds_workspace": true,
             "chatSessionId": null,
             "autopilotRunId": null,
-            "triggerCommentId": "cmt_6ox44aeybxxg",
+            "triggerCommentId": "cmt_xgqkr5l2r04q",
             "triggerSummary": "Snapshot comment body",
             "workspaceId": "local",
             "status": "queued",
@@ -18303,8 +18244,8 @@
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
-            "assignmentEventId": "sevt_ttgbd5jebyjy",
-            "assignment_event_id": "sevt_ttgbd5jebyjy",
+            "assignmentEventId": "sevt_uj5ra15g3kjw",
+            "assignment_event_id": "sevt_uj5ra15g3kjw",
             "assignmentSourceEventId": null,
             "assignment_source_event_id": null,
             "projectionFromSeq": null,
@@ -19298,10 +19239,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/directory-scans/:requestId",
       "route": "GET /api/runtimes/:id/directory-scans/:requestId",
-      "path": "/api/runtimes/rt_snapshot/directory-scans/rds_95b5dwter7av",
+      "path": "/api/runtimes/rt_snapshot/directory-scans/rds_xtp8jpp4a7us",
       "status": 200,
       "body": {
-        "id": "rds_95b5dwter7av",
+        "id": "rds_xtp8jpp4a7us",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -19320,10 +19261,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/local-skills/:requestId",
       "route": "GET /api/runtimes/:id/local-skills/:requestId",
-      "path": "/api/runtimes/rt_snapshot/local-skills/rls_u7jlxs9tay5o",
+      "path": "/api/runtimes/rt_snapshot/local-skills/rls_95b5dwter7av",
       "status": 200,
       "body": {
-        "id": "rls_u7jlxs9tay5o",
+        "id": "rls_95b5dwter7av",
         "runtime_id": "rt_snapshot",
         "status": "running",
         "supported": true,
@@ -19334,10 +19275,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/local-skills/import/:requestId",
       "route": "GET /api/runtimes/:id/local-skills/import/:requestId",
-      "path": "/api/runtimes/rt_snapshot/local-skills/import/rli_s05boock1828",
+      "path": "/api/runtimes/rt_snapshot/local-skills/import/rli_u7jlxs9tay5o",
       "status": 200,
       "body": {
-        "id": "rli_s05boock1828",
+        "id": "rli_u7jlxs9tay5o",
         "runtime_id": "rt_snapshot",
         "skill_key": "snapshot-skill",
         "status": "running",
@@ -19366,10 +19307,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/models/:requestId",
       "route": "GET /api/runtimes/:id/models/:requestId",
-      "path": "/api/runtimes/rt_snapshot/models/rml_xtp8jpp4a7us",
+      "path": "/api/runtimes/rt_snapshot/models/rml_cyvme8h5925t",
       "status": 200,
       "body": {
-        "id": "rml_xtp8jpp4a7us",
+        "id": "rml_cyvme8h5925t",
         "runtime_id": "rt_snapshot",
         "status": "running",
         "supported": true,
@@ -19392,10 +19333,10 @@
     {
       "key": "get-sweep GET /api/runtimes/:id/update/:updateId",
       "route": "GET /api/runtimes/:id/update/:updateId",
-      "path": "/api/runtimes/rt_snapshot/update/rup_bbo9f1dxazyr",
+      "path": "/api/runtimes/rt_snapshot/update/rup_s05boock1828",
       "status": 200,
       "body": {
-        "id": "rup_bbo9f1dxazyr",
+        "id": "rup_s05boock1828",
         "runtime_id": "rt_snapshot",
         "status": "running",
         "scope": "agent",
@@ -19569,7 +19510,7 @@
     {
       "key": "get-sweep GET /api/shares/:token",
       "route": "GET /api/shares/:token",
-      "path": "/api/shares/awt_aunci5sv8e5p1ut6x0",
+      "path": "/api/shares/awt_sv4llynq4cfmaunci5",
       "status": 401,
       "body": {
         "error": "login required"
@@ -19578,7 +19519,7 @@
     {
       "key": "get-sweep GET /api/shares/:token/attachments/:attachmentId/content",
       "route": "GET /api/shares/:token/attachments/:attachmentId/content",
-      "path": "/api/shares/awt_aunci5sv8e5p1ut6x0/attachments/att_snapshot/content",
+      "path": "/api/shares/awt_sv4llynq4cfmaunci5/attachments/att_snapshot/content",
       "status": 401,
       "body": {
         "error": "login required"
@@ -20017,7 +19958,7 @@
       "status": 200,
       "body": [
         {
-          "id": "inv_yy6thkeq1n3e",
+          "id": "inv_bbo9f1dxazyr",
           "workspaceId": "local",
           "workspace_id": "local",
           "inviterId": "local",
@@ -20637,10 +20578,10 @@
     {
       "key": "inbox#000 POST /api/inbox/:id/read",
       "route": "POST /api/inbox/:id/read",
-      "path": "/api/inbox/inb_m21cp1q6gys4/read",
+      "path": "/api/inbox/inb_zofbpdsnw9pi/read",
       "status": 200,
       "body": {
-        "id": "inb_m21cp1q6gys4",
+        "id": "inb_zofbpdsnw9pi",
         "workspaceId": "local",
         "workspace_id": "local",
         "issueId": "iss_snapshot_blocked",
@@ -20697,10 +20638,10 @@
     {
       "key": "inbox#001 POST /api/inbox/:id/archive",
       "route": "POST /api/inbox/:id/archive",
-      "path": "/api/inbox/inb_m21cp1q6gys4/archive",
+      "path": "/api/inbox/inb_zofbpdsnw9pi/archive",
       "status": 200,
       "body": {
-        "id": "inb_m21cp1q6gys4",
+        "id": "inb_zofbpdsnw9pi",
         "workspaceId": "local",
         "workspace_id": "local",
         "issueId": "iss_snapshot_blocked",
@@ -20757,11 +20698,11 @@
     {
       "key": "inbox#002 POST /api/multiremi/inbox/:id/read",
       "route": "POST /api/multiremi/inbox/:id/read",
-      "path": "/api/multiremi/inbox/inb_m21cp1q6gys4/read",
+      "path": "/api/multiremi/inbox/inb_zofbpdsnw9pi/read",
       "status": 200,
       "body": {
         "item": {
-          "id": "inb_m21cp1q6gys4",
+          "id": "inb_zofbpdsnw9pi",
           "workspaceId": "local",
           "workspace_id": "local",
           "issueId": "iss_snapshot_blocked",
@@ -20819,11 +20760,11 @@
     {
       "key": "inbox#003 POST /api/multiremi/inbox/:id/archive",
       "route": "POST /api/multiremi/inbox/:id/archive",
-      "path": "/api/multiremi/inbox/inb_m21cp1q6gys4/archive",
+      "path": "/api/multiremi/inbox/inb_zofbpdsnw9pi/archive",
       "status": 200,
       "body": {
         "item": {
-          "id": "inb_m21cp1q6gys4",
+          "id": "inb_zofbpdsnw9pi",
           "workspaceId": "local",
           "workspace_id": "local",
           "issueId": "iss_snapshot_blocked",
@@ -20966,7 +20907,7 @@
       "path": "/api/issues/iss_snapshot/reactions",
       "status": 201,
       "body": {
-        "id": "rxn_va5q49t622xv",
+        "id": "rxn_wk1mrnyfwl4x",
         "issue_id": "iss_snapshot",
         "actor_type": "member",
         "actor_id": "local",
@@ -21137,7 +21078,7 @@
       "status": 201,
       "body": {
         "reaction": {
-          "id": "rxn_va5q49t622xv",
+          "id": "rxn_wk1mrnyfwl4x",
           "issueId": "iss_snapshot",
           "workspaceId": "local",
           "actorType": "member",
@@ -21163,7 +21104,7 @@
       "status": 201,
       "body": {
         "subscriber": {
-          "id": "sub_8dim5r24mzl2",
+          "id": "sub_va5q49t622xv",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "memberId": "mem_snapshot_two",
@@ -21276,7 +21217,7 @@
       "path": "/api/issues/iss_snapshot/sessions",
       "status": 201,
       "body": {
-        "id": "ises_vfs9viv2ilj6",
+        "id": "ises_nwk7j7pg419m",
         "issue_id": "iss_snapshot",
         "workspace_id": "local",
         "title": "Flow session",
@@ -21290,8 +21231,8 @@
         "updated_at": "<timestamp>",
         "participants": [
           {
-            "id": "spart_mmcj3uiam2jc",
-            "session_id": "ises_vfs9viv2ilj6",
+            "id": "spart_vfs9viv2ilj6",
+            "session_id": "ises_nwk7j7pg419m",
             "participant_type": "member",
             "participant_id": "local",
             "role": "owner",
@@ -21305,10 +21246,10 @@
     {
       "key": "issue-sessions#001 PATCH /api/issues/:id/sessions/:sessionId",
       "route": "PATCH /api/issues/:id/sessions/:sessionId",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6",
+      "path": "/api/issues/iss_snapshot/sessions/ises_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "ises_vfs9viv2ilj6",
+        "id": "ises_nwk7j7pg419m",
         "issue_id": "iss_snapshot",
         "workspace_id": "local",
         "title": "Flow session renamed",
@@ -21322,8 +21263,8 @@
         "updated_at": "<timestamp>",
         "participants": [
           {
-            "id": "spart_mmcj3uiam2jc",
-            "session_id": "ises_vfs9viv2ilj6",
+            "id": "spart_vfs9viv2ilj6",
+            "session_id": "ises_nwk7j7pg419m",
             "participant_type": "member",
             "participant_id": "local",
             "role": "owner",
@@ -21337,11 +21278,11 @@
     {
       "key": "issue-sessions#002 POST /api/issues/:id/sessions/:sessionId/participants",
       "route": "POST /api/issues/:id/sessions/:sessionId/participants",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/participants",
+      "path": "/api/issues/iss_snapshot/sessions/ises_nwk7j7pg419m/participants",
       "status": 201,
       "body": {
-        "id": "spart_va5q49t622xv",
-        "session_id": "ises_vfs9viv2ilj6",
+        "id": "spart_wk1mrnyfwl4x",
+        "session_id": "ises_nwk7j7pg419m",
         "participant_type": "agent",
         "participant_id": "agt_snapshot",
         "role": "participant",
@@ -21353,12 +21294,12 @@
     {
       "key": "issue-sessions#003 POST /api/issues/:id/sessions/:sessionId/messages",
       "route": "POST /api/issues/:id/sessions/:sessionId/messages",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/messages",
+      "path": "/api/issues/iss_snapshot/sessions/ises_nwk7j7pg419m/messages",
       "status": 201,
       "body": {
-        "id": "cmt_8dim5r24mzl2",
+        "id": "cmt_va5q49t622xv",
         "issue_id": "iss_snapshot",
-        "issue_session_id": "ises_vfs9viv2ilj6",
+        "issue_session_id": "ises_nwk7j7pg419m",
         "author_type": "member",
         "author_id": null,
         "task_id": null,
@@ -21377,12 +21318,12 @@
     {
       "key": "issue-sessions#004 POST /api/issues/:id/sessions/:sessionId/results",
       "route": "POST /api/issues/:id/sessions/:sessionId/results",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/results",
+      "path": "/api/issues/iss_snapshot/sessions/ises_nwk7j7pg419m/results",
       "status": 201,
       "body": {
-        "id": "sres_q5010won31uy",
+        "id": "sres_piqp1rpc1xal",
         "issue_id": "iss_snapshot",
-        "source_session_id": "ises_vfs9viv2ilj6",
+        "source_session_id": "ises_nwk7j7pg419m",
         "title": "result",
         "body": "session result",
         "metadata": {},
@@ -21394,10 +21335,10 @@
     {
       "key": "issue-sessions#005 POST /api/issues/:id/sessions/:sessionId/tasks",
       "route": "POST /api/issues/:id/sessions/:sessionId/tasks",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/tasks",
+      "path": "/api/issues/iss_snapshot/sessions/ises_nwk7j7pg419m/tasks",
       "status": 201,
       "body": {
-        "id": "tsk_jez2ujdp6d5n",
+        "id": "tsk_3gdnj5pggzmd",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -21407,8 +21348,8 @@
         "executionFingerprint": null,
         "execution_fingerprint": null,
         "issueId": "iss_snapshot",
-        "issueSessionId": "ises_vfs9viv2ilj6",
-        "issue_session_id": "ises_vfs9viv2ilj6",
+        "issueSessionId": "ises_nwk7j7pg419m",
+        "issue_session_id": "ises_nwk7j7pg419m",
         "issueSessionGeneration": 1,
         "issue_session_generation": 1,
         "holdsWorkspace": true,
@@ -21424,8 +21365,8 @@
         "attempt": 1,
         "maxAttempts": 3,
         "parentTaskId": null,
-        "assignmentEventId": "sevt_aw448dcq07dx",
-        "assignment_event_id": "sevt_aw448dcq07dx",
+        "assignmentEventId": "sevt_l30ikvaows9d",
+        "assignment_event_id": "sevt_l30ikvaows9d",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -21482,7 +21423,7 @@
     {
       "key": "issue-sessions#006 DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
       "route": "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/participants/agent/agt_snapshot",
+      "path": "/api/issues/iss_snapshot/sessions/ises_nwk7j7pg419m/participants/agent/agt_snapshot",
       "status": 204,
       "body": ""
     },
@@ -21493,7 +21434,7 @@
       "status": 201,
       "body": {
         "share": {
-          "token": "shr_vfs9viv2ilj6mmcj._kt6155W3b5zVCKU01i9w5QGoOJA4gh6enCvZZ1HRqo",
+          "token": "shr_nwk7j7pg419mvfs9.-zMpHB41f9IbMQRsIvOZr2FFdzwaG4hLH9jdZgDChsI",
           "expires_at": "<timestamp>",
           "view_count": 0,
           "last_viewed_at": null,
@@ -21508,7 +21449,7 @@
       "status": 200,
       "body": {
         "share": {
-          "token": "shr_vfs9viv2ilj6mmcj._kt6155W3b5zVCKU01i9w5QGoOJA4gh6enCvZZ1HRqo",
+          "token": "shr_nwk7j7pg419mvfs9.-zMpHB41f9IbMQRsIvOZr2FFdzwaG4hLH9jdZgDChsI",
           "expires_at": "<timestamp>",
           "view_count": 0,
           "last_viewed_at": null,
@@ -21529,7 +21470,7 @@
       "path": "/api/issues",
       "status": 201,
       "body": {
-        "id": "iss_vfs9viv2ilj6",
+        "id": "iss_nwk7j7pg419m",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -21561,10 +21502,10 @@
     {
       "key": "issues-compat#001 PUT /api/issues/:id",
       "route": "PUT /api/issues/:id",
-      "path": "/api/issues/iss_vfs9viv2ilj6",
+      "path": "/api/issues/iss_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "iss_vfs9viv2ilj6",
+        "id": "iss_nwk7j7pg419m",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -21593,10 +21534,10 @@
     {
       "key": "issues-compat#002 PATCH /api/issues/:id",
       "route": "PATCH /api/issues/:id",
-      "path": "/api/issues/iss_vfs9viv2ilj6",
+      "path": "/api/issues/iss_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "iss_vfs9viv2ilj6",
+        "id": "iss_nwk7j7pg419m",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -21628,9 +21569,9 @@
       "path": "/api/issues/quick-create",
       "status": 202,
       "body": {
-        "task_id": "tsk_3gdnj5pggzmd",
+        "task_id": "tsk_zsxpe4iu5err",
         "issue": {
-          "id": "iss_piqp1rpc1xal",
+          "id": "iss_2ryujm2j4i6h",
           "workspace_id": "local",
           "number": 7,
           "identifier": "MUL-7",
@@ -21669,11 +21610,11 @@
     {
       "key": "issues-compat#005 POST /api/issues/:id/squad-evaluated",
       "route": "POST /api/issues/:id/squad-evaluated",
-      "path": "/api/issues/iss_vfs9viv2ilj6/squad-evaluated",
+      "path": "/api/issues/iss_nwk7j7pg419m/squad-evaluated",
       "status": 201,
       "body": {
-        "id": "act_4it58rkbvy1m",
-        "issueId": "iss_vfs9viv2ilj6",
+        "id": "act_aw448dcq07dx",
+        "issueId": "iss_nwk7j7pg419m",
         "actorType": "agent",
         "actorId": "agt_snapshot",
         "type": "squad_leader_evaluated",
@@ -21685,7 +21626,7 @@
           "reason": "nothing to do"
         },
         "createdAt": "<timestamp>",
-        "issue_id": "iss_vfs9viv2ilj6",
+        "issue_id": "iss_nwk7j7pg419m",
         "actor_type": "agent",
         "actor_id": "agt_snapshot",
         "created_at": "<timestamp>"
@@ -21715,7 +21656,7 @@
       "status": 201,
       "body": {
         "issue": {
-          "id": "iss_vfs9viv2ilj6",
+          "id": "iss_nwk7j7pg419m",
           "key": "MUL-6",
           "number": 6,
           "title": "Native issue",
@@ -21838,7 +21779,7 @@
           "updatedAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_ntqjp15rt1ph",
+          "id": "tsk_7212d1hv48ko",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -21865,8 +21806,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_ic8dc9g1qpho",
-          "assignment_event_id": "sevt_ic8dc9g1qpho",
+          "assignmentEventId": "sevt_ibk9if0740q3",
+          "assignment_event_id": "sevt_ibk9if0740q3",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -21904,10 +21845,10 @@
       "path": "/api/multiremi/issues/quick-create",
       "status": 202,
       "body": {
-        "taskId": "tsk_zsxpe4iu5err",
-        "task_id": "tsk_zsxpe4iu5err",
+        "taskId": "tsk_q5010won31uy",
+        "task_id": "tsk_q5010won31uy",
         "issue": {
-          "id": "iss_2ryujm2j4i6h",
+          "id": "iss_3gq3rlr8o45b",
           "key": "MUL-7",
           "number": 7,
           "title": "do the thing",
@@ -21940,7 +21881,7 @@
           "updatedAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_zsxpe4iu5err",
+          "id": "tsk_q5010won31uy",
           "taskKind": "quick_create",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -21949,9 +21890,9 @@
           "plugin_snapshot": [],
           "executionFingerprint": null,
           "execution_fingerprint": null,
-          "issueId": "iss_2ryujm2j4i6h",
-          "issueSessionId": "ises_q5010won31uy",
-          "issue_session_id": "ises_q5010won31uy",
+          "issueId": "iss_3gq3rlr8o45b",
+          "issueSessionId": "ises_piqp1rpc1xal",
+          "issue_session_id": "ises_piqp1rpc1xal",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
@@ -21967,8 +21908,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_jez2ujdp6d5n",
-          "assignment_event_id": "sevt_jez2ujdp6d5n",
+          "assignmentEventId": "sevt_3gdnj5pggzmd",
+          "assignment_event_id": "sevt_3gdnj5pggzmd",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -22035,7 +21976,7 @@
       "path": "/api/labels",
       "status": 201,
       "body": {
-        "id": "lbl_vfs9viv2ilj6",
+        "id": "lbl_nwk7j7pg419m",
         "workspace_id": "local",
         "name": "compat-label",
         "color": "#ff0000",
@@ -22046,10 +21987,10 @@
     {
       "key": "labels#001 PUT /api/labels/:id",
       "route": "PUT /api/labels/:id",
-      "path": "/api/labels/lbl_vfs9viv2ilj6",
+      "path": "/api/labels/lbl_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "lbl_vfs9viv2ilj6",
+        "id": "lbl_nwk7j7pg419m",
         "workspace_id": "local",
         "name": "compat-label-renamed",
         "color": "#00ff00",
@@ -22060,7 +22001,7 @@
     {
       "key": "labels#002 DELETE /api/labels/:id",
       "route": "DELETE /api/labels/:id",
-      "path": "/api/labels/lbl_vfs9viv2ilj6",
+      "path": "/api/labels/lbl_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -22071,7 +22012,7 @@
       "status": 201,
       "body": {
         "label": {
-          "id": "lbl_mmcj3uiam2jc",
+          "id": "lbl_vfs9viv2ilj6",
           "workspaceId": "local",
           "name": "native-label",
           "color": "#0000ff",
@@ -22258,7 +22199,7 @@
       "body": {
         "workspace_id": "local",
         "agent_id": "agt_default_local_claude_local",
-        "issue_id": "iss_mmcj3uiam2jc"
+        "issue_id": "iss_vfs9viv2ilj6"
       }
     },
     {
@@ -22268,7 +22209,7 @@
       "status": 200,
       "body": {
         "workspace_id": "local",
-        "issue_id": "iss_ic8dc9g1qpho"
+        "issue_id": "iss_ibk9if0740q3"
       }
     },
     {
@@ -22278,7 +22219,7 @@
       "status": 201,
       "body": {
         "member": {
-          "id": "mem_vfs9viv2ilj6",
+          "id": "mem_nwk7j7pg419m",
           "workspaceId": "local",
           "userId": null,
           "name": "Native member",
@@ -22331,7 +22272,7 @@
     {
       "key": "members-invitations#003 POST /api/invitations/:id/decline",
       "route": "POST /api/invitations/:id/decline",
-      "path": "/api/invitations/inv_yy6thkeq1n3e/decline",
+      "path": "/api/invitations/inv_bbo9f1dxazyr/decline",
       "status": 403,
       "body": {
         "error": "invitation does not belong to you"
@@ -22340,7 +22281,7 @@
     {
       "key": "members-invitations#004 POST /api/invitations/:id/accept",
       "route": "POST /api/invitations/:id/accept",
-      "path": "/api/invitations/inv_yy6thkeq1n3e/accept",
+      "path": "/api/invitations/inv_bbo9f1dxazyr/accept",
       "status": 403,
       "body": {
         "error": "invitation does not belong to you"
@@ -22352,7 +22293,7 @@
       "path": "/api/pins",
       "status": 201,
       "body": {
-        "id": "pin_vfs9viv2ilj6",
+        "id": "pin_nwk7j7pg419m",
         "workspace_id": "local",
         "user_id": "local",
         "item_type": "issue",
@@ -22368,7 +22309,7 @@
       "status": 200,
       "body": [
         {
-          "id": "pin_vfs9viv2ilj6",
+          "id": "pin_nwk7j7pg419m",
           "workspace_id": "local",
           "user_id": "local",
           "item_type": "issue",
@@ -22392,7 +22333,7 @@
       "status": 201,
       "body": {
         "pin": {
-          "id": "pin_mmcj3uiam2jc",
+          "id": "pin_vfs9viv2ilj6",
           "workspaceId": "local",
           "userId": "local",
           "itemType": "project",
@@ -22410,7 +22351,7 @@
       "body": {
         "pins": [
           {
-            "id": "pin_mmcj3uiam2jc",
+            "id": "pin_vfs9viv2ilj6",
             "workspaceId": "local",
             "userId": "local",
             "itemType": "project",
@@ -22438,7 +22379,7 @@
       "status": 201,
       "body": {
         "doc": {
-          "id": "pdoc_vfs9viv2ilj6",
+          "id": "pdoc_nwk7j7pg419m",
           "project_id": "prj_snapshot",
           "workspace_id": "local",
           "kind": "wiki",
@@ -22468,7 +22409,7 @@
       "status": 200,
       "body": {
         "doc": {
-          "id": "pdoc_vfs9viv2ilj6",
+          "id": "pdoc_nwk7j7pg419m",
           "project_id": "prj_snapshot",
           "workspace_id": "local",
           "kind": "wiki",
@@ -22506,7 +22447,7 @@
       "path": "/api/projects",
       "status": 201,
       "body": {
-        "id": "prj_vfs9viv2ilj6",
+        "id": "prj_nwk7j7pg419m",
         "workspace_id": "local",
         "title": "Compat project",
         "description": "compat",
@@ -22533,10 +22474,10 @@
     {
       "key": "projects#001 PUT /api/projects/:id",
       "route": "PUT /api/projects/:id",
-      "path": "/api/projects/prj_vfs9viv2ilj6",
+      "path": "/api/projects/prj_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "prj_vfs9viv2ilj6",
+        "id": "prj_nwk7j7pg419m",
         "workspace_id": "local",
         "title": "Compat project renamed",
         "description": "compat",
@@ -22563,11 +22504,11 @@
     {
       "key": "projects#002 POST /api/projects/:id/resources",
       "route": "POST /api/projects/:id/resources",
-      "path": "/api/projects/prj_vfs9viv2ilj6/resources",
+      "path": "/api/projects/prj_nwk7j7pg419m/resources",
       "status": 201,
       "body": {
-        "id": "res_mmcj3uiam2jc",
-        "project_id": "prj_vfs9viv2ilj6",
+        "id": "res_vfs9viv2ilj6",
+        "project_id": "prj_nwk7j7pg419m",
         "workspace_id": "local",
         "resource_type": "github_repo",
         "resource_ref": {
@@ -22582,11 +22523,11 @@
     {
       "key": "projects#003 PUT /api/projects/:id/resources/:resourceId",
       "route": "PUT /api/projects/:id/resources/:resourceId",
-      "path": "/api/projects/prj_vfs9viv2ilj6/resources/res_mmcj3uiam2jc",
+      "path": "/api/projects/prj_nwk7j7pg419m/resources/res_vfs9viv2ilj6",
       "status": 200,
       "body": {
-        "id": "res_mmcj3uiam2jc",
-        "project_id": "prj_vfs9viv2ilj6",
+        "id": "res_vfs9viv2ilj6",
+        "project_id": "prj_nwk7j7pg419m",
         "workspace_id": "local",
         "resource_type": "github_repo",
         "resource_ref": {
@@ -22601,14 +22542,14 @@
     {
       "key": "projects#004 DELETE /api/projects/:id/resources/:resourceId",
       "route": "DELETE /api/projects/:id/resources/:resourceId",
-      "path": "/api/projects/prj_vfs9viv2ilj6/resources/res_mmcj3uiam2jc",
+      "path": "/api/projects/prj_nwk7j7pg419m/resources/res_vfs9viv2ilj6",
       "status": 204,
       "body": ""
     },
     {
       "key": "projects#005 DELETE /api/projects/:id",
       "route": "DELETE /api/projects/:id",
-      "path": "/api/projects/prj_vfs9viv2ilj6",
+      "path": "/api/projects/prj_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -22619,7 +22560,7 @@
       "status": 201,
       "body": {
         "project": {
-          "id": "prj_wk1mrnyfwl4x",
+          "id": "prj_mmcj3uiam2jc",
           "workspaceId": "local",
           "title": "Native project",
           "description": null,
@@ -22683,7 +22624,7 @@
       "status": 201,
       "body": {
         "resource": {
-          "id": "res_va5q49t622xv",
+          "id": "res_wk1mrnyfwl4x",
           "projectId": "prj_snapshot",
           "workspaceId": "local",
           "resourceType": "github_repo",
@@ -22766,7 +22707,7 @@
       "status": 201,
       "body": {
         "runtime": {
-          "id": "rt_vfs9viv2ilj6",
+          "id": "rt_nwk7j7pg419m",
           "name": "flow-runtime",
           "provider": "codex",
           "daemonId": null,
@@ -22914,7 +22855,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/models",
       "status": 200,
       "body": {
-        "id": "rml_va5q49t622xv",
+        "id": "rml_wk1mrnyfwl4x",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "models": [],
@@ -22931,7 +22872,7 @@
       "path": "/api/runtimes/rt_snapshot/models",
       "status": 200,
       "body": {
-        "id": "rml_8dim5r24mzl2",
+        "id": "rml_va5q49t622xv",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "supported": true,
@@ -22945,7 +22886,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/directory-scans",
       "status": 200,
       "body": {
-        "id": "rds_7212d1hv48ko",
+        "id": "rds_8dim5r24mzl2",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -22966,7 +22907,7 @@
       "path": "/api/runtimes/rt_snapshot/directory-scans",
       "status": 200,
       "body": {
-        "id": "rds_ntqjp15rt1ph",
+        "id": "rds_7212d1hv48ko",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -22987,7 +22928,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/local-skills",
       "status": 200,
       "body": {
-        "id": "rls_ibk9if0740q3",
+        "id": "rls_ntqjp15rt1ph",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "skills": [],
@@ -23004,7 +22945,7 @@
       "path": "/api/runtimes/rt_snapshot/local-skills",
       "status": 200,
       "body": {
-        "id": "rls_ic8dc9g1qpho",
+        "id": "rls_ibk9if0740q3",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "supported": true,
@@ -23018,7 +22959,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/import",
       "status": 200,
       "body": {
-        "id": "rli_3gq3rlr8o45b",
+        "id": "rli_ic8dc9g1qpho",
         "runtimeId": "rt_snapshot",
         "skillKey": "snapshot-skill",
         "name": null,
@@ -23039,7 +22980,7 @@
       "path": "/api/runtimes/rt_snapshot/local-skills/import",
       "status": 200,
       "body": {
-        "id": "rli_2ryujm2j4i6h",
+        "id": "rli_3gq3rlr8o45b",
         "runtime_id": "rt_snapshot",
         "skill_key": "snapshot-skill",
         "status": "pending",
@@ -23071,7 +23012,7 @@
       "path": "/api/runtimes/rt_snapshot/commands",
       "status": 202,
       "body": {
-        "id": "rcmd_piqp1rpc1xal",
+        "id": "rcmd_2ryujm2j4i6h",
         "runtimeId": "rt_snapshot",
         "runtime_id": "rt_snapshot",
         "command": "printf snapshot",
@@ -23099,10 +23040,10 @@
     {
       "key": "runtimes#017 GET /api/runtimes/:id/commands/:requestId",
       "route": "GET /api/runtimes/:id/commands/:requestId",
-      "path": "/api/runtimes/rt_snapshot/commands/rcmd_piqp1rpc1xal",
+      "path": "/api/runtimes/rt_snapshot/commands/rcmd_2ryujm2j4i6h",
       "status": 200,
       "body": {
-        "id": "rcmd_piqp1rpc1xal",
+        "id": "rcmd_2ryujm2j4i6h",
         "runtimeId": "rt_snapshot",
         "runtime_id": "rt_snapshot",
         "command": "printf snapshot",
@@ -23301,7 +23242,7 @@
       "path": "/api/feedback",
       "status": 201,
       "body": {
-        "id": "fdb_vfs9viv2ilj6",
+        "id": "fdb_nwk7j7pg419m",
         "created_at": "<timestamp>"
       }
     },
@@ -23312,7 +23253,7 @@
       "status": 201,
       "body": {
         "feedback": {
-          "id": "fdb_mmcj3uiam2jc",
+          "id": "fdb_vfs9viv2ilj6",
           "workspaceId": "local",
           "userId": "local",
           "memberId": null,
@@ -23354,7 +23295,7 @@
         "workspaceId": "local",
         "provider": "claude",
         "token": "mdt_0000000000004000800000000000000400000000000040008000000000000005",
-        "tokenId": "dtk_wk1mrnyfwl4x",
+        "tokenId": "dtk_mmcj3uiam2jc",
         "daemonId": "dmn_00000000000040008000000000000003",
         "installScriptUrl": "https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh",
         "releaseArtifactPattern": "multiremi-${version}-${os}-${arch}.tar.gz",
@@ -23387,7 +23328,7 @@
       "path": "/api/skills",
       "status": 201,
       "body": {
-        "id": "skl_vfs9viv2ilj6",
+        "id": "skl_nwk7j7pg419m",
         "workspace_id": "local",
         "name": "compat-skill",
         "description": "compat",
@@ -23402,10 +23343,10 @@
     {
       "key": "skills-compat#001 PUT /api/skills/:id",
       "route": "PUT /api/skills/:id",
-      "path": "/api/skills/skl_vfs9viv2ilj6",
+      "path": "/api/skills/skl_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "skl_vfs9viv2ilj6",
+        "id": "skl_nwk7j7pg419m",
         "workspace_id": "local",
         "name": "compat-skill-renamed",
         "description": "compat",
@@ -23420,10 +23361,10 @@
     {
       "key": "skills-compat#002 PATCH /api/skills/:id",
       "route": "PATCH /api/skills/:id",
-      "path": "/api/skills/skl_vfs9viv2ilj6",
+      "path": "/api/skills/skl_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "skl_vfs9viv2ilj6",
+        "id": "skl_nwk7j7pg419m",
         "workspace_id": "local",
         "name": "compat-skill-patched",
         "description": "compat",
@@ -23438,11 +23379,11 @@
     {
       "key": "skills-compat#003 PUT /api/skills/:id/files",
       "route": "PUT /api/skills/:id/files",
-      "path": "/api/skills/skl_vfs9viv2ilj6/files",
+      "path": "/api/skills/skl_nwk7j7pg419m/files",
       "status": 200,
       "body": {
-        "id": "skf_mmcj3uiam2jc",
-        "skill_id": "skl_vfs9viv2ilj6",
+        "id": "skf_vfs9viv2ilj6",
+        "skill_id": "skl_nwk7j7pg419m",
         "path": "extra.md",
         "content": "extra",
         "created_at": "<timestamp>",
@@ -23452,7 +23393,7 @@
     {
       "key": "skills-compat#004 DELETE /api/skills/:id/files/:fileId",
       "route": "DELETE /api/skills/:id/files/:fileId",
-      "path": "/api/skills/skl_vfs9viv2ilj6/files/skf_mmcj3uiam2jc",
+      "path": "/api/skills/skl_nwk7j7pg419m/files/skf_vfs9viv2ilj6",
       "status": 204,
       "body": ""
     },
@@ -23468,7 +23409,7 @@
     {
       "key": "skills-compat#006 DELETE /api/skills/:id",
       "route": "DELETE /api/skills/:id",
-      "path": "/api/skills/skl_vfs9viv2ilj6",
+      "path": "/api/skills/skl_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -23479,7 +23420,7 @@
       "status": 201,
       "body": {
         "skill": {
-          "id": "skl_vfs9viv2ilj6",
+          "id": "skl_nwk7j7pg419m",
           "workspaceId": "local",
           "name": "native-skill",
           "description": "",
@@ -23598,7 +23539,7 @@
       "path": "/api/squads",
       "status": 201,
       "body": {
-        "id": "sqd_vfs9viv2ilj6",
+        "id": "sqd_nwk7j7pg419m",
         "workspace_id": "local",
         "name": "Compat squad",
         "description": "",
@@ -23613,8 +23554,8 @@
         "member_count": 1,
         "member_preview": [
           {
-            "id": "sqm_mmcj3uiam2jc",
-            "squad_id": "sqd_vfs9viv2ilj6",
+            "id": "sqm_vfs9viv2ilj6",
+            "squad_id": "sqd_nwk7j7pg419m",
             "member_type": "agent",
             "member_id": "agt_snapshot",
             "role": "leader",
@@ -23626,10 +23567,10 @@
     {
       "key": "squads#001 PUT /api/squads/:id",
       "route": "PUT /api/squads/:id",
-      "path": "/api/squads/sqd_vfs9viv2ilj6",
+      "path": "/api/squads/sqd_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "sqd_vfs9viv2ilj6",
+        "id": "sqd_nwk7j7pg419m",
         "workspace_id": "local",
         "name": "Compat squad renamed",
         "description": "",
@@ -23644,8 +23585,8 @@
         "member_count": 1,
         "member_preview": [
           {
-            "id": "sqm_mmcj3uiam2jc",
-            "squad_id": "sqd_vfs9viv2ilj6",
+            "id": "sqm_vfs9viv2ilj6",
+            "squad_id": "sqd_nwk7j7pg419m",
             "member_type": "agent",
             "member_id": "agt_snapshot",
             "role": "leader",
@@ -23657,11 +23598,11 @@
     {
       "key": "squads#002 POST /api/squads/:id/members",
       "route": "POST /api/squads/:id/members",
-      "path": "/api/squads/sqd_vfs9viv2ilj6/members",
+      "path": "/api/squads/sqd_nwk7j7pg419m/members",
       "status": 201,
       "body": {
-        "id": "sqm_mmcj3uiam2jc",
-        "squad_id": "sqd_vfs9viv2ilj6",
+        "id": "sqm_vfs9viv2ilj6",
+        "squad_id": "sqd_nwk7j7pg419m",
         "member_type": "agent",
         "member_id": "agt_snapshot",
         "role": "leader",
@@ -23671,11 +23612,11 @@
     {
       "key": "squads#003 PATCH /api/squads/:id/members/role",
       "route": "PATCH /api/squads/:id/members/role",
-      "path": "/api/squads/sqd_vfs9viv2ilj6/members/role",
+      "path": "/api/squads/sqd_nwk7j7pg419m/members/role",
       "status": 200,
       "body": {
-        "id": "sqm_mmcj3uiam2jc",
-        "squad_id": "sqd_vfs9viv2ilj6",
+        "id": "sqm_vfs9viv2ilj6",
+        "squad_id": "sqd_nwk7j7pg419m",
         "member_type": "agent",
         "member_id": "agt_snapshot",
         "role": "leader",
@@ -23685,14 +23626,14 @@
     {
       "key": "squads#004 DELETE /api/squads/:id/members",
       "route": "DELETE /api/squads/:id/members",
-      "path": "/api/squads/sqd_vfs9viv2ilj6/members",
+      "path": "/api/squads/sqd_nwk7j7pg419m/members",
       "status": 204,
       "body": ""
     },
     {
       "key": "squads#005 DELETE /api/squads/:id",
       "route": "DELETE /api/squads/:id",
-      "path": "/api/squads/sqd_vfs9viv2ilj6",
+      "path": "/api/squads/sqd_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -23703,7 +23644,7 @@
       "status": 201,
       "body": {
         "squad": {
-          "id": "sqd_wk1mrnyfwl4x",
+          "id": "sqd_mmcj3uiam2jc",
           "workspaceId": "local",
           "name": "Native squad",
           "description": "",
@@ -23810,7 +23751,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_vfs9viv2ilj6",
+          "id": "tsk_nwk7j7pg419m",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -23873,11 +23814,11 @@
     {
       "key": "tasks#001 POST /api/multiremi/tasks/:id/cancel",
       "route": "POST /api/multiremi/tasks/:id/cancel",
-      "path": "/api/multiremi/tasks/tsk_vfs9viv2ilj6/cancel",
+      "path": "/api/multiremi/tasks/tsk_nwk7j7pg419m/cancel",
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_vfs9viv2ilj6",
+          "id": "tsk_nwk7j7pg419m",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -23944,7 +23885,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_mmcj3uiam2jc",
+          "id": "tsk_vfs9viv2ilj6",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -24007,10 +23948,10 @@
     {
       "key": "tasks#003 POST /api/tasks/:id/cancel",
       "route": "POST /api/tasks/:id/cancel",
-      "path": "/api/tasks/tsk_mmcj3uiam2jc/cancel",
+      "path": "/api/tasks/tsk_vfs9viv2ilj6/cancel",
       "status": 200,
       "body": {
-        "id": "tsk_mmcj3uiam2jc",
+        "id": "tsk_vfs9viv2ilj6",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -24099,7 +24040,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_wk1mrnyfwl4x",
+          "id": "tsk_mmcj3uiam2jc",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -24126,8 +24067,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_8dim5r24mzl2",
-          "assignment_event_id": "sevt_8dim5r24mzl2",
+          "assignmentEventId": "sevt_va5q49t622xv",
+          "assignment_event_id": "sevt_va5q49t622xv",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -24162,10 +24103,10 @@
     {
       "key": "tasks#005 POST /api/issues/:id/tasks/:taskId/cancel",
       "route": "POST /api/issues/:id/tasks/:taskId/cancel",
-      "path": "/api/issues/iss_snapshot/tasks/tsk_wk1mrnyfwl4x/cancel",
+      "path": "/api/issues/iss_snapshot/tasks/tsk_mmcj3uiam2jc/cancel",
       "status": 200,
       "body": {
-        "id": "tsk_wk1mrnyfwl4x",
+        "id": "tsk_mmcj3uiam2jc",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -24192,8 +24133,8 @@
         "attempt": 1,
         "maxAttempts": 3,
         "parentTaskId": null,
-        "assignmentEventId": "sevt_8dim5r24mzl2",
-        "assignment_event_id": "sevt_8dim5r24mzl2",
+        "assignmentEventId": "sevt_va5q49t622xv",
+        "assignment_event_id": "sevt_va5q49t622xv",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -24253,7 +24194,7 @@
       "path": "/api/issues/iss_snapshot/rerun",
       "status": 202,
       "body": {
-        "id": "tsk_ic8dc9g1qpho",
+        "id": "tsk_ntqjp15rt1ph",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -24280,8 +24221,8 @@
         "attempt": 1,
         "maxAttempts": 3,
         "parentTaskId": null,
-        "assignmentEventId": "sevt_2ryujm2j4i6h",
-        "assignment_event_id": "sevt_2ryujm2j4i6h",
+        "assignmentEventId": "sevt_ic8dc9g1qpho",
+        "assignment_event_id": "sevt_ic8dc9g1qpho",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -24341,7 +24282,7 @@
       "path": "/api/tokens",
       "status": 201,
       "body": {
-        "id": "pat_vfs9viv2ilj6",
+        "id": "pat_nwk7j7pg419m",
         "name": "compat token",
         "token_prefix": "mul_00000000",
         "expires_at": null,
@@ -24356,7 +24297,7 @@
       "path": "/api/tokens/current/renew",
       "status": 201,
       "body": {
-        "id": "pat_mmcj3uiam2jc",
+        "id": "pat_vfs9viv2ilj6",
         "workspaceId": "local",
         "daemonId": null,
         "taskId": null,
@@ -24379,7 +24320,7 @@
     {
       "key": "tokens#002 DELETE /api/tokens/:id",
       "route": "DELETE /api/tokens/:id",
-      "path": "/api/tokens/pat_vfs9viv2ilj6",
+      "path": "/api/tokens/pat_nwk7j7pg419m",
       "status": 204,
       "body": ""
     },
@@ -24390,7 +24331,7 @@
       "status": 201,
       "body": {
         "token": {
-          "id": "pat_wk1mrnyfwl4x",
+          "id": "pat_mmcj3uiam2jc",
           "workspaceId": "local",
           "daemonId": null,
           "taskId": null,
@@ -24447,14 +24388,14 @@
     {
       "key": "webhooks#000 POST /api/webhooks/autopilots/:token",
       "route": "POST /api/webhooks/autopilots/:token",
-      "path": "/api/webhooks/autopilots/awt_aunci5sv8e5p1ut6x0",
+      "path": "/api/webhooks/autopilots/awt_sv4llynq4cfmaunci5",
       "status": 200,
       "body": {
         "status": "accepted",
-        "delivery_id": "whd_vfs9viv2ilj6",
-        "run_id": "run_mmcj3uiam2jc",
+        "delivery_id": "whd_nwk7j7pg419m",
+        "run_id": "run_vfs9viv2ilj6",
         "autopilot_id": "apl_snapshot",
-        "trigger_id": "trg_sv4llynq4cfm"
+        "trigger_id": "trg_lv85f3t6oap5"
       }
     },
     {
@@ -24474,7 +24415,7 @@
       "path": "/api/workspaces",
       "status": 201,
       "body": {
-        "id": "ws_vfs9viv2ilj6",
+        "id": "ws_nwk7j7pg419m",
         "name": "Flow workspace",
         "slug": "flow-workspace",
         "description": null,
@@ -24492,10 +24433,10 @@
     {
       "key": "workspaces#001 PUT /api/workspaces/:id",
       "route": "PUT /api/workspaces/:id",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6",
+      "path": "/api/workspaces/ws_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "ws_vfs9viv2ilj6",
+        "id": "ws_nwk7j7pg419m",
         "name": "Flow workspace renamed",
         "slug": "flow-workspace",
         "description": null,
@@ -24513,10 +24454,10 @@
     {
       "key": "workspaces#002 PATCH /api/workspaces/:id",
       "route": "PATCH /api/workspaces/:id",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6",
+      "path": "/api/workspaces/ws_nwk7j7pg419m",
       "status": 200,
       "body": {
-        "id": "ws_vfs9viv2ilj6",
+        "id": "ws_nwk7j7pg419m",
         "name": "Flow workspace renamed",
         "slug": "flow-workspace",
         "description": "patched",
@@ -24534,12 +24475,12 @@
     {
       "key": "workspaces#003 POST /api/workspaces/:id/members",
       "route": "POST /api/workspaces/:id/members",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/members",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/members",
       "status": 201,
       "body": {
-        "id": "inv_mmcj3uiam2jc",
-        "workspaceId": "ws_vfs9viv2ilj6",
-        "workspace_id": "ws_vfs9viv2ilj6",
+        "id": "inv_vfs9viv2ilj6",
+        "workspaceId": "ws_nwk7j7pg419m",
+        "workspace_id": "ws_nwk7j7pg419m",
         "inviterId": "local",
         "inviter_id": "local",
         "inviteeEmail": "invitee@snapshot.invalid",
@@ -24588,14 +24529,14 @@
     {
       "key": "workspaces#006 DELETE /api/workspaces/:id/invitations/:invitationId",
       "route": "DELETE /api/workspaces/:id/invitations/:invitationId",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/invitations/inv_mmcj3uiam2jc",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/invitations/inv_vfs9viv2ilj6",
       "status": 204,
       "body": ""
     },
     {
       "key": "workspaces#007 PUT /api/workspaces/:id/relay-config/:engine",
       "route": "PUT /api/workspaces/:id/relay-config/:engine",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/relay-config/claude",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/relay-config/claude",
       "status": 200,
       "body": {
         "claude": {
@@ -24610,7 +24551,7 @@
     {
       "key": "workspaces#008 POST /api/workspaces/:id/relay-config/:engine/reveal",
       "route": "POST /api/workspaces/:id/relay-config/:engine/reveal",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/relay-config/claude/reveal",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/relay-config/claude/reveal",
       "status": 200,
       "body": {
         "token": ""
@@ -24619,7 +24560,7 @@
     {
       "key": "workspaces#009 PUT /api/workspaces/:id/relay-config/discovery",
       "route": "PUT /api/workspaces/:id/relay-config/discovery",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/relay-config/discovery",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/relay-config/discovery",
       "status": 200,
       "body": {
         "model_discovery": true
@@ -24628,7 +24569,7 @@
     {
       "key": "workspaces#010 POST /api/workspaces/:id/lark/install/begin",
       "route": "POST /api/workspaces/:id/lark/install/begin",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/lark/install/begin",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/lark/install/begin",
       "status": 202,
       "body": {
         "session_id": "local-lark-<timestamp>",
@@ -24644,14 +24585,14 @@
     {
       "key": "workspaces#011 DELETE /api/workspaces/:id/lark/installations/:installationId",
       "route": "DELETE /api/workspaces/:id/lark/installations/:installationId",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/lark/installations/inst_snapshot",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/lark/installations/inst_snapshot",
       "status": 204,
       "body": ""
     },
     {
       "key": "workspaces#012 POST /api/workspaces/:id/leave",
       "route": "POST /api/workspaces/:id/leave",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/leave",
+      "path": "/api/workspaces/ws_nwk7j7pg419m/leave",
       "status": 400,
       "body": {
         "error": "workspace must have at least one owner"
@@ -24660,7 +24601,7 @@
     {
       "key": "workspaces#013 DELETE /api/workspaces/:id",
       "route": "DELETE /api/workspaces/:id",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6",
+      "path": "/api/workspaces/ws_nwk7j7pg419m",
       "status": 204,
       "body": ""
     }

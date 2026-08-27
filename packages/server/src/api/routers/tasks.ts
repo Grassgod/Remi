@@ -110,21 +110,6 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         : {}),
     };
     const task = store.createTask(createInput);
-    if (taskToken && issue && !leaderDelegation) {
-      store.appendIssueActivity(issue.id, {
-        actorType: "system",
-        actorId: null,
-        type: "delegation_return_skipped",
-        body: `Task ${task.id} was created without delegation lineage`,
-        data: {
-          reason: "no_lineage",
-          stage: "task_creation",
-          sourceTaskId: sourceTask?.id ?? taskToken.taskId,
-          taskId: task.id,
-          targetAgentId: agent.id,
-        },
-      });
-    }
     return c.json({ task: taskPublicResponse(task) }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
