@@ -11,18 +11,22 @@ import type {
   MultiremiTaskWithAgent,
 } from "@multiremi/contracts/types.js";
 
-type InternalDelegationTaskField =
+type InternalTaskField =
   | "delegationId"
   | "delegation_id"
   | "delegatedByAgentId"
-  | "delegated_by_agent_id";
+  | "delegated_by_agent_id"
+  | "issueCreationRestricted"
+  | "issue_creation_restricted";
 
-export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, InternalDelegationTaskField> {
+export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, InternalTaskField> {
   const {
     delegationId: _delegationId,
     delegation_id: _delegationIdSnake,
     delegatedByAgentId: _delegatedByAgentId,
     delegated_by_agent_id: _delegatedByAgentIdSnake,
+    issueCreationRestricted: _issueCreationRestricted,
+    issue_creation_restricted: _issueCreationRestrictedSnake,
     ...publicTask
   } = task;
   return publicTask;
@@ -105,7 +109,7 @@ export function taskCompatibilityResponse(
   queueBlocker: MultiremiTaskQueueBlocker | null = null,
 ): Omit<
   MultiremiTask,
-  "result" | "delegationId" | "delegation_id" | "delegatedByAgentId" | "delegated_by_agent_id"
+  "result" | InternalTaskField
 > & {
   result: unknown | null;
   agent_id: string;
@@ -144,7 +148,7 @@ export function taskCompatibilityResponse(
   const publicTask = taskPublicResponse(task);
   const response: Omit<
     MultiremiTask,
-    "result" | "delegationId" | "delegation_id" | "delegatedByAgentId" | "delegated_by_agent_id"
+    "result" | InternalTaskField
   > & {
     result: unknown | null;
     agent_id: string;

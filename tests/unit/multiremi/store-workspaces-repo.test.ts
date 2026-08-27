@@ -85,6 +85,15 @@ describe("WorkspacesRepo", () => {
     expect(repo.getNotificationPreferences({ workspaceId: "local" }).preferences.comments).toBe("muted");
   });
 
+  it("keeps Feishu notifications enabled when legacy preferences omit the new group", () => {
+    const repo = createRepo();
+    repo.updateNotificationPreferences({ workspaceId: "local", preferences: { updates: "muted" } });
+
+    const preferences = repo.getNotificationPreferences({ workspaceId: "local" }).preferences;
+    expect(preferences.updates).toBe("muted");
+    expect(preferences.feishu_messages).toBeUndefined();
+  });
+
   it("deletes every workspace SCM record in the workspace deletion transaction", () => {
     const { repo, store } = createFixture();
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 31).toString("base64");

@@ -1028,6 +1028,7 @@ const NOTIFICATION_GROUPS: MultiremiNotificationGroupKey[] = [
   "status_changes",
   "comments",
   "updates",
+  "feishu_messages",
   "agent_activity",
   "system_notifications",
 ];

@@ -253,6 +253,7 @@ export class MultiremiScheduler {
     try {
       return this.store.runAutopilot(trigger.autopilotId, {
         source: "schedule",
+        triggerId: trigger.id,
         payload: {
           cronExpression: trigger.cronExpression,
           triggerLabel: trigger.label,

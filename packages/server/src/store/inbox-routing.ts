@@ -34,6 +34,30 @@ export const INBOX_ROUTING: Record<string, InboxRoutingEntry> = {
     severity: "info",
     why: "Issue progress belongs only in the workbench while visible there; otherwise only human comments notify subscribers.",
   },
+  feishu_message_notification: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.feishu_message_notification,
+    severity: "info",
+    why: "A Feishu message reminder is a personal action surfaced outside the workbench.",
+  },
+  feishu_reply_draft: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.feishu_reply_draft,
+    severity: "attention",
+    why: "A reply draft requires a human to review it and send from Feishu.",
+  },
+  feishu_issue_proposal: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.feishu_issue_proposal,
+    severity: "attention",
+    why: "An Issue proposal requires an explicit human approval or rejection.",
+  },
+  feishu_ingest_connection_alert: {
+    rule: "R3",
+    route: INBOX_ROUTE_BY_TYPE.feishu_ingest_connection_alert,
+    severity: "attention",
+    why: "A deduplicated ingestion health failure must remain visible until recovery.",
+  },
   autopilot_paused: {
     rule: "R3",
     route: INBOX_ROUTE_BY_TYPE.autopilot_paused,

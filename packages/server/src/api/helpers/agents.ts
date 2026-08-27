@@ -33,6 +33,7 @@ import {
   type FleetProviderModelsResponse,
 } from "../wire/runtimes.js";
 import { ATLAS_AGENT_NAME } from "../../repository-wiki/atlas.js";
+import { currentTaskIssueCreationRestricted } from "./issues.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
 
@@ -384,6 +385,8 @@ export function parseExpectedActiveAgentIds(c: Context, value: unknown): string[
 }
 
 export function withAgentRequestContext(c: Context, store: MultiremiStore, input: CreateAgentInput): CreateAgentInput | Response {
+  const issuePolicy = agentIssueProposalPolicyInput(c, store, input, true);
+  if (issuePolicy instanceof Response) return issuePolicy;
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -425,6 +428,7 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     thinking_level: thinkingLevel || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
+    ...issuePolicy,
   };
 }
 
@@ -434,7 +438,10 @@ export function withAgentUpdateRequestContext(
   current: MultiremiAgent,
   input: UpdateAgentInput,
 ): UpdateAgentInput | Response {
+  const issuePolicy = agentIssueProposalPolicyInput(c, store, input, false);
+  if (issuePolicy instanceof Response) return issuePolicy;
   const next: UpdateAgentInput = { ...input };
+  Object.assign(next, issuePolicy);
   if (hasRequestField(input, "custom_env", "customEnv", "env")) {
     return c.json({
       error: "custom_env is no longer accepted on this endpoint; use PUT /api/agents/{id}/env (or `multiremi agent env set`)",
@@ -561,11 +568,43 @@ export function withAgentUpdateRequestContext(
   return next;
 }
 
+function agentIssueProposalPolicyInput(
+  c: Context,
+  store: MultiremiStore,
+  input: CreateAgentInput | CreateAgentFromTemplateInput | UpdateAgentInput,
+  inheritOnCreate: boolean,
+): Pick<CreateAgentInput, "issueCreationRequiresProposal" | "issue_creation_requires_proposal"> | Response {
+  const hasExplicitPolicy = hasRequestField(input, "issueCreationRequiresProposal", "issue_creation_requires_proposal");
+  if (hasExplicitPolicy && currentAccessToken(c)?.type === "task") {
+    return c.json({
+      error: "only a human can change an agent's Issue proposal policy",
+      code: "human_agent_policy_required",
+    }, 403);
+  }
+  if (!hasExplicitPolicy) {
+    if (!inheritOnCreate || !currentTaskIssueCreationRestricted(c, store)) return {};
+    return {
+      issueCreationRequiresProposal: true,
+      issue_creation_requires_proposal: true,
+    };
+  }
+  const value = input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal;
+  if (typeof value !== "boolean") {
+    return c.json({ error: "issue_creation_requires_proposal must be a boolean" }, 400);
+  }
+  return {
+    issueCreationRequiresProposal: value,
+    issue_creation_requires_proposal: value,
+  };
+}
+
 export function withAgentTemplateRequestContext(
   c: Context,
   store: MultiremiStore,
   input: CreateAgentFromTemplateInput,
 ): CreateAgentFromTemplateInput | Response {
+  const issuePolicy = agentIssueProposalPolicyInput(c, store, input, true);
+  if (issuePolicy instanceof Response) return issuePolicy;
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -601,6 +640,7 @@ export function withAgentTemplateRequestContext(
     model: model || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
+    ...issuePolicy,
   };
 }
 

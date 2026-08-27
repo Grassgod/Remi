@@ -6,7 +6,7 @@ table against that manifest.
 
 ## Canonical command tree
 
-The canonical tree has 31 top-level resources. Attachment is the 32nd API domain
+The canonical tree has 32 top-level resources. Attachment is the 33rd API domain
 and is exposed below Issue and Comment rather than as another top-level resource.
 
 ```text
@@ -39,6 +39,7 @@ remi runtime
 remi daemon
 remi autopilot
 remi scm
+remi feishu
 
 remi inbox
 remi notification
@@ -52,6 +53,16 @@ remi lark
 Use `remi help <path>` or `remi <path> --help` for the registered positional and
 option contract. All capability commands declare their authentication identities,
 mutation class, and `table|json|jsonl` output contract in the Registry.
+
+The Feishu ingestion domain exposes source administration through
+`remi feishu source list|get|status|add|update` and task-safe processing through
+`remi feishu messages list|resolve|notify|draft-reply|propose-issue`. Issue
+proposals are non-blocking Inbox items; only humans can run
+`remi feishu proposals approve|reject` or the administrative direct
+`messages create-issue` command. Dedicated commands atomically create their
+Inbox/Issue object and audited outcome, and generic `resolve` cannot forge those
+outcomes. An empty source allowlist means zero ingestion; `source update
+--clear-allowlist` restores that state.
 
 The current main integration also exposes archived Issue recovery, Workspace
 prompt/archive settings, and Repository Wiki administration through:

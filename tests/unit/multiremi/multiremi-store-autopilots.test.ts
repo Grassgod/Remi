@@ -275,11 +275,50 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const advanced = store.getAutopilotTrigger(trigger.id)!;
     expect(advanced.nextRunAt).toBeString();
     expect(advanced.lastFiredAt).toBeString();
+    expect(scheduler.tickDueTriggers()).toEqual([]);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
 
     db!.run("UPDATE multiremi_autopilot_triggers SET next_run_at = NULL WHERE id = ?", [trigger.id]);
     expect(store.recoverLostScheduleTriggers()).toBe(1);
     expect(store.getAutopilotTrigger(trigger.id)!.nextRunAt).toBeString();
     scheduler.stop();
+  });
+
+  it("requires event ids to identify a trigger while allowing eventless trigger executions", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Trigger invariant worker", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Trigger invariant",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+    const schedule = store.createAutopilotTrigger(autopilot.id, {
+      kind: "schedule",
+      cronExpression: "0 * * * *",
+    });
+    const webhook = store.createAutopilotTrigger(autopilot.id, { kind: "webhook" });
+
+    expect(() => store.runAutopilot(autopilot.id, {
+      source: "api",
+      eventId: "evt_without_trigger",
+    })).toThrow("event_id requires trigger_id");
+    expect(() => store.runAutopilot(autopilot.id, {
+      source: "system_event",
+      triggerId: schedule.id,
+    })).toThrow("system_event runs require trigger_id and event_id");
+    expect(() => store.runAutopilot(autopilot.id, {
+      source: "system_event",
+      eventId: "evt_without_trigger",
+    })).toThrow("event_id requires trigger_id");
+
+    expect(store.runAutopilot(autopilot.id, {
+      source: "schedule",
+      triggerId: schedule.id,
+    })).toMatchObject({ source: "schedule", triggerId: schedule.id, eventId: null });
+    expect(store.runAutopilot(autopilot.id, {
+      source: "webhook",
+      triggerId: webhook.id,
+    })).toMatchObject({ source: "webhook", triggerId: webhook.id, eventId: null });
   });
 
   it("claims due schedule triggers atomically across sqlite connections", () => {

@@ -43,6 +43,7 @@ const AGENT_FIELDS: readonly CliOptionSpec[] = [
   { name: "thinking-level", type: "string", valueName: "level", description: "Reasoning effort" },
   { name: "visibility", type: "string", valueName: "private|workspace", description: "Agent visibility" },
   { name: "max-concurrent-tasks", type: "integer", valueName: "n", description: "Maximum concurrent tasks" },
+  { name: "issue-creation-requires-proposal", type: "boolean", description: "Require human approval before this agent can create Issues" },
 ];
 
 const SQUAD_FIELDS: readonly CliOptionSpec[] = [
@@ -488,6 +489,7 @@ function agentBody(invocation: CommandInvocation, creating: boolean): Record<str
     thinking_level: stringOption(invocation, "thinking-level") ?? undefined,
     visibility: stringOption(invocation, "visibility") ?? undefined,
     max_concurrent_tasks: integerOption(invocation, "max-concurrent-tasks") ?? undefined,
+    issue_creation_requires_proposal: booleanOption(invocation, "issue-creation-requires-proposal") ?? undefined,
     workspace_id: creating ? requiredWorkspace(invocation) : undefined,
   };
 }

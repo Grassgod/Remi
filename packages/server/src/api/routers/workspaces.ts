@@ -2,6 +2,8 @@ import type { Context, Hono } from "hono";
 import {
   backfillWorkspaceRepositoryDefaultBranches,
   createScmAwareGitRemoteInspector,
+  currentTaskParentId,
+  currentTaskIssueCreationRestricted,
   denyCurrentUserWorkspaceAccess,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
@@ -384,6 +386,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         workspaceId,
         ownerId: authenticatedRequestUserId(c) ?? "local",
         visibility: "workspace",
+        issueCreationRequiresProposal: currentTaskIssueCreationRestricted(c, store),
       });
       agent = created.agent;
     } else {
@@ -504,6 +507,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       payload: { atlas_repository_id: repositoryId, atlas_mode: "bootstrap_repository" },
       repositoryId,
       dedupeKey: repositoryWikiBuildDedupeKey(repositoryId, "bootstrap_repository", null),
+      sourceTaskId: currentTaskParentId(c),
     });
     if (run.deduplicated) {
       return c.json({

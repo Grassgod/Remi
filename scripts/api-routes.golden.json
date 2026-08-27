@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 623,
+    "routeCount": 636,
     "routeCountByPrefix": {
       "native": 204,
-      "compat": 406,
+      "compat": 419,
       "root": 13
     },
-    "getRoutes": 269,
-    "getRoutesWithBody": 266,
+    "getRoutes": 273,
+    "getRoutesWithBody": 270,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 354,
+    "mutationRoutes": 363,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -381,6 +381,10 @@
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/sources",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "GET /api/workspaces/:workspaceId/scm/events",
@@ -423,6 +427,7 @@
     "PATCH /api/workspaces/:id/members/:memberId",
     "PATCH /api/workspaces/:id/repos/:repositoryId",
     "PATCH /api/workspaces/:id/runtime-provisions/:provisionId",
+    "PATCH /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "POST /api/agents",
     "POST /api/agents/:id/archive",
@@ -640,6 +645,14 @@
     "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue",
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply",
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify",
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/propose-issue",
+    "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve",
+    "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/approve",
+    "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/reject",
+    "POST /api/workspaces/:workspaceId/feishu/sources",
     "POST /api/workspaces/:workspaceId/scm/connections",
     "POST /api/workspaces/:workspaceId/scm/connections/:connectionId/verify",
     "POST /auth/google",
@@ -997,6 +1010,10 @@
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/sources",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "GET /api/workspaces/:workspaceId/scm/events",
@@ -1261,6 +1278,7 @@
         "max_concurrent_tasks": 3,
         "model": "",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "supervisor": false,
         "owner_id": "local",
         "skills": [],
@@ -1296,6 +1314,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "supervisor": false,
         "owner_id": "local",
         "skills": [],
@@ -1388,6 +1407,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "supervisor": false,
         "owner_id": "local",
         "skills": [
@@ -1429,6 +1449,7 @@
         "max_concurrent_tasks": 3,
         "model": "claude-opus-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "supervisor": false,
         "owner_id": "local",
         "skills": [
@@ -1471,6 +1492,7 @@
           "max_concurrent_tasks": 6,
           "model": "",
           "thinking_level": "",
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "owner_id": "local",
           "skills": [],
@@ -1515,6 +1537,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1581,6 +1605,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1653,6 +1679,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1692,6 +1720,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -1766,6 +1796,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
@@ -2025,7 +2057,10 @@
         "created_by_id": "local",
         "last_run_at": null,
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2050,7 +2085,10 @@
         "created_by_id": "local",
         "last_run_at": null,
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2076,7 +2114,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2102,7 +2143,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2128,7 +2172,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2154,7 +2201,10 @@
         "last_fired_at": null,
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
-        "event_config": null
+        "event_config": null,
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2206,7 +2256,10 @@
         "created_by_id": "local",
         "last_run_at": "<timestamp>",
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "issue_creation_restricted": false,
+        "issue_creation_restriction_reason": null,
+        "issue_creation_restricted_by_task_id": null
       }
     },
     {
@@ -2327,6 +2380,12 @@
           "trigger_label": null,
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -2373,6 +2432,12 @@
           "trigger_label": "snapshot trigger",
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -2622,6 +2687,12 @@
           "trigger_label": "snapshot trigger",
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -5868,6 +5939,7 @@
           "max_concurrent_tasks": 6,
           "model": "claude-sonnet-4",
           "thinking_level": "",
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "owner_id": "local",
           "skills": [
@@ -5910,6 +5982,7 @@
         "max_concurrent_tasks": 6,
         "model": "claude-sonnet-4",
         "thinking_level": "",
+        "issue_creation_requires_proposal": false,
         "supervisor": false,
         "owner_id": "local",
         "skills": [
@@ -6386,7 +6459,10 @@
             "created_by_id": "local",
             "last_run_at": "<timestamp>",
             "created_at": "<timestamp>",
-            "updated_at": "<timestamp>"
+            "updated_at": "<timestamp>",
+            "issue_creation_restricted": false,
+            "issue_creation_restriction_reason": null,
+            "issue_creation_restricted_by_task_id": null
           }
         ],
         "total": 1
@@ -6415,7 +6491,10 @@
           "created_by_id": "local",
           "last_run_at": "<timestamp>",
           "created_at": "<timestamp>",
-          "updated_at": "<timestamp>"
+          "updated_at": "<timestamp>",
+          "issue_creation_restricted": false,
+          "issue_creation_restriction_reason": null,
+          "issue_creation_restricted_by_task_id": null
         },
         "triggers": [
           {
@@ -6436,7 +6515,10 @@
             "last_fired_at": null,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
-            "event_config": null
+            "event_config": null,
+            "issue_creation_restricted": false,
+            "issue_creation_restriction_reason": null,
+            "issue_creation_restricted_by_task_id": null
           }
         ]
       }
@@ -7641,6 +7723,149 @@
             "id": "dashboard.usage.daily",
             "command": "remi dashboard usage daily",
             "capability": "dashboard.usage.daily",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.create-issue",
+            "command": "remi feishu messages create-issue",
+            "capability": "feishu.messages.create-issue",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.draft-reply",
+            "command": "remi feishu messages draft-reply",
+            "capability": "feishu.messages.draft-reply",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.list",
+            "command": "remi feishu messages list",
+            "capability": "feishu.messages.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.notify",
+            "command": "remi feishu messages notify",
+            "capability": "feishu.messages.notify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.propose-issue",
+            "command": "remi feishu messages propose-issue",
+            "capability": "feishu.messages.propose-issue",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.messages.resolve",
+            "command": "remi feishu messages resolve",
+            "capability": "feishu.messages.resolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.proposals.approve",
+            "command": "remi feishu proposals approve",
+            "capability": "feishu.proposals.approve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.proposals.reject",
+            "command": "remi feishu proposals reject",
+            "capability": "feishu.proposals.reject",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.add",
+            "command": "remi feishu source add",
+            "capability": "feishu.source.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.get",
+            "command": "remi feishu source get",
+            "capability": "feishu.source.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.list",
+            "command": "remi feishu source list",
+            "capability": "feishu.source.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.status",
+            "command": "remi feishu source status",
+            "capability": "feishu.source.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.update",
+            "command": "remi feishu source update",
+            "capability": "feishu.source.update",
             "outputs": [
               "table",
               "json",
@@ -14221,6 +14446,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -14288,6 +14515,8 @@
           "customArgs": [],
           "mcpConfig": null,
           "thinkingLevel": null,
+          "issueCreationRequiresProposal": false,
+          "issue_creation_requires_proposal": false,
           "supervisor": false,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -14734,6 +14963,12 @@
             "trigger_label": "snapshot trigger",
             "cronExpression": null,
             "cron_expression": null,
+            "issueCreationRestricted": false,
+            "issue_creation_restricted": false,
+            "issueCreationRestrictionReason": null,
+            "issue_creation_restriction_reason": null,
+            "issueCreationRestrictedByTaskId": null,
+            "issue_creation_restricted_by_task_id": null,
             "createdByType": "member",
             "created_by_type": "member",
             "createdById": "local",
@@ -14782,6 +15017,12 @@
           "trigger_label": "snapshot trigger",
           "cronExpression": null,
           "cron_expression": null,
+          "issueCreationRestricted": false,
+          "issue_creation_restricted": false,
+          "issueCreationRestrictionReason": null,
+          "issue_creation_restriction_reason": null,
+          "issueCreationRestrictedByTaskId": null,
+          "issue_creation_restricted_by_task_id": null,
           "createdByType": "member",
           "created_by_type": "member",
           "createdById": "local",
@@ -14809,6 +15050,9 @@
             "label": "snapshot trigger",
             "eventFilters": null,
             "eventConfig": null,
+            "issueCreationRestricted": false,
+            "issueCreationRestrictionReason": null,
+            "issueCreationRestrictedByTaskId": null,
             "signingSecretSet": false,
             "signingSecretHint": null,
             "lastFiredAt": null,
@@ -14825,7 +15069,10 @@
             "signing_secret_set": false,
             "last_fired_at": null,
             "created_at": "<timestamp>",
-            "updated_at": "<timestamp>"
+            "updated_at": "<timestamp>",
+            "issue_creation_restricted": false,
+            "issue_creation_restriction_reason": null,
+            "issue_creation_restricted_by_task_id": null
           }
         ],
         "runs": [
@@ -18227,6 +18474,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -20182,6 +20431,44 @@
             "last_reported_at": null
           }
         ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/messages",
+      "route": "GET /api/workspaces/:workspaceId/feishu/messages",
+      "path": "/api/workspaces/local/feishu/messages",
+      "status": 200,
+      "body": {
+        "messages": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/sources",
+      "route": "GET /api/workspaces/:workspaceId/feishu/sources",
+      "path": "/api/workspaces/local/feishu/sources",
+      "status": 200,
+      "body": {
+        "sources": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+      "route": "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+      "path": "/api/workspaces/local/feishu/sources/fsrc_snapshot",
+      "status": 404,
+      "body": {
+        "error": "Feishu source not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
+      "route": "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
+      "path": "/api/workspaces/local/feishu/sources/fsrc_snapshot/status",
+      "status": 404,
+      "body": {
+        "error": "Feishu source not found"
       }
     },
     {
@@ -22843,6 +23130,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -22913,6 +23202,8 @@
             "customArgs": [],
             "mcpConfig": null,
             "thinkingLevel": null,
+            "issueCreationRequiresProposal": false,
+            "issue_creation_requires_proposal": false,
             "supervisor": false,
             "archivedAt": null,
             "createdAt": "<timestamp>",

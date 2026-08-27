@@ -44,8 +44,8 @@ export class AgentsSkillsRepo {
         `INSERT INTO multiremi_agents (
           id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, cwd, executable, model,
           max_concurrent_tasks, allowed_tools, custom_env, custom_args, mcp_config, thinking_level,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          issue_creation_requires_proposal, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           workspaceId,
@@ -67,6 +67,7 @@ export class AgentsSkillsRepo {
           toJson(input.customArgs ?? input.custom_args ?? []),
           (input.mcpConfig ?? input.mcp_config) == null ? null : toJson(input.mcpConfig ?? input.mcp_config),
           input.thinkingLevel ?? input.thinking_level ?? null,
+          Boolean(input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal) ? 1 : 0,
           now,
           now,
         ],
@@ -153,6 +154,7 @@ export class AgentsSkillsRepo {
         custom_args = ?,
         mcp_config = ?,
         thinking_level = ?,
+        issue_creation_requires_proposal = ?,
         updated_at = ?
        WHERE id = ?`,
       [
@@ -189,6 +191,9 @@ export class AgentsSkillsRepo {
         hasAnyField(input, "thinkingLevel", "thinking_level")
           ? input.thinkingLevel ?? input.thinking_level ?? null
           : current.thinkingLevel,
+        hasAnyField(input, "issueCreationRequiresProposal", "issue_creation_requires_proposal")
+          ? Boolean(input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal) ? 1 : 0
+          : current.issueCreationRequiresProposal ? 1 : 0,
         now,
         id,
       ],
@@ -569,7 +574,11 @@ export class AgentsSkillsRepo {
 
   ensureDefaultAgent(
     provider = "claude",
-    options: { workspaceId?: string | null; ownerId?: string | null } = {},
+    options: {
+      workspaceId?: string | null;
+      ownerId?: string | null;
+      issueCreationRequiresProposal?: boolean;
+    } = {},
   ): MultiremiAgent {
     const workspaceId = cleanOptionalString(options.workspaceId) ?? "local";
     const ownerId = cleanOptionalString(options.ownerId) ?? "local";
@@ -599,6 +608,7 @@ export class AgentsSkillsRepo {
       provider,
       workspaceId,
       ownerId,
+      issueCreationRequiresProposal: options.issueCreationRequiresProposal ?? false,
       instructions: "You are an autonomous coding agent. Complete the task and report the result clearly.",
     });
   }
@@ -783,6 +793,8 @@ export function toAgent(row: Row): MultiremiAgent {
     customArgs: parseJson(row.custom_args, []),
     mcpConfig: row.mcp_config == null ? null : parseJson(row.mcp_config, null),
     thinkingLevel: nullableString(row.thinking_level),
+    issueCreationRequiresProposal: Boolean(Number(row.issue_creation_requires_proposal ?? 0)),
+    issue_creation_requires_proposal: Boolean(Number(row.issue_creation_requires_proposal ?? 0)),
     supervisor: Number(row.supervisor ?? 0) === 1,
     archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),

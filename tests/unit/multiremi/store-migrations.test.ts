@@ -77,7 +77,13 @@ describe("store migrations", () => {
     expect(tables).not.toContain("multiremi_github_settings");
     expect(tables).not.toContain("multiremi_github_pull_requests");
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
+    expect(columnNames(database, "multiremi_agents")).toContain("issue_creation_requires_proposal");
+    expect(columnNames(database, "multiremi_feishu_message_outcomes")).toEqual(expect.arrayContaining([
+      "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
+    ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
+    expect(columnNames(database, "multiremi_tasks")).toContain("issue_creation_restricted");
+    expect(columnNames(database, "multiremi_autopilot_runs")).toContain("source_task_id");
     expect(columnNames(database, "multiremi_autopilots")).toEqual(expect.arrayContaining([
       "session_policy", "workspace_policy",
     ]));
@@ -263,6 +269,275 @@ describe("store migrations", () => {
       `SELECT name FROM sqlite_master
        WHERE type = 'index' AND name = 'idx_multiremi_notification_deliveries_pending'`,
     ).get()).toEqual({ name: "idx_multiremi_notification_deliveries_pending" });
+  });
+
+  it("upgrades the first Feishu ingestion schema without trusting its stored endpoint URL", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_feishu_sources (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'personal_automation',
+        endpoint TEXT NOT NULL,
+        allowlist TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        retention_days INTEGER NOT NULL DEFAULT 90,
+        poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+        access_token_encrypted TEXT,
+        access_token_hint TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, endpoint)
+      );
+      CREATE TABLE multiremi_feishu_messages (
+        message_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        source_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        sender TEXT NOT NULL DEFAULT '{}',
+        content TEXT NOT NULL DEFAULT '{}',
+        searchable_text TEXT NOT NULL DEFAULT '',
+        content_fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        ingested_at TEXT NOT NULL,
+        processed_at TEXT
+      );
+      INSERT INTO multiremi_feishu_sources (
+        id, workspace_id, name, endpoint, created_at, updated_at
+      ) VALUES (
+        'fsrc_legacy', 'local', 'Legacy', 'http://127.0.0.1:8042',
+        '2026-08-25T00:00:00.000Z', '2026-08-25T00:00:00.000Z'
+      );
+      INSERT INTO multiremi_feishu_messages (
+        message_id, source_id, chat_id, content_fingerprint, created_at, ingested_at
+      ) VALUES (
+        'om_legacy', 'fsrc_legacy', 'oc_legacy', 'fingerprint',
+        '2026-08-25T00:01:00.000Z', '2026-08-25T00:02:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_feishu_sources")).toEqual(expect.arrayContaining([
+      "endpoint_name", "unprocessed_retry_seconds", "unprocessed_retry_limit",
+      "last_successful_ingest_at", "last_error_code", "last_error_at",
+      "consecutive_failures", "connection_alerted_at",
+      "connection_alert_delivery_failure_count", "connection_alert_delivery_error_code",
+      "connection_alert_delivery_failed_at",
+    ]));
+    expect(columnNames(database, "multiremi_feishu_messages")).toEqual(expect.arrayContaining([
+      "retry_count", "last_retry_at",
+    ]));
+    expect(database.query(
+      "SELECT endpoint_name, enabled FROM multiremi_feishu_sources WHERE id = 'fsrc_legacy'",
+    ).get()).toEqual({ endpoint_name: "legacy_fsrc_legacy", enabled: 0 });
+    expect(database.query(
+      "SELECT retry_count, last_retry_at FROM multiremi_feishu_messages WHERE message_id = 'om_legacy'",
+    ).get()).toEqual({ retry_count: 0, last_retry_at: null });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_v2'",
+    ).get()).toEqual({ count: 1 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    ).get()).toEqual({ count: 1 });
+
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_v2'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("upgrades an already-migrated Feishu v2 source table to alert delivery v3", () => {
+    const database = freshDb();
+    migrate(database);
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    );
+    database.exec(`
+      ALTER TABLE multiremi_feishu_sources DROP COLUMN connection_alert_delivery_failure_count;
+      ALTER TABLE multiremi_feishu_sources DROP COLUMN connection_alert_delivery_error_code;
+      ALTER TABLE multiremi_feishu_sources DROP COLUMN connection_alert_delivery_failed_at;
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_feishu_sources")).toEqual(expect.arrayContaining([
+      "connection_alert_delivery_failure_count",
+      "connection_alert_delivery_error_code",
+      "connection_alert_delivery_failed_at",
+    ]));
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    ).get()).toEqual({ count: 1 });
+
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260825_feishu_ingest_alert_delivery_v3'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("upgrades Feishu outcome rows from v3 to issue proposal v4 idempotently", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      DROP INDEX idx_multiremi_feishu_issue_proposals_status;
+      DROP INDEX idx_multiremi_feishu_issue_proposals_message;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_payload;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_status;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_resolved_at;
+      ALTER TABLE multiremi_feishu_message_outcomes DROP COLUMN proposal_resolved_by;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_feishu_issue_proposals_v4';
+      INSERT INTO multiremi_feishu_message_outcomes (
+        id, workspace_id, message_id, outcome_kind, ref, reason, task_id, created_at
+      ) VALUES (
+        'fout_v3', 'local', 'om_v3', 'ignored', NULL, 'legacy', NULL,
+        '2026-08-26T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_feishu_message_outcomes")).toEqual(expect.arrayContaining([
+      "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
+    ]));
+    expect(database.query(
+      `SELECT proposal_payload, proposal_status, proposal_resolved_at, proposal_resolved_by
+       FROM multiremi_feishu_message_outcomes WHERE id = 'fout_v3'`,
+    ).get()).toEqual({
+      proposal_payload: "{}",
+      proposal_status: "not_applicable",
+      proposal_resolved_at: null,
+      proposal_resolved_by: null,
+    });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_feishu_issue_proposals_v4'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_feishu_issue_proposals_v4'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("adds the agent Issue proposal policy with an unrestricted legacy default", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_agents DROP COLUMN issue_creation_requires_proposal;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy';
+      INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at)
+      VALUES ('agt_policy_legacy', 'Legacy agent', 'codex',
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT issue_creation_requires_proposal FROM multiremi_agents WHERE id = 'agt_policy_legacy'",
+    ).get()).toEqual({ issue_creation_requires_proposal: 0 });
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("adds the task Issue proposal snapshot with an unrestricted legacy default", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_tasks DROP COLUMN issue_creation_restricted;
+      ALTER TABLE multiremi_autopilot_runs DROP COLUMN source_task_id;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_task_issue_proposal_policy';
+      INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at)
+      VALUES ('agt_task_policy_legacy', 'Legacy task agent', 'codex',
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z');
+      INSERT INTO multiremi_tasks (
+        id, task_kind, agent_id, workspace_id, status, priority, prompt,
+        attempt, max_attempts, plugin_snapshot, created_at, updated_at
+      ) VALUES (
+        'tsk_policy_legacy', 'direct', 'agt_task_policy_legacy', 'local', 'queued', 0, 'legacy task',
+        1, 3, '[]', '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      "SELECT issue_creation_restricted FROM multiremi_tasks WHERE id = 'tsk_policy_legacy'",
+    ).get()).toEqual({ issue_creation_restricted: 0 });
+    expect(columnNames(database, "multiremi_autopilot_runs")).toContain("source_task_id");
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_task_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_task_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("adds persistent Autopilot proposal taint with unrestricted legacy defaults", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_autopilots DROP COLUMN issue_creation_restricted;
+      ALTER TABLE multiremi_autopilots DROP COLUMN issue_creation_restriction_reason;
+      ALTER TABLE multiremi_autopilots DROP COLUMN issue_creation_restricted_by_task_id;
+      ALTER TABLE multiremi_autopilot_triggers DROP COLUMN issue_creation_restricted;
+      ALTER TABLE multiremi_autopilot_triggers DROP COLUMN issue_creation_restriction_reason;
+      ALTER TABLE multiremi_autopilot_triggers DROP COLUMN issue_creation_restricted_by_task_id;
+      ALTER TABLE multiremi_webhook_deliveries DROP COLUMN source_task_id;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260826_autopilot_issue_proposal_policy';
+      INSERT INTO multiremi_agents (id, name, provider, created_at, updated_at)
+      VALUES ('agt_autopilot_policy_legacy', 'Legacy automation agent', 'codex',
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z');
+      INSERT INTO multiremi_autopilots (
+        id, title, workspace_id, assignee_type, assignee_id, status, execution_mode,
+        session_policy, workspace_policy, trigger_kind, created_by_type, created_by_id,
+        created_at, updated_at
+      ) VALUES (
+        'aut_policy_legacy', 'Legacy automation', 'local', 'agent',
+        'agt_autopilot_policy_legacy', 'active', 'run_only', 'new', 'reuse_issue',
+        'schedule', 'member', 'local', '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z'
+      );
+      INSERT INTO multiremi_autopilot_triggers (
+        id, autopilot_id, kind, enabled, created_at, updated_at
+      ) VALUES (
+        'atr_policy_legacy', 'aut_policy_legacy', 'schedule', 1,
+        '2026-08-26T00:00:00.000Z', '2026-08-26T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+
+    expect(database.query(
+      `SELECT issue_creation_restricted, issue_creation_restriction_reason,
+              issue_creation_restricted_by_task_id
+       FROM multiremi_autopilots WHERE id = 'aut_policy_legacy'`,
+    ).get()).toEqual({
+      issue_creation_restricted: 0,
+      issue_creation_restriction_reason: null,
+      issue_creation_restricted_by_task_id: null,
+    });
+    expect(database.query(
+      `SELECT issue_creation_restricted, issue_creation_restriction_reason,
+              issue_creation_restricted_by_task_id
+       FROM multiremi_autopilot_triggers WHERE id = 'atr_policy_legacy'`,
+    ).get()).toEqual({
+      issue_creation_restricted: 0,
+      issue_creation_restriction_reason: null,
+      issue_creation_restricted_by_task_id: null,
+    });
+    expect(columnNames(database, "multiremi_webhook_deliveries")).toContain("source_task_id");
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_autopilot_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+    migrate(database);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_autopilot_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
   });
 
   it("migrates legacy GitHub PR projections and settings without dual-writing", () => {

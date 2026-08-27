@@ -65,6 +65,7 @@ export function maybeDispatchOnIssueUpdate(
     return store.assignIssue(issue.id, {
       assigneeType: issue.assigneeType,
       assigneeId: issue.assigneeId,
+      parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
     }).issue;
   } catch (err) {
     log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -557,7 +558,7 @@ export function createOnboardingIssue(
 export function safeRerunIssue(
   store: MultiremiStore,
   issueId: string,
-  body: { agent_id?: string; agentId?: string; prompt?: string },
+  body: { agent_id?: string; agentId?: string; prompt?: string; parentTaskId?: string | null },
 ): { task: MultiremiTask } | { error: string; status: 400 | 404 } {
   const issue = store.getIssue(issueId);
   if (!issue) return { error: "issue not found", status: 404 };
@@ -574,6 +575,7 @@ export function safeRerunIssue(
     issueId: issue.id,
     workspaceId: issue.workspaceId,
     prompt: body.prompt ?? issue.title,
+    parentTaskId: body.parentTaskId ?? null,
   });
   return { task };
 }

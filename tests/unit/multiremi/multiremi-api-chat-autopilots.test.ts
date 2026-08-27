@@ -85,6 +85,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
     const duplicateBody = await duplicate.json();
     expect(duplicateBody.status).toBe("duplicate");
     expect(duplicateBody.deliveryId).toBe(webhookBody.deliveryId);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(2);
 
     const deliveries = await app.request(`/api/multiremi/autopilots/${autopilot.id}/deliveries`);
     const deliveriesBody = await deliveries.json();

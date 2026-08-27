@@ -18,6 +18,7 @@ import type {
   ListIssueCommentsInput,
   ListIssuesInput,
   MultiremiIssue,
+  MultiremiAgent,
   MultiremiSubscriptionReason,
 } from "@multiremi/contracts/types.js";
 import { currentJwtUserId } from "./auth-guards.js";
@@ -25,6 +26,40 @@ import { splitQueryList } from "./common.js";
 import { parseBooleanQuery, parseIntegerQuery } from "./request.js";
 
 export const SUBSCRIPTION_REASONS: MultiremiSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
+
+export const ISSUE_CREATION_REQUIRES_PROPOSAL_CODE = "issue_creation_requires_proposal";
+
+export function restrictedTaskIssueCreationAgent(c: Context, store: MultiremiStore): MultiremiAgent | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.agentId) return null;
+  const agent = store.getAgent(token.agentId);
+  const task = token.taskId ? store.getTask(token.taskId) : null;
+  if (!task?.issueCreationRestricted && !agent?.issueCreationRequiresProposal) return null;
+  return agent;
+}
+
+export function currentTaskIssueCreationRestricted(c: Context, store: MultiremiStore): boolean {
+  const token = currentTaskAccessToken(c);
+  if (!token?.agentId) return false;
+  return Boolean(
+    (token.taskId ? store.getTask(token.taskId)?.issueCreationRestricted : false)
+    || store.getAgent(token.agentId)?.issueCreationRequiresProposal,
+  );
+}
+
+/** Trusted parent lineage for server-created descendants. Request bodies must
+ * never supply this value directly. */
+export function currentTaskParentId(c: Context): string | null {
+  return currentTaskAccessToken(c)?.taskId ?? null;
+}
+
+export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStore): Response | null {
+  if (!restrictedTaskIssueCreationAgent(c, store)) return null;
+  return c.json({
+    error: "This agent must use `remi feishu messages propose-issue`; a human must approve before an Issue is created.",
+    code: ISSUE_CREATION_REQUIRES_PROPOSAL_CODE,
+  }, 403);
+}
 
 export function issueSubscriberCaller(c: Context): { actorType: "member" | "agent"; actorId: string } {
   const taskToken = currentTaskAccessToken(c);

@@ -167,6 +167,7 @@ export interface IssuesSurface {
   createIssue(input: CreateIssueInput): MultiremiIssue;
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment;
   getIssue(id: string): MultiremiIssue | null;
+  getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null;
   getIssueComment(id: string): MultiremiIssueComment | null;
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
@@ -748,6 +749,7 @@ export class StoreContext {
     actorId?: string | null;
     details?: unknown | null;
     emitEvent?: boolean;
+    bypassMute?: boolean;
     issueStatus?: string | null;
   }): MultiremiInboxItem | null {
     const routing = INBOX_ROUTING[input.type];
@@ -762,7 +764,7 @@ export class StoreContext {
     if (recipientType !== "member" || !rawRecipientId) return null;
     const member = this.resolveWorkspaceMemberForNotification(workspaceId, rawRecipientId);
     if (!member || member.archivedAt) return null;
-    if (this.isNotificationMuted(workspaceId, member.id, input.type)) return null;
+    if (!input.bypassMute && this.isNotificationMuted(workspaceId, member.id, input.type)) return null;
     const id = createId("inb");
     const now = nowIso();
     this.db.run(
@@ -901,6 +903,12 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
   if (type === "issue_assigned" || type === "unassigned") return "assignments";
   if (type === "comment_created" || type === "comment_mention") return "comments";
   if (type === "status_changed") return "status_changes";
+  if (
+    type === "feishu_message_notification"
+    || type === "feishu_reply_draft"
+    || type === "feishu_issue_proposal"
+  ) return "feishu_messages";
+  if (type === "feishu_ingest_connection_alert") return "system_notifications";
   if (type.startsWith("agent_")) return "agent_activity";
   if (
     type.startsWith("system_")

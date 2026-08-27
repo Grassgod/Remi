@@ -79,6 +79,10 @@
         "label": "Priority & Due date",
         "description": "When priority or due date changes on issues you follow"
       },
+      "feishu_messages": {
+        "label": "Feishu messages",
+        "description": "Inbox reminders and reply drafts created from monitored Feishu messages"
+      },
       "agent_activity": {
         "label": "Agent activity",
         "description": "When an agent task completes or fails"

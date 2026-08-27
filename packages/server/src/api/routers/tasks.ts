@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import {
   canCurrentUserAccessAgent,
   canUserViewTaskMessages,
+  currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
   loadChatSessionForCurrentUser,
   organizerTaskInspection,
@@ -66,6 +67,10 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       execution_fingerprint: _executionFingerprintSnake,
       issueSessionGeneration: _issueSessionGeneration,
       issue_session_generation: _issueSessionGenerationSnake,
+      parentTaskId: _parentTaskId,
+      parent_task_id: _parentTaskIdSnake,
+      issueCreationRestricted: _issueCreationRestricted,
+      issue_creation_restricted: _issueCreationRestrictedSnake,
       delegationId: _delegationId,
       delegation_id: _delegationIdSnake,
       delegatedByAgentId: _delegatedByAgentId,
@@ -74,7 +79,12 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       assignment_source_event_id: _assignmentSourceEventIdSnake,
       ...publicInput
     } = body;
-    return c.json({ task: taskPublicResponse(store.createTask(publicInput)) }, 201);
+    return c.json({
+      task: taskPublicResponse(store.createTask({
+        ...publicInput,
+        parentTaskId: currentTaskParentId(c),
+      })),
+    }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
     const task = store.getTaskWithAgent(c.req.param("id"));

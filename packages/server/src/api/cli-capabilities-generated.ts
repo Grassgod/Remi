@@ -4309,6 +4309,170 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "feishu.source.list": {
+      "command": "remi feishu source list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.source.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.source.get": {
+      "command": "remi feishu source get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.source.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.source.status": {
+      "command": "remi feishu source status",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.source.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.source.add": {
+      "command": "remi feishu source add",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.source.update": {
+      "command": "remi feishu source update",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.list": {
+      "command": "remi feishu messages list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.resolve": {
+      "command": "remi feishu messages resolve",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.resolve",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.create-issue": {
+      "command": "remi feishu messages create-issue",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.messages.create-issue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.propose-issue": {
+      "command": "remi feishu messages propose-issue",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.propose-issue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.notify": {
+      "command": "remi feishu messages notify",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.notify",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.messages.draft-reply": {
+      "command": "remi feishu messages draft-reply",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.messages.draft-reply",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.proposals.approve": {
+      "command": "remi feishu proposals approve",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.proposals.approve",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.proposals.reject": {
+      "command": "remi feishu proposals reject",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.proposals.reject",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "inbox.list": {
       "command": "remi inbox list",
       "auth": [
