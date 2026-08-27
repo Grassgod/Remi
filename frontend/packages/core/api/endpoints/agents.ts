@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentEnvResponse,
+  AgentSupervisorState,
   AgentTemplate,
   AgentTemplateSummary,
   CreateAgentFromTemplateRequest,
@@ -12,12 +13,14 @@ import type {
 import type { HttpClient } from "../http";
 import { parseWithFallback } from "../schema";
 import {
+  AgentSupervisorStateSchema,
   AgentTemplateSchema,
   AgentTemplateSummaryListSchema,
   CreateAgentFromTemplateResponseSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
+  emptyAgentSupervisorState,
 } from "../schemas/agents";
 
 export class AgentsEndpoints {
@@ -92,6 +95,22 @@ export class AgentsEndpoints {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  async setAgentSupervisor(id: string, enabled: boolean): Promise<AgentSupervisorState> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/agents/${encodeURIComponent(id)}/supervisor`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    return parseWithFallback(
+      raw,
+      AgentSupervisorStateSchema,
+      emptyAgentSupervisorState(id, enabled),
+      { endpoint: "PUT /api/agents/:id/supervisor" },
+    );
   }
 
   async archiveAgent(id: string): Promise<Agent> {

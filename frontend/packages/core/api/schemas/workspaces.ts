@@ -2,6 +2,7 @@
 // rules as the other domains: `.loose()` passes unknown fields, values default
 // so an older/newer server never white-screens the settings page.
 import { z } from "zod";
+import type { WorkspaceOrganizerSettings } from "../../types";
 
 export const WorkspaceEnvResponseSchema = z.object({
   workspace_id: z.string().default(""),
@@ -29,4 +30,14 @@ export const EMPTY_PLATFORM_PROMPT_TEMPLATE: PlatformPromptTemplatePreview = {
   bootstrap: "",
   delta: "",
   sha256: { bootstrap: "", delta: "" },
+};
+
+export const WorkspaceOrganizerSettingsSchema = z.object({
+  workspace_id: z.string().default(""),
+  mode: z.enum(["report_only", "act"]).default("report_only"),
+}).loose();
+
+export const EMPTY_WORKSPACE_ORGANIZER_SETTINGS: WorkspaceOrganizerSettings = {
+  workspace_id: "",
+  mode: "report_only",
 };

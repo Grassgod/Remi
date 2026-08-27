@@ -127,7 +127,9 @@
     "agent_archived_toast": "에이전트를 보관했습니다",
     "archive_failed_toast": "에이전트를 보관하지 못했습니다",
     "agent_restored_toast": "에이전트를 복원했습니다",
-    "restore_failed_toast": "에이전트를 복원하지 못했습니다"
+    "restore_failed_toast": "에이전트를 복원하지 못했습니다",
+    "supervisor_updated_toast": "작업 감독자 권한을 업데이트했습니다",
+    "supervisor_update_failed_toast": "작업 감독자 권한을 업데이트하지 못했습니다"
   },
   "inspector": {
     "section_properties": "속성",
@@ -154,7 +156,10 @@
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "save": "저장",
     "cancel": "취소",
-    "prop_engine": "엔진"
+    "prop_engine": "엔진",
+    "prop_supervisor": "작업 감독자",
+    "supervisor_enabled": "사용",
+    "supervisor_disabled": "사용 안 함"
   },
   "skill_attach": {
     "trigger_aria": "워크스페이스 스킬 연결",

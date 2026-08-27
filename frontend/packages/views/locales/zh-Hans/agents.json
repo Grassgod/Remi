@@ -123,7 +123,9 @@
     "agent_archived_toast": "已归档智能体",
     "archive_failed_toast": "归档智能体失败",
     "agent_restored_toast": "已恢复智能体",
-    "restore_failed_toast": "恢复智能体失败"
+    "restore_failed_toast": "恢复智能体失败",
+    "supervisor_updated_toast": "已更新任务主管权限",
+    "supervisor_update_failed_toast": "更新任务主管权限失败"
   },
   "inspector": {
     "section_properties": "属性",
@@ -150,7 +152,10 @@
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
     "cancel": "取消",
-    "prop_engine": "引擎"
+    "prop_engine": "引擎",
+    "prop_supervisor": "任务主管",
+    "supervisor_enabled": "已启用",
+    "supervisor_disabled": "未启用"
   },
   "skill_attach": {
     "trigger_aria": "附加工作区 skill",

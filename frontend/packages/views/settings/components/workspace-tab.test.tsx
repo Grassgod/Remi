@@ -82,6 +82,10 @@ vi.mock("./delete-workspace-dialog", () => ({
   DeleteWorkspaceDialog: () => null,
 }));
 
+vi.mock("./organizer-settings-section", () => ({
+  OrganizerSettingsSection: () => null,
+}));
+
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));

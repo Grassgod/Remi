@@ -169,6 +169,23 @@
     "confirm_cancel": "Cancel",
     "confirm_action": "Confirm"
   },
+  "organizer": {
+    "title": "Task supervision",
+    "description": "Choose what supervisor agents may do after they detect an unhealthy task.",
+    "mode_label": "Organizer mode",
+    "report_only_label": "Report only",
+    "report_only_description": "Supervisors can inspect task health and report issues, but cannot change another task.",
+    "act_label": "Allow intervention",
+    "act_description": "Supervisors may steer, request an immediate answer, cancel, or redispatch one task at a time. Every action requires a reason and is audited.",
+    "audit_hint": "This workspace setting applies to every agent with Task supervisor enabled.",
+    "read_only": "Only workspace owners and admins can change this mode.",
+    "save": "Save mode",
+    "saving": "Saving...",
+    "saved": "Task supervision mode updated",
+    "save_failed": "Failed to update task supervision mode",
+    "load_failed": "Could not load the task supervision mode.",
+    "retry": "Retry"
+  },
   "prompts": {
     "title": "Agent prompts",
     "description": "Workspace instructions appended to every Agent task.",

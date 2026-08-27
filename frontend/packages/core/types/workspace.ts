@@ -19,6 +19,13 @@ export interface Workspace {
   updated_at: string;
 }
 
+export type OrganizerMode = "report_only" | "act";
+
+export interface WorkspaceOrganizerSettings {
+  workspace_id: string;
+  mode: OrganizerMode;
+}
+
 export interface WorkspacePromptSettings {
   bootstrapPrompt: string;
   deltaPrompt: string;

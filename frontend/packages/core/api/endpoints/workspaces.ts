@@ -1,5 +1,7 @@
 import type {
+  OrganizerMode,
   Workspace,
+  WorkspaceOrganizerSettings,
   WorkspacePromptSettings,
   PlatformPromptTemplatePreview,
   UpdateWorkspacePromptSettingsRequest,
@@ -8,9 +10,11 @@ import type {
 import type { HttpClient } from "../http";
 import { parseWithFallback } from "../schema";
 import {
+  EMPTY_WORKSPACE_ORGANIZER_SETTINGS,
   EMPTY_PLATFORM_PROMPT_TEMPLATE,
   EMPTY_WORKSPACE_ENV,
   PlatformPromptTemplatePreviewSchema,
+  WorkspaceOrganizerSettingsSchema,
   WorkspaceEnvResponseSchema,
   type WorkspaceEnvResponse,
 } from "../schemas/workspaces";
@@ -39,6 +43,37 @@ export class WorkspacesEndpoints {
       method: "PATCH",
       body: JSON.stringify(data),
     });
+  }
+
+  async getWorkspaceOrganizerSettings(workspaceId: string): Promise<WorkspaceOrganizerSettings> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/organizer`,
+    );
+    return parseWithFallback(
+      raw,
+      WorkspaceOrganizerSettingsSchema,
+      { ...EMPTY_WORKSPACE_ORGANIZER_SETTINGS, workspace_id: workspaceId },
+      { endpoint: "GET /api/workspaces/:id/organizer" },
+    );
+  }
+
+  async updateWorkspaceOrganizerSettings(
+    workspaceId: string,
+    mode: OrganizerMode,
+  ): Promise<WorkspaceOrganizerSettings> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/organizer`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ mode }),
+      },
+    );
+    return parseWithFallback(
+      raw,
+      WorkspaceOrganizerSettingsSchema,
+      { workspace_id: workspaceId, mode },
+      { endpoint: "PUT /api/workspaces/:id/organizer" },
+    );
   }
 
   async getWorkspacePromptSettings(workspaceId: string): Promise<WorkspacePromptSettings> {

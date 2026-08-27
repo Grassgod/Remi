@@ -16,6 +16,7 @@ import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import { isImeComposing } from "@multiremi/core/utils";
 import { useTimeAgo } from "../../i18n";
 import { Button } from "@multiremi/ui/components/ui/button";
+import { Switch } from "@multiremi/ui/components/ui/switch";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AvatarUploadButton } from "../../common/avatar-upload-button";
 import { Input } from "@multiremi/ui/components/ui/input";
@@ -59,7 +60,10 @@ interface InspectorProps {
    * `server/internal/handler/agent.go:519-535`.
    */
   canEdit: boolean;
+  /** Only workspace owners/admins can grant cross-task supervisor authority. */
+  canManageSupervisor: boolean;
   onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
+  onSetSupervisor: (id: string, enabled: boolean) => Promise<void>;
   /**
    * Focus the overview pane's Integrations tab. The inspector's Lark status
    * row is read-only and deep-links here; Manage / Disconnect live in the
@@ -82,7 +86,9 @@ export function AgentDetailInspector({
   owner,
   presence,
   canEdit,
+  canManageSupervisor,
   onUpdate,
+  onSetSupervisor,
   onShowIntegrations,
 }: InspectorProps) {
   const { t } = useT("agents");
@@ -92,6 +98,7 @@ export function AgentDetailInspector({
   const provider = agent.provider || "claude";
   const { models } = useFleetProviderModels(wsId ?? "", provider);
   const showIntegrations = useHasIntegrations(agent.id);
+  const [supervisorSaving, setSupervisorSaving] = useState(false);
   const switchEngine = (next: string) =>
     update({ provider: next, model: "", thinking_level: "" });
   const switchModel = (next: string) => {
@@ -158,6 +165,29 @@ export function AgentDetailInspector({
             value={agent.max_concurrent_tasks}
             canEdit={canEdit}
             onChange={(n) => update({ max_concurrent_tasks: n })}
+          />
+        </PropRow>
+        <PropRow label={t(($) => $.inspector.prop_supervisor)} interactive={false}>
+          <span
+            id={`agent-supervisor-hint-${agent.id}`}
+            className="mr-auto text-muted-foreground"
+          >
+            {agent.supervisor === true
+              ? t(($) => $.inspector.supervisor_enabled)
+              : t(($) => $.inspector.supervisor_disabled)}
+          </span>
+          <Switch
+            size="sm"
+            checked={agent.supervisor === true}
+            disabled={!canManageSupervisor || supervisorSaving}
+            aria-label={t(($) => $.inspector.prop_supervisor)}
+            aria-describedby={`agent-supervisor-hint-${agent.id}`}
+            onCheckedChange={(enabled) => {
+              setSupervisorSaving(true);
+              void onSetSupervisor(agent.id, enabled).finally(() => {
+                setSupervisorSaving(false);
+              });
+            }}
           />
         </PropRow>
       </Section>

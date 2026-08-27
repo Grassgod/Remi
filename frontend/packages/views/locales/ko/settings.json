@@ -169,6 +169,23 @@
     "confirm_cancel": "취소",
     "confirm_action": "확인"
   },
+  "organizer": {
+    "title": "작업 감독",
+    "description": "감독 에이전트가 비정상 작업을 감지한 뒤 수행할 수 있는 동작을 선택합니다.",
+    "mode_label": "Organizer 모드",
+    "report_only_label": "보고만",
+    "report_only_description": "감독자는 작업 상태를 점검하고 문제를 보고할 수 있지만 다른 작업을 변경할 수 없습니다.",
+    "act_label": "개입 허용",
+    "act_description": "감독자는 작업별로 지시 추가, 즉시 답변 요청, 취소 또는 재배정을 수행할 수 있습니다. 모든 동작에는 이유와 감사 기록이 필요합니다.",
+    "audit_hint": "이 설정은 작업 감독자가 활성화된 모든 에이전트에 적용됩니다.",
+    "read_only": "워크스페이스 소유자와 관리자만 이 모드를 변경할 수 있습니다.",
+    "save": "모드 저장",
+    "saving": "저장 중...",
+    "saved": "작업 감독 모드를 업데이트했습니다",
+    "save_failed": "작업 감독 모드를 업데이트하지 못했습니다",
+    "load_failed": "작업 감독 모드를 불러오지 못했습니다.",
+    "retry": "다시 시도"
+  },
   "prompts": {
     "title": "에이전트 프롬프트",
     "description": "워크스페이스의 모든 에이전트 작업에 추가되는 지침입니다.",

@@ -123,7 +123,9 @@
     "agent_archived_toast": "エージェントをアーカイブしました",
     "archive_failed_toast": "エージェントをアーカイブできませんでした",
     "agent_restored_toast": "エージェントを復元しました",
-    "restore_failed_toast": "エージェントを復元できませんでした"
+    "restore_failed_toast": "エージェントを復元できませんでした",
+    "supervisor_updated_toast": "タスク監督権限を更新しました",
+    "supervisor_update_failed_toast": "タスク監督権限を更新できませんでした"
   },
   "inspector": {
     "section_properties": "プロパティ",
@@ -150,7 +152,10 @@
     "description_placeholder": "このエージェントは何をしますか？",
     "save": "保存",
     "cancel": "キャンセル",
-    "prop_engine": "エンジン"
+    "prop_engine": "エンジン",
+    "prop_supervisor": "タスク監督者",
+    "supervisor_enabled": "有効",
+    "supervisor_disabled": "無効"
   },
   "skill_attach": {
     "trigger_aria": "ワークスペースのスキルを追加",

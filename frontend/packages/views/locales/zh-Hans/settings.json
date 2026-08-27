@@ -169,6 +169,23 @@
     "confirm_cancel": "取消",
     "confirm_action": "确认"
   },
+  "organizer": {
+    "title": "任务巡检与干预",
+    "description": "设置任务主管发现异常任务后可以采取的动作。",
+    "mode_label": "Organizer 模式",
+    "report_only_label": "仅报告",
+    "report_only_description": "任务主管可以检查任务健康状态并报告问题，但不能改变其他任务。",
+    "act_label": "允许干预",
+    "act_description": "任务主管可以逐个追加指令、要求立即作答、取消或重新派发任务。每次操作都必须填写原因并接受审计。",
+    "audit_hint": "此工作区设置适用于所有已启用「任务主管」的智能体。",
+    "read_only": "只有工作区所有者和管理员可以修改此模式。",
+    "save": "保存模式",
+    "saving": "保存中...",
+    "saved": "已更新任务巡检模式",
+    "save_failed": "更新任务巡检模式失败",
+    "load_failed": "无法加载任务巡检模式。",
+    "retry": "重试"
+  },
   "prompts": {
     "title": "智能体提示词",
     "description": "追加到当前工作区所有智能体任务的工作区级指令。",
