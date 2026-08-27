@@ -108,17 +108,32 @@ describe("formatTokens", () => {
     expect(formatTokens(2_400_000)).toBe("2.4M");
     expect(formatTokens(2_000_000)).toBe("2M");
     expect(formatTokens(658_905_053)).toBe("658.9M");
-    expect(formatTokens(999_999_999)).toBe("1000.0M");
   });
 
   it("uses a billions tier at one billion", () => {
     expect(formatTokens(1_000_000_000)).toBe("1B");
     expect(formatTokens(1_415_100_000)).toBe("1.4B");
-    expect(formatTokens(1_999_999_999)).toBe("2.0B");
     expect(formatTokens(2_000_000_000)).toBe("2B");
   });
 
   it("uses a trillions tier at one trillion", () => {
     expect(formatTokens(1_000_000_000_000)).toBe("1T");
+  });
+
+  it("promotes a reading that rounds up past its own tier", () => {
+    // The whole point of a compact unit is defeated by "1000.0M".
+    expect(formatTokens(999_999_999)).toBe("1B");
+    expect(formatTokens(999_999)).toBe("1M");
+    expect(formatTokens(999_999_999_999)).toBe("1T");
+    // Just below the rounding threshold, so it stays in its own tier.
+    expect(formatTokens(999_949_999)).toBe("999.9M");
+  });
+
+  it("drops the decimal on readings that round to an integer from either side", () => {
+    expect(formatTokens(1_999_999_999)).toBe("2B");
+    expect(formatTokens(1_960_000_000)).toBe("2B");
+    expect(formatTokens(2_040_000_000)).toBe("2B");
+    // Far enough from the integer to keep the decimal.
+    expect(formatTokens(1_940_000_000)).toBe("1.9B");
   });
 });
