@@ -14,7 +14,7 @@ import {
   citationRefsOption,
   readOptionalTextBody,
 } from "./fields.js";
-import { wikiDiff, wikiPull, wikiPush, wikiStatus } from "./wiki-working-copy.js";
+import { wikiDiff, wikiMove, wikiPull, wikiPush, wikiStatus } from "./wiki-working-copy.js";
 
 type KnowledgeKind = "memory" | "wiki";
 
@@ -67,6 +67,13 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await wikiDiff(options, requireProject("wiki", "diff", options));
     return;
   }
+  if (action === "mv") {
+    const ref = positional[1]?.trim();
+    const destination = positional[2]?.trim();
+    if (!ref || !destination) throw new Error("usage: multiremi wiki mv <ref> <new-path> [--project <project-id>]");
+    await wikiMove(options, projectOption(options), ref, destination);
+    return;
+  }
   if (action === "push") {
     await wikiPush(options, projectOption(options));
     return;
@@ -105,7 +112,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await backlinks("wiki", positional[1], options);
     return;
   }
-  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|push ...");
+  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|mv|push ...");
 }
 
 async function listKnowledge(kind: KnowledgeKind, options: CliOptions): Promise<void> {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
@@ -8,6 +8,7 @@ import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
 interface DocState {
   id: string;
   slug: string;
+  path?: string;
   title: string;
   body: string;
   version: number;
@@ -111,6 +112,81 @@ describe("Wiki working copy", () => {
       await runMultiremi(["wiki", "push", ...base], { programName: "multiremi" });
       expect(docs.has("old-page")).toBe(false);
       expect(docs.get("new-page")).toMatchObject({ title: "New page", body: "# New page\n\nCurrent guidance." });
+    });
+  });
+
+  test("moves a Project Wiki page without changing its id or slug", async () => {
+    const docs = new Map<string, DocState>([["guide", {
+      id: "pdoc_guide",
+      slug: "guide",
+      path: "guide.md",
+      title: "Guide",
+      body: "# Guide\n\nOriginal",
+      version: 1,
+    }]]);
+    await withWikiServer(docs, async (serverUrl, requests) => {
+      const root = workspaceRoot();
+      const base = ["--project", "prj_1", "--server", serverUrl, "--token", "token"];
+      await runMultiremi(["wiki", "pull", ...base], { programName: "multiremi" });
+      await runMultiremi(["wiki", "mv", "guide", "architecture/guide.md", ...base], { programName: "multiremi" });
+      writeFileSync(join(root, "wiki", "architecture", "guide.md"), "# Guide\n\nMoved and edited\n");
+      await runMultiremi(["wiki", "push", ...base], { programName: "multiremi" });
+
+      expect(docs.get("guide")).toMatchObject({
+        id: "pdoc_guide",
+        slug: "guide",
+        path: "architecture/guide.md",
+        body: "# Guide\n\nMoved and edited",
+        version: 2,
+      });
+      expect(requests.filter((request) => request.method === "PUT")).toHaveLength(1);
+      expect(requests.some((request) => request.method === "POST" || request.method === "DELETE")).toBe(false);
+      expect(existsSync(join(root, "wiki", "guide.md"))).toBe(false);
+      expect(readFileSync(join(root, ".multiremi", "wiki-base", "files", "architecture", "guide.md"), "utf8"))
+        .toContain("Moved and edited");
+      const manifest = JSON.parse(readFileSync(join(root, ".multiremi", "wiki-base", "manifest.json"), "utf8"));
+      expect(manifest.docs[0]).toMatchObject({ id: "pdoc_guide", slug: "guide", path: "architecture/guide.md", version: 2 });
+      expect(manifest.docs[0].movedTo).toBeUndefined();
+    });
+  });
+
+  test("recognizes a same-content filesystem rename as a move", async () => {
+    const docs = new Map<string, DocState>([["guide", {
+      id: "pdoc_guide",
+      slug: "guide",
+      path: "guide.md",
+      title: "Guide",
+      body: "same content",
+      version: 1,
+    }]]);
+    await withWikiServer(docs, async (serverUrl, requests) => {
+      const root = workspaceRoot();
+      const base = ["--project", "prj_1", "--server", serverUrl, "--token", "token"];
+      await runMultiremi(["wiki", "pull", ...base], { programName: "multiremi" });
+      mkdirSync(join(root, "wiki", "guides"));
+      renameSync(join(root, "wiki", "guide.md"), join(root, "wiki", "guides", "guide.md"));
+      await runMultiremi(["wiki", "push", ...base], { programName: "multiremi" });
+
+      expect(docs.get("guide")).toMatchObject({ id: "pdoc_guide", slug: "guide", path: "guides/guide.md", version: 2 });
+      expect(requests.filter((request) => request.method === "PUT")).toHaveLength(1);
+      expect(requests.some((request) => request.method === "POST" || request.method === "DELETE")).toBe(false);
+    });
+  });
+
+  test("recursively creates nested pages with basename-derived unique slugs", async () => {
+    const docs = new Map<string, DocState>();
+    await withWikiServer(docs, async (serverUrl) => {
+      const root = workspaceRoot();
+      const base = ["--project", "prj_1", "--server", serverUrl, "--token", "token"];
+      await runMultiremi(["wiki", "pull", ...base], { programName: "multiremi" });
+      mkdirSync(join(root, "wiki", "architecture"), { recursive: true });
+      mkdirSync(join(root, "wiki", "operations"), { recursive: true });
+      writeFileSync(join(root, "wiki", "architecture", "overview.md"), "# Architecture overview\n");
+      writeFileSync(join(root, "wiki", "operations", "overview.md"), "# Operations overview\n");
+      await runMultiremi(["wiki", "push", ...base], { programName: "multiremi" });
+
+      expect(docs.get("overview")).toMatchObject({ path: "architecture/overview.md" });
+      expect(docs.get("overview-2")).toMatchObject({ path: "operations/overview.md" });
     });
   });
 
@@ -288,7 +364,8 @@ describe("Wiki working copy", () => {
         }],
       }, null, 2)}\n`);
 
-      writeFileSync(join(repositoryRoot, "architecture", "overview.md"), "after\n");
+      await runMultiremi(["wiki", "mv", "rwdoc_overview", "design/overview.md", ...base], { programName: "multiremi" });
+      writeFileSync(join(repositoryRoot, "design", "overview.md"), "after\n");
       writeFileSync(join(repositoryRoot, "getting-started.md"), "# Getting started\n\nFirst page.\n");
       rmSync(join(root, ".multiremi", "wiki-base", "manifest.json"));
       await runMultiremi([
@@ -302,7 +379,8 @@ describe("Wiki working copy", () => {
         "deadbeef",
       ], { programName: "multiremi" });
 
-      expect(repositoryDocs.get("architecture/overview.md")).toMatchObject({ body: "after", version: 2 });
+      expect(repositoryDocs.has("architecture/overview.md")).toBe(false);
+      expect(repositoryDocs.get("design/overview.md")).toMatchObject({ id: "rwdoc_overview", body: "after", version: 2 });
       expect(repositoryDocs.get("getting-started.md")).toMatchObject({ title: "Getting started", body: "# Getting started\n\nFirst page." });
       expect(requests.filter((request) => request.method === "PUT" || request.method === "POST")
         .every((request) => request.body?.source_revision === "deadbeef")).toBe(true);
@@ -348,8 +426,9 @@ async function withWikiServer(
         if (!current) return Response.json({ error: "not found" }, { status: 404 });
         if (request.method === "PUT") {
           if (Number(body.expected_version) !== current.version) return Response.json({ error: "version conflict" }, { status: 409 });
-          const updated = { ...current, body: String(body.body ?? current.body), version: current.version + 1 };
-          hooks.repositoryDocs?.set(current.path, updated);
+          const updated = { ...current, path: String(body.path ?? current.path), body: String(body.body ?? current.body), version: current.version + 1 };
+          hooks.repositoryDocs?.delete(current.path);
+          hooks.repositoryDocs?.set(updated.path, updated);
           return Response.json({ doc: wireRepositoryDoc(updated) });
         }
         if (request.method === "DELETE") {
@@ -366,6 +445,7 @@ async function withWikiServer(
         const created: DocState = {
           id: `pdoc_${slug}`,
           slug,
+          path: String(body.path ?? `${slug}.md`),
           title: String(body.title),
           body: String(body.body ?? ""),
           version: 1,
@@ -381,7 +461,7 @@ async function withWikiServer(
         if (request.method === "PUT") {
           if (Number(body.expected_version) !== current.version) return Response.json({ error: "version conflict" }, { status: 409 });
           if (hooks.failUpdate?.(slug)) return Response.json({ error: "version conflict" }, { status: 409 });
-          const updated = { ...current, body: String(body.body ?? current.body), version: current.version + 1 };
+          const updated = { ...current, path: String(body.path ?? current.path ?? `${slug}.md`), body: String(body.body ?? current.body), version: current.version + 1 };
           docs.set(slug, updated);
           hooks.afterUpdate?.(slug);
           return Response.json({ doc: wireDoc(updated) });
@@ -418,6 +498,7 @@ function workspaceRoot(): string {
 function wireDoc(doc: DocState): Record<string, unknown> {
   return {
     ...doc,
+    path: doc.path ?? `${doc.slug}.md`,
     project_id: "prj_1",
     workspace_id: "local",
     kind: "wiki",

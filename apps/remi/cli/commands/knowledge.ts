@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { CliError, type CliOptionSpec, type CommandInvocation, type CommandSpec } from "../core/index.js";
 import type { CliOptions } from "../multiremi/options.js";
-import { wikiDiff, wikiPull, wikiPush, wikiStatus } from "../multiremi/commands/wiki-working-copy.js";
+import { wikiDiff, wikiMove, wikiPull, wikiPush, wikiStatus } from "../multiremi/commands/wiki-working-copy.js";
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
@@ -269,7 +269,7 @@ function migrationSpec(
 }
 
 function wikiWorkingCopySpecs(): CommandSpec[] {
-  return (["pull", "status", "diff", "push"] as const).map((action) => spec(
+  const specs = (["pull", "status", "diff", "push"] as const).map((action) => spec(
     `wiki.${action}`,
     ["wiki", action],
     `${action[0]!.toUpperCase()}${action.slice(1)} the wiki working copy`,
@@ -291,6 +291,27 @@ function wikiWorkingCopySpecs(): CommandSpec[] {
       else await wikiPush(options, projectId);
     },
   ));
+  specs.push(spec(
+    "wiki.mv",
+    ["wiki", "mv"],
+    "Move a Wiki page without changing its identity",
+    "write",
+    [refPositional("document"), { name: "new-path", required: true }],
+    [PROJECT_OPTION],
+    async (invocation) => {
+      const projectRef = projectOption(invocation);
+      const project = projectRef
+        ? await resolveProject(await clientFor(invocation), requiredWorkspace(invocation), projectRef)
+        : null;
+      await wikiMove(
+        legacyOptions(invocation),
+        project ? String(project.id) : null,
+        positional(invocation, 0, "document"),
+        positional(invocation, 1, "new-path"),
+      );
+    },
+  ));
+  return specs;
 }
 
 async function projectRequest(

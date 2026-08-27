@@ -136,6 +136,7 @@ export interface AgentTaskProjectResource {
 export interface AgentTaskProjectDocEntry {
   id: string;
   slug: string;
+  path?: string;
   title: string;
   summary?: string | null;
   /** memory entries carry a trimmed body; wiki entries are null. */
@@ -162,6 +163,7 @@ export interface AgentTaskProjectDoc {
   workspaceId?: string;
   kind: "wiki" | "memory";
   slug: string;
+  path?: string;
   title: string;
   summary: string | null;
   body: string;

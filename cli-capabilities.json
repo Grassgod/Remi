@@ -1835,6 +1835,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "wiki.mv": {
+      "command": "remi wiki mv",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "wiki.mv",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.list": {
       "command": "remi issue list",
       "aliases": [],

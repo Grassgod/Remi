@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { normalizeWikiPath } from "@multiremi/contracts/wiki-path";
 import type {
   AgentTask,
   AgentTaskProjectDoc,
@@ -86,11 +87,12 @@ function prepareIssueWikiWorkspaceUnlocked(workDir: string, task: AgentTask, pro
   for (const doc of remoteDocs) {
     const prior = previousById.get(doc.id) ?? previousBySlug.get(doc.slug);
     if (prior) matchedPriorPaths.add(prior.path);
-    const path = prior?.path ?? `${safeSlug(doc.slug)}.md`;
-    const localPath = join(wikiRoot, path);
-    const basePath = join(filesRoot, path);
+    const remotePath = projectDocPath(doc);
+    const priorPath = prior?.path ?? remotePath;
+    const localPath = join(wikiRoot, priorPath);
+    const basePath = join(filesRoot, priorPath);
     const remoteText = markdownFile(doc.body);
-    const remoteEntry = manifestEntry(doc, path, remoteText);
+    const remoteEntry = manifestEntry(doc, remotePath, remoteText);
 
     if (!prior) {
       if (readRegularText(workDir, localPath, "Wiki page") === null) writeTextAtomic(workDir, localPath, remoteText);
@@ -103,14 +105,19 @@ function prepareIssueWikiWorkspaceUnlocked(workDir: string, task: AgentTask, pro
     const localText = readRegularText(workDir, localPath, "Wiki page");
     const remoteUnchanged = prior.id === remoteEntry.id
       && prior.version === remoteEntry.version
-      && prior.sha256 === remoteEntry.sha256;
+      && prior.sha256 === remoteEntry.sha256
+      && prior.path === remoteEntry.path;
     if (remoteUnchanged) {
       nextEntries.push(prior);
       continue;
     }
     if (localText !== null && localText === baseText) {
-      writeTextAtomic(workDir, localPath, remoteText);
-      writeReadOnlyText(workDir, basePath, remoteText);
+      if (prior.path !== remotePath) {
+        removeRegularFile(workDir, localPath);
+        removeRegularFile(workDir, basePath);
+      }
+      writeTextAtomic(workDir, join(wikiRoot, remotePath), remoteText);
+      writeReadOnlyText(workDir, join(filesRoot, remotePath), remoteText);
       nextEntries.push(remoteEntry);
       continue;
     }
@@ -329,13 +336,19 @@ function readManifest(workDir: string, path: string): IssueWikiManifest | null {
 }
 
 function validManifestPath(value: unknown): value is string {
-  return typeof value === "string"
-    && value.length > 3
-    && value.length <= 200
-    && value.toLowerCase().endsWith(".md")
-    && !value.includes("/")
-    && !value.includes("\\")
-    && !value.includes("\0");
+  if (typeof value !== "string") return false;
+  try {
+    const normalized = normalizeWikiPath(value);
+    return normalized === value && normalized !== "repositories.md" && !normalized.startsWith("repositories/");
+  } catch {
+    return false;
+  }
+}
+
+function projectDocPath(doc: AgentTaskProjectDoc): string {
+  const value = doc.path ?? `${safeSlug(doc.slug)}.md`;
+  if (!validManifestPath(value)) throw new Error(`Project Wiki path is invalid: ${value}`);
+  return value;
 }
 
 function safeSlug(value: string): string {
