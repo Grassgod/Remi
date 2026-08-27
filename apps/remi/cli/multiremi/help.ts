@@ -97,7 +97,7 @@ Options:
   --host <address>       API listen host for serve (default: 0.0.0.0)
   --token <token>        Bearer token for server/daemon auth
   --server <url>         Daemon server URL (default: http://127.0.0.1:6120)
-  --output json|table    Output format for supported read commands
+  --output <value>       Output format for supported reads; exact file for attachment download
   --json                 JSON output for daemon status and daemon service status
   --full-id              Show full IDs in supported table output
   --attachment <path>    Attach a local file to issue create/comment add (repeatable)

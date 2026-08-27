@@ -36,8 +36,11 @@ and restores the old symlink if health checks fail.
 
 ## Docker Compose control plane
 
-Keep `platform.env` and `api.env` outside Git with mode `0600`. Set API and Web
-images to immutable GHCR digests from `platform-release.json`, then run:
+Keep `platform.env` and `api.env` outside Git with mode `0600`. Create `api.env`
+from [`docker/api.env.example`](docker/api.env.example), replace every required
+placeholder, and enable only the optional features the deployment uses. Never
+commit the populated file. Set API and Web images to immutable GHCR digests from
+`platform-release.json`, then run:
 
 ```bash
 docker compose --env-file /etc/multiremi/platform.env \
@@ -55,9 +58,10 @@ When PostgreSQL and OpenViking already run in Docker, use
 data-service networks; it never creates, replaces, or deletes data containers.
 
 1. Back up PostgreSQL, OpenViking, uploads, session archives, and SSH Mesh state.
-2. Create an API env file outside Git. Change the database hostname to the
-   existing network alias (`postgres` by default). Do not copy secrets into the
-   Compose env file. Create a separate control-plane env file whose database
+2. Copy `deploy/docker/api.env.example` to an API env file outside Git, replace
+   its required placeholders, set mode `0600`, and change the database hostname
+   to the existing network alias (`postgres` by default). Do not copy secrets
+   into the Compose env file. Create a separate control-plane env file whose database
    URL uses the host-published PostgreSQL address (`127.0.0.1` by default).
 3. Create a persistent service home owned by the runtime user and bind it with
    `REMI_HOME_DIR`. Bind the existing uploads, session archives, and SSH Mesh
@@ -87,9 +91,14 @@ The updater may use this Compose file after cutover. Set
 still appear in the service status panel.
 
 Feishu message ingestion uses an operator-owned endpoint registry instead of
-accepting arbitrary URLs from users or agents. See
+accepting arbitrary URLs from users or agents. The `feishu-sidecar` service in
+`compose.application.yml` is inert until `COMPOSE_PROFILES=feishu-sidecar` and
+`REMI_FEISHU_SIDECAR_ENDPOINTS` are set in the platform env file; it shares the
+API container's network namespace and publishes no port. The updater removes and
+recreates it around every API container replacement, and a sidecar that fails to
+start degrades ingestion without failing the release. See
 [`docs/feishu-message-ingestion.md`](../docs/feishu-message-ingestion.md) for
-the fail-closed environment contract and a review-only Compose sidecar example.
+the fail-closed environment contract, the rollout runbook, and rollback.
 
 ## Direct Session Archive uploads (MUL-144)
 
@@ -134,9 +143,23 @@ and refuses redirects before attaching its Bearer token. An absolute URL is
 only a direct-route candidate: before PUT, the daemon sends an authenticated
 HEAD request to the same content URL. Only a `204` response carrying
 `X-Remi-Archive-Direct: 1` proves that Nginx selected the direct API location.
-The API intentionally does not emit this header, so a request forwarded by the
-Next.js compatibility rewrite cannot attest itself. Results are cached by
-target origin for the configured finite TTL.
+The direct Nginx location injects `X-Remi-Archive-Direct-Route: 1` into the
+upstream request. The API emits the response marker only when that route proof
+is present and the request `Host` authority (including a non-default port)
+matches `MULTIREMI_DAEMON_DIRECT_BASE_URL`. The Next.js compatibility rewrite
+does not inject the route proof, so it cannot attest itself even if it preserves
+the public `Host`; response-header passthrough therefore cannot create a false
+positive. Results are cached by target origin for the configured finite TTL.
+
+The route proof is only as trustworthy as the edge that injects it. Nginx must
+also clear a client-supplied `X-Remi-Archive-Direct-Route` on every other path,
+otherwise a caller can send the header itself and reach the API through the
+Next.js rewrite. The authority check does not cover this on its own: it compares
+the request `Host` to `MULTIREMI_DAEMON_DIRECT_BASE_URL`, so it is a no-op
+whenever the direct route shares the public host and port, which is the topology
+the sample configuration describes. Add
+`proxy_set_header X-Remi-Archive-Direct-Route "";` to the enclosing server block
+so only the direct location supplies the proof.
 
 The 8 MiB fallback is deliberately fail-closed and is a compatibility change.
 Production history includes one 8.912 MiB archive that previously succeeded,
@@ -148,10 +171,12 @@ known failure size and is not recommended as a substitute for the direct route.
 
 Use [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf) in
 the public server block. It disables request/response buffering, allows bodies
-up to 1 GiB, gives a streaming upload 15 minutes, and adds the direct-route
-attestation header. Replace its sample `16120` upstream port with the host's
-effective `REMI_API_BIND_PORT`. Keep the API container bound to loopback; Nginx
-is the external network path.
+up to 1 GiB, gives a streaming upload 15 minutes, preserves the public `Host`,
+and injects the direct-route proof consumed by the API. Replace its sample
+`16120` upstream port with the host's effective `REMI_API_BIND_PORT`, and add the
+server-level `proxy_set_header X-Remi-Archive-Direct-Route "";` documented in the
+file header. Keep the API container bound to loopback; Nginx is the external
+network path.
 
 Audit the complete effective configuration with `nginx -T`. Ordinary prefix
 location order does not decide this match. A broader regex declared earlier can
@@ -182,6 +207,13 @@ following steps. This repository change does not perform them:
 6. Retry failed archives, then verify API access logs receive the content PUTs,
    Web/Next.js logs do not, and each archive becomes `ready` with its declared
    size and SHA-256. Check Web process memory/event-loop health during the run.
+
+`remi issue archive retry <issue> <archive-id>` (the compatibility alias of
+`remi session archive retry`) also accepts an exhausted failed archive. It
+resets the attempt count, error, backoff timestamp, and exhaustion timestamp,
+returning the row to `pending` with `retry_state=eligible`. Run it once per
+failed archive only after the direct route and API setting pass the HEAD check;
+the daemon will claim and upload the recovered attempt on its next archive run.
 
 Do not expose the API container port directly to the network and do not place
 daemon tokens in Nginx configuration or logs.

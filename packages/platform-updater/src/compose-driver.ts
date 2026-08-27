@@ -19,6 +19,15 @@ interface ComposeConfig {
   openvikingContainer?: string | null;
 }
 
+/** Services this stack owns outright and switches as one batch. */
+const CORE_SERVICES = ["api", "web", "ssh-mesh-control-plane"] as const;
+/**
+ * The Feishu ingestion sidecar shares the API container's network namespace, so
+ * it only exists when the operator enabled its Compose profile, and it must be
+ * detached before the API container is replaced and reattached afterwards.
+ */
+const SIDECAR_SERVICE = "feishu-sidecar";
+
 interface ComposeManifest {
   version: string;
   ref: string;
@@ -48,8 +57,11 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     if (operation.kind === "check_updates") return (await this.inspect()).currentRelease;
     if (operation.kind === "restart") {
       await report({ status: "restarting", progress: { message: "Restarting platform services" } });
-      await this.mustCompose(["restart", "api", "web", "ssh-mesh-control-plane"]);
+      await this.mustCompose(["restart", ...CORE_SERVICES]);
       await this.verify();
+      // A restart keeps the API container, so the sidecar keeps its namespace.
+      // It is restarted with the batch, but never at the platform's expense.
+      await this.restartSidecar();
       return (await this.inspect()).currentRelease;
     }
     if (operation.kind === "rollback") {
@@ -78,10 +90,14 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
       // operator cancel, so the switch below never runs in those cases.
       if (drain) await drain.waitUntilDrained(report);
       await report({ status: "switching", previousRelease: previous, progress: { message: "Applying image digests" } });
-      await this.mustCompose(["up", "-d", "--no-deps", "api", "web", "ssh-mesh-control-plane"]);
+      // Docker refuses to replace a container another container borrows its
+      // network namespace from, so the sidecar goes first and comes back after.
+      await this.detachSidecar();
+      await this.mustCompose(["up", "-d", "--no-deps", ...CORE_SERVICES]);
       // Do not call the control API between switching containers and verifying
       // them. A broken API image must not be able to block the local rollback.
       await this.verify();
+      await this.attachSidecar();
       const release = toRelease(manifest);
       await this.writeRelease(release);
       return release;
@@ -97,12 +113,50 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
         // Restore the host first. Reporting through the newly switched API can
         // fail for the same reason that triggered this rollback.
         await this.writeImageEnv(originalEnv, previous.apiImage, previous.webImage);
-        await this.mustCompose(["up", "-d", "--no-deps", "api", "web", "ssh-mesh-control-plane"]);
+        await this.detachSidecar();
+        await this.mustCompose(["up", "-d", "--no-deps", ...CORE_SERVICES]);
         await this.verify();
+        // The restored API container has a new namespace too.
+        await this.attachSidecar();
         await report({ status: "rolling_back", previousRelease: previous, error: errorMessage(error) });
       }
       throw error;
     }
+  }
+
+  /**
+   * `feishu-sidecar` lives behind a Compose profile: an installation that never
+   * enabled ingestion has no such service, and naming it would make every
+   * Compose command fail. `config --services` resolves the profile from the
+   * same env file the other commands use.
+   */
+  private async hasSidecar(): Promise<boolean> {
+    const result = await this.compose(["config", "--services"]);
+    if (result.exitCode !== 0) return false;
+    return result.stdout.split("\n").some((line) => line.trim() === SIDECAR_SERVICE);
+  }
+
+  /** Remove the sidecar so the API container it borrows a namespace from can be replaced. */
+  private async detachSidecar(): Promise<void> {
+    if (!(await this.hasSidecar())) return;
+    // Best effort: an absent or already-stopped sidecar must not block a
+    // platform switch, and `up` recreates it either way.
+    await this.compose(["rm", "--stop", "--force", SIDECAR_SERVICE]);
+  }
+
+  /**
+   * Reattach the sidecar to the new API namespace. A sidecar that refuses to
+   * start is a degraded ingestion path, not a failed platform release: the
+   * control panel reports the endpoint as Unreachable and the API stays up.
+   */
+  private async attachSidecar(): Promise<void> {
+    if (!(await this.hasSidecar())) return;
+    await this.compose(["up", "-d", "--no-deps", "--force-recreate", SIDECAR_SERVICE]);
+  }
+
+  private async restartSidecar(): Promise<void> {
+    if (!(await this.hasSidecar())) return;
+    await this.compose(["restart", SIDECAR_SERVICE]);
   }
 
   private async restoreEnvFile(originalEnv: string): Promise<void> {
@@ -149,11 +203,18 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
   }
 
   private async inspectServices(): Promise<MultiremiPlatformService[]> {
-    const result = await this.compose(["ps", "--format", "json"]);
+    const [result, sidecar] = await Promise.all([this.compose(["ps", "--format", "json"]), this.hasSidecar()]);
     const rows = result.stdout.split("\n").filter(Boolean).flatMap((line) => {
       try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; }
     });
-    return Promise.all((["api", "web", "ssh-mesh-control-plane", "postgres", "openviking"] as const).map(async (id) => {
+    // The sidecar is only listed where it is actually deployed; an installation
+    // without the profile should not see a permanently stopped service.
+    const ids = [
+      ...CORE_SERVICES,
+      ...(sidecar ? [SIDECAR_SERVICE] as const : []),
+      "postgres", "openviking",
+    ] as const satisfies readonly MultiremiPlatformService["id"][];
+    return Promise.all(ids.map(async (id) => {
       const row = rows.find((item) => item.Service === id);
       if (!row && (id === "postgres" || id === "openviking")) {
         return this.inspectExternalDependency(id);
@@ -237,10 +298,11 @@ function safeFile(value: string): string {
   return value;
 }
 
-function serviceName(id: "api" | "web" | "ssh-mesh-control-plane" | "postgres" | "openviking"): string {
+function serviceName(id: MultiremiPlatformService["id"]): string {
   if (id === "api") return "API";
   if (id === "web") return "Web";
   if (id === "ssh-mesh-control-plane") return "SSH Mesh Control Plane";
+  if (id === "feishu-sidecar") return "Feishu Ingestion Sidecar";
   return id === "postgres" ? "PostgreSQL" : "OpenViking";
 }
 

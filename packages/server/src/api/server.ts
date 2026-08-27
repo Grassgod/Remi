@@ -50,6 +50,10 @@ import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
+import {
+  evaluateStartupEnv,
+  normalizeDaemonDirectBaseUrl,
+} from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
 import type { RouterDeps } from "./routers/deps.js";
@@ -120,6 +124,14 @@ import {
   type FeishuSidecarEndpointRegistry,
 } from "@multiremi/feishu-ingest/endpoints.js";
 import {
+  FeishuEndpointHealthChecker,
+  type FeishuEndpointHealthCheckerOptions,
+} from "@multiremi/feishu-ingest/health.js";
+import {
+  FeishuChatDirectory,
+  type FeishuChatDirectoryOptions,
+} from "@multiremi/feishu-ingest/chat-directory.js";
+import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
   authorizeDaemonWebSocketRequest,
@@ -179,28 +191,6 @@ function envEnabled(value: string | undefined, fallback = true): boolean {
   return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
 }
 
-function normalizeDaemonDirectBaseUrl(value: string | null | undefined): string | null {
-  const raw = value?.trim();
-  if (!raw) return null;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("MULTIREMI_DAEMON_DIRECT_BASE_URL must be an absolute http(s) URL");
-  }
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:")
-    || url.username
-    || url.password
-    || url.search
-    || url.hash
-    || (url.pathname !== "/" && url.pathname !== "")
-  ) {
-    throw new Error("MULTIREMI_DAEMON_DIRECT_BASE_URL must be an http(s) origin without credentials, path, query, or fragment");
-  }
-  return url.origin;
-}
-
 export interface MultiremiApiOptions {
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
@@ -226,6 +216,10 @@ export interface MultiremiApiOptions {
   feishuIngest?: FeishuIngestScheduler | null;
   /** Server-owned name-to-URL registry. User input never supplies a fetch URL. */
   feishuSidecarEndpoints?: FeishuSidecarEndpointRegistry;
+  /** Injectable endpoint probe dependencies for deterministic tests. */
+  feishuEndpointHealth?: FeishuEndpointHealthCheckerOptions;
+  /** Injectable candidate-chat lookup dependencies for deterministic tests. */
+  feishuChatDirectory?: FeishuChatDirectoryOptions;
   /** Undefined enables server-owned Issue title scanning; null explicitly disables it. */
   issueTitleScheduler?: IssueTitleScheduler | null;
   issueRetitle?: typeof retitleIssue;
@@ -253,6 +247,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const feishuSidecarEndpoints = options.feishuSidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
+  const feishuEndpointHealth = new FeishuEndpointHealthChecker(
+    feishuSidecarEndpoints,
+    options.feishuEndpointHealth,
+  );
+  const feishuChatDirectory = new FeishuChatDirectory(feishuSidecarEndpoints, options.feishuChatDirectory);
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
     options.daemonDirectBaseUrl === undefined
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
@@ -276,6 +275,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     repositoryWiki,
     sessionArchives,
     feishuSidecarEndpoints,
+    feishuEndpointHealth,
+    feishuChatDirectory,
     daemonDirectBaseUrl,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
     issueRetitle: options.issueRetitle ?? retitleIssue,
@@ -612,6 +613,26 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 }
 
 export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
+  const startupEnv = {
+    ...process.env,
+    ...(options.authToken !== undefined
+      ? { MULTIREMI_TOKEN: options.authToken ?? undefined }
+      : {}),
+    ...(options.daemonDirectBaseUrl !== undefined
+      ? { MULTIREMI_DAEMON_DIRECT_BASE_URL: options.daemonDirectBaseUrl ?? undefined }
+      : {}),
+  };
+  const startupConfig = evaluateStartupEnv(startupEnv);
+  if (startupConfig.missingRequired.length > 0) {
+    const message = `Missing required production environment variables: ${startupConfig.missingRequired.join(", ")}`;
+    log.error(`[startup-env] ${message}`);
+    throw new Error(message);
+  }
+  log.info(`[effective-config] ${JSON.stringify(startupConfig.effective)}`);
+  for (const degradation of startupConfig.degradations) {
+    log.warn(`[configuration-degradation] ${degradation.message}`);
+  }
+
   const store = options.store ?? new MultiremiStore();
   const feishuSidecarEndpoints = options.feishuSidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
   const backgroundJobs = options.backgroundJobs

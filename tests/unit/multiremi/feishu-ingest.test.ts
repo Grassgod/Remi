@@ -298,9 +298,9 @@ describe("Feishu message ingestion", () => {
       allowlist: [{ chatId: "oc_inbox01", addedAt: "2026-08-25T10:00:00.000Z" }],
     });
     store.ingestFeishuBatch(source.id, [
-      message("om_notify", "oc_inbox01", "2026-08-25T10:01:00.000Z", "notice"),
-      message("om_draft", "oc_inbox01", "2026-08-25T10:02:00.000Z", "question"),
-      message("om_issue", "oc_inbox01", "2026-08-25T10:03:00.000Z", "work"),
+      message("om_notify", "oc_inbox01", "2026-08-25T10:01:00.000Z", "notice", "研发群"),
+      message("om_draft", "oc_inbox01", "2026-08-25T10:02:00.000Z", "question", "研发群"),
+      message("om_issue", "oc_inbox01", "2026-08-25T10:03:00.000Z", "work", "研发群"),
       message("om_no_recipient", "oc_inbox01", "2026-08-25T10:04:00.000Z", "orphan"),
     ]);
     const agent = store.createAgent({ name: "Inbox watcher", provider: "codex" });
@@ -326,7 +326,9 @@ describe("Feishu message ingestion", () => {
     expect(notificationBody.inboxItem).toMatchObject({
       type: "feishu_message_notification",
       body: "Deployment window changed",
-      details: { message_id: "om_notify", outcome_kind: "notified" },
+      // The chat name rides along so the inbox row can name the chat the
+      // message came from without resolving the id against the chat list.
+      details: { message_id: "om_notify", outcome_kind: "notified", chat_name: "研发群" },
     });
 
     const draft = await app.request("/api/workspaces/local/feishu/messages/om_draft/draft-reply", {
@@ -400,7 +402,7 @@ describe("Feishu message ingestion", () => {
       allowlist: [{ chatId: "oc_proposals", addedAt: "2026-08-26T08:00:00.000Z" }],
     });
     store.ingestFeishuBatch(source.id, [
-      message("om_proposal_approve", "oc_proposals", "2026-08-26T08:01:00.000Z", "approve"),
+      message("om_proposal_approve", "oc_proposals", "2026-08-26T08:01:00.000Z", "approve", "提议群"),
       message("om_proposal_reject", "oc_proposals", "2026-08-26T08:02:00.000Z", "reject"),
       message("om_proposal_muted", "oc_proposals", "2026-08-26T08:03:00.000Z", "muted"),
     ]);
@@ -472,7 +474,11 @@ describe("Feishu message ingestion", () => {
       inboxItem: {
         type: "feishu_issue_proposal",
         severity: "attention",
-        details: { proposal_id: proposedBody.proposal.id, message_id: "om_proposal_approve" },
+        details: {
+          proposal_id: proposedBody.proposal.id,
+          message_id: "om_proposal_approve",
+          chat_name: "提议群",
+        },
       },
     });
     expect(store.getFeishuMessage("om_proposal_approve")?.processedAt).toBeString();
@@ -1031,10 +1037,12 @@ function message(
   chatId: string,
   createdAt: string,
   text: string,
+  chatName?: string,
 ): IngestedFeishuMessageInput {
   return {
     messageId,
     chatId,
+    ...(chatName === undefined ? {} : { chatName }),
     sender: { id: "ou_sender" },
     content: { message_id: messageId, chat_id: chatId, text, create_time: createdAt },
     searchableText: text,

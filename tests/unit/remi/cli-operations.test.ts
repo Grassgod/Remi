@@ -235,6 +235,31 @@ describe("operations CLI contracts", () => {
     expect(requests[0]?.method).toBe("POST");
     expect(new URL(requests[0]!.url).pathname).toBe("/api/multiremi/platform/operations/op_123/cancel");
   });
+
+  it("reads authenticated platform degradation configuration", async () => {
+    useCliEnv();
+    const spec = specById("platform.config");
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      expect(request.method).toBe("GET");
+      expect(new URL(request.url).pathname).toBe("/api/multiremi/platform/config");
+      expect(request.headers.get("Authorization")).toBe("Bearer test-token");
+      return Response.json({
+        degradations: [{
+          id: "session_archive_direct_upload",
+          status: "disabled",
+          effectiveValue: null,
+          detail: "Session Archive direct upload disabled, falling back to 8 MiB proxy limit",
+        }],
+      });
+    });
+
+    const output = await capture(() => registryFor([spec]).execute([
+      "platform", "config", "--output", "json",
+    ]));
+    expect(output.stdout).toContain("session_archive_direct_upload");
+    expect(output.stdout).toContain("disabled");
+    expect(output.stdout).toContain("8 MiB");
+  });
 });
 
 function specById(id: string): CommandSpec {
