@@ -86,6 +86,101 @@ The updater may use this Compose file after cutover. Set
 `MULTIREMI_PLATFORM_OPENVIKING_CONTAINER` so externally managed dependencies
 still appear in the service status panel.
 
+## Direct Session Archive uploads (MUL-144)
+
+Session Archive content is a potentially large binary PUT. It must enter the
+API directly instead of passing through the Web container's Next.js
+`/api/:path*` compatibility rewrite. Keep that rewrite for normal API traffic
+and installations that have not enabled the direct path; do not use it for
+large archive bodies.
+
+The API and daemon recognize these settings:
+
+- `MULTIREMI_DAEMON_DIRECT_BASE_URL` (API): public API origin advertised in the
+  archive init response, for example `https://remi.example.com`. It must be an
+  `http(s)` origin with no credentials, path, query, or fragment. When unset,
+  init keeps returning the legacy relative upload URL.
+- `MULTIREMI_ARCHIVE_UPLOAD_BASE_URL` (daemon): operator-trusted API origin that
+  overrides the advertised origin for archive content only. Use it as a
+  temporary escape hatch or when the direct API uses a different hostname.
+- `MULTIREMI_ARCHIVE_PROXY_MAX_BYTES` (daemon): maximum archive size allowed
+  through a relative control-plane/Next.js fallback. The default is 8 MiB.
+  Larger archives fail before PUT and persist an actionable `last_error` that
+  names the direct-upload settings; smaller archives remain backward
+  compatible.
+- `MULTIREMI_ARCHIVE_DIRECT_PROBE_TTL_MS` (daemon): TTL for positive and
+  negative direct-route HEAD attestations. The default is 5 minutes.
+- `MULTIREMI_ARCHIVE_DIRECT_PROBE_TIMEOUT_MS` (daemon): maximum HEAD
+  attestation duration. The default is 10 seconds; a failure or missing marker
+  is treated as an unconfigured direct route.
+- `MULTIREMI_ARCHIVE_UPLOAD_TIMEOUT_MS` (daemon): total timeout for one archive
+  PUT. The default is 15 minutes, matching the Nginx sample. Increase it for
+  exceptionally slow links rather than removing the bound.
+- `MULTIREMI_ARCHIVE_FAILURE_REPORT_TIMEOUT_MS` (daemon): timeout for the
+  best-effort `last_error` callback after a failed upload. The default is 10
+  seconds.
+
+An absolute URL advertised by the authenticated API is accepted without daemon
+configuration only when its hostname matches `MULTIREMI_SERVER_URL`; a daemon
+override explicitly trusts a different hostname. HTTPS control-plane URLs
+cannot be downgraded by the server response. In all cases the daemon verifies
+the exact archive pathname and attempt query, rejects credentials/fragments,
+and refuses redirects before attaching its Bearer token. An absolute URL is
+only a direct-route candidate: before PUT, the daemon sends an authenticated
+HEAD request to the same content URL. Only a `204` response carrying
+`X-Remi-Archive-Direct: 1` proves that Nginx selected the direct API location.
+The API intentionally does not emit this header, so a request forwarded by the
+Next.js compatibility rewrite cannot attest itself. Results are cached by
+target origin for the configured finite TTL.
+
+The 8 MiB fallback is deliberately fail-closed and is a compatibility change.
+Production history includes one 8.912 MiB archive that previously succeeded,
+while the smallest observed failed archive was 10.051 MiB. Therefore an
+unconfigured deployment now explicitly rejects some archives in the 8-10 MiB
+range instead of risking a truncated upload. Operators may raise
+`MULTIREMI_ARCHIVE_PROXY_MAX_BYTES`, but doing so moves the limit toward a
+known failure size and is not recommended as a substitute for the direct route.
+
+Use [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf) in
+the public server block. It disables request/response buffering, allows bodies
+up to 1 GiB, gives a streaming upload 15 minutes, and adds the direct-route
+attestation header. Replace its sample `16120` upstream port with the host's
+effective `REMI_API_BIND_PORT`. Keep the API container bound to loopback; Nginx
+is the external network path.
+
+Audit the complete effective configuration with `nginx -T`. Ordinary prefix
+location order does not decide this match. A broader regex declared earlier can
+win, and a covering `^~` prefix such as `^~ /api/` prevents regex locations from
+being evaluated at all. Place this regex before broader matching regexes and
+remove or narrow any covering `^~` prefix. QA read-only inspection found that
+the current production-209 topology (ordinary Web catch-all, three API
+WebSocket prefixes, and `^~ /api/webhooks/scm/`) permits this location to match;
+the location itself was not installed by this change.
+
+For the production host `n37-117-209`, an authorized operator must perform the
+following steps. This repository change does not perform them:
+
+1. Read the deployment's Compose env and confirm the effective host API port;
+   do not assume the sample port.
+2. Inspect `nginx -T` for earlier matching regexes and covering `^~` prefixes,
+   then add the direct location, run `nginx -t`, and reload Nginx. Its position
+   relative to an ordinary Web catch-all is irrelevant.
+3. Add `MULTIREMI_DAEMON_DIRECT_BASE_URL=https://n37-117-209.byted.org` to the
+   API secret env file and redeploy through the normal release/updater flow.
+4. Upgrade Runtime daemon CLIs through their normal release flow to obtain
+   streaming uploads, URL validation, the proxy-size guard, and durable upload
+   failure reporting. Platform deployment does not upgrade Runtime CLIs.
+5. Initialize a disposable archive attempt and send an authenticated HEAD to
+   its exact `upload_url`. Confirm a `204` response with
+   `X-Remi-Archive-Direct: 1`; a missing marker means the route is not active.
+   Keep daemon tokens out of shell history and logs.
+6. Retry failed archives, then verify API access logs receive the content PUTs,
+   Web/Next.js logs do not, and each archive becomes `ready` with its declared
+   size and SHA-256. Check Web process memory/event-loop health during the run.
+
+Do not expose the API container port directly to the network and do not place
+daemon tokens in Nginx configuration or logs.
+
 ## Drain-protected updates (MUL-74)
 
 Update and rollback operations drain the platform before touching containers

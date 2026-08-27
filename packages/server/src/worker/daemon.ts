@@ -57,6 +57,7 @@ import {
   type MultiremiRepoSyncResult,
 } from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
+import { executeRuntimeCommand } from "./runtime-command.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
   writeTaskContext,
@@ -344,6 +345,18 @@ export interface MultiremiDaemonOptions {
   gitWorktreeInspector?: GitWorktreeInspector;
   /** Maximum uncompressed provider history accepted for one Issue snapshot. */
   sessionArchiveMaxSourceBytes?: number;
+  /** Operator-trusted API origin used only for Session Archive content uploads. */
+  sessionArchiveUploadBaseUrl?: string | null;
+  /** Largest archive allowed through the control-plane proxy fallback. */
+  sessionArchiveProxyMaxBytes?: number;
+  /** TTL for positive and negative direct-route HEAD attestations. */
+  sessionArchiveDirectProbeTtlMs?: number;
+  /** Maximum duration of a direct-route HEAD attestation. */
+  sessionArchiveDirectProbeTimeoutMs?: number;
+  /** Maximum total duration of one archive content upload. */
+  sessionArchiveUploadTimeoutMs?: number;
+  /** Maximum duration of best-effort upload failure reporting. */
+  sessionArchiveFailureReportTimeoutMs?: number;
   /** Runtime-global immutable Agent Plugin cache. */
   pluginCacheRoot?: string;
   /** Injectable provider capability probe; production uses the native CLI and ACP bridge. */
@@ -510,7 +523,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -684,7 +697,21 @@ export class MultiremiDaemon {
       ? cleanupRetryDelays
       : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
-    this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token);
+    this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token, {
+      sessionArchiveUploadBaseUrl: options.sessionArchiveUploadBaseUrl === undefined
+        ? process.env.MULTIREMI_ARCHIVE_UPLOAD_BASE_URL ?? null
+        : options.sessionArchiveUploadBaseUrl,
+      sessionArchiveProxyMaxBytes: options.sessionArchiveProxyMaxBytes
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_PROXY_MAX_BYTES, 8 * 1024 * 1024),
+      sessionArchiveDirectProbeTtlMs: options.sessionArchiveDirectProbeTtlMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_DIRECT_PROBE_TTL_MS, 5 * 60 * 1_000),
+      sessionArchiveDirectProbeTimeoutMs: options.sessionArchiveDirectProbeTimeoutMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_DIRECT_PROBE_TIMEOUT_MS, 10_000),
+      sessionArchiveUploadTimeoutMs: options.sessionArchiveUploadTimeoutMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_UPLOAD_TIMEOUT_MS, 15 * 60 * 1_000),
+      sessionArchiveFailureReportTimeoutMs: options.sessionArchiveFailureReportTimeoutMs
+        ?? numberEnv(process.env.MULTIREMI_ARCHIVE_FAILURE_REPORT_TIMEOUT_MS, 10_000),
+    });
     this.sshMeshManager = options.sshMeshManager ?? new SshMeshManager({
       workspaceId: this.options.workspaceId ?? "local",
       daemonId: this.options.daemonId ?? this.options.runtimeName,
@@ -1013,6 +1040,9 @@ export class MultiremiDaemon {
     if (ack.pending_directory_scan) {
       await this.handleRuntimeDirectoryScan(runtimeId, ack.pending_directory_scan);
     }
+    if (ack.pending_command) {
+      await this.handleRuntimeCommand(runtimeId, ack.pending_command);
+    }
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
     }
@@ -1168,6 +1198,25 @@ export class MultiremiDaemon {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async handleRuntimeCommand(
+    runtimeId: string,
+    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_command"]>,
+  ): Promise<void> {
+    const result = await executeRuntimeCommand({
+      command: request.command,
+      args: request.args,
+      timeoutMs: request.timeout_ms,
+    });
+    await this.client.reportRuntimeCommandResult(runtimeId, request.id, {
+      status: result.status,
+      exit_code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      duration_ms: result.durationMs,
+      ...(result.error ? { error: result.error } : {}),
+    });
   }
 
   private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {

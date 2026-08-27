@@ -39,6 +39,11 @@ export function onIssueCreated(
     qc.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.parent_issue_id) });
     qc.invalidateQueries({ queryKey: issueKeys.childProgress(wsId) });
   }
+  if (issue.source_issue_id) {
+    qc.invalidateQueries({
+      queryKey: issueKeys.generated(wsId, issue.source_issue_id),
+    });
+  }
 }
 
 export function onIssueUpdated(
@@ -55,6 +60,10 @@ export function onIssueUpdated(
   const oldParentId =
     detailData?.parent_issue_id ??
     (firstListData ? findIssueLocation(firstListData, issue.id)?.issue.parent_issue_id : null) ??
+    null;
+  const oldSourceIssueId =
+    detailData?.source_issue_id ??
+    (firstListData ? findIssueLocation(firstListData, issue.id)?.issue.source_issue_id : null) ??
     null;
   // The NEW parent comes from the WS payload when parent_issue_id changed
   const newParentId = issue.parent_issue_id ?? null;
@@ -115,6 +124,21 @@ export function onIssueUpdated(
       qc.invalidateQueries({ queryKey: issueKeys.childProgress(wsId) });
     }
     qc.invalidateQueries({ queryKey: issueKeys.childrenByParentsAll(wsId) });
+  }
+
+  const newSourceIssueId =
+    issue.source_issue_id !== undefined
+      ? issue.source_issue_id
+      : oldSourceIssueId;
+  for (const sourceIssueId of new Set([
+    oldSourceIssueId,
+    newSourceIssueId,
+  ])) {
+    if (sourceIssueId) {
+      qc.invalidateQueries({
+        queryKey: issueKeys.generated(wsId, sourceIssueId),
+      });
+    }
   }
 }
 
@@ -192,7 +216,22 @@ export function onIssueDeleted(
   wsId: string,
   issueId: string,
 ) {
+  const detailData = qc.getQueryData<Issue>(issueKeys.detail(wsId, issueId));
+  const firstListData = qc.getQueriesData<ListIssuesCache>({
+    queryKey: issueKeys.list(wsId),
+  })[0]?.[1];
+  const sourceIssueId =
+    detailData?.source_issue_id ??
+    (firstListData
+      ? findIssueLocation(firstListData, issueId)?.issue.source_issue_id
+      : null) ??
+    null;
   cleanupDeletedIssueCaches(qc, wsId, issueId);
+  if (sourceIssueId) {
+    qc.invalidateQueries({
+      queryKey: issueKeys.generated(wsId, sourceIssueId),
+    });
+  }
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: workbenchKeys.all(wsId) });

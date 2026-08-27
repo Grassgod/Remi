@@ -431,6 +431,30 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_directory_scan_runtime ON multiremi_runtime_directory_scan_requests(runtime_id, status, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_command_requests (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      command TEXT NOT NULL,
+      args TEXT NOT NULL DEFAULT '[]',
+      redacted_command TEXT NOT NULL,
+      redacted_args TEXT NOT NULL DEFAULT '[]',
+      provision_id TEXT,
+      timeout_ms INTEGER NOT NULL,
+      created_by TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      exit_code INTEGER,
+      stdout TEXT,
+      stderr TEXT,
+      duration_ms INTEGER,
+      error TEXT,
+      run_started_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_command_runtime ON multiremi_runtime_command_requests(runtime_id, status, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -488,6 +512,68 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_workspace ON multiremi_workspace_members(workspace_id);
+
+    CREATE TABLE IF NOT EXISTS multiremi_workspace_runtime_provisions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      package TEXT,
+      version TEXT,
+      version_check INTEGER NOT NULL DEFAULT 1,
+      bin TEXT,
+      registry TEXT,
+      command TEXT,
+      args TEXT NOT NULL DEFAULT '[]',
+      redacted_command TEXT,
+      redacted_args TEXT NOT NULL DEFAULT '[]',
+      trigger_kinds TEXT NOT NULL DEFAULT '[]',
+      cron_expression TEXT,
+      timezone TEXT,
+      next_run_at TEXT,
+      last_fired_at TEXT,
+      timeout_ms INTEGER NOT NULL,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(workspace_id) REFERENCES multiremi_workspaces(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_runtime_provisions_due
+      ON multiremi_workspace_runtime_provisions(enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_runtime_provisions_workspace
+      ON multiremi_workspace_runtime_provisions(workspace_id, enabled, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_provision_audit (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      provision_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      actor_id TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_provision_audit_provision
+      ON multiremi_runtime_provision_audit(provision_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_provision_states (
+      provision_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      observed_version TEXT,
+      last_command_request_id TEXT,
+      last_checked_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(provision_id, runtime_id),
+      FOREIGN KEY(provision_id) REFERENCES multiremi_workspace_runtime_provisions(id) ON DELETE CASCADE,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_provision_states_runtime
+      ON multiremi_runtime_provision_states(runtime_id, status);
 
     CREATE TABLE IF NOT EXISTS multiremi_access_tokens (
       id TEXT PRIMARY KEY,
@@ -2054,6 +2140,8 @@ export function runMigrations(db: SqlDatabase): void {
   // legacy `mem_<ws>_<userId>` id convention.
   addColumnIfMissing(db, "multiremi_users", "external_id TEXT");
   addColumnIfMissing(db, "multiremi_workspace_members", "user_id TEXT");
+  addColumnIfMissing(db, "multiremi_runtime_command_requests", "provision_id TEXT");
+  addColumnIfMissing(db, "multiremi_workspace_runtime_provisions", "version_check INTEGER NOT NULL DEFAULT 1");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_users_external_id ON multiremi_users(external_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
   backfillMemberUserIds(db);

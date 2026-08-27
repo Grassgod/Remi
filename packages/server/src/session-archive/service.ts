@@ -404,6 +404,58 @@ export class SessionArchiveService {
     }
   }
 
+  preflightUpload(
+    runtimeId: string,
+    issueId: string,
+    archiveId: string,
+    attemptCount: number,
+  ): void {
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    archive = this.requireWritableArchive(archive, runtimeId);
+    this.assertCurrentAttempt(archive, attemptCount);
+    if (archive.status !== "pending" && archive.status !== "uploading") {
+      throw new SessionArchiveError(
+        `cannot upload archive in ${archive.status} state`,
+        409,
+        "session_archive_invalid_state",
+      );
+    }
+  }
+
+  failUpload(
+    runtimeId: string,
+    issueId: string,
+    archiveId: string,
+    attemptCount: number,
+    error: string,
+  ): MultiremiSessionArchive {
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    archive = this.requireWritableArchive(archive, runtimeId);
+    this.assertCurrentAttempt(archive, attemptCount);
+    if (archive.status === "failed") return archive;
+    if (archive.status !== "pending" && archive.status !== "uploading") {
+      throw new SessionArchiveError(
+        `cannot fail archive upload in ${archive.status} state`,
+        409,
+        "session_archive_invalid_state",
+      );
+    }
+    const failed = this.store.markSessionArchiveFailedAttempt(
+      archive.id,
+      runtimeId,
+      attemptCount,
+      error,
+    );
+    if (!failed) {
+      throw new SessionArchiveError(
+        "session archive upload attempt was superseded",
+        409,
+        "session_archive_attempt_conflict",
+      );
+    }
+    return failed;
+  }
+
   async complete(
     runtimeId: string,
     issueId: string,
@@ -753,10 +805,34 @@ export class SessionArchiveService {
     this.schedulePurgeRecovery(0);
   }
 
+  /**
+   * Cancels future scheduling only. A pass that already started keeps running to
+   * completion so a receipt is never left half-consumed (archive directory gone
+   * but receipt still on disk). Await {@link whenIssueArchivePurgeRecoveryIdle}
+   * when the caller needs the outbox to be quiescent.
+   */
   stopIssueArchivePurgeRecovery(): void {
     this.purgeRecoveryStarted = false;
     if (this.purgeRecoveryTimer) clearTimeout(this.purgeRecoveryTimer);
     this.purgeRecoveryTimer = null;
+  }
+
+  /**
+   * Resolves once no recovery pass and no receipt consumption is in flight.
+   * Call after {@link stopIssueArchivePurgeRecovery} to observe a settled
+   * outbox; on its own it only reflects a momentary lull, since a running
+   * recovery loop can schedule another pass immediately afterwards.
+   */
+  async whenIssueArchivePurgeRecoveryIdle(): Promise<void> {
+    while (this.purgeRecoveryInFlight || this.purgeReceiptAttempts.size > 0) {
+      await this.purgeRecoveryInFlight?.catch(() => undefined);
+      await Promise.all(
+        [...this.purgeReceiptAttempts.values()].map((attempt) => attempt.catch(() => undefined)),
+      );
+      // Yield a macrotask so the settled pass runs its own `finally` and clears
+      // the in-flight handles before the next check.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   async recoverIssueArchivePurges(_minAgeMs = 0): Promise<number> {

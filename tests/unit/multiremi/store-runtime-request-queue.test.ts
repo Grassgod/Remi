@@ -144,6 +144,17 @@ const FAMILIES: Family[] = [
       repo.claimRuntimeLocalSkillImportRequests("rt_q", 5);
     },
   },
+  {
+    name: "runtime command",
+    table: "multiremi_runtime_command_requests",
+    pendingTimeoutError: "daemon did not respond within 3 minutes",
+    runningTimeoutError: "daemon did not finish the command within 20 minutes",
+    drive: (repo) => {
+      const request = repo.createRuntimeCommandRequest("rt_q", { command: "printf ready" });
+      repo.getRuntimeCommandRequest("rt_q", request.id);
+      repo.claimRuntimeCommandRequest("rt_q");
+    },
+  },
 ];
 
 describe("RuntimeRequestQueue SQL", () => {
@@ -266,5 +277,58 @@ describe("RuntimeRequestQueue lifecycle", () => {
 
     expect(repo.getRuntimeModelListRequest("rt_q", models.id)?.status).toBe("timeout");
     expect(repo.getRuntimeDirectoryScanRequest("rt_q", scan.id)?.status).toBe("pending");
+  });
+
+  it("runs the command family through pending, running, and completed", () => {
+    const repo = createRepo();
+    const request = repo.createRuntimeCommandRequest("rt_q", {
+      command: "printf ready",
+      timeoutMs: 2_000,
+      createdBy: "admin-user",
+    });
+    expect(request.status).toBe("pending");
+    expect(request.createdBy).toBe("admin-user");
+
+    expect(repo.claimRuntimeCommandRequest("rt_q")?.status).toBe("running");
+    const completed = repo.reportRuntimeCommandResult("rt_q", request.id, {
+      status: "completed",
+      exitCode: 7,
+      stdout: "ready",
+      durationMs: 12,
+    });
+    expect(completed).toMatchObject({ status: "completed", exitCode: 7, stdout: "ready", durationMs: 12 });
+    expect(completed.command).toBe("");
+    expect(completed.args).toEqual([]);
+    expect(completed.redactedCommand).toBe("printf ready");
+  });
+
+  it("expires pending and running command requests on their separate deadlines", () => {
+    const repo = createRepo();
+    const pending = repo.createRuntimeCommandRequest("rt_q", { command: "printf pending" });
+    db!.run("UPDATE multiremi_runtime_command_requests SET created_at = ? WHERE id = ?", [
+      new Date(Date.now() - 181_000).toISOString(),
+      pending.id,
+    ]);
+    expect(repo.getRuntimeCommandRequest("rt_q", pending.id)).toMatchObject({
+      status: "timeout",
+      error: "daemon did not respond within 3 minutes",
+      command: "",
+      args: [],
+      redactedCommand: "printf pending",
+    });
+
+    const running = repo.createRuntimeCommandRequest("rt_q", { command: "printf running" });
+    repo.claimRuntimeCommandRequest("rt_q");
+    db!.run("UPDATE multiremi_runtime_command_requests SET run_started_at = ? WHERE id = ?", [
+      new Date(Date.now() - 1_201_000).toISOString(),
+      running.id,
+    ]);
+    expect(repo.getRuntimeCommandRequest("rt_q", running.id)).toMatchObject({
+      status: "timeout",
+      error: "daemon did not finish the command within 20 minutes",
+      command: "",
+      args: [],
+      redactedCommand: "printf running",
+    });
   });
 });

@@ -55,8 +55,8 @@ import {
   TriggerConfigSection,
   getDefaultTriggerConfig,
   toCronExpression,
-} from "./trigger-config";
-import type { TriggerConfig } from "./trigger-config";
+} from "../../common/trigger-config";
+import type { TriggerConfig } from "../../common/trigger-config";
 import type {
   AutopilotExecutionMode,
   AutopilotRun,

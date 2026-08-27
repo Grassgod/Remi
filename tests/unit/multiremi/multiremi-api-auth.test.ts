@@ -34,6 +34,8 @@ describe("Multiremi API — authentication and token scoping", () => {
       ["GET", "/api/multiremi/platform/status/history", "platform_maintenance"],
       ["POST", "/api/cloud-runtime/nodes/start", "platform_maintenance"],
       ["POST", "/api/runtimes/rt_1/update", "platform_maintenance"],
+      ["GET", "/api/workspaces/local/runtime-provisions", "platform_maintenance"],
+      ["PATCH", "/api/workspaces/local/runtime-provisions/prov_1", "platform_maintenance"],
       ["PUT", "/api/workspaces/local/ssh-mesh", "platform_maintenance"],
       ["POST", "/api/multiremi/runtimes", "daemon_identity"],
       ["POST", "/api/multiremi/runtimes/rt_1/heartbeat", "daemon_identity"],

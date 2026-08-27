@@ -53,6 +53,7 @@ import {
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
 } from "@multiremi/store/repos/runtimes-repo.js";
+import { RuntimeProvisionsRepo } from "@multiremi/store/repos/runtime-provisions-repo.js";
 import {
   DaemonRetirementRepo,
   type DaemonInventoryEntry,
@@ -141,6 +142,8 @@ import type {
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateRuntimeUpdateInput,
+  CreateRuntimeCommandInput,
+  CreateWorkspaceRuntimeProvisionInput,
   CreateRuntimeLocalSkillImportInput,
   CreateSessionTaskInput,
   CreateSkillInput,
@@ -220,19 +223,24 @@ import type {
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
   MultiremiRuntimeDirectoryScanRequest,
+  MultiremiRuntimeCommandRequest,
+  MultiremiRuntimeProvisionState,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeModelListRequest,
   MultiremiRuntimeUpdateRequest,
+  MultiremiWorkspaceRuntimeProvision,
   MultiremiWorkspaceProjectDoc,
   PublishSessionResultInput,
   QuickCreateIssueInput,
   ReportRuntimeDirectoryScanInput,
+  ReportRuntimeCommandInput,
   ReportRuntimeModelListInput,
   QuickCreateIssueResult,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeUpdateInput,
+  UpdateWorkspaceRuntimeProvisionInput,
   MultiremiAgentRuntime,
   MultiremiRuntime,
   MultiremiRuntimeDaily,
@@ -365,6 +373,7 @@ export class MultiremiStore {
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
   private runtimes: RuntimesRepo;
+  private runtimeProvisions: RuntimeProvisionsRepo;
   private daemonRetirement: DaemonRetirementRepo;
   private sshMesh: SshMeshRepo;
   private autopilots: AutopilotsRepo;
@@ -416,6 +425,7 @@ export class MultiremiStore {
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
+    this.runtimeProvisions = new RuntimeProvisionsRepo(this.ctx);
     this.daemonRetirement = new DaemonRetirementRepo(this.ctx);
     this.sshMesh = new SshMeshRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
@@ -1675,7 +1685,11 @@ runMigrations(this.db);
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
     const daemonId = String(input.daemonId ?? input.daemon_id ?? "").trim();
-    if (!daemonId) return this.runtimes.registerRuntime(input);
+    if (!daemonId) {
+      const runtime = this.runtimes.registerRuntime(input);
+      this.runtimeProvisions.enqueueRuntimeOnRegister(runtime.id);
+      return runtime;
+    }
     const workspaceId = String(input.workspaceId ?? input.workspace_id ?? "local").trim() || "local";
     const tx = this.db.transaction(() => {
       this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
@@ -1697,7 +1711,9 @@ runMigrations(this.db);
       this.agentPlugins.reconcileAgentPluginDesiredStateWithinLock(workspaceId);
       return runtime;
     });
-    return tx();
+    const runtime = tx();
+    this.runtimeProvisions.enqueueRuntimeOnRegister(runtime.id);
+    return runtime;
   }
 
   registerDaemonRuntimeBatch(inputs: RegisterRuntimeInput[]): MultiremiRuntime[] {
@@ -1714,7 +1730,7 @@ runMigrations(this.db);
       }
     }
 
-    return this.db.transaction(() => {
+    const runtimes = this.db.transaction(() => {
       this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       this.agentPlugins.lockAgentPluginWorkspace(workspaceId);
@@ -1734,6 +1750,8 @@ runMigrations(this.db);
       this.agentPlugins.reconcileAgentPluginDesiredStateWithinLock(workspaceId);
       return runtimes;
     })();
+    for (const runtime of runtimes) this.runtimeProvisions.enqueueRuntimeOnRegister(runtime.id);
+    return runtimes;
   }
 
   isDaemonRetired(workspaceId: string, daemonId: string): boolean {
@@ -2030,6 +2048,58 @@ runMigrations(this.db);
 
   reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
     return this.runtimes.reportRuntimeUpdateResult(runtimeId, requestId, input);
+  }
+
+  createRuntimeCommandRequest(runtimeId: string, input: CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest {
+    return this.runtimes.createRuntimeCommandRequest(runtimeId, input);
+  }
+
+  getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null {
+    return this.runtimes.getRuntimeCommandRequest(runtimeId, requestId);
+  }
+
+  claimRuntimeCommandRequest(runtimeId: string): MultiremiRuntimeCommandRequest | null {
+    return this.runtimes.claimRuntimeCommandRequest(runtimeId);
+  }
+
+  reportRuntimeCommandResult(runtimeId: string, requestId: string, input: ReportRuntimeCommandInput): MultiremiRuntimeCommandRequest {
+    const request = this.runtimes.reportRuntimeCommandResult(runtimeId, requestId, input);
+    this.runtimeProvisions.recordCommandResult(request);
+    return request;
+  }
+
+  listWorkspaceRuntimeProvisions(workspaceId: string): MultiremiWorkspaceRuntimeProvision[] {
+    return this.runtimeProvisions.list(workspaceId);
+  }
+
+  getWorkspaceRuntimeProvision(id: string): MultiremiWorkspaceRuntimeProvision | null {
+    return this.runtimeProvisions.get(id);
+  }
+
+  createWorkspaceRuntimeProvision(
+    workspaceId: string,
+    input: CreateWorkspaceRuntimeProvisionInput,
+  ): MultiremiWorkspaceRuntimeProvision {
+    return this.runtimeProvisions.create(workspaceId, input);
+  }
+
+  updateWorkspaceRuntimeProvision(
+    id: string,
+    input: UpdateWorkspaceRuntimeProvisionInput,
+  ): MultiremiWorkspaceRuntimeProvision {
+    return this.runtimeProvisions.update(id, input);
+  }
+
+  deleteWorkspaceRuntimeProvision(id: string, actorId: string | null = null): boolean {
+    return this.runtimeProvisions.delete(id, actorId);
+  }
+
+  listRuntimeProvisionStates(provisionId: string): MultiremiRuntimeProvisionState[] {
+    return this.runtimeProvisions.listStates(provisionId);
+  }
+
+  enqueueWorkspaceRuntimeProvision(provisionId: string): number {
+    return this.runtimeProvisions.enqueueWorkspaceProvision(provisionId);
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
@@ -2942,6 +3012,18 @@ runMigrations(this.db);
 
   recoverLostScheduleTriggers(now: Date = new Date()): number {
     return this.autopilots.recoverLostScheduleTriggers(now);
+  }
+
+  claimDueRuntimeProvisions(now: Date = new Date()): MultiremiWorkspaceRuntimeProvision[] {
+    return this.runtimeProvisions.claimDue(now);
+  }
+
+  advanceRuntimeProvisionNextRun(id: string, from: Date = new Date()): MultiremiWorkspaceRuntimeProvision | null {
+    return this.runtimeProvisions.advanceNextRun(id, from);
+  }
+
+  recoverLostRuntimeProvisionSchedules(now: Date = new Date()): number {
+    return this.runtimeProvisions.recoverLostSchedules(now);
   }
 
   enqueueIssueStatusChangedEvent(input: {

@@ -25,6 +25,7 @@ import {
   promoteLegacyCliPatForDaemonRegistration,
   readJson,
   readJsonStrict,
+  requireWorkspaceAdmin,
   safeCreateRuntimeUpdateRequest,
   usageQuery,
   validateMultiremiRuntimeProvider,
@@ -40,6 +41,7 @@ import {
   hasRequestField,
   parseOptionalInt,
   runtimeCompatibilityResponse,
+  runtimeCommandRequestResponse,
   runtimeDirectoryScanRequestCompatibilityResponse,
   runtimeHasActiveAgentsResponse,
   runtimeLocalSkillImportRequestCompatibilityResponse,
@@ -54,10 +56,12 @@ import {
 } from "../wire/index.js";
 import type {
   CreateRuntimeDirectoryScanInput,
+  CreateRuntimeCommandInput,
   CreateRuntimeLocalSkillImportInput,
   CreateRuntimeUpdateInput,
   RegisterRuntimeInput,
   ReportRuntimeDirectoryScanInput,
+  ReportRuntimeCommandInput,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeModelListInput,
@@ -294,6 +298,59 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: `invalid status: ${String(body.status ?? "")}` }, 400);
     }
     store.reportRuntimeUpdateResult(runtimeId, updateId, body);
+    return c.json({ status: "ok" });
+  });
+  app.post("/api/runtimes/:id/commands", async (c) => {
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const denied = requireWorkspaceAdmin(c, store, loaded.runtime.workspaceId ?? "local");
+    if (denied) return denied;
+    const body = await readJsonStrict<CreateRuntimeCommandInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const request = store.createRuntimeCommandRequest(loaded.runtime.id, {
+        command: body.command,
+        args: body.args,
+        timeoutMs: body.timeoutMs ?? body.timeout_ms,
+        createdBy: currentRequestUserId(c),
+        created_by: currentRequestUserId(c),
+      });
+      return c.json(runtimeCommandRequestResponse(request), 202);
+    } catch (error) {
+      const response = runtimeCommandErrorResponse(c, error);
+      if (response) return response;
+      throw error;
+    }
+  });
+  app.get("/api/runtimes/:id/commands/:requestId", (c) => {
+    const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
+    if (loaded instanceof Response) return loaded;
+    const denied = requireWorkspaceAdmin(c, store, loaded.runtime.workspaceId ?? "local");
+    if (denied) return denied;
+    const request = store.getRuntimeCommandRequest(loaded.runtime.id, c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(runtimeCommandRequestResponse(request));
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/commands/claim", (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId, authToken);
+    if (denied) return denied;
+    return c.json({ request: store.claimRuntimeCommandRequest(runtimeId) });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/commands/:requestId/result", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId, authToken);
+    if (denied) return denied;
+    const requestId = c.req.param("requestId");
+    const request = store.getRuntimeCommandRequest(runtimeId, requestId);
+    if (!request) return c.json({ error: "request not found" }, 404);
+    if (isTerminalRuntimeRequestForDaemon(request.status)) return c.json({ status: "ok" });
+    const body = await readJsonStrict<ReportRuntimeCommandInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (body.status !== "completed" && body.status !== "failed" && body.status !== "timeout") {
+      return c.json({ error: `invalid status: ${String(body.status ?? "")}` }, 400);
+    }
+    store.reportRuntimeCommandResult(runtimeId, requestId, body);
     return c.json({ status: "ok" });
   });
   app.post("/api/multiremi/runtimes/:id/local-skills", (c) => {
@@ -610,4 +667,19 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     return c.json(ack);
   });
+}
+
+function runtimeCommandErrorResponse(c: Context, error: unknown): Response | null {
+  if (!(error instanceof Error)) return null;
+  if (
+    error.message === "command is required"
+    || error.message === "args must be an array of strings"
+    || error.message.startsWith("command must not exceed")
+    || error.message.startsWith("args must not contain")
+    || error.message.startsWith("each command arg must not exceed")
+    || error.message.startsWith("timeout_ms must be")
+  ) {
+    return c.json({ error: error.message }, 400);
+  }
+  return null;
 }

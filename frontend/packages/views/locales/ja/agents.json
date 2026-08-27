@@ -437,6 +437,7 @@
     "sort_newest_first": "新しい順",
     "plan": "計画",
     "command_not_recorded": "コマンドは記録されていません（以前のバージョンのタスク）",
+    "tool_running": "実行中…",
     "nested_steps_other": "{{count}} ステップ",
     "collab_activity_hidden": "サブエージェントの内部処理は記録されません",
     "step_not_finished": "未完了",

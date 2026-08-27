@@ -50,7 +50,8 @@
     "actions_aria": "Machine actions",
     "tabs": {
       "runtimes": "Runtimes",
-      "ssh_mesh": "SSH access"
+      "ssh_mesh": "SSH access",
+      "provisions": "Provisions"
     },
     "retire": {
       "action": "Deactivate and remove",
@@ -490,5 +491,80 @@
     "retry": "Retry",
     "kpi_cache_unpriced": "No pricing for the models used — savings can't be calculated",
     "kpi_cache_total_only": "Only total tokens were recorded — savings can't be calculated"
+  },
+  "provisions": {
+    "title": "Runtime provisions",
+    "subtitle": "Workspace declarations and their latest state on every runtime.",
+    "add": "Add provision",
+    "filter_label": "Provision kind",
+    "filters": { "all": "All" },
+    "kinds": { "npm_global": "npm global", "command": "Command", "unknown": "Unknown" },
+    "load_failed": "Couldn't load runtime provisions",
+    "retry": "Retry",
+    "empty": "No provisions",
+    "empty_hint": "Workspace runtime declarations will appear here.",
+    "filter_empty": "No provisions match this filter.",
+    "enabled_label": "Enabled",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "edit": "Edit provision",
+    "cancel": "Cancel",
+    "save": "Save",
+    "not_available": "Not available",
+    "summary": "{{converged}} converged · {{attention}} need attention · {{total}} total",
+    "triggers": {
+      "on_register": "On runtime connect",
+      "on_change": "On change",
+      "cron": "Schedule"
+    },
+    "status": {
+      "pending": "Pending",
+      "converged": "Converged",
+      "drifted": "Drifted",
+      "failed": "Failed",
+      "unknown": "Unknown"
+    },
+    "matrix": {
+      "select": "Select a provision to inspect runtime state.",
+      "title": "Runtime state",
+      "load_failed": "Couldn't load runtime state.",
+      "empty": "No runtime state has been recorded.",
+      "error_details": "Show failure details"
+    },
+    "form": {
+      "create_title": "Add runtime provision",
+      "edit_title": "Edit runtime provision",
+      "description": "Apply one workspace declaration across its runtimes.",
+      "kind": "Kind",
+      "package": "Package",
+      "version": "Version",
+      "bin": "Binary",
+      "registry": "Registry",
+      "version_check": "Require a successful --version check",
+      "current_command": "Current redacted command",
+      "replacement_command": "Replacement command",
+      "command": "Command",
+      "leave_unchanged": "Leave blank to keep the current command",
+      "args": "Arguments",
+      "args_placeholder": "One argument per line",
+      "triggers": "Triggers",
+      "timeout": "Timeout (ms)",
+      "timeout_invalid": "Enter a positive timeout in milliseconds.",
+      "npm_required": "Package, version, and binary are required.",
+      "command_required": "Command is required."
+    },
+    "delete": {
+      "action": "Delete provision",
+      "title": "Delete this provision?",
+      "description": "{{target}} will no longer be managed across this workspace.",
+      "confirm": "Delete provision"
+    },
+    "toast": {
+      "created": "Provision created",
+      "updated": "Provision updated",
+      "deleted": "Provision deleted",
+      "save_failed": "Failed to save provision",
+      "delete_failed": "Failed to delete provision"
+    }
   }
 }

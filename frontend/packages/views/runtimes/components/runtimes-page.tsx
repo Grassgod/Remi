@@ -54,6 +54,7 @@ import { ProviderLogo } from "./provider-logo";
 import { RuntimeList, buildWorkloadIndex } from "./runtime-list";
 import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import { SshMeshPanel } from "./ssh-mesh-panel";
+import { RuntimeProvisionsPanel } from "./runtime-provisions-panel";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
@@ -888,6 +889,9 @@ function MachineDetail({
           <TabsTrigger value="ssh-mesh">
             {t(($) => $.machine.tabs.ssh_mesh)}
           </TabsTrigger>
+          <TabsTrigger value="provisions">
+            {t(($) => $.machine.tabs.provisions)}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="runtimes" className="min-h-0 flex-1 overflow-hidden">
           <RuntimeList
@@ -901,6 +905,9 @@ function MachineDetail({
             sourceDaemonId={machine.daemonId}
             sourceName={machine.title}
           />
+        </TabsContent>
+        <TabsContent value="provisions" className="min-h-0 flex-1 overflow-hidden">
+          <RuntimeProvisionsPanel />
         </TabsContent>
       </Tabs>
     </main>

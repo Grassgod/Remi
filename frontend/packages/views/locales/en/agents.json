@@ -448,6 +448,7 @@
     "sort_newest_first": "Newest first",
     "plan": "Plan",
     "command_not_recorded": "Command not recorded (task from an older version)",
+    "tool_running": "Running…",
     "nested_steps_one": "{{count}} step",
     "nested_steps_other": "{{count}} steps",
     "collab_activity_hidden": "Subagent internal activity is not captured",
