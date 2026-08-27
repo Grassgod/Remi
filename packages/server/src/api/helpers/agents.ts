@@ -24,7 +24,11 @@ import type {
   UpdateAgentInput,
   UpdateSkillInput,
 } from "@multiremi/contracts/types.js";
-import { canCurrentUserAccessAgent, denyCurrentUserWorkspaceAccess } from "./auth-guards.js";
+import {
+  canCurrentUserAccessAgent,
+  denyCurrentUserWorkspaceAccess,
+  requireHumanWorkspaceAdmin,
+} from "./auth-guards.js";
 import { canCurrentUserUseRuntime } from "./runtimes.js";
 import {
   fleetModelsResponse,
@@ -32,7 +36,7 @@ import {
   type FleetModelThinkingResponse,
   type FleetProviderModelsResponse,
 } from "../wire/runtimes.js";
-import { ATLAS_AGENT_NAME } from "../../repository-wiki/atlas.js";
+import { isAgentRole } from "@multiremi/store/agent-role.js";
 import { currentTaskIssueCreationRestricted } from "./issues.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
@@ -91,14 +95,6 @@ function providerThinkingConsensus(models: FleetModelResponse[]): FleetModelThin
     supported_levels: first.supported_levels,
     ...(defaultLevel ? { default_level: defaultLevel } : {}),
   };
-}
-
-function reservedAtlasAgentName(c: Context, name: string): Response | null {
-  if (name !== ATLAS_AGENT_NAME) return null;
-  return c.json({
-    error: `${ATLAS_AGENT_NAME} is reserved for the platform Repository Wiki agent`,
-    code: "atlas_identity_reserved",
-  }, 409);
 }
 
 export function requestedAgentWorkspaceId(c: Context, input?: Pick<CreateAgentInput, "workspaceId" | "workspace_id">): string {
@@ -390,10 +386,10 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
+  const role = agentRoleRequestInput(c, store, workspaceId, input);
+  if (role instanceof Response) return role;
   const name = cleanString(typeof input.name === "string" ? input.name : null);
   if (!name) return c.json({ error: "name is required" }, 400);
-  const reserved = reservedAtlasAgentName(c, name);
-  if (reserved) return reserved;
   const provider = resolveAgentRequestProvider(c, store, workspaceId, input);
   if (provider instanceof Response) return provider;
   const conflict = store.getAgentByWorkspaceAndName(workspaceId, name);
@@ -428,6 +424,7 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     thinking_level: thinkingLevel || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
+    ...role,
     ...issuePolicy,
   };
 }
@@ -450,6 +447,9 @@ export function withAgentUpdateRequestContext(
   const targetWorkspaceId = hasRequestField(input, "workspaceId", "workspace_id")
     ? cleanString(input.workspaceId ?? input.workspace_id) ?? "local"
     : current.workspaceId;
+  const role = agentRoleRequestInput(c, store, current.workspaceId, input);
+  if (role instanceof Response) return role;
+  Object.assign(next, role);
   if (targetWorkspaceId !== current.workspaceId) {
     const denied = denyCurrentUserWorkspaceAccess(c, store, targetWorkspaceId);
     if (denied) return denied;
@@ -465,8 +465,6 @@ export function withAgentUpdateRequestContext(
   if (hasRequestField(input, "name")) {
     const name = cleanString(typeof input.name === "string" ? input.name : null);
     if (!name) return c.json({ error: "name is required" }, 400);
-    const reserved = reservedAtlasAgentName(c, name);
-    if (reserved) return reserved;
     const conflict = store.getAgentByWorkspaceAndName(targetWorkspaceId, name);
     if (conflict && conflict.id !== current.id) return agentNameConflict(c, name);
     next.name = name;
@@ -608,10 +606,10 @@ export function withAgentTemplateRequestContext(
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
+  const role = agentRoleRequestInput(c, store, workspaceId, input);
+  if (role instanceof Response) return role;
   const name = cleanString(typeof input.name === "string" ? input.name : null);
   if (!name) return c.json({ error: "name is required" }, 400);
-  const reserved = reservedAtlasAgentName(c, name);
-  if (reserved) return reserved;
   const templateSlug = cleanString(input.templateSlug ?? input.template_slug);
   if (!templateSlug) return c.json({ error: "template_slug is required" }, 400);
   const template = getAgentTemplate(templateSlug);
@@ -640,8 +638,24 @@ export function withAgentTemplateRequestContext(
     model: model || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
+    ...role,
     ...issuePolicy,
   };
+}
+
+function agentRoleRequestInput(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  input: Pick<CreateAgentInput, "role">,
+): Pick<CreateAgentInput, "role"> | Response {
+  if (!hasRequestField(input, "role")) return {};
+  const denied = requireHumanWorkspaceAdmin(c, store, workspaceId);
+  if (denied) return denied;
+  if (!isAgentRole(input.role)) {
+    return c.json({ error: "role must be normal, maintainer, or supervisor" }, 400);
+  }
+  return { role: input.role };
 }
 
 /**

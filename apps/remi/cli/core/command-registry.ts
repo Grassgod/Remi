@@ -89,6 +89,7 @@ interface RegisteredPath {
 }
 
 const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
+  "agent.role.set",
   "agent.supervisor.set",
   "autopilot.trigger.rotate-token",
   "autopilot.trigger.set-secret",

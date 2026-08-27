@@ -83,6 +83,7 @@ import type { RouterDeps } from "./deps.js";
 import { createAgentFromTemplate, getAgentTemplate } from "../agent-templates.js";
 import { sanitizeWorkspaceProgressSummarySettings } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 import { sanitizeIssueAutoTitleSettings } from "@multiremi/issue-title/settings.js";
+import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import {
   autopilotRunSourceRevision,
   repositoryWikiBuildDedupeKey,
@@ -90,11 +91,12 @@ import {
 } from "@multiremi/store/repos/autopilots-repo.js";
 import {
   ATLAS_AGENT_NAME,
+  ATLAS_PROJECT_AUTOPILOT_KIND,
+  ATLAS_PROJECT_AUTOPILOT_TITLE,
+  ATLAS_REPOSITORY_WIKI_AUTOPILOT_KIND,
   ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
   resolveAtlasRepositoryWikiAutopilot,
 } from "@multiremi/repository-wiki/atlas.js";
-
-const ATLAS_PROJECT_AUTOPILOT_TITLE = "Atlas · Project Knowledge";
 
 export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
@@ -365,7 +367,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/workspaces/:id/repository-wikis/atlas", async (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = requireHumanWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
     const plugin = store.listAgentPlugins(workspaceId, { provider: "claude" })
@@ -378,18 +380,34 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       }, 409);
     }
 
-    let agent = store.getAgentByWorkspaceAndName(workspaceId, ATLAS_AGENT_NAME);
+    const existingManagedAutopilot = store.listAutopilots(workspaceId).find((autopilot) =>
+      autopilot.managedKind === ATLAS_REPOSITORY_WIKI_AUTOPILOT_KIND
+      || autopilot.managedKind === ATLAS_PROJECT_AUTOPILOT_KIND
+    );
+    const managedAssignee = existingManagedAutopilot?.assigneeType === "agent"
+      ? store.getAgent(existingManagedAutopilot.assigneeId)
+      : null;
+    let agent = managedAssignee?.workspaceId === workspaceId ? managedAssignee : null;
+    agent ??= store.listAgents().find((candidate) =>
+      candidate.workspaceId === workspaceId
+      && agentRoleAtLeast(candidate.role, "maintainer")
+      && store.listAgentPluginBindings(candidate.id).some((binding) =>
+        binding.pluginId === plugin.id && binding.enabled
+      )
+    ) ?? null;
     if (!agent) {
       const created = await createAgentFromTemplate(store, {
         templateSlug: "atlas-llm-wiki",
-        name: ATLAS_AGENT_NAME,
+        name: availableAtlasAgentName(store, workspaceId),
         workspaceId,
         ownerId: authenticatedRequestUserId(c) ?? "local",
         visibility: "workspace",
+        role: "maintainer",
         issueCreationRequiresProposal: currentTaskIssueCreationRestricted(c, store),
       });
       agent = created.agent;
     } else {
+      if (agent.role === "normal") agent = store.setAgentRole(agent.id, "maintainer");
       const template = getAgentTemplate("atlas-llm-wiki")!;
       agent = store.updateAgent(agent.id, {
         description: template.description,
@@ -419,6 +437,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       workspaceId,
       agentId: agent.id,
       title: ATLAS_PROJECT_AUTOPILOT_TITLE,
+      managedKind: ATLAS_PROJECT_AUTOPILOT_KIND,
       description: "When an Issue is completed, inspect its sessions and code evidence, then maintain durable Project Wiki and Memory with the remi CLI.",
       executionMode: "trigger_issue",
       createdById,
@@ -433,6 +452,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       workspaceId,
       agentId: agent.id,
       title: ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE,
+      managedKind: ATLAS_REPOSITORY_WIKI_AUTOPILOT_KIND,
       description: "Use the canonical SCM event, checked-out target repository, and existing Repo Wiki to perform an incremental repository Wiki update with the remi CLI.",
       executionMode: "run_only",
       createdById,
@@ -967,22 +987,34 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/workspaces/:id/lark/installations/:installationId", (c) => c.body(null, 204));
 }
 
+function availableAtlasAgentName(store: RouterDeps["store"], workspaceId: string): string {
+  if (!store.getAgentByWorkspaceAndName(workspaceId, ATLAS_AGENT_NAME)) return ATLAS_AGENT_NAME;
+  for (let suffix = 2; suffix < 10_000; suffix++) {
+    const candidate = `${ATLAS_AGENT_NAME} ${suffix}`;
+    if (!store.getAgentByWorkspaceAndName(workspaceId, candidate)) return candidate;
+  }
+  throw new Error("unable to allocate an Atlas display name");
+}
+
 function atlasSetupStatus(store: RouterDeps["store"], workspaceId: string): Record<string, unknown> {
-  const agent = store.getAgentByWorkspaceAndName(workspaceId, ATLAS_AGENT_NAME);
+  const allAutopilots = store.listAutopilots(workspaceId);
+  const projectAutopilot = allAutopilots.find((autopilot) =>
+    autopilot.managedKind === ATLAS_PROJECT_AUTOPILOT_KIND
+  ) ?? null;
+  const repositoryAutopilot = resolveAtlasRepositoryWikiAutopilot(
+    workspaceId,
+    store.listAgents(),
+    allAutopilots,
+  );
+  const managedAutopilot = repositoryAutopilot ?? projectAutopilot;
+  const agent = managedAutopilot?.assigneeType === "agent"
+    ? store.getAgent(managedAutopilot.assigneeId)
+    : null;
   const plugin = store.listAgentPlugins(workspaceId, { provider: "claude" })
     .find((candidate) => candidate.name === "code-to-wiki") ?? null;
   const pluginBinding = agent && plugin
     ? store.listAgentPluginBindings(agent.id).find((binding) => binding.pluginId === plugin.id && binding.enabled) ?? null
     : null;
-  const autopilots = agent
-    ? store.listAutopilots(workspaceId).filter((autopilot) => autopilot.assigneeType === "agent" && autopilot.assigneeId === agent.id)
-    : [];
-  const projectAutopilot = autopilots.find((autopilot) => autopilot.title === ATLAS_PROJECT_AUTOPILOT_TITLE) ?? null;
-  const repositoryAutopilot = resolveAtlasRepositoryWikiAutopilot(
-    workspaceId,
-    store.listAgents(),
-    store.listAutopilots(workspaceId),
-  );
   const projectTrigger = projectAutopilot
     ? store.listAutopilotTriggers(projectAutopilot.id).find((trigger) => trigger.kind === "system_event" && trigger.enabled) ?? null
     : null;
@@ -1021,10 +1053,13 @@ function ensureAtlasAutopilot(
     title: string;
     description: string;
     executionMode: MultiremiAutopilotExecutionMode;
+    managedKind: NonNullable<MultiremiAutopilot["managedKind"]>;
     createdById: string;
   },
 ): MultiremiAutopilot {
-  const existing = store.listAutopilots(input.workspaceId).find((autopilot) => autopilot.title === input.title);
+  const existing = store.listAutopilots(input.workspaceId).find((autopilot) =>
+    autopilot.managedKind === input.managedKind
+  );
   if (existing) {
     return store.updateAutopilot(existing.id, {
       description: input.description,
@@ -1035,7 +1070,7 @@ function ensureAtlasAutopilot(
       sessionPolicy: "new",
     });
   }
-  return store.createAutopilot({
+  const created = store.createAutopilot({
     title: input.title,
     description: input.description,
     workspaceId: input.workspaceId,
@@ -1047,6 +1082,7 @@ function ensureAtlasAutopilot(
     createdByType: "member",
     createdById: input.createdById,
   });
+  return store.setAutopilotManagedKind(created.id, input.managedKind);
 }
 
 function ensureAtlasTrigger(

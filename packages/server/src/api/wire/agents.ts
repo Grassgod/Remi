@@ -36,6 +36,7 @@ export function agentCompatibilityResponse(store: MultiremiStore, agent: Multire
     model: agent.model ?? "",
     thinking_level: agent.thinkingLevel ?? "",
     issue_creation_requires_proposal: agent.issueCreationRequiresProposal,
+    role: agent.role,
     supervisor: agent.supervisor === true,
     owner_id: agent.ownerId,
     skills: store.listAgentSkills(agent.id, { includeFiles: false }).map(agentSkillCompatibilitySummary),

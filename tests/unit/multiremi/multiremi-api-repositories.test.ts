@@ -68,7 +68,7 @@ describe("Multiremi API - workspace repositories", () => {
     }
 
     const atlas = store.getAgentByWorkspaceAndName(workspace.id, "Atlas · LLM Wiki");
-    expect(atlas).toMatchObject({ provider: "claude", model: "opus5", visibility: "workspace" });
+    expect(atlas).toMatchObject({ provider: "claude", model: "opus5", visibility: "workspace", role: "maintainer" });
     expect(store.listAgentPluginBindings(atlas!.id)).toHaveLength(1);
     const automations = store.listAutopilots(workspace.id).filter((item) => item.assigneeId === atlas!.id);
     expect(automations.map((item) => item.title).sort()).toEqual([
@@ -77,6 +77,32 @@ describe("Multiremi API - workspace repositories", () => {
     ]);
     expect(automations.flatMap((item) => store.listAutopilotTriggers(item.id).map((trigger) => trigger.kind)).sort())
       .toEqual(["scm_event", "system_event"]);
+
+    const repositoryAutomation = automations.find((item) => item.managedKind === "atlas_repository_wiki")!;
+    const agentEdit = await app.request(`/api/agents/${atlas!.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: " Atlas · LLM Wiki ", description: "Maintains durable Wikis" }),
+    });
+    expect(agentEdit.status).toBe(200);
+    expect(await agentEdit.json()).toMatchObject({ name: "Atlas · LLM Wiki", role: "maintainer" });
+    const automationEdit = await app.request(`/api/autopilots/${repositoryAutomation.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Repository Docs Updater", description: "Maintains repository docs" }),
+    });
+    expect(automationEdit.status).toBe(200);
+    const agentRename = await app.request(`/api/agents/${atlas!.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Knowledge Maintainer" }),
+    });
+    expect(agentRename.status).toBe(200);
+    const renamedStatus = await app.request(path);
+    expect(renamedStatus.status).toBe(200);
+    expect(await renamedStatus.json()).toMatchObject({ configured: true, agent_id: atlas!.id });
+    expect((await app.request(path, { method: "POST" })).status).toBe(200);
+    expect(store.getAutopilot(repositoryAutomation.id)?.title).toBe("Repository Docs Updater");
 
     const build = await app.request(`/api/workspaces/${workspace.id}/repos/repo_atlas/wiki/build`, { method: "POST" });
     expect(build.status).toBe(202);
@@ -87,6 +113,43 @@ describe("Multiremi API - workspace repositories", () => {
     expect(store.getTask(buildBody.task_id)).toMatchObject({
       workspaceId: workspace.id,
       prompt: expect.stringContaining("repository LLM Wiki"),
+    });
+    const buildToken = await store.createTaskAccessToken(store.getTask(buildBody.task_id)!, "local");
+    expect(buildToken.scopes).toContain("repository-wiki:maintainer");
+  });
+
+  it("does not grant maintainer authority to an ordinary Agent with the Atlas display name", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    const ordinary = store.createAgent({
+      name: "Atlas · LLM Wiki",
+      provider: "claude",
+      workspaceId: workspace.id,
+    });
+    store.importAgentPlugin({
+      provider: "claude",
+      name: "code-to-wiki",
+      manifest: { name: "code-to-wiki", version: "1.0.0" },
+      files: [{ path: "skills/code-to-wiki/SKILL.md", content: "# Code to Wiki\n" }],
+    });
+    store.createScmConnection({
+      workspaceId: workspace.id,
+      name: "GitHub",
+      provider: "github",
+      mode: "poll",
+    });
+    const app = createMultiremiApp({ store });
+
+    const response = await app.request(`/api/workspaces/${workspace.id}/repository-wikis/atlas`, {
+      method: "POST",
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(store.getAgent(ordinary.id)?.role).toBe("normal");
+    expect(body.agent_id).not.toBe(ordinary.id);
+    expect(store.getAgent(body.agent_id)).toMatchObject({
+      name: "Atlas · LLM Wiki 2",
+      role: "maintainer",
     });
   });
 
@@ -371,7 +434,7 @@ describe("Multiremi API - workspace repositories", () => {
       .toEqual([2, 1]);
   });
 
-  it("gives owner task tokens full same-workspace Repository Wiki and build access", async () => {
+  it("keeps Atlas setup human-only while preserving same-workspace task Wiki access", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.updateWorkspaceRepositories(workspace.id, [{
@@ -408,6 +471,11 @@ describe("Multiremi API - workspace repositories", () => {
     const jsonAuth = { ...auth, "Content-Type": "application/json" };
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const root = `/api/workspaces/${workspace.id}/repos/repo_task_wiki/wiki`;
+    const humanSetup = await app.request(`/api/workspaces/${workspace.id}/repository-wikis/atlas`, {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    expect(humanSetup.status).toBe(200);
 
     const createdResponse = await app.request(root, {
       method: "POST",
@@ -437,7 +505,8 @@ describe("Multiremi API - workspace repositories", () => {
       headers: jsonAuth,
       body: "{}",
     });
-    expect(atlas.status).toBe(200);
+    expect(atlas.status).toBe(403);
+    expect(await atlas.json()).toMatchObject({ code: "task_token_hard_denied" });
     const build = await app.request(`${root}/build`, { method: "POST", headers: jsonAuth, body: "{}" });
     expect(build.status).toBe(202);
 

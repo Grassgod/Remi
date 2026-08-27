@@ -116,6 +116,21 @@ function agentSpecs(): CommandSpec[] {
       const response = await client.request({ method: "PUT", path: `/api/agents/${encodePath(id)}/supervisor`, body: { enabled } });
       renderResource(invocation, response.data);
     }),
+    spec("agent.role.set", ["agent", "role", "set"], "Set an agent's permission role", "write", HUMAN, [ref("agent")], [
+      { name: "role", type: "string", valueName: "normal|maintainer|supervisor", description: "Agent permission role", required: true },
+    ], async (invocation) => {
+      const { client, id } = await agentTarget(invocation);
+      const role = stringOption(invocation, "role");
+      if (role !== "normal" && role !== "maintainer" && role !== "supervisor") {
+        throw new CliError("usage", "--role must be normal, maintainer, or supervisor");
+      }
+      const response = await client.request({
+        method: "PUT",
+        path: `/api/agents/${encodePath(id)}/role`,
+        body: { role },
+      });
+      renderResource(invocation, response.data);
+    }),
     spec("agent.archive", ["agent", "archive"], "Archive an agent", "destructive", HUMAN, [ref("agent")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       const client = await clientFor(invocation);

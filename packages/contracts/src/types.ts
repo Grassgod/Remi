@@ -59,6 +59,8 @@ export interface MultiremiAgentTemplate extends MultiremiAgentTemplateSummary {
   instructions: string;
 }
 
+export type MultiremiAgentRole = "normal" | "maintainer" | "supervisor";
+
 export interface MultiremiAgent {
   id: string;
   name: string;
@@ -87,6 +89,7 @@ export interface MultiremiAgent {
   thinkingLevel: string | null;
   issueCreationRequiresProposal: boolean;
   issue_creation_requires_proposal?: boolean;
+  role: MultiremiAgentRole;
   supervisor?: boolean;
   archivedAt: string | null;
   createdAt: string;
@@ -127,6 +130,7 @@ export interface CreateAgentInput {
   thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
+  role?: MultiremiAgentRole;
 }
 
 export interface UpdateAgentInput {
@@ -161,6 +165,7 @@ export interface UpdateAgentInput {
   thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
+  role?: MultiremiAgentRole;
 }
 
 export interface CreateAgentFromTemplateInput {
@@ -188,6 +193,7 @@ export interface CreateAgentFromTemplateInput {
   owner_id?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
+  role?: MultiremiAgentRole;
 }
 
 export interface CreateAgentFromTemplateResult {
@@ -3114,6 +3120,8 @@ export interface MultiremiAutopilot {
   workspaceId: string;
   workspace_id?: string;
   title: string;
+  managedKind: "atlas_project_knowledge" | "atlas_repository_wiki" | null;
+  managed_kind?: "atlas_project_knowledge" | "atlas_repository_wiki" | null;
   description: string | null;
   projectId: string | null;
   project_id?: string | null;
