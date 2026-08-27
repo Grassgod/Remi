@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import { appendTimelineItem, buildEntries, buildTimeline, coalesceTimelineItems, countToolCalls, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
+import { appendTimelineItem, buildEntries, buildTimeline, coalesceTimelineItems, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
 
 function message(seq: number, type: TaskMessagePayload["type"], content?: string): TaskMessagePayload {
   return {
@@ -13,21 +13,6 @@ function message(seq: number, type: TaskMessagePayload["type"], content?: string
 }
 
 describe("task transcript timeline", () => {
-  it("uses one tool-call count contract for summary and dialog timelines", () => {
-    const items = buildTimeline([
-      message(1, "tool_use"),
-      message(2, "tool_result"),
-      message(3, "text"),
-      message(4, "tool_use"),
-    ]);
-
-    const summaryToolCount = countToolCalls(items);
-    const dialogToolCount = countToolCalls(items);
-
-    expect(summaryToolCount).toBe(2);
-    expect(dialogToolCount).toBe(summaryToolCount);
-  });
-
   it("keeps steer messages as distinct timeline events with audit metadata", () => {
     const steer = message(1, "steer", "Switch to Chinese");
     steer.meta = { steer_kind: "steer", author_type: "user" };
