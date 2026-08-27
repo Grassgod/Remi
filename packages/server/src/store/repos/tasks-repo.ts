@@ -21,6 +21,13 @@ import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
 import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
+import {
+  autopilotOutcomeBody,
+  autopilotTriggerObjectLabel,
+  summarizeAutopilotOutcome,
+} from "@multiremi/store/autopilot-run-notification.js";
+import { normalizeWorkspaceRepositories } from "@multiremi/api/helpers/repositories.js";
+import { autopilotRunTriggerSummary } from "@multiremi/api/wire/autopilots.js";
 import { createLogger } from "@shared/logger.js";
 import type {
   CreateOrganizerActionInput,
@@ -2403,18 +2410,30 @@ export class TasksRepo {
         else this.ctx.analytics().recordAutopilotRunFailedAnalytics(autopilot, run, failureReason);
         const durationSeconds = autopilotRunDurationSeconds(run.triggeredAt, run.completedAt);
         const trigger = run.source;
+        const repositories = normalizeWorkspaceRepositories(
+          this.ctx.workspaces().getWorkspace(autopilot.workspaceId)?.repos ?? [],
+        );
+        const repositoryNames = new Map(repositories.map((repository) => [repository.id, repository.name]));
+        const triggerObject = autopilotRunTriggerSummary(
+          run,
+          (repositoryId) => repositoryNames.get(repositoryId) ?? null,
+        );
+        const triggerObjectLabel = autopilotTriggerObjectLabel(triggerObject, trigger, run.triggeredAt);
+        const title = triggerObjectLabel
+          ? `${autopilot.title} · ${triggerObjectLabel}`
+          : autopilot.title;
         const recipients = this.ctx.resolveAutopilotNotificationRecipients(autopilot);
         for (const recipientId of recipients) {
           if (runStatus === "completed") {
-            const summary = summarizeAutopilotOutcome(task.result) ?? "No result summary.";
+            const outcome = summarizeAutopilotOutcome(task.result);
             this.ctx.createInboxItem({
               workspaceId: autopilot.workspaceId,
               issueId: run.issueId,
               memberId: recipientId,
               type: "autopilot_run_completed",
               severity: "info",
-              title: `${autopilot.title} completed`,
-              body: `Completed in ${durationSeconds}s | Trigger: ${trigger} | ${summary}`,
+              title,
+              body: autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
               actorId: null,
               details: {
@@ -2425,19 +2444,21 @@ export class TasksRepo {
                 trigger,
                 duration_seconds: durationSeconds,
                 issue_id: run.issueId,
+                trigger_object: triggerObject,
+                outcome,
               },
               emitEvent: true,
             });
           } else {
-            const reason = summarizeAutopilotOutcome(failureReason) ?? "Unknown failure.";
+            const outcome = summarizeAutopilotOutcome(failureReason, { failed: true });
             this.ctx.createInboxItem({
               workspaceId: autopilot.workspaceId,
               issueId: run.issueId,
               memberId: recipientId,
               type: "autopilot_run_failed",
               severity: "attention",
-              title: `${autopilot.title} failed`,
-              body: `Failed after ${durationSeconds}s | Trigger: ${trigger} | ${reason}`,
+              title,
+              body: autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
               actorId: null,
               details: {
@@ -2448,6 +2469,8 @@ export class TasksRepo {
                 trigger,
                 duration_seconds: durationSeconds,
                 issue_id: run.issueId,
+                trigger_object: triggerObject,
+                outcome,
               },
               emitEvent: true,
             });
@@ -2757,12 +2780,6 @@ function autopilotRunDurationSeconds(triggeredAt: string, completedAt: string | 
   const end = Date.parse(completedAt ?? "");
   if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
   return Math.max(0, Math.round((end - start) / 1000));
-}
-
-function summarizeAutopilotOutcome(value: string | null | undefined): string | null {
-  const summary = value?.replace(/\s+/g, " ").trim();
-  if (!summary) return null;
-  return summary.length > 240 ? `${summary.slice(0, 237)}...` : summary;
 }
 
 function parseJsonValue(value: string): unknown | undefined {

@@ -127,8 +127,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const completed = store.listInboxItems(creator.id).find((item) => item.type === "autopilot_run_completed")!;
     expect(completed.memberId).toBe(creator.id);
     expect(completed.severity).toBe("info");
-    expect(completed.title).toBe("Daily summary completed");
-    expect(completed.body).toContain("Trigger: schedule");
+    expect(completed.title).toMatch(/^Daily summary · Scheduled \d{2}:\d{2} UTC$/);
     expect(completed.body).toContain("Published 12 project updates. No blockers.");
     expect(completed.details).toMatchObject({
       autopilot_id: completedAutopilot.id,
@@ -138,14 +137,24 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       trigger: "schedule",
       duration_seconds: expect.any(Number),
       issue_id: null,
+      trigger_object: {
+        event_type: "schedule",
+        repository_id: null,
+        repository_name: null,
+      },
+      outcome: {
+        kind: "changes",
+        text: "Published 12 project updates. No blockers.",
+        links: [],
+        counts: null,
+      },
     });
 
     const failed = store.listInboxItems(owner.id).find((item) => item.type === "autopilot_run_failed")!;
     expect(failed.memberId).toBe(owner.id);
     expect(failed.severity).toBe("attention");
-    expect(failed.title).toBe("Dependency audit failed");
-    expect(failed.body).toContain("Trigger: api");
-    expect(failed.body).toContain("Dependency service unavailable");
+    expect(failed.title).toBe("Dependency audit");
+    expect(failed.body).toContain("Dependency service unavailable.");
     expect(failed.details).toMatchObject({
       autopilot_id: failedAutopilot.id,
       autopilot_title: "Dependency audit",
@@ -154,6 +163,13 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       trigger: "api",
       duration_seconds: expect.any(Number),
       issue_id: null,
+      trigger_object: null,
+      outcome: {
+        kind: "failed",
+        text: "Dependency service unavailable.",
+        links: [],
+        counts: null,
+      },
     });
 
     const inboxEvents = events.filter((event) => event.type === "inbox:new");
