@@ -1372,7 +1372,7 @@ export class IssuesRepo {
         });
       }
     }
-    this.ctx.issueSessions().appendSessionEvent(issueSessionId, {
+    const commentEvent = this.ctx.issueSessions().appendSessionEvent(issueSessionId, {
       authorType,
       authorId: input.authorId ?? null,
       kind: "message",
@@ -1416,7 +1416,7 @@ export class IssuesRepo {
       mentionedMemberIds,
       { comment_id: id, issue_session_id: issueSessionId },
     );
-    const mentionTasks = this.triggerCommentMentions(issue, comment);
+    const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq);
     this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
     return comment;
   }
@@ -2608,6 +2608,7 @@ export class IssuesRepo {
   private triggerCommentMentions(
     issue: MultiremiIssue,
     comment: MultiremiIssueComment,
+    requiredEventSeq: number,
   ): MultiremiTask[] {
     const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
@@ -2622,14 +2623,49 @@ export class IssuesRepo {
       && sourceTask.issueSessionId === comment.issueSessionId;
     for (const target of targets) {
       const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
-      if (!agent || seenAgents.has(agent.id)) continue;
-      if (comment.authorType === "agent" && comment.authorId === agent.id) continue;
+      if (!agent) {
+        if (comment.authorType === "agent") {
+          this.recordCommentMentionSkipped(issue, comment, null, target, "target_unavailable");
+        }
+        continue;
+      }
+      if (seenAgents.has(agent.id)) continue;
+      if (comment.authorType === "agent" && comment.authorId === agent.id) {
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "self_mention");
+        continue;
+      }
       seenAgents.add(agent.id);
 
-      if (
-        comment.authorType === "agent"
-        && !this.isSquadLeaderDelegation(issue, comment.authorId, sourceTask, taskAuthoredByCommentAgent, agent.id)
-      ) continue;
+      const leaderDelegation = this.isSquadLeaderDelegation({
+        issue,
+        sourceTask,
+        authorAgentId: comment.authorType === "agent" ? comment.authorId : null,
+        targetAgentId: agent.id,
+        issueSessionId: comment.issueSessionId,
+      });
+      const delegationReturn = comment.authorType === "agent"
+        && taskAuthoredByCommentAgent
+        && !!sourceTask?.delegationId
+        && sourceTask.delegatedByAgentId === agent.id;
+      if (delegationReturn) {
+        const wakeup = this.ctx.tasks().ensureDelegationWakeup({
+          sourceTaskId: sourceTask!.id,
+          requiredEventSeq,
+          triggerCommentId: comment.id,
+        });
+        if (wakeup.task) tasks.push(wakeup.task);
+        continue;
+      }
+      if (comment.authorType === "agent" && !leaderDelegation) {
+        this.recordCommentMentionSkipped(
+          issue,
+          comment,
+          agent,
+          target,
+          taskAuthoredByCommentAgent ? "unsupported_direction" : "unlinked_agent_comment",
+        );
+        continue;
+      }
 
       // One delegation per teammate per open turn. A leader routinely re-mentions
       // the teammate it just dispatched while writing its own summary ("已派 @QA
@@ -2662,7 +2698,7 @@ export class IssuesRepo {
         continue;
       }
 
-      const delegationId = taskAuthoredByCommentAgent ? createId("dlg") : null;
+      const delegationId = leaderDelegation ? createId("dlg") : null;
       const task = this.ctx.tasks().createTask({
         agentId: agent.id,
         issueId: issue.id,
@@ -2694,6 +2730,29 @@ export class IssuesRepo {
     return tasks;
   }
 
+  private recordCommentMentionSkipped(
+    issue: MultiremiIssue,
+    comment: MultiremiIssueComment,
+    agent: MultiremiAgent | null,
+    target: { assigneeType: "agent" | "squad"; assigneeId: string },
+    reason: "self_mention" | "unsupported_direction" | "unlinked_agent_comment" | "target_unavailable",
+  ): void {
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: "system",
+      actorId: null,
+      type: "comment_mention_skipped",
+      body: `Skipped agent mention for ${agent?.name ?? target.assigneeId}`,
+      data: {
+        reason,
+        commentId: comment.id,
+        sourceTaskId: comment.taskId,
+        assigneeType: target.assigneeType,
+        assigneeId: target.assigneeId,
+        agentId: agent?.id ?? null,
+      },
+    });
+  }
+
   private resolveCommentMentionTargets(body: string, workspaceId: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {
     const targets: Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> = [];
     const seen = new Set<string>();
@@ -2721,28 +2780,29 @@ export class IssuesRepo {
     return targets;
   }
 
-  private isSquadLeaderDelegation(
-    issue: MultiremiIssue,
-    authorId: string | null,
-    sourceTask: MultiremiTask | null,
-    taskAuthoredByCommentAgent: boolean,
-    targetAgentId: string,
-  ): boolean {
+  isSquadLeaderDelegation(input: {
+    issue: MultiremiIssue;
+    sourceTask: MultiremiTask | null;
+    authorAgentId: string | null;
+    targetAgentId: string;
+    issueSessionId: string | null;
+  }): boolean {
+    const { issue, sourceTask, authorAgentId, targetAgentId, issueSessionId } = input;
     if (
-      !authorId
+      !authorAgentId
       || !sourceTask
-      || !taskAuthoredByCommentAgent
-      || sourceTask.agentId !== authorId
+      || sourceTask.agentId !== authorAgentId
       || sourceTask.issueId !== issue.id
+      || sourceTask.issueSessionId !== issueSessionId
       || issue.assigneeType !== "squad"
       || !issue.assigneeId
     ) return false;
     const squad = this.ctx.squads().getSquad(issue.assigneeId);
-    if (!squad || squad.archivedAt || squad.leaderId !== authorId) return false;
+    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return false;
     return this.ctx.squads().listSquadMembers(squad.id).some((member) =>
       member.memberType === "agent"
       && member.memberId === targetAgentId
-      && member.memberId !== authorId
+      && member.memberId !== authorAgentId
     );
   }
 

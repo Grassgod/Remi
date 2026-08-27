@@ -2053,12 +2053,14 @@ export class TasksRepo {
       !source.delegatedByAgentId ||
       source.agentId === source.delegatedByAgentId
     ) {
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "no_lineage");
       return { task: null, created: false, covered: false };
     }
 
     const delegator = this.ctx.agents().getAgent(source.delegatedByAgentId);
     if (!delegator || delegator.archivedAt || delegator.workspaceId !== source.workspaceId) {
       log.warn(`delegation ${source.delegationId} cannot return to unavailable agent ${source.delegatedByAgentId}`);
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "delegator_unavailable");
       return { task: null, created: false, covered: false };
     }
 
@@ -2071,6 +2073,9 @@ export class TasksRepo {
     );
     const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(source.issueSessionId, delegator.id);
     if (lane.cursorSeq >= requiredEventSeq) {
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
+        laneCursorSeq: lane.cursorSeq,
+      });
       return { task: null, created: false, covered: true };
     }
 
@@ -2084,6 +2089,9 @@ export class TasksRepo {
       const projectedThrough = candidate.projectionToSeq;
       if (isActiveTaskStatus(candidate.status) && projectedThrough == null) {
         if (!input.terminalStatus) {
+          this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
+            returnTaskId: candidate.id,
+          });
           return { task: candidate, created: false, covered: true };
         }
         // An explicit @Leader may have queued this return before the child
@@ -2109,6 +2117,10 @@ export class TasksRepo {
             ],
           );
           if (updated.changes > 0) {
+            this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
+              returnTaskId: candidate.id,
+              terminalReportMerged: true,
+            });
             return { task: this.getTask(candidate.id)!, created: false, covered: true };
           }
         }
@@ -2118,6 +2130,10 @@ export class TasksRepo {
         (isActiveTaskStatus(candidate.status) && projectedThrough != null && projectedThrough >= requiredEventSeq)
         || (candidate.status === "completed" && projectedThrough != null && projectedThrough >= requiredEventSeq)
       ) {
+        this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
+          returnTaskId: candidate.id,
+          projectionToSeq: projectedThrough,
+        });
         return { task: candidate, created: false, covered: true };
       }
     }
@@ -2157,6 +2173,33 @@ export class TasksRepo {
       },
     });
     return { task, created: true, covered: false };
+  }
+
+  private recordDelegationReturnSkipped(
+    source: MultiremiTask,
+    input: DelegationWakeupInput,
+    requiredEventSeq: number,
+    reason: "no_lineage" | "delegator_unavailable" | "already_covered",
+    details: Record<string, unknown> = {},
+  ): void {
+    if (!source.issueId) return;
+    this.ctx.appendIssueActivity(source.issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "delegation_return_skipped",
+      body: `Delegation return skipped: ${reason}`,
+      data: {
+        reason,
+        delegationId: source.delegationId,
+        sourceTaskId: source.id,
+        delegatorAgentId: source.delegatedByAgentId,
+        delegateAgentId: source.agentId,
+        requiredEventSeq,
+        triggerCommentId: cleanOptionalString(input.triggerCommentId),
+        terminalStatus: input.terminalStatus ?? null,
+        ...details,
+      },
+    });
   }
 
   private afterTaskTerminal(

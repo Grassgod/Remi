@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAgent, MultiremiIssue, MultiremiRuntime, MultiremiTask } from "@multiremi/contracts/types.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -113,6 +114,78 @@ describe("task-level agent delegation return", () => {
       delegationId: null,
       delegatedByAgentId: null,
     });
+    expect(store.listIssueActivity(issue.id)
+      .find((activity) => activity.type === "comment_mention_skipped")?.data)
+      .toMatchObject({ reason: "unlinked_agent_comment", agentId: qa.id });
+  });
+
+  it("derives direct-task delegation lineage only from a qualifying task credential", async () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Leader", provider: "claude" });
+    const qa = store.createAgent({ name: "QA", provider: "claude" });
+    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
+    const issue = store.createIssue({ title: "Direct delegation", assigneeType: "squad", assigneeId: squad.id });
+    const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
+    const taskToken = await store.createTaskAccessToken(leaderTask, "local");
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const body = {
+      agentId: qa.id,
+      issueId: issue.id,
+      prompt: "Verify the direct assignment.",
+      delegationId: "dlg_forged",
+      delegatedByAgentId: qa.id,
+    };
+
+    const humanResponse = await app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(humanResponse.status).toBe(201);
+    const humanTaskId = ((await humanResponse.json()) as { task: { id: string } }).task.id;
+    expect(store.getTask(humanTaskId)).toMatchObject({
+      delegationId: null,
+      delegatedByAgentId: null,
+    });
+
+    const delegatedResponse = await app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(delegatedResponse.status).toBe(201);
+    const delegatedTaskId = ((await delegatedResponse.json()) as { task: { id: string } }).task.id;
+    const delegated = store.getTask(delegatedTaskId)!;
+    expect(delegated).toMatchObject({
+      delegatedByAgentId: leader.id,
+      issueSessionId: leaderTask.issueSessionId,
+    });
+    expect(delegated.delegationId).toStartWith("dlg_");
+    expect(delegated.delegationId).not.toBe("dlg_forged");
+  });
+
+  it("audits a task-token task creation that does not qualify as delegation", async () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Leader", provider: "claude" });
+    const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
+    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [] });
+    const issue = store.createIssue({ title: "Rejected direct delegation", assigneeType: "squad", assigneeId: squad.id });
+    const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
+    const taskToken = await store.createTaskAccessToken(leaderTask, "local");
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: outsider.id, issueId: issue.id, prompt: "Investigate." }),
+    });
+    expect(response.status).toBe(201);
+    const taskId = ((await response.json()) as { task: { id: string } }).task.id;
+    expect(store.getTask(taskId)).toMatchObject({ delegationId: null, delegatedByAgentId: null });
+    expect(store.listIssueActivity(issue.id)
+      .find((activity) => activity.type === "delegation_return_skipped"
+        && (activity.data as Record<string, unknown>).taskId === taskId)?.data)
+      .toMatchObject({ reason: "no_lineage", stage: "task_creation", sourceTaskId: leaderTask.id });
   });
 
   it("lets only the assigned squad leader richly mention a squad teammate", () => {
@@ -137,6 +210,9 @@ describe("task-level agent delegation return", () => {
       body: `Please help [@Outsider](mention://agent/${outsider.id})`,
     });
     expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
+    expect(store.listIssueActivity(issue.id)
+      .find((activity) => activity.type === "comment_mention_skipped")?.data)
+      .toMatchObject({ reason: "unsupported_direction", agentId: outsider.id });
 
     store.createIssueComment(issue.id, {
       authorType: "agent",
@@ -273,7 +349,7 @@ describe("task-level agent delegation return", () => {
       .filter((activity) => activity.type === "delegation_return_triggered")).toHaveLength(1);
   });
 
-  it("ignores a child rich mention and returns only when the child becomes terminal", () => {
+  it("returns a child rich mention immediately and coalesces repeated and terminal reports", () => {
     const fixture = createDelegationFixture();
     const report = fixture.store.createIssueComment(fixture.issue.id, {
       authorType: "agent",
@@ -283,7 +359,22 @@ describe("task-level agent delegation return", () => {
     });
 
     let returned = delegationTasks(fixture);
-    expect(returned).toHaveLength(1);
+    expect(returned).toHaveLength(2);
+    let leaderReturn = returned.find((task) => task.agentId === fixture.leader.id)!;
+    expect(leaderReturn.prompt).toContain("QA requested your attention");
+    expect(leaderReturn.triggerCommentId).toBe(report.id);
+
+    fixture.store.createIssueComment(fixture.issue.id, {
+      authorType: "agent",
+      authorId: fixture.qa.id,
+      taskId: fixture.childTask.id,
+      body: `Still working; [@Leader](mention://agent/${fixture.leader.id}) no action needed yet.`,
+    });
+    expect(delegationTasks(fixture)).toHaveLength(2);
+    expect(fixture.store.listIssueActivity(fixture.issue.id)
+      .some((activity) => activity.type === "delegation_return_skipped"
+        && (activity.data as Record<string, unknown>).reason === "already_covered"))
+      .toBeTrue();
 
     fixture.store.completeTask(fixture.childTask.id, {
       output: "QA finished successfully.",
@@ -293,7 +384,7 @@ describe("task-level agent delegation return", () => {
 
     returned = delegationTasks(fixture);
     expect(returned).toHaveLength(2);
-    const leaderReturn = returned.find((task) => task.agentId === fixture.leader.id)!;
+    leaderReturn = returned.find((task) => task.agentId === fixture.leader.id)!;
     expect(leaderReturn.prompt).toContain("QA finished successfully.");
     expect(leaderReturn.triggerCommentId).toBeNull();
     fixture.store.updateIssueComment(report.id, { body: "QA found no blocker." });
@@ -381,5 +472,26 @@ describe("task-level agent delegation return", () => {
       workDir: "/tmp/delegation-qa",
     }).status).toBe("completed");
     expect(delegationTasks(fixture).filter((task) => task.agentId === fixture.leader.id)).toHaveLength(0);
+    expect(fixture.store.listIssueActivity(fixture.issue.id)
+      .some((activity) => activity.type === "delegation_return_skipped"
+        && (activity.data as Record<string, unknown>).reason === "delegator_unavailable"))
+      .toBeTrue();
+  });
+
+  it("audits a return attempt with no delegation lineage", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Solo", provider: "claude" });
+    const issue = store.createIssue({ title: "No lineage" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work." });
+
+    expect(store.ensureDelegationWakeup({ sourceTaskId: task.id, requiredEventSeq: 1 })).toEqual({
+      task: null,
+      created: false,
+      covered: false,
+    });
+    expect(store.listIssueActivity(issue.id)
+      .some((activity) => activity.type === "delegation_return_skipped"
+        && (activity.data as Record<string, unknown>).reason === "no_lineage"))
+      .toBeTrue();
   });
 });

@@ -18,6 +18,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { CreateTaskInput } from "@multiremi/contracts/types.js";
+import { createId } from "@multiremi/ids.js";
 import { TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
@@ -74,7 +75,49 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       assignment_source_event_id: _assignmentSourceEventIdSnake,
       ...publicInput
     } = body;
-    return c.json({ task: taskPublicResponse(store.createTask(publicInput)) }, 201);
+    const taskToken = currentTaskAccessToken(c);
+    const sourceTask = taskToken?.taskId ? store.getTask(taskToken.taskId) : null;
+    const issueId = cleanString(publicInput.issueId);
+    const issue = issueId ? store.getIssue(issueId) : null;
+    const requestedIssueSessionId = cleanString(publicInput.issueSessionId ?? publicInput.issue_session_id);
+    const inheritedIssueSessionId = requestedIssueSessionId ?? sourceTask?.issueSessionId ?? null;
+    const leaderDelegation = Boolean(
+      taskToken
+      && sourceTask
+      && issue
+      && store.isSquadLeaderDelegation({
+        issue,
+        sourceTask,
+        authorAgentId: taskToken.agentId,
+        targetAgentId: agent.id,
+        issueSessionId: inheritedIssueSessionId,
+      })
+    );
+    const createInput: CreateTaskInput = leaderDelegation
+      ? {
+          ...publicInput,
+          issueSessionId: inheritedIssueSessionId,
+          delegationId: createId("dlg"),
+          delegatedByAgentId: sourceTask!.agentId,
+        }
+      : publicInput;
+    const task = store.createTask(createInput);
+    if (taskToken && issue && !leaderDelegation) {
+      store.appendIssueActivity(issue.id, {
+        actorType: "system",
+        actorId: null,
+        type: "delegation_return_skipped",
+        body: `Task ${task.id} was created without delegation lineage`,
+        data: {
+          reason: "no_lineage",
+          stage: "task_creation",
+          sourceTaskId: sourceTask?.id ?? taskToken.taskId,
+          taskId: task.id,
+          targetAgentId: agent.id,
+        },
+      });
+    }
+    return c.json({ task: taskPublicResponse(task) }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
     const task = store.getTaskWithAgent(c.req.param("id"));

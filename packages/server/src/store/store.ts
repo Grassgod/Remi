@@ -2731,6 +2731,16 @@ runMigrations(this.db);
     return this.tasks.listTasksForIssue(issueId);
   }
 
+  isSquadLeaderDelegation(input: {
+    issue: MultiremiIssue;
+    sourceTask: MultiremiTask | null;
+    authorAgentId: string | null;
+    targetAgentId: string;
+    issueSessionId: string | null;
+  }): boolean {
+    return this.issues.isSquadLeaderDelegation(input);
+  }
+
   getTaskQueueBlocker(taskId: string): MultiremiTaskQueueBlocker | null {
     return this.tasks.getTaskQueueBlocker(taskId);
   }
