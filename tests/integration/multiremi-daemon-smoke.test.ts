@@ -757,12 +757,15 @@ describe("Bun Multiremi daemon smoke", () => {
         totalTokens: 11,
       });
       // Runtime identity and machine display name are separate fields.
-      expect(store.listRuntimes()[0]).toMatchObject({
+      const registeredRuntime = store.listRuntimes()[0]!;
+      expect(registeredRuntime).toMatchObject({
         name: "claude",
-        daemonDisplayName: "n37-206-133-hehuajie",
         provider: "claude",
         status: "online",
       });
+      expect(registeredRuntime.daemonDisplayName).toBe(
+        registeredRuntime.deviceInfo.split(" · ", 1)[0],
+      );
       expect(closed).toBe(true);
     } finally {
       server.stop(true);
