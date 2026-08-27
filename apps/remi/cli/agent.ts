@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@shared/logger.js";
-import type { MultiremiAgent } from "@multiremi/contracts/types.js";
+import type { MultiremiAgent, MultiremiDaemonBotProject } from "@multiremi/contracts/types.js";
 
 const log = createLogger("agent");
 
@@ -38,6 +38,7 @@ export function feishuConfigured(): boolean {
 export interface FeishuChannelHandle {
   start: Promise<void>;
   stop: () => Promise<void>;
+  updateProjects: (projects: MultiremiDaemonBotProject[]) => void;
 }
 
 /**
@@ -48,12 +49,17 @@ export interface FeishuChannelHandle {
  */
 export async function bootFeishuChannel(
   agent: MultiremiAgent,
+  projects: MultiremiDaemonBotProject[],
   authorizeSender: (senderOpenId: string) => Promise<boolean>,
 ): Promise<FeishuChannelHandle | null> {
   if (!feishuConfigured()) return null;
   const { Remi } = await import("@remi/core.js");
   const { loadConfig } = await import("@shared/config.js");
-  const remi = Remi.boot(loadConfig(), agent, { authorizeFeishuSender: authorizeSender });
+  const remi = Remi.boot(loadConfig(), agent, projects, { authorizeFeishuSender: authorizeSender });
   log.info("Starting Feishu channel");
-  return { start: remi.start(), stop: () => remi.stop() };
+  return {
+    start: remi.start(),
+    stop: () => remi.stop(),
+    updateProjects: (next) => remi.setBotProjects(next),
+  };
 }

@@ -22,6 +22,7 @@ class MockProvider implements Provider {
   lastContext: string | null = null;
   lastSystemPrompt: string | null = null;
   closed = false;
+  cleared: string[] = [];
 
   constructor(private _responseText: string = "Mock response", private _name: string = "acp:claude") {}
 
@@ -72,6 +73,10 @@ class MockProvider implements Provider {
 
   async close(): Promise<void> {
     this.closed = true;
+  }
+
+  async clearSession(chatId?: string): Promise<void> {
+    this.cleared.push(chatId ?? "");
   }
 }
 
@@ -180,8 +185,11 @@ function makeAgent(tmpDir: string, overrides: Partial<MultiremiAgent> = {}): Mul
 }
 
 const Remi = class extends RemiCore {
-  constructor(remiConfig: RemiConfig) {
-    super(remiConfig, makeAgent(tmpDir));
+  constructor(
+    remiConfig: RemiConfig,
+    botProjects: ConstructorParameters<typeof RemiCore>[2] = null,
+  ) {
+    super(remiConfig, makeAgent(tmpDir), botProjects);
   }
 };
 
@@ -510,6 +518,78 @@ describe("RemiCore", () => {
     // session_id cleared but display_name preserved
     expect(sessDb.getSessionId("chat-clear")).toBeNull();
     expect(sessDb.getDisplayName("chat-clear")).toBe(nameBefore);
+  });
+
+  it("/p lists only the server-projected Multiremi projects", async () => {
+    const projectDir = join(tmpDir, "project-one");
+    mkdirSync(projectDir);
+    const remi = new Remi(config, [{ id: "prj_one", title: "One", cwd: projectDir }]);
+    remi.addProvider(new MockProvider());
+
+    const response = await remi.handleMessage({
+      text: "/p",
+      chatId: "chat-project-list",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("prj_one  One");
+    expect(response.text).toContain(projectDir);
+  });
+
+  it("/p switches the persistent session cwd by Multiremi project id", async () => {
+    const projectDir = join(tmpDir, "project-switch");
+    mkdirSync(projectDir);
+    const provider = new MockProvider();
+    const remi = new Remi(config, [{ id: "prj_switch", title: "Switch", cwd: projectDir }]);
+    remi.addProvider(provider);
+    await remi.handleMessage({
+      text: "hello",
+      chatId: "chat-project-switch",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    const response = await remi.handleMessage({
+      text: "/p prj_switch",
+      chatId: "chat-project-switch",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("Switch (prj_switch)");
+    expect(sessDb.getSession("chat-project-switch")?.cwd).toBe(projectDir);
+    expect(sessDb.getSessionId("chat-project-switch")).toBeNull();
+    expect(provider.cleared).toContain("chat-project-switch");
+  });
+
+  it("/p rejects paths and projects outside the server projection", async () => {
+    const remi = new Remi(config, []);
+    remi.addProvider(new MockProvider());
+
+    const response = await remi.handleMessage({
+      text: `/p ${tmpDir}`,
+      chatId: "chat-project-reject",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("不存在，或未绑定到当前运行节点");
+    expect(sessDb.getSession("chat-project-reject")?.cwd ?? null).toBeNull();
+  });
+
+  it("/p fails visibly before the daemon project catalog is available", async () => {
+    const remi = new Remi(config);
+    remi.addProvider(new MockProvider());
+
+    const response = await remi.handleMessage({
+      text: "/p",
+      chatId: "chat-project-unavailable",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("项目目录暂不可用");
   });
 
   // ── Session display name uniqueness ────────────────────

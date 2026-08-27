@@ -2493,6 +2493,13 @@ export interface MultiremiProjectResource {
   createdBy: string | null;
 }
 
+/** Daemon-only projection used by the co-resident bot's persistent project switcher. */
+export interface MultiremiDaemonBotProject {
+  id: string;
+  title: string;
+  cwd: string;
+}
+
 export type MultiremiProjectDocKind = "wiki" | "memory";
 
 export interface MultiremiProjectDoc {

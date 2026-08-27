@@ -71,7 +71,6 @@ describe("Multiremi API — daemon endpoints", () => {
       custom_args: ["--profile", "bot"],
       thinking_level: "high",
     });
-
     const heartbeat = await app.request("/api/daemon/heartbeat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -97,6 +96,69 @@ describe("Multiremi API — daemon endpoints", () => {
       expect(rejected.status).toBe(404);
       expect(await rejected.json()).toEqual({ error: "bot agent not found in runtime workspace" });
     }
+  });
+
+  it("projects only current-workspace directories owned by the requesting daemon", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const foreignWorkspace = store.createWorkspace({
+      id: "ws_foreign_projects",
+      name: "Foreign projects",
+      slug: "foreign-projects",
+    });
+    const visible = store.createProject({ title: "Visible", workspaceId: "local" });
+    const otherDaemon = store.createProject({ title: "Other daemon", workspaceId: "local" });
+    const archived = store.createProject({ title: "Archived", workspaceId: "local", status: "completed" });
+    const foreign = store.createProject({ title: "Foreign", workspaceId: foreignWorkspace.id });
+    for (const [project, daemonId, cwd] of [
+      [visible, "daemon-projects", "/srv/visible"],
+      [otherDaemon, "daemon-other", "/srv/other"],
+      [archived, "daemon-projects", "/srv/archived"],
+      [foreign, "daemon-projects", "/srv/foreign"],
+    ] as const) {
+      store.createProjectResource(project.id, {
+        resourceType: "local_directory",
+        resourceRef: { daemonId, localPath: cwd },
+      });
+    }
+    const app = createMultiremiApp({ store });
+    const registered = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-projects",
+        include_bot_projects: true,
+        runtimes: [{ type: "claude", version: "1" }],
+      }),
+    });
+
+    expect(registered.status).toBe(200);
+    expect(registered.headers.get("cache-control")).toBe("no-store");
+    const registeredBody = await registered.json();
+    expect(registeredBody.bot_projects).toEqual([
+      { id: visible.id, title: "Visible", cwd: "/srv/visible" },
+    ]);
+
+    const added = store.createProject({ title: "Added", workspaceId: "local" });
+    store.createProjectResource(added.id, {
+      resourceType: "local_directory",
+      resourceRef: { daemonId: "daemon-projects", localPath: "/srv/added" },
+    });
+    const heartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: registeredBody.runtimes[0].id,
+        include_bot_projects: true,
+      }),
+    });
+    expect(heartbeat.status).toBe(200);
+    expect(heartbeat.headers.get("cache-control")).toBe("no-store");
+    expect((await heartbeat.json()).bot_projects).toEqual([
+      { id: added.id, title: "Added", cwd: "/srv/added" },
+      { id: visible.id, title: "Visible", cwd: "/srv/visible" },
+    ]);
   });
 
   it("checks Feishu external identities against the daemon token workspace", async () => {

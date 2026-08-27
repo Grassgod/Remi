@@ -318,10 +318,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         currentAccessToken(c)?.type !== "daemon" && (!authToken || usesMasterToken),
     });
     if ("error" in result) return c.json({ error: result.error }, result.status);
-    if (botAgent.agent) c.header("Cache-Control", "no-store");
+    if (botAgent.agent || body.include_bot_projects) c.header("Cache-Control", "no-store");
     return c.json({
       ...result,
       ...(botAgent.agent ? { bot_agent: daemonBotAgentResponse(botAgent.agent) } : {}),
+      ...(body.include_bot_projects
+        ? { bot_projects: daemonBotProjects(store, registerWorkspace, registerDaemonId) }
+        : {}),
     });
   });
   app.post("/api/daemon/deregister", async (c) => {
@@ -343,6 +346,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       drain_ack_generation?: number;
       active_task_count?: number;
       bot_agent_id?: string;
+      include_bot_projects?: boolean;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -405,6 +409,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     if (botAgent.agent) {
       response.bot_agent = daemonBotAgentResponse(botAgent.agent);
+    }
+    if (body.include_bot_projects) {
+      response.bot_projects = daemonBotProjects(store, workspaceId, runtime?.daemonId ?? "");
+    }
+    if (botAgent.agent || body.include_bot_projects) {
       c.header("Cache-Control", "no-store");
     }
     return c.json(response);
@@ -895,6 +904,26 @@ function resolveBotAgent(
     return { error: "bot agent not found in runtime workspace", status: 404 };
   }
   return { agent };
+}
+
+function daemonBotProjects(
+  store: RouterDeps["store"],
+  workspaceId: string,
+  daemonId: string,
+): Array<{ id: string; title: string; cwd: string }> {
+  if (!daemonId) return [];
+  return store.listProjects(workspaceId).flatMap((project) => {
+    if (project.archivedAt) return [];
+    const directory = store.listProjectResources(project.id).find((resource) => {
+      if (resource.workspaceId !== workspaceId || resource.resourceType !== "local_directory") return false;
+      const owner = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
+      const cwd = String(resource.resourceRef.localPath ?? resource.resourceRef.local_path ?? "").trim();
+      return owner === daemonId && Boolean(cwd);
+    });
+    if (!directory) return [];
+    const cwd = String(directory.resourceRef.localPath ?? directory.resourceRef.local_path).trim();
+    return [{ id: project.id, title: project.title, cwd }];
+  });
 }
 
 function safeProjectKnowledgeError(error: unknown): string {

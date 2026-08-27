@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiAgent,
+  MultiremiDaemonBotProject,
   MultiremiProjectDocIndexEntry,
   MultiremiRepoData,
   MultiremiRuntimeDirectoryCandidate,
@@ -45,6 +46,7 @@ export interface MultiremiDaemonRegisterRuntimeInput {
   agentPluginProtocol?: number;
   sshMeshProtocol?: number;
   botAgentId?: string | null;
+  includeBotProjects?: boolean;
   runtime: {
     name: string;
     type: string;
@@ -75,12 +77,14 @@ export interface MultiremiDaemonRegisterResponse {
   relay?: MultiremiRelayWire;
   runtimes: Array<{ id: string; provider?: string; type?: string }>;
   botAgent?: MultiremiAgent | null;
+  botProjects?: MultiremiDaemonBotProject[];
 }
 
 export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonHeartbeatAck {
   workspace_settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
   botAgent?: MultiremiAgent | null;
+  botProjects?: MultiremiDaemonBotProject[];
 }
 
 export interface MultiremiDaemonGcStatus {
@@ -202,13 +206,17 @@ export class MultiremiDaemonClient {
   }
 
   async registerDaemonRuntime(input: MultiremiDaemonRegisterRuntimeInput): Promise<MultiremiDaemonRegisterResponse> {
-    const response = await this.post<MultiremiDaemonRegisterResponse & { bot_agent?: unknown }>("/api/daemon/register", {
+    const response = await this.post<MultiremiDaemonRegisterResponse & {
+      bot_agent?: unknown;
+      bot_projects?: unknown;
+    }>("/api/daemon/register", {
       workspace_id: input.workspaceId,
       daemon_id: input.daemonId,
       device_name: input.deviceName ?? "",
       cli_version: input.cliVersion ?? "",
       launched_by: input.launchedBy ?? "",
       ...(input.botAgentId ? { bot_agent_id: input.botAgentId } : {}),
+      ...(input.includeBotProjects ? { include_bot_projects: true } : {}),
       capabilities: {
         agent_plugins: input.agentPluginProtocol ?? MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         ssh_mesh: input.sshMeshProtocol ?? MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
@@ -216,9 +224,11 @@ export class MultiremiDaemonClient {
       runtimes: [input.runtime],
     });
     const botAgent = normalizeDaemonAgent(response.bot_agent);
+    const botProjects = normalizeDaemonBotProjects(response.bot_projects);
     return {
       ...response,
       ...(botAgent ? { botAgent } : {}),
+      ...(botProjects ? { botProjects } : {}),
     };
   }
 
@@ -236,6 +246,7 @@ export class MultiremiDaemonClient {
     sshMeshStatus?: MultiremiDaemonSshMeshStatus,
     drainStatus?: { ackGeneration: number; activeTaskCount: number },
     botAgentId?: string | null,
+    includeBotProjects = false,
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
     let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
@@ -253,6 +264,7 @@ export class MultiremiDaemonClient {
             }
           : {}),
         ...(botAgentId ? { bot_agent_id: botAgentId } : {}),
+        ...(includeBotProjects ? { include_bot_projects: true } : {}),
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
@@ -261,11 +273,13 @@ export class MultiremiDaemonClient {
       throw error;
     }
     const botAgent = normalizeDaemonAgent((resp as Record<string, unknown>).bot_agent);
+    const botProjects = normalizeDaemonBotProjects((resp as Record<string, unknown>).bot_projects);
     return {
       runtime_id: runtimeId,
       status: resp.status ?? "ok",
       ...resp,
       ...(botAgent ? { botAgent } : {}),
+      ...(botProjects ? { botProjects } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
   }
 
@@ -1279,6 +1293,18 @@ function normalizeDaemonClaimProjectContexts(raw: any): MultiremiTaskWithAgent["
       docs,
       repos: Array.isArray(context.repos) ? context.repos : [],
     }];
+  });
+}
+
+function normalizeDaemonBotProjects(raw: unknown): MultiremiDaemonBotProject[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const record = entry as Record<string, unknown>;
+    const id = stringOrNull(record.id);
+    const title = stringOrNull(record.title);
+    const cwd = stringOrNull(record.cwd);
+    return id && title && cwd ? [{ id, title, cwd }] : [];
   });
 }
 

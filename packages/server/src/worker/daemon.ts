@@ -142,6 +142,7 @@ import {
 } from "@daemon/agent-runtime/workspace/session-archive.js";
 import { SshMeshManager } from "@daemon/ssh-mesh.js";
 import type {
+  MultiremiDaemonBotProject,
   MultiremiDaemonHeartbeatAck,
   MultiremiAgent,
   MultiremiDaemonSshMeshStatus,
@@ -330,6 +331,8 @@ export interface MultiremiDaemonOptions {
   botAgentId?: string | null;
   /** Delivers the validated bot agent returned by daemon registration/heartbeat. */
   onBotAgentResolved?: (agent: MultiremiAgent) => void;
+  /** Delivers the server-filtered project directories available to the co-resident bot. */
+  onBotProjectsUpdated?: (projects: MultiremiDaemonBotProject[]) => void;
   pollIntervalMs?: number;
   maxConcurrency?: number;
   once?: boolean;
@@ -539,7 +542,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "botAgentId" | "onBotAgentResolved" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "botAgentId" | "onBotAgentResolved" | "onBotProjectsUpdated" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -609,6 +612,7 @@ export class MultiremiDaemon {
   private readonly cliUpdateCoordinator: MultiremiCliUpdateCoordinator | null;
   private readonly botAgentId: string | null;
   private readonly onBotAgentResolved: ((agent: MultiremiAgent) => void) | null;
+  private readonly onBotProjectsUpdated: ((projects: MultiremiDaemonBotProject[]) => void) | null;
   private workspaceOwnershipLost = false;
   private terminalAuthorityCleanup: Promise<void> | null = null;
   private terminalAuthorityCleanupRetryWake: (() => void) | null = null;
@@ -657,6 +661,7 @@ export class MultiremiDaemon {
     this.supervisorReady = options.supervisorReady ?? (() => this.ready);
     this.onReadyChange = options.onReadyChange ?? (() => {});
     this.cliUpdateCoordinator = options.cliUpdateCoordinator ?? null;
+    this.onBotProjectsUpdated = options.onBotProjectsUpdated ?? null;
     this.options = {
       token: options.token ?? process.env.MULTIREMI_TOKEN ?? null,
       runtimeId,
@@ -851,6 +856,7 @@ export class MultiremiDaemon {
               activeTaskCount: this.activeTaskCount,
             },
             this.botAgentId,
+            Boolean(this.onBotProjectsUpdated),
           );
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
           if (!skipClaim && !this.stopped) {
@@ -959,6 +965,7 @@ export class MultiremiDaemon {
         agentPluginProtocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         sshMeshProtocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
         botAgentId: this.botAgentId,
+        includeBotProjects: Boolean(this.onBotProjectsUpdated),
         runtime: {
           // Empty name → server derives `<provider> (<deviceName>)`, which the
           // dashboard splits into the machine title + a clean provider row.
@@ -976,22 +983,25 @@ export class MultiremiDaemon {
       this.options.runtimeId = runtime.id;
       this.applyWorkspaceRegistrationState(response);
       this.applyBotAgent(response.botAgent);
+      this.applyBotProjects(response.botProjects);
       this.runtimeRegistrationGeneration++;
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
       return this.options.runtimeId;
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
     this.options.runtimeId = runtime.runtime.id;
-    if (this.botAgentId) {
+    if (this.botAgentId || this.onBotProjectsUpdated) {
       const ack = await this.client.heartbeatRuntime(
         this.options.runtimeId,
         undefined,
         undefined,
         this.botAgentId,
+        Boolean(this.onBotProjectsUpdated),
       );
       if (ack.workspace_settings) this.applyWorkspaceSettings(this.options.workspaceId ?? "local", ack.workspace_settings);
       if (ack.relay) this.workspaceRelays.set(this.options.workspaceId ?? "local", ack.relay);
       this.applyBotAgent(ack.botAgent);
+      this.applyBotProjects(ack.botProjects);
     }
     this.runtimeRegistrationGeneration++;
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
@@ -1007,6 +1017,14 @@ export class MultiremiDaemon {
     // Keep startup metadata-only. Eager Git sync blocks Bun's event loop and is
     // duplicated by co-resident Claude/Codex daemons. Tasks and explicit
     // checkouts populate only the repositories they actually need.
+  }
+
+  private applyBotProjects(projects: MultiremiDaemonBotProject[] | undefined): void {
+    if (!this.onBotProjectsUpdated) return;
+    if (!projects) {
+      throw new Error("daemon response did not include the requested bot project catalog");
+    }
+    this.onBotProjectsUpdated(projects);
   }
 
   /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
@@ -1063,13 +1081,14 @@ export class MultiremiDaemon {
         this.appliedDrainGeneration = ack.drain.generation;
       }
     }
-    if (ack.workspace_settings) this.applyWorkspaceSettings(workspaceId, ack.workspace_settings);
-    if (this.botAgentId) this.applyBotAgent(ack.botAgent);
-    if (ack.relay) {
-      this.workspaceRelays.set(workspaceId, ack.relay);
-    }
     if (ack.status === "runtime_gone" || ack.runtime_gone) {
       return !(await this.handleRuntimeGone(runtimeId, Date.now()));
+    }
+    if (ack.workspace_settings) this.applyWorkspaceSettings(workspaceId, ack.workspace_settings);
+    if (this.botAgentId) this.applyBotAgent(ack.botAgent);
+    this.applyBotProjects(ack.botProjects);
+    if (ack.relay) {
+      this.workspaceRelays.set(workspaceId, ack.relay);
     }
     if (ack.pending_update) {
       await this.handleRuntimeUpdate(runtimeId, ack.pending_update.id, ack.pending_update.target_version, ack.pending_update.scope ?? "cli");

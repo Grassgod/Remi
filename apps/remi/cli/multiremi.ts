@@ -17,7 +17,7 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
-import type { MultiremiAgent } from "@multiremi/contracts/types.js";
+import type { MultiremiAgent, MultiremiDaemonBotProject } from "@multiremi/contracts/types.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
 import { setLogLevel } from "@shared/logger.js";
 import { multiremiVersion } from "@multiremi/version.js";
@@ -283,6 +283,7 @@ export interface WorkerDaemonSupervisorOptions {
   onRestartRequested?: () => void;
   botAgentId?: string | null;
   onBotAgentResolved?: (agent: MultiremiAgent) => void;
+  onBotProjectsUpdated?: (projects: MultiremiDaemonBotProject[]) => void;
 }
 
 function configuredWorkerWorkspaceId(
@@ -356,6 +357,7 @@ export async function resolveWorkerDaemons(
     workspaceId: configuredWorkerWorkspaceId(options, config) ?? "local",
     botAgentId: supervisor.botAgentId,
     onBotAgentResolved: supervisor.onBotAgentResolved,
+    onBotProjectsUpdated: supervisor.onBotProjectsUpdated,
     daemonPort: providers.length > 1 && baseDaemonPort !== 0 ? baseDaemonPort + providers.indexOf(provider) : baseDaemonPort,
     workspacesRoot: supervisor.workspacesRoot,
     workspaceRootFence: supervisor.workspaceRootFence,
@@ -428,6 +430,11 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     let resolveBotAgent!: (agent: MultiremiAgent) => void;
     const botAgentReady = new Promise<MultiremiAgent>((resolve) => { resolveBotAgent = resolve; });
     let resolvedBotAgentId: string | null = null;
+    let resolveBotProjects!: (projects: MultiremiDaemonBotProject[]) => void;
+    const botProjectsReady = new Promise<MultiremiDaemonBotProject[]>((resolve) => {
+      resolveBotProjects = resolve;
+    });
+    let botProjectsResolved = false;
     daemons = await resolveWorkerDaemons(options, {
       workspacesRoot: workspaceSupervisor.workspaceRoot,
       workspaceRootFence: () => workspaceSupervisor?.assertOwner(),
@@ -439,6 +446,14 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
         resolvedBotAgentId = agent.id;
         resolveBotAgent(agent);
       },
+      onBotProjectsUpdated: shouldStartFeishu
+        ? (projects) => {
+            feishu?.updateProjects(projects);
+            if (botProjectsResolved) return;
+            botProjectsResolved = true;
+            resolveBotProjects(projects);
+          }
+        : undefined,
     });
     // Co-resident Feishu requires the daemon's authenticated workspace control
     // plane. Starting it without that gate would admit messages without proof
@@ -452,7 +467,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     }
     if (daemons.length === 0) {
       if (shouldStartFeishu) {
-        throw new Error("Cannot start Feishu: no healthy Multiremi daemon is available to resolve its agent");
+        throw new Error("Cannot start Feishu: no healthy Multiremi daemon is available");
       }
       throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
     }
@@ -484,12 +499,16 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     const running: Promise<void>[] = [...providerRuns];
     try {
       if (shouldStartFeishu) {
-        const providerExitedBeforeAgent = Promise.race(providerRuns.map((run) => run.then(() => {
-          throw new Error("Multiremi daemon exited before resolving the configured bot agent");
+        const providerExitedBeforeBotReady = Promise.race(providerRuns.map((run) => run.then(() => {
+          throw new Error("Multiremi daemon exited before resolving the bot configuration");
         })));
-        const botAgent = await Promise.race([botAgentReady, providerExitedBeforeAgent]);
+        const [botAgent, projects] = await Promise.race([
+          Promise.all([botAgentReady, botProjectsReady]),
+          providerExitedBeforeBotReady,
+        ]);
         feishu = await bootFeishuChannel(
           botAgent,
+          projects,
           (senderOpenId) => daemons[0]!.checkExternalWorkspaceMembership(
             feishuWorkspaceId!,
             senderOpenId,

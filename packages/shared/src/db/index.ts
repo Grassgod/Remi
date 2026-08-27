@@ -38,6 +38,7 @@ function backupPathForMigration(path: string): string | null {
 function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
   const hasGroupConfigs = tableExists(db, "group_configs");
   const hasEmbeddings = tableExists(db, "embeddings");
+  const hasProjects = tableExists(db, "projects");
   const hasVecItems = tableExists(db, "vec_items");
   const hasLegacyConfig = Boolean(db.query(
     "SELECT 1 FROM remi_config WHERE section IN ('provider', 'mcp') LIMIT 1",
@@ -47,7 +48,13 @@ function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
       "SELECT 1 FROM remi_migrations WHERE id = ? LIMIT 1",
     ).get(LEGACY_AGENT_CONFIG_MIGRATION_ID));
 
-  if (!hasGroupConfigs && !hasEmbeddings && !hasLegacyConfig && (!hasVecItems || vecCleanupRecorded)) {
+  if (
+    !hasGroupConfigs
+    && !hasEmbeddings
+    && !hasProjects
+    && !hasLegacyConfig
+    && (!hasVecItems || vecCleanupRecorded)
+  ) {
     return;
   }
 
@@ -69,6 +76,7 @@ function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
     transactionStarted = true;
     if (hasGroupConfigs) db.exec("DROP TABLE group_configs");
     if (hasEmbeddings) db.exec("DROP TABLE embeddings");
+    if (hasProjects) db.exec("DROP TABLE projects");
     if (hasLegacyConfig) {
       db.run("DELETE FROM remi_config WHERE section IN ('provider', 'mcp')");
     }
@@ -179,23 +187,6 @@ export function getDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_conv_sender ON conversations(sender_id);
     CREATE INDEX IF NOT EXISTS idx_conv_status ON conversations(status) WHERE status != 'completed';
 
-    -- Projects (replaces toml-only storage)
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      chat_id TEXT,
-      repo_url TEXT,
-      cwd TEXT,
-      pipeline_config TEXT,
-      init_status TEXT DEFAULT 'pending',
-      init_steps TEXT,
-      deleted INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_projects_init_status ON projects(init_status);
-
     -- Session registry (replaces sessions.json)
     CREATE TABLE IF NOT EXISTS sessions (
       session_key   TEXT PRIMARY KEY,
@@ -254,15 +245,6 @@ export function getDb(): Database {
     db.exec("ALTER TABLE conversations ADD COLUMN session_key TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_conv_session_key ON conversations(session_key)");
   }
-
-  // Projects table migration — add deleted column
-  try {
-    const projCols = db.query("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
-    const projColNames = new Set(projCols.map((c) => c.name));
-    if (projColNames.size > 0 && !projColNames.has("deleted")) {
-      db.exec("ALTER TABLE projects ADD COLUMN deleted INTEGER DEFAULT 0");
-    }
-  } catch {}
 
   _db = db;
   return db;

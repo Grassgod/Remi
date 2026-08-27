@@ -266,6 +266,36 @@ describe("MultiremiDaemonClient workspace configuration", () => {
     expect(requestBody).toEqual({ external_id: "ou_member" });
   });
 
+  it("requests and normalizes the co-resident bot project catalog", async () => {
+    const requestBodies: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json({
+        status: "ok",
+        runtimes: [{ id: "runtime-1", provider: "claude" }],
+        repos: [],
+        repos_version: "empty",
+        bot_projects: [{ id: "prj_1", title: "Remi", cwd: "/work/remi" }],
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    const registered = await client.registerDaemonRuntime({
+      workspaceId: "ws_1",
+      daemonId: "daemon-1",
+      includeBotProjects: true,
+      runtime: { name: "", type: "claude", version: "1" },
+    });
+    const heartbeat = await client.heartbeatRuntime("runtime-1", undefined, undefined, undefined, true);
+
+    expect(requestBodies).toEqual([
+      expect.objectContaining({ include_bot_projects: true, workspace_id: "ws_1" }),
+      expect.objectContaining({ include_bot_projects: true, runtime_id: "runtime-1" }),
+    ]);
+    expect(registered.botProjects).toEqual([{ id: "prj_1", title: "Remi", cwd: "/work/remi" }]);
+    expect(heartbeat.botProjects).toEqual([{ id: "prj_1", title: "Remi", cwd: "/work/remi" }]);
+  });
+
   it("returns heartbeat-delivered settings and Relay configuration", async () => {
     globalThis.fetch = (async () => Response.json({
       status: "ok",

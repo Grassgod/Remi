@@ -157,10 +157,6 @@ export class ConfigManager {
     return [this.ensureProjectsRoot()];
   }
 
-  ensureForCwd(_cwd: string): void {
-    this.ensureProjectsRoot();
-  }
-
   ensureGlobals(): void {
     const legacySoul = join(REMI_HOME, "soul.md");
     const claudeInstructions = join(CLAUDE_HOME, "CLAUDE.md");

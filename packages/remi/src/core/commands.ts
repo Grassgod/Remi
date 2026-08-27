@@ -7,10 +7,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
 import type { Remi } from "../core.js";
-import { ProjectStore } from "../project/store.js";
 import type { IncomingMessage } from "@connectors/base.js";
 import { type AgentResponse, type Provider } from "@shared/contracts/provider-types.js";
 import * as sessDb from "@shared/db/sessions.js";
@@ -43,21 +40,22 @@ export async function tryCommand(remi: Remi, text: string, msg: IncomingMessage)
     case "project":
     case "p": {
       const arg = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
-      const projectStore = new ProjectStore();
 
       if (!arg) {
-        // Show current project + list
+        const projects = remi._listBotProjects();
+        if (!projects) {
+          return { text: "项目目录暂不可用，请检查 Multiremi daemon 连接。" };
+        }
         const currentCwd = sessDb.getSession(sessionKey)?.cwd ?? undefined;
-        const projects = projectStore.list().filter((p) => p.cwd);
-        const lines = [`📍 当前: ${currentCwd ?? "~ (默认)"}`];
+        const lines = [`当前目录: ${currentCwd ?? "未绑定（使用 agent 默认目录）"}`];
         if (projects.length > 0) {
           lines.push("", "可用项目:");
           for (const p of projects) {
             const marker = currentCwd === p.cwd ? " ◀" : "";
-            lines.push(`  ${p.id}  →  ${p.cwd}${marker}`);
+            lines.push(`  ${p.id}  ${p.title}  →  ${p.cwd}${marker}`);
           }
         } else {
-          lines.push("", "暂无注册项目，请在 Dashboard → Projects 中添加。");
+          lines.push("", "当前运行节点没有可切换的 Multiremi 项目目录。");
         }
         return { text: lines.join("\n") };
       }
@@ -69,25 +67,24 @@ export async function tryCommand(remi: Remi, text: string, msg: IncomingMessage)
         if ("clearSession" in provider && typeof provider.clearSession === "function") {
           await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
         }
-        return { text: "已清除项目绑定，下条消息将在默认目录启动。" };
+        return { text: "已清除项目绑定，下条消息将在 agent 默认目录启动。" };
       }
 
-      // Resolve alias or direct path
-      let targetPath: string;
-      const matched = projectStore.getById(arg);
-      if (matched?.cwd) {
-        targetPath = matched.cwd;
-      } else {
-        // Treat as direct path, expand ~
-        targetPath = arg.startsWith("~") ? arg.replace("~", homedir()) : resolve(arg);
+      const projects = remi._listBotProjects();
+      if (!projects) {
+        return { text: "项目目录暂不可用，请检查 Multiremi daemon 连接。" };
       }
+      const matched = remi._getBotProject(arg);
+      if (!matched) {
+        return { text: "项目不存在，或未绑定到当前运行节点。请用 /p 查看可用项目。" };
+      }
+      const targetPath = matched.cwd;
 
       if (!existsSync(targetPath)) {
-        return { text: `路径不存在: ${targetPath}` };
+        return { text: "项目目录在当前运行节点上不存在，请检查项目资源配置。" };
       }
 
       // Kill old process, bind new cwd
-      remi._configManager?.ensureForCwd(targetPath);
       sessDb.updateSessionCwd(sessionKey, targetPath);
       sessDb.clearSessionId(sessionKey);
       const provider = remi._getProvider();
@@ -95,9 +92,7 @@ export async function tryCommand(remi: Remi, text: string, msg: IncomingMessage)
         await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
       }
 
-      // Find alias name for display
-      const aliasName = matched?.id ?? projectStore.list().find((p) => p.cwd === targetPath)?.id;
-      return { text: `项目已切换: ${aliasName ? `${aliasName} (${targetPath})` : targetPath}\n下条消息将在新目录启动 Claude。` };
+      return { text: `项目已切换: ${matched.title} (${matched.id})\n下条消息将在 ${targetPath} 启动 agent。` };
     }
     case "context": {
       // Forward /context to CLI to get detailed context usage breakdown

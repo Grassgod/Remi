@@ -15,6 +15,8 @@ function createLegacyDb(path: string): void {
     INSERT INTO group_configs VALUES ('chat-1', 'project-1');
     CREATE TABLE embeddings (id TEXT PRIMARY KEY, content_hash TEXT);
     INSERT INTO embeddings VALUES ('embedding-1', 'hash-1');
+    CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT);
+    INSERT INTO projects VALUES ('project-1', 'Legacy project');
     CREATE TABLE vec_items (embedding BLOB);
     INSERT INTO vec_items VALUES (X'01');
     CREATE TABLE remi_config (
@@ -57,7 +59,7 @@ test("opening an existing Remi DB backs it up and removes all legacy state", () 
 
   setDbPath(path);
   const tables = getDb().query(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_configs', 'embeddings', 'vec_items')",
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_configs', 'embeddings', 'projects', 'vec_items')",
   ).all();
 
   expect(tables).toEqual([]);
@@ -71,6 +73,10 @@ test("opening an existing Remi DB backs it up and removes all legacy state", () 
   const backup = new Database(backupPath, { readonly: true });
   expect(backup.query("SELECT chat_id FROM group_configs").get()).toEqual({ chat_id: "chat-1" });
   expect(backup.query("SELECT id FROM embeddings").get()).toEqual({ id: "embedding-1" });
+  expect(backup.query("SELECT id, name FROM projects").get()).toEqual({
+    id: "project-1",
+    name: "Legacy project",
+  });
   expect(backup.query("SELECT section FROM remi_config ORDER BY section").all()).toEqual([
     { section: "feishu" },
     { section: "mcp" },
@@ -105,6 +111,9 @@ test("a real mid-migration SQL failure rolls back every destructive change", () 
   ]);
   expect(rolledBack.query("SELECT id, content_hash FROM embeddings").all()).toEqual([
     { id: "embedding-1", content_hash: "hash-1" },
+  ]);
+  expect(rolledBack.query("SELECT id, name FROM projects").all()).toEqual([
+    { id: "project-1", name: "Legacy project" },
   ]);
   expect(rolledBack.query("SELECT embedding FROM vec_items").all()).toHaveLength(1);
   expect(rolledBack.query("SELECT section FROM remi_config ORDER BY section").all()).toEqual([

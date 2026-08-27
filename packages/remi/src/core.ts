@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { RemiConfig } from "@shared/config.js";
 import { REMI_HOME, SESSIONS_FILE } from "@shared/config.js";
-import type { MultiremiAgent } from "@multiremi/contracts/types.js";
+import type { MultiremiAgent, MultiremiDaemonBotProject } from "@multiremi/contracts/types.js";
 import type { Connector, IncomingMessage } from "@connectors/base.js";
 import { LaneScheduler, resolveSessionKey } from "@daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
@@ -54,10 +54,16 @@ export class Remi {
   readonly _scheduler: LaneScheduler;
   readonly _activeAborts = new Map<string, AbortController>();
   readonly _runtime = new AgentRuntime();
+  private _botProjects: Map<string, MultiremiDaemonBotProject> | null;
 
-  constructor(config: RemiConfig, agent: MultiremiAgent) {
+  constructor(
+    config: RemiConfig,
+    agent: MultiremiAgent,
+    botProjects: MultiremiDaemonBotProject[] | null = null,
+  ) {
     this.config = config;
     this.agent = agent;
+    this._botProjects = botProjects ? new Map(botProjects.map((project) => [project.id, project])) : null;
     if (!agent.cwd?.trim()) throw new Error(`Bot agent ${agent.id} has no cwd configured`);
     if (agent.archivedAt) throw new Error(`Bot agent ${agent.id} is archived`);
     this._scheduler = new LaneScheduler({ maxConcurrency: agent.maxConcurrentTasks });
@@ -96,6 +102,18 @@ export class Remi {
 
   addConnector(connector: Connector): void {
     this._connectors.push(connector);
+  }
+
+  setBotProjects(projects: MultiremiDaemonBotProject[]): void {
+    this._botProjects = new Map(projects.map((project) => [project.id, project]));
+  }
+
+  _listBotProjects(): MultiremiDaemonBotProject[] | null {
+    return this._botProjects ? [...this._botProjects.values()] : null;
+  }
+
+  _getBotProject(id: string): MultiremiDaemonBotProject | null {
+    return this._botProjects?.get(id) ?? null;
   }
 
   /** Abort active processing for a session (called by /esc). */
@@ -173,9 +191,10 @@ export class Remi {
   static boot(
     config: RemiConfig,
     agent: MultiremiAgent,
+    botProjects: MultiremiDaemonBotProject[],
     options: { authorizeFeishuSender?: FeishuSenderAuthorizer } = {},
   ): Remi {
-    const remi = new Remi(config, agent);
+    const remi = new Remi(config, agent, botProjects);
 
     // 1. AuthStore (1Passport) with token sync rules
     const syncRules: TokenSyncRule[] | undefined =
