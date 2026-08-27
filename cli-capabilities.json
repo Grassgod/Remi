@@ -9954,6 +9954,9 @@
     "PUT /api/agents/:id/env": {
       "command": "agent.env.update"
     },
+    "PUT /api/agents/:id/role": {
+      "command": "agent.role.set"
+    },
     "PUT /api/agents/:id/skills": {
       "command": "agent.skill.set"
     },

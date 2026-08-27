@@ -727,10 +727,7 @@ export function normalizeAgentRequestMaxConcurrentTasks(c: Context, value: unkno
 }
 
 export function agentNameConflict(c: Context, name: string): Response {
-  return c.json({
-    error: `an agent named "${name}" already exists in this workspace`,
-    code: "agent_name_conflict",
-  }, 409);
+  return c.json({ error: `an agent named "${name}" already exists in this workspace` }, 409);
 }
 
 export function loadAgentForCurrentUser(

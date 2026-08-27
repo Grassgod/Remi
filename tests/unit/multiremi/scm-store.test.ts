@@ -1119,7 +1119,9 @@ describe("SCM connection and canonical event store", () => {
       body: JSON.stringify({ name: "Atlas · LLM Wiki" }),
     });
     expect(duplicateNameResponse.status).toBe(409);
-    expect(await duplicateNameResponse.json()).toMatchObject({ code: "agent_name_conflict" });
+    expect(await duplicateNameResponse.json()).toEqual({
+      error: 'an agent named "Atlas · LLM Wiki" already exists in this workspace',
+    });
 
     const ordinaryResponse = await app.request("/api/multiremi/autopilots", {
       method: "POST",
