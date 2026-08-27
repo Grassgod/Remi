@@ -27,6 +27,7 @@ import {
   dashboardRunTimeDailyOptions,
 } from "@multiremi/core/dashboard";
 import { useCustomPricingStore } from "@multiremi/core/runtimes/custom-pricing-store";
+import { useLegacyUsageNoticeStore } from "@multiremi/core/dashboard/legacy-usage-notice-store";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { PageHeader } from "../../layout/page-header";
 import { KpiCard } from "../../runtimes/components/shared";
@@ -175,6 +176,13 @@ export function DashboardPage() {
   // The user can save model prices from the runtimes page; re-render when
   // they do so the dashboard reflects the new rates.
   useCustomPricingStore((s) => s.pricings);
+
+  // The legacy total-only notice below is informational and has no remedy, so
+  // it carries a permanent off switch. Selecting the two fields separately
+  // keeps the selector return values primitive (a composite object would be a
+  // fresh reference every call and re-render forever).
+  const legacyNoticeDismissed = useLegacyUsageNoticeStore((s) => s.dismissed);
+  const dismissLegacyNotice = useLegacyUsageNoticeStore((s) => s.dismiss);
 
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -439,10 +447,18 @@ export function DashboardPage() {
                   explained by the dedicated notice below instead. */}
               <UnmappedPricingNotice usage={splitUsageInWindow} />
 
-              {totals.totalOnly > 0 && (
+              {/* Legacy total-only banner. These rows predate the daemon
+                  split fix (MUL-92): the bridges reported context occupancy
+                  with no input/output dimension, and the dimensions were
+                  never persisted, so there is nothing to recover and no
+                  setting that makes them priceable. It explains a cost figure
+                  that doesn't cover every token, which is worth saying once —
+                  hence the dismiss, which the pricing-gap banner above does
+                  not get (that one has a remedy). */}
+              {totals.totalOnly > 0 && !legacyNoticeDismissed && (
                 <div
                   role="alert"
-                  className="flex items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs"
+                  className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs"
                 >
                   <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
                   <p className="min-w-0 flex-1 text-foreground">
@@ -450,6 +466,14 @@ export function DashboardPage() {
                       tokens: formatTokens(totals.totalOnly),
                     })}
                   </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={dismissLegacyNotice}
+                  >
+                    {t(($) => $.kpi.total_only_dismiss)}
+                  </Button>
                 </div>
               )}
 
