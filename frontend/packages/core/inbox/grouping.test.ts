@@ -70,6 +70,31 @@ describe("inbox grouping", () => {
     expect(filterInboxItemsBySource(items, "all")).toEqual(items);
   });
 
+  it("gives every ingestion row its own tab and leaves automation to autopilot", () => {
+    const at = new Date().toISOString();
+    const items = [
+      item("autopilot", "autopilot_run_failed", at),
+      item("notification", "feishu_message_notification", at),
+      item("proposal", "feishu_issue_proposal", at),
+      item("draft", "feishu_reply_draft", at),
+      item("alert", "feishu_ingest_connection_alert", at),
+      item("comment", "comment_created", at),
+    ];
+
+    // The connection alert belongs with the messages: a reader whose stream
+    // went quiet looks in this tab for the reason, not in automation.
+    expect(filterInboxItemsBySource(items, "message_stream").map((entry) => entry.id)).toEqual([
+      "notification",
+      "proposal",
+      "draft",
+      "alert",
+    ]);
+    // Chat volume would otherwise bury the autopilot runs this tab is for.
+    expect(filterInboxItemsBySource(items, "automation").map((entry) => entry.id)).toEqual([
+      "autopilot",
+    ]);
+  });
+
   it("counts only unread, unarchived attention-or-higher rows for badges", () => {
     const at = new Date().toISOString();
     const withSeverity = (

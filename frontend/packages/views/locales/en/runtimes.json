@@ -314,6 +314,8 @@
     "step1_label": "Install the Remi CLI",
     "step2_label": "Start the daemon",
     "step2_hint": "Writes the connection config, then keeps the daemon running in the background.",
+    "device_name_label": "Computer name (optional)",
+    "device_name_placeholder": "Leave blank to use this computer's hostname",
     "credential_loading": "Creating a secure connection credential...",
     "credential_error": "Couldn't create a connection credential.",
     "credential_error_detail": "Reason: {{reason}}",

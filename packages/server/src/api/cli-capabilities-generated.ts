@@ -2214,7 +2214,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
       ]
     },
     "issue.attachment.download": {
-      "command": "remi issue attachment download",
+      "command": "remi attachment download",
       "auth": [
         "human",
         "task"
@@ -4411,6 +4411,80 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "feishu.source.delete": {
+      "command": "remi feishu source delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.endpoint.list": {
+      "command": "remi feishu endpoint list",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.endpoint.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.endpoint.check": {
+      "command": "remi feishu endpoint check",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.endpoint.check",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.source.available-chats": {
+      "command": "remi feishu source available-chats",
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.available-chats",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.chats.list": {
+      "command": "remi feishu chats list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.chats.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "feishu.proposals.list": {
+      "command": "remi feishu proposals list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.proposals.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "feishu.messages.list": {
       "command": "remi feishu messages list",
       "auth": [
@@ -4905,6 +4979,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "platform.realtime",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "platform.config": {
+      "command": "remi platform config",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "platform.config",
       "output": [
         "table",
         "json",

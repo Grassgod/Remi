@@ -279,4 +279,13 @@ describe("RepositoryWikiPage build state", () => {
       queryKey: ["repositories", "workspace-1", "repo-1", "wiki"],
     });
   });
+
+  it("forces the mobile Wiki drawer to the specified 280px width", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Repository Wiki" }));
+
+    expect(document.querySelector('[data-slot="sheet-content"]')).toHaveClass("!w-[280px]");
+  });
 });

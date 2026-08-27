@@ -108,6 +108,7 @@ vi.mock("../../runtimes/components/custom-pricing-dialog", () => ({
 }));
 
 import { DashboardPage } from "./dashboard-page";
+import { useLegacyUsageNoticeStore } from "@multiremi/core/dashboard/legacy-usage-notice-store";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -153,6 +154,11 @@ function setStates(overrides: Partial<Record<string, QueryState>> = {}) {
 
 beforeEach(() => {
   refetchCalls.length = 0;
+  // The legacy-notice store is the real one (pure zustand over localStorage,
+  // no API), so its persisted flag has to be reset or the first dismissal
+  // would hide the banner for every later test.
+  localStorage.clear();
+  useLegacyUsageNoticeStore.setState({ dismissed: false });
   cleanup();
 });
 
@@ -203,14 +209,47 @@ describe("DashboardPage — normal values", () => {
 
     expect(screen.getAllByText("5.2M").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("~5.2M")).toBeTruthy();
-    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(screen.getByText(/5.2M tokens recorded by older runtimes have totals only/)).toBeTruthy();
     expect(screen.queryByText("$0.00")).toBeNull();
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("lets the user dismiss the total-only notice for good, keeping the KPIs honest", () => {
+    // The notice has no remedy — those rows were persisted without the
+    // input/output dimension — so it must be dismissable instead of nagging
+    // forever. Dismissing is a display decision only: the tokens still count
+    // toward volume and the cost tile still refuses to fabricate a number.
+    const totalOnly = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 5_181_880,
+      task_count: 27,
+    };
+    setStates({
+      daily: { data: [usageRow(totalOnly)] },
+      "by-agent": {
+        data: [usageRow({ ...totalOnly, agent_id: "agent-1" })],
+      },
+      "agent-runtime": { data: [{ ...RUN_TIME_ROW, task_count: 27 }] },
+      "runtime-daily": { data: [{ ...RUN_TIME_DAILY_ROW, task_count: 27 }] },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+
+    expect(
+      screen.queryByText(/tokens recorded by older runtimes have totals only/),
+    ).toBeNull();
+    expect(useLegacyUsageNoticeStore.getState().dismissed).toBe(true);
+    expect(screen.getAllByText("5.2M").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("$0.00")).toBeNull();
+  });
+
   it("does not offer custom pricing for total-only usage on an unpriced model", () => {
     const totalOnly = {
-      model: "gpt-5.6-sol",
+      model: "gpt-5.5-mini",
       input_tokens: 0,
       output_tokens: 0,
       cache_read_tokens: 0,
@@ -233,14 +272,14 @@ describe("DashboardPage — normal values", () => {
     renderWithI18n(<DashboardPage />);
 
     expect(screen.getAllByRole("alert")).toHaveLength(1);
-    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(screen.getByText(/5.2M tokens recorded by older runtimes have totals only/)).toBeTruthy();
     expect(screen.queryByText(/model has no maintained price/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Set custom prices" })).toBeNull();
   });
 
   it("keeps both notices when an unpriced model has split and total-only usage", () => {
     const totalOnly = usageRow({
-      model: "gpt-5.6-sol",
+      model: "gpt-5.5-mini",
       input_tokens: 0,
       output_tokens: 0,
       cache_read_tokens: 0,
@@ -249,7 +288,7 @@ describe("DashboardPage — normal values", () => {
       task_count: 27,
     });
     const split = usageRow({
-      model: "gpt-5.6-sol",
+      model: "gpt-5.5-mini",
       input_tokens: 536,
       output_tokens: 174_228,
       cache_read_tokens: 24_578_049,
@@ -275,7 +314,7 @@ describe("DashboardPage — normal values", () => {
     renderWithI18n(<DashboardPage />);
 
     expect(screen.getAllByRole("alert")).toHaveLength(2);
-    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(screen.getByText(/5.2M tokens recorded by older runtimes have totals only/)).toBeTruthy();
     expect(screen.getByText(/1 model has no maintained price/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Set custom prices" })).toBeTruthy();
   });

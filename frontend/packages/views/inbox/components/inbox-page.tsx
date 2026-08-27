@@ -31,6 +31,7 @@ import {
   useMarkInboxItemsRead,
 } from "@multiremi/core/inbox/mutations";
 
+import { FeishuInboxActions } from "./feishu-inbox-actions";
 import { IssueDetail } from "../../issues/components";
 import { ErrorBoundary } from "@multiremi/ui/components/common/error-boundary";
 import { EmptyState } from "../../common/empty-state";
@@ -64,8 +65,7 @@ import {
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
 import { InboxListItem, useTimeAgo } from "./inbox-list-item";
-import { useTypeLabels } from "./inbox-detail-label";
-import { getInboxDisplayTitle } from "./inbox-display";
+import { useInboxTitle, useTypeLabels } from "./inbox-detail-label";
 import { useT } from "../../i18n";
 
 // A failed inbox fetch resolves to an empty list, and an empty list renders
@@ -231,6 +231,7 @@ export function InboxPage() {
   const markGroupReadMutation = useMarkInboxItemsRead();
   const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
+  const inboxTitle = useInboxTitle();
 
 
   // Auto-mark-read whenever a selected item is unread — covers both click-
@@ -353,6 +354,7 @@ export function InboxPage() {
 
   const sourceFilters: Array<{ key: InboxSourceFilter; label: string }> = [
     { key: "all", label: t(($) => $.filters.all) },
+    { key: "message_stream", label: t(($) => $.filters.message_stream) },
     { key: "automation", label: t(($) => $.filters.automation) },
     { key: "mentions", label: t(($) => $.filters.mentions) },
     { key: "assignments", label: t(($) => $.filters.assignments) },
@@ -517,7 +519,7 @@ export function InboxPage() {
     </ErrorBoundary>
   ) : selected ? (
     <div className="p-6">
-      <h2 className="text-lg font-semibold">{getInboxDisplayTitle(selected)}</h2>
+      <h2 className="text-lg font-semibold">{inboxTitle(selected, "detail")}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         {typeLabels[selected.type]} · {timeAgo(selected.created_at)}
       </p>
@@ -534,6 +536,9 @@ export function InboxPage() {
           <p className="mt-1 whitespace-pre-wrap text-sm">{selected.details.original_prompt}</p>
         </div>
       )}
+      {/* Renders nothing for non-Feishu rows. Approve/reject/ignore live here,
+          in the stream, so a decision never requires a trip to Settings. */}
+      <FeishuInboxActions item={selected} onArchive={() => handleArchive(selected.id)} />
       <div className="mt-4 flex gap-2">
         {selected.type === "quick_create_failed" && (
           <Button

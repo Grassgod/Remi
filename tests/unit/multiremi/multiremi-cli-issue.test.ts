@@ -347,7 +347,6 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       console.log = (value?: unknown) => { logs.push(String(value)); };
       console.error = (value?: unknown) => { errors.push(String(value)); };
       const serverUrl = `http://127.0.0.1:${server.port}`;
-      const downloadDir = join(tmp, "downloads", "nested");
 
       await runMultiremi(["issue", "create", "--server", serverUrl, "--token", "tok_cli", "--workspace", "ws_cli", "--title", "Created", "--attachment", issueAttachment], { programName: "multiremi" });
       await runMultiremi([
@@ -370,7 +369,19 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
         "--attachment",
         commentAttachmentB,
       ], { programName: "multiremi" });
-      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output-dir", downloadDir], { programName: "multiremi" });
+      const missingOutputDir = join(tmp, "missing", "downloads");
+      const exactOutput = join(tmp, "renamed", "custom-name.bin");
+      await expect(runMultiremi([
+        "attachment",
+        "download",
+        "att_1",
+        "-o",
+        exactOutput,
+      ], { programName: "multiremi" })).rejects.toThrow(
+        "usage: remi attachment download <attachment-id> [--output <file> | --output-dir <dir>]",
+      );
+      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output-dir", missingOutputDir], { programName: "multiremi" });
+      await runMultiremi(["attachment", "download", "att_1", "--server", serverUrl, "--token", "tok_cli", "--output", exactOutput], { programName: "multiremi" });
 
       expect(uploads.map((upload) => [upload.issueId, upload.filename, upload.text])).toEqual([
         ["iss_created", "issue-note.txt", "issue file"],
@@ -388,8 +399,9 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       expect(errors).toContain(`Uploaded ${commentAttachmentA}`);
       expect(errors).toContain(`Uploaded ${commentAttachmentB}`);
       expect(errors.some((line) => line.includes("URLs are not supported"))).toBe(true);
-      expect(readFileSync(join(downloadDir, "download.txt"), "utf8")).toBe("downloaded!");
-      expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({ id: "att_1", filename: "download.txt", path: join(downloadDir, "download.txt") });
+      expect(readFileSync(join(missingOutputDir, "download.txt"), "utf8")).toBe("downloaded!");
+      expect(readFileSync(exactOutput, "utf8")).toBe("downloaded!");
+      expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({ id: "att_1", filename: "custom-name.bin", path: exactOutput });
     } finally {
       console.log = originalLog;
       console.error = originalError;

@@ -1246,6 +1246,8 @@ export interface MultiremiTask {
   trigger_author_type?: string | null;
   triggerAuthorName?: string | null;
   trigger_author_name?: string | null;
+  triggerCommentAttachments?: unknown[];
+  trigger_comment_attachments?: unknown[];
   newCommentCount?: number | null;
   new_comment_count?: number | null;
   newCommentsSince?: string | null;
@@ -1569,6 +1571,8 @@ export interface MultiremiIssue {
   contextRefs: unknown[];
   metadata: Record<string, string | number | boolean>;
   labels: MultiremiLabel[];
+  /** Included on daemon task claims so prompts can make issue attachments directly discoverable. */
+  attachments?: MultiremiAttachment[];
   createdBy: string | null;
   completedAt: string | null;
   archivedAt: string | null;
@@ -2924,6 +2928,16 @@ export interface MultiremiFeishuMessage {
   lastRetryAt: string | null;
 }
 
+export interface MultiremiFeishuChat {
+  sourceId: string;
+  chatId: string;
+  chatName: string | null;
+  chatType: string | null;
+  messageCount: number;
+  lastMessageAt: string;
+  inAllowlist: boolean;
+}
+
 export interface MultiremiFeishuSourceStatus {
   sourceId: string;
   unprocessedCount: number;
@@ -3005,6 +3019,21 @@ export interface MultiremiFeishuIssueProposal {
   resolvedAt: string | null;
   resolvedBy: string | null;
   createdAt: string;
+}
+
+export interface MultiremiFeishuIssueProposalMessageSummary {
+  messageId: string;
+  sourceId: string;
+  chatId: string;
+  chatName: string | null;
+  sender: Record<string, unknown>;
+  searchableText: string;
+  messageAppLink: string | null;
+  createdAt: string;
+}
+
+export interface MultiremiFeishuIssueProposalListItem extends MultiremiFeishuIssueProposal {
+  message: MultiremiFeishuIssueProposalMessageSummary;
 }
 
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────
@@ -4196,6 +4225,7 @@ export type MultiremiPlatformServiceId =
   | "api"
   | "web"
   | "ssh-mesh-control-plane"
+  | "feishu-sidecar"
   | "postgres"
   | "openviking";
 export type MultiremiPlatformServiceStatus = "ready" | "degraded" | "stopped" | "unknown";

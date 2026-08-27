@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 /** A repo the daemon pre-checked-out into the task workDir before the run. */
@@ -53,6 +54,10 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     sections.push(`Title: ${task.issue.title}`);
     if (mode === "bootstrap") {
       if (task.issue.description) sections.push(task.issue.description);
+    }
+    const issueAttachments = issuePromptAttachments(task.issue);
+    if (issueAttachments.length) appendPromptAttachments(sections, issueAttachments);
+    if (mode === "bootstrap") {
       const metadata = Object.entries(task.issue.metadata).sort(([left], [right]) => left.localeCompare(right));
       if (metadata.length) {
         sections.push("");
@@ -252,6 +257,7 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
 
   const chatBootstrapTranscript = stringField(task, "chatBootstrapTranscript", "chat_bootstrap_transcript");
   const chatMessage = stringField(task, "chatMessage", "chat_message");
+  const chatAttachments = arrayField(task, "chatMessageAttachments", "chat_message_attachments");
   if (chatBootstrapTranscript) {
     sections.push("");
     sections.push("## Product Chat History");
@@ -262,12 +268,11 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
     sections.push("");
     sections.push("## Chat Message");
     sections.push(chatMessage);
-    const attachments = arrayField(task, "chatMessageAttachments", "chat_message_attachments");
-    if (attachments.length) {
-      sections.push("");
-      sections.push("Attachments:");
-      for (const attachment of attachments) sections.push(formatChatAttachment(attachment));
-    }
+  }
+  if (chatAttachments.length) {
+    sections.push("");
+    sections.push("Attachments:");
+    appendPromptAttachments(sections, chatAttachments, false);
   }
 
   const autopilotTitle = stringField(task, "autopilotTitle", "autopilot_title");
@@ -403,6 +408,12 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask): void 
   } else if (triggerContent) {
     sections.push("The comment body appears once in Current Session Context; use the event with this trigger comment ID as the authoritative text.");
   }
+  const triggerAttachments = arrayField(task, "triggerCommentAttachments", "trigger_comment_attachments");
+  if (triggerAttachments.length) {
+    sections.push("");
+    sections.push("Attachments:");
+    appendPromptAttachments(sections, triggerAttachments, false);
+  }
   if (authorType === "agent") {
     sections.push("");
     sections.push("The triggering comment was posted by another agent. If it is only an acknowledgment, thanks, or sign-off and you produced no work this turn, do not reply. If you did real work, post the result as a normal reply. Do not mention the other agent as a sign-off.");
@@ -481,8 +492,43 @@ function formatJsonBlock(value: unknown): string {
   return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
 
-function formatChatAttachment(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return `- ${String(value)}`;
+interface PromptAttachment {
+  id: string;
+  filename: string;
+  contentType: string;
+  size: string;
+}
+
+function issuePromptAttachments(issue: NonNullable<AgentTask["issue"]>): unknown[] {
+  const attachments = Array.isArray(issue.attachments) ? [...issue.attachments] : [];
+  const knownIds = new Set(attachments.map((attachment) => attachment?.id).filter(Boolean));
+  for (const id of attachmentIdsFromText(issue.description)) {
+    if (!knownIds.has(id)) attachments.push({ id });
+  }
+  return attachments;
+}
+
+function appendPromptAttachments(sections: string[], values: unknown[], includeHeading = true): void {
+  if (includeHeading) {
+    sections.push("");
+    sections.push("Attachments:");
+  }
+  for (const value of values) sections.push(formatPromptAttachment(value));
+}
+
+function formatPromptAttachment(value: unknown): string {
+  const attachment = normalizePromptAttachment(value);
+  if (!attachment.id) return `- ${String(value)}`;
+  return [
+    `- id: ${attachment.id}; filename: ${attachment.filename}; content-type: ${attachment.contentType}; size: ${attachment.size}`,
+    `  Download: \`remi attachment download ${attachment.id} --output-dir <dir>\`, then use Read to inspect the local file.`,
+  ].join("\n");
+}
+
+function normalizePromptAttachment(value: unknown): PromptAttachment {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { id: "", filename: "unavailable", contentType: "unavailable", size: "unavailable" };
+  }
   const attachment = value as Record<string, unknown>;
   const id = typeof attachment.id === "string" ? attachment.id : "";
   const filename = typeof attachment.filename === "string" ? attachment.filename : "";
@@ -491,8 +537,18 @@ function formatChatAttachment(value: unknown): string {
     : typeof attachment.contentType === "string"
       ? attachment.contentType
       : "";
-  const label = [filename, contentType ? `(${contentType})` : ""].filter(Boolean).join(" ");
-  return `- ${[id, label].filter(Boolean).join(" - ") || JSON.stringify(value)}`;
+  const rawSize = attachment.size_bytes ?? attachment.sizeBytes;
+  const size = typeof rawSize === "number" && Number.isFinite(rawSize)
+    ? `${Math.max(0, rawSize)} bytes`
+    : typeof rawSize === "string" && rawSize.trim()
+      ? `${rawSize.trim()} bytes`
+      : "unavailable";
+  return {
+    id,
+    filename: filename || "unavailable",
+    contentType: contentType || "unavailable",
+    size,
+  };
 }
 
 function stringField(task: AgentTask, camel: keyof AgentTask, snake: keyof AgentTask): string | null {

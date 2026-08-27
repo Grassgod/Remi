@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./inbox": "./src/inbox.ts",
+    "./attachments": "./src/attachments.ts",
     "./wiki-path": "./src/wiki-path.ts"
   },
   "dependencies": {}

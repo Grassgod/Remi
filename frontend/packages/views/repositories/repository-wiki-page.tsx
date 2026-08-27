@@ -276,7 +276,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
           <aside className="hidden min-h-0 border-r lg:flex">{sidebar}</aside>
           <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-            <SheetContent side="left" className="w-[280px] gap-0 p-0" showCloseButton={false}>
+            <SheetContent side="left" className="!w-[280px] gap-0 p-0" showCloseButton={false}>
               <SheetTitle className="sr-only">{t(($) => $.wiki.title)}</SheetTitle>
               {sidebar}
             </SheetContent>

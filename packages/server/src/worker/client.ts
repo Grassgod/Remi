@@ -950,6 +950,11 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
       : Array.isArray(raw.chatMessageAttachments)
         ? raw.chatMessageAttachments
         : [],
+    triggerCommentAttachments: Array.isArray(raw.trigger_comment_attachments)
+      ? raw.trigger_comment_attachments.map(normalizeDaemonClaimAttachment)
+      : Array.isArray(raw.triggerCommentAttachments)
+        ? raw.triggerCommentAttachments.map(normalizeDaemonClaimAttachment)
+        : [],
     autopilotId: stringOrNull(raw.autopilot_id ?? raw.autopilotId),
     autopilotSource: stringOrNull(raw.autopilot_source ?? raw.autopilotSource),
     autopilotTitle: stringOrNull(raw.autopilot_title ?? raw.autopilotTitle),
@@ -1058,6 +1063,24 @@ function normalizeDaemonClaimIssue(raw: any): MultiremiTaskWithAgent["issue"] {
     contextRefs: Array.isArray(raw.context_refs) ? raw.context_refs : Array.isArray(raw.contextRefs) ? raw.contextRefs : [],
     metadata: objectOrDefault(raw.metadata),
     labels: Array.isArray(raw.labels) ? raw.labels : [],
+    attachments: Array.isArray(raw.attachments) ? raw.attachments.map(normalizeDaemonClaimAttachment) : [],
+  };
+}
+
+function normalizeDaemonClaimAttachment(raw: any): any {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  return {
+    ...raw,
+    workspaceId: stringOrNull(raw.workspace_id ?? raw.workspaceId) ?? "",
+    issueId: stringOrNull(raw.issue_id ?? raw.issueId),
+    commentId: stringOrNull(raw.comment_id ?? raw.commentId),
+    chatSessionId: stringOrNull(raw.chat_session_id ?? raw.chatSessionId),
+    chatMessageId: stringOrNull(raw.chat_message_id ?? raw.chatMessageId),
+    uploaderType: stringOrNull(raw.uploader_type ?? raw.uploaderType) ?? "",
+    uploaderId: stringOrNull(raw.uploader_id ?? raw.uploaderId) ?? "",
+    contentType: stringOrNull(raw.content_type ?? raw.contentType) ?? "application/octet-stream",
+    sizeBytes: numberOrDefault(raw.size_bytes ?? raw.sizeBytes, 0),
+    createdAt: stringOrNull(raw.created_at ?? raw.createdAt) ?? "",
   };
 }
 

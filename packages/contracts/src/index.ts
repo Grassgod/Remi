@@ -4,3 +4,4 @@ export * from "./provider-types.js";
 export * from "./acp-elicitation.js";
 export * from "./inbox.js";
 export * from "./compaction.js";
+export * from "./attachments.js";

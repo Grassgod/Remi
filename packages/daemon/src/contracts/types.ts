@@ -69,6 +69,15 @@ export interface AgentTaskSkillFile {
   content?: string;
 }
 
+export interface AgentTaskAttachment {
+  id: string;
+  filename?: string;
+  contentType?: string;
+  content_type?: string;
+  sizeBytes?: number;
+  size_bytes?: number;
+}
+
 /** Issue attached to a task. */
 export interface AgentTaskIssue {
   id: string;
@@ -78,6 +87,7 @@ export interface AgentTaskIssue {
   metadata: Record<string, string | number | boolean>;
   issueKind?: "execution" | "intake";
   sourceIssueId?: string | null;
+  attachments?: AgentTaskAttachment[];
 }
 
 export interface AgentTaskIssueSession {
@@ -337,6 +347,8 @@ export interface AgentTask {
   trigger_author_type?: string | null;
   triggerAuthorName?: string | null;
   trigger_author_name?: string | null;
+  triggerCommentAttachments?: unknown[];
+  trigger_comment_attachments?: unknown[];
   newCommentsSince?: string | null;
   new_comments_since?: string | null;
   newCommentCount?: number | null;

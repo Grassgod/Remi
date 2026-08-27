@@ -12,6 +12,7 @@
   "filters": {
     "label": "通知元",
     "all": "すべて",
+    "message_stream": "メッセージストリーム",
     "automation": "自動化",
     "mentions": "メンション",
     "assignments": "割り当て"
@@ -28,6 +29,7 @@
     "mark_group_read": "グループを既読にする",
     "mark_done_tooltip": "完了にする",
     "archive_tooltip": "アーカイブ",
+    "feishu_source": "Feishu メッセージ",
     "time": {
       "just_now": "たった今",
       "minutes": "{{count}}分",
@@ -66,7 +68,11 @@
     "autopilot_paused": "自動化を一時停止",
     "autopilot_run_completed": "自動化が完了",
     "autopilot_run_failed": "自動化に失敗",
-    "autopilot_run_overdue": "自動化が期限超過"
+    "autopilot_run_overdue": "自動化が期限超過",
+    "feishu_message_notification": "Feishu メッセージ",
+    "feishu_reply_draft": "Feishu 返信ドラフト",
+    "feishu_issue_proposal": "Feishu イシュー提案",
+    "feishu_ingest_connection_alert": "Feishu 取り込みアラート"
   },
   "labels": {
     "set_status_to": "ステータスを変更:",
@@ -79,7 +85,29 @@
     "removed_due_date": "期限を削除",
     "reacted_to_comment": "あなたのコメントに {{emoji}} のリアクションをしました",
     "created_with_agent": "エージェントで作成: {{identifier}}",
-    "failed_with_detail": "失敗: {{detail}}"
+    "failed_with_detail": "失敗: {{detail}}",
+    "feishu_source_failing": "{{source}} が {{failures}} 回連続で失敗しました"
+  },
+  "feishu": {
+    "approve": "承認してイシューを作成",
+    "reject": "却下",
+    "ignore": "無視",
+    "mark_processed": "処理済みにする",
+    "confirm": "確定",
+    "cancel": "キャンセル",
+    "open_in_feishu": "Feishu で開く",
+    "open_settings": "Feishu メッセージ設定を開く",
+    "ignore_reason_label": "このメッセージを無視する理由は？",
+    "process_reason_label": "このメッセージはどのように処理しましたか？",
+    "reason_required": "理由を入力してください",
+    "approved": "提案を承認しました",
+    "approved_with_issue": "{{identifier}} を作成しました",
+    "rejected": "提案を却下しました",
+    "resolved": "メッセージを処理しました",
+    "action_failed": "操作に失敗しました",
+    "proposed_issue_title": "提案されたイシュー",
+    "draft_not_sent": "このドラフトはまだ Feishu に送信されていません。返信が自動送信されることはありません。",
+    "alert_error_code": "エラーコード: {{code}}"
   },
   "errors": {
     "mark_read_failed": "既読にできませんでした",

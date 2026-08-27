@@ -8,6 +8,7 @@ export interface LibrarianWikiDocument {
   id: string;
   scope: "project" | "repository";
   repositoryId: string | null;
+  repositoryDirectory?: string | null;
   slug: string;
   path: string;
   title: string;
@@ -32,10 +33,13 @@ export interface WikiLintReport {
   documents_scanned: number;
   counts: Record<WikiLintFindingType, number>;
   findings: WikiLintFinding[];
+  diagnostics: string[];
 }
 
 export async function wikiLint(options: CliOptions, projectId: string): Promise<WikiLintReport> {
-  const report = lintWikiDocuments(await fetchLibrarianDocuments(options, projectId));
+  const scope = await fetchLibrarianDocuments(options, projectId);
+  const report = lintWikiDocuments(scope.documents, scope.knownTargets);
+  for (const diagnostic of report.diagnostics) console.error(`Wiki lint: ${diagnostic}`);
   printJson(report);
   return report;
 }
@@ -101,10 +105,16 @@ export function mergeWikiDocuments(
   return { body, refs };
 }
 
-export function lintWikiDocuments(documents: readonly LibrarianWikiDocument[]): WikiLintReport {
+export function lintWikiDocuments(
+  documents: readonly LibrarianWikiDocument[],
+  knownTargets: readonly string[] = [],
+): WikiLintReport {
   const findings: WikiLintFinding[] = [];
+  const diagnostics: string[] = [];
   const aliases = new Map<string, LibrarianWikiDocument[]>();
   const inbound = new Set<string>();
+  const brokenLinks = new Set<string>();
+  const externalAliases = new Set(knownTargets.map(normalizeRef).filter(Boolean));
   for (const document of documents) {
     for (const alias of documentAliases(document)) {
       const matches = aliases.get(alias) ?? [];
@@ -114,10 +124,16 @@ export function lintWikiDocuments(documents: readonly LibrarianWikiDocument[]): 
   }
 
   for (const source of documents) {
+    if (source.slug === "_schema") continue;
     for (const target of wikiLinks(source.body)) {
       const matches = aliases.get(normalizeRef(target)) ?? [];
       if (!matches.length) {
-        findings.push({ type: "broken_link", severity: "error", document: summary(source), target });
+        if (externalAliases.has(normalizeRef(target))) continue;
+        const key = `${source.id}\0${normalizeRef(target)}`;
+        if (!brokenLinks.has(key)) {
+          brokenLinks.add(key);
+          findings.push({ type: "broken_link", severity: "error", document: summary(source), target });
+        }
         continue;
       }
       for (const match of matches) if (match.id !== source.id) inbound.add(match.id);
@@ -150,17 +166,29 @@ export function lintWikiDocuments(documents: readonly LibrarianWikiDocument[]): 
   const facts = new Map<string, Array<{ document: LibrarianWikiDocument; label: string; value: string; normalized: string }>>();
   for (const document of documents) {
     for (const fact of explicitFacts(document.body)) {
-      const entries = facts.get(fact.key) ?? [];
+      const scope = document.scope === "project" ? "project" : `repository:${document.repositoryId ?? document.id}`;
+      const key = `${scope}\0${fact.subject}\0${fact.property}`;
+      const entries = facts.get(key) ?? [];
       entries.push({ document, label: fact.label, value: fact.value, normalized: normalizeFactValue(fact.value) });
-      facts.set(fact.key, entries);
+      facts.set(key, entries);
     }
   }
-  for (const entries of facts.values()) {
+  const seenContradictions = new Set<string>();
+  for (const [key, entries] of facts) {
+    if (entries.length > MAX_CONTRADICTION_BUCKET_SIZE) {
+      diagnostics.push(`skipped contradiction bucket ${JSON.stringify(key.replaceAll("\0", "/"))}: ${entries.length} facts exceed the ${MAX_CONTRADICTION_BUCKET_SIZE}-fact limit`);
+      continue;
+    }
     for (let leftIndex = 0; leftIndex < entries.length; leftIndex++) {
       const left = entries[leftIndex]!;
       for (let rightIndex = leftIndex + 1; rightIndex < entries.length; rightIndex++) {
         const right = entries[rightIndex]!;
         if (left.document.id === right.document.id || left.normalized === right.normalized) continue;
+        const pair = [left.document.id, right.document.id].sort().join("\0");
+        const values = [left.normalized, right.normalized].sort().join("\0");
+        const findingKey = `${key}\0${pair}\0${values}`;
+        if (seenContradictions.has(findingKey)) continue;
+        seenContradictions.add(findingKey);
         findings.push({
           type: "contradiction",
           severity: "error",
@@ -180,22 +208,25 @@ export function lintWikiDocuments(documents: readonly LibrarianWikiDocument[]): 
   );
   const counts: WikiLintReport["counts"] = { duplicate: 0, contradiction: 0, orphan: 0, broken_link: 0 };
   for (const finding of findings) counts[finding.type] += 1;
-  return { clean: findings.length === 0, documents_scanned: documents.length, counts, findings };
+  return { clean: findings.length === 0 && diagnostics.length === 0, documents_scanned: documents.length, counts, findings, diagnostics };
 }
 
-async function fetchLibrarianDocuments(options: CliOptions, projectId: string): Promise<LibrarianWikiDocument[]> {
+async function fetchLibrarianDocuments(
+  options: CliOptions,
+  projectId: string,
+): Promise<{ documents: LibrarianWikiDocument[]; knownTargets: string[] }> {
   const workspaceId = multiremiApiConnection(options).workspaceId;
   if (!workspaceId) throw new Error("--workspace <workspace-id> is required for wiki lint");
-  const [projectResponse, repositoriesResponse] = await Promise.all([
+  const [projectResponse, memoryResponse, context] = await Promise.all([
     multiremiApiRequest("GET", `/api/projects/${encodeURIComponent(projectId)}/docs?kind=wiki`, undefined, options),
-    multiremiApiRequest("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/repos`, undefined, options),
+    multiremiApiRequest("GET", `/api/projects/${encodeURIComponent(projectId)}/docs?kind=memory`, undefined, options),
+    fetchLibrarianContext(options, projectId),
   ]);
   const projectDocs = arrayField(projectResponse, "docs").map((value) => parseDocument(value, "project", null));
-  const repositoryIds = arrayField(repositoriesResponse, "repositories")
-    .map((value) => recordField(value, "id"))
-    .filter(Boolean);
+  const repositoryIds = stringArrayField(context.project, "repository_ids");
   const repositoryResponses = await Promise.all(repositoryIds.map(async (repositoryId) => ({
     repositoryId,
+    directory: repositoryDirectory(context.repositories.get(repositoryId), repositoryId),
     response: await multiremiApiRequest(
       "GET",
       `/api/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repositoryId)}/wiki`,
@@ -203,10 +234,36 @@ async function fetchLibrarianDocuments(options: CliOptions, projectId: string): 
       options,
     ),
   })));
-  const repositoryDocs = repositoryResponses.flatMap(({ repositoryId, response }) =>
-    arrayField(response, "docs").map((value) => parseDocument(value, "repository", repositoryId))
+  const repositoryDocs = repositoryResponses.flatMap(({ repositoryId, directory, response }) =>
+    arrayField(response, "docs").map((value) => parseDocument(value, "repository", repositoryId, directory))
   );
-  return [...projectDocs, ...repositoryDocs];
+  const knownTargets = arrayField(memoryResponse, "docs").flatMap((value) => {
+    if (!isRecord(value)) return [];
+    return [recordField(value, "id"), recordField(value, "slug")].filter(Boolean);
+  });
+  return { documents: [...projectDocs, ...repositoryDocs], knownTargets };
+}
+
+async function fetchLibrarianContext(
+  options: CliOptions,
+  projectId: string,
+): Promise<{ project: Record<string, unknown>; repositories: Map<string, Record<string, unknown>> }> {
+  let cursor: string | null = null;
+  let project: Record<string, unknown> | null = null;
+  const repositories = new Map<string, Record<string, unknown>>();
+  do {
+    const suffix: string = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+    const response: unknown = await multiremiApiRequest("GET", `/api/cli/context?limit=200${suffix}`, undefined, options);
+    project ??= findContextProject(response, projectId);
+    for (const candidate of arrayField(recordValue(response, "catalog"), "repositories")) {
+      if (!isRecord(candidate)) continue;
+      const id = recordField(candidate, "id");
+      if (id) repositories.set(id, candidate);
+    }
+    cursor = recordField(recordValue(response, "catalog"), "next_cursor") || null;
+  } while (cursor && (!project || stringArrayField(project, "repository_ids").some((id) => !repositories.has(id))));
+  if (!project) throw new Error(`Project ${projectId} is missing from the CLI context`);
+  return { project, repositories };
 }
 
 async function fetchProjectDoc(options: CliOptions, projectId: string, ref: string): Promise<LibrarianWikiDocument> {
@@ -219,7 +276,12 @@ async function fetchProjectDoc(options: CliOptions, projectId: string, ref: stri
   return parseDocument(unwrapDoc(response), "project", null);
 }
 
-function parseDocument(value: unknown, scope: LibrarianWikiDocument["scope"], repositoryId: string | null): LibrarianWikiDocument {
+function parseDocument(
+  value: unknown,
+  scope: LibrarianWikiDocument["scope"],
+  repositoryId: string | null,
+  repositoryDirectory: string | null = null,
+): LibrarianWikiDocument {
   if (!isRecord(value)) throw new Error("Wiki API returned an invalid document");
   const id = recordField(value, "id");
   const slug = recordField(value, "slug");
@@ -230,6 +292,7 @@ function parseDocument(value: unknown, scope: LibrarianWikiDocument["scope"], re
     id,
     scope,
     repositoryId,
+    repositoryDirectory,
     slug,
     path,
     title,
@@ -249,6 +312,32 @@ function arrayField(value: unknown, name: string): unknown[] {
   return isRecord(value) && Array.isArray(value[name]) ? value[name] : [];
 }
 
+function stringArrayField(value: unknown, name: string): string[] {
+  if (!isRecord(value) || !Array.isArray(value[name])) return [];
+  return [...new Set(value[name].filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))];
+}
+
+function recordValue(value: unknown, name: string): Record<string, unknown> | null {
+  return isRecord(value) && isRecord(value[name]) ? value[name] : null;
+}
+
+function findContextProject(value: unknown, projectId: string): Record<string, unknown> | null {
+  const current = recordValue(recordValue(value, "current"), "project");
+  if (current && recordField(current, "id") === projectId) return current;
+  return arrayField(recordValue(value, "catalog"), "projects")
+    .find((candidate): candidate is Record<string, unknown> => isRecord(candidate) && recordField(candidate, "id") === projectId) ?? null;
+}
+
+function repositoryDirectory(repository: Record<string, unknown> | undefined, repositoryId: string): string | null {
+  const name = repository ? recordField(repository, "name") : "";
+  if (!name) return null;
+  return `${safeSlug(name)}-${safeSlug(repositoryId).slice(-8)}`;
+}
+
+function safeSlug(value: string): string {
+  return value.trim().replace(/[\\/:*?"<>|\x00-\x1f]+/g, "-").replace(/^\.+$/, "").slice(0, 160);
+}
+
 function recordField(value: unknown, name: string): string {
   return isRecord(value) && typeof value[name] === "string" ? value[name].trim() : "";
 }
@@ -265,7 +354,10 @@ function summary(document: LibrarianWikiDocument): WikiLintFinding["document"] {
 function documentAliases(document: LibrarianWikiDocument): string[] {
   const path = document.path.replace(/\.md$/i, "");
   const basename = path.split("/").at(-1) ?? path;
-  return [...new Set([document.id, document.slug, document.path, path, basename].map(normalizeRef).filter(Boolean))];
+  const materialized = document.scope === "repository" && document.repositoryDirectory
+    ? [`repositories/${document.repositoryDirectory}/${document.path}`, `repositories/${document.repositoryDirectory}/${path}`]
+    : [];
+  return [...new Set([document.id, document.slug, document.path, path, basename, ...materialized].map(normalizeRef).filter(Boolean))];
 }
 
 function wikiLinks(body: string): string[] {
@@ -303,8 +395,15 @@ function shingles(value: string): Set<string> {
   return result;
 }
 
-function explicitFacts(body: string): Array<{ key: string; label: string; value: string }> {
-  const facts: Array<{ key: string; label: string; value: string }> = [];
+const MAX_CONTRADICTION_BUCKET_SIZE = 64;
+const CONTRADICTION_PROPERTIES = new Set([
+  "branch", "endpoint", "interval", "limit", "mode", "model", "owner", "port", "provider", "region",
+  "state", "status", "timeout", "timezone", "version",
+  "分支", "区域", "所有者", "提供方", "时区", "模型", "模式", "状态", "版本", "端点", "端口", "超时", "间隔", "上限",
+]);
+
+function explicitFacts(body: string): Array<{ subject: string; property: string; label: string; value: string }> {
+  const facts: Array<{ subject: string; property: string; label: string; value: string }> = [];
   for (const rawLine of body.split(/\r?\n/)) {
     const line = rawLine.trim().replace(/^[-*]\s+/, "").replace(/^\*\*(.+)\*\*$/, "$1");
     if (!line || line.startsWith("#") || line.startsWith("|") || line.length > 260) continue;
@@ -312,8 +411,12 @@ function explicitFacts(body: string): Array<{ key: string; label: string; value:
     if (!match) continue;
     const label = match[1]!.replace(/\*\*/g, "").trim();
     const value = match[2]!.trim();
-    const key = label.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-    if (key && value) facts.push({ key, label, value });
+    const parts = label.toLowerCase().split(/[\s./>]+/u).map((part) => part.replace(/[^\p{L}\p{N}_-]+/gu, "")).filter(Boolean);
+    if (parts.length < 2 || !value) continue;
+    const property = parts.at(-1)!;
+    const subject = parts.slice(0, -1).join(" ");
+    if (!subject || !CONTRADICTION_PROPERTIES.has(property)) continue;
+    facts.push({ subject, property, label, value });
   }
   return facts;
 }

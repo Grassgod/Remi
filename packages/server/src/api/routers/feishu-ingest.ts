@@ -7,6 +7,11 @@ import type {
   ResolveMultiremiFeishuMessageInput,
   UpdateMultiremiFeishuSourceInput,
 } from "@multiremi/contracts/types.js";
+import {
+  FeishuChatDirectoryError,
+  normalizeFeishuChatQuery,
+  normalizeFeishuChatScope,
+} from "@multiremi/feishu-ingest/chat-directory.js";
 import { publishIssueCreated } from "../helpers/store-bridge.js";
 import {
   denyCurrentUserWorkspaceAccess,
@@ -21,6 +26,36 @@ import type { RouterDeps } from "./deps.js";
 
 export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
+
+  app.get("/api/workspaces/:workspaceId/feishu/endpoints", async (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanFeishuSourceAdmin(c, deps, workspaceId);
+    if (denied) return denied;
+    const names = deps.feishuSidecarEndpoints.names();
+    const sourceCounts = new Map<string, number>();
+    for (const source of store.listFeishuSources({ workspaceId })) {
+      sourceCounts.set(source.endpointName, (sourceCounts.get(source.endpointName) ?? 0) + 1);
+    }
+    const endpoints = await Promise.all(names.map(async (name) => ({
+      ...await deps.feishuEndpointHealth.get(name) ?? deps.feishuEndpointHealth.unknown(name),
+      sourceCount: sourceCounts.get(name) ?? 0,
+    })));
+    return c.json({ configured: names.length > 0, endpoints });
+  });
+
+  app.post("/api/workspaces/:workspaceId/feishu/endpoints/:name/check", async (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireHumanFeishuSourceAdmin(c, deps, workspaceId);
+    if (denied) return denied;
+    const name = c.req.param("name");
+    const endpoint = await deps.feishuEndpointHealth.get(name, true);
+    if (!endpoint) return c.json({ error: "Feishu sidecar endpoint not found" }, 404);
+    const sourceCount = store.listFeishuSources({ workspaceId })
+      .filter((source) => source.endpointName === name).length;
+    return c.json({ endpoint: { ...endpoint, sourceCount } });
+  });
 
   app.get("/api/workspaces/:workspaceId/feishu/sources", (c) => {
     const workspaceId = c.req.param("workspaceId");
@@ -80,20 +115,120 @@ export function registerFeishuIngestRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
 
+  app.delete("/api/workspaces/:workspaceId/feishu/sources/:sourceId", (c) => {
+    const loaded = loadSource(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    const source = loaded.source;
+    if (!store.deleteFeishuSource(source.id)) return c.json({ error: "Feishu source not found" }, 404);
+    publishWorkspaceEvent(c, store, "feishu:source_deleted", source.workspaceId, {
+      sourceId: source.id,
+      endpointName: source.endpointName,
+      name: source.name,
+    });
+    return c.json({ deleted: true });
+  });
+
+  // Candidate chats for the allowlist picker. An empty allowlist ingests nothing, so
+  // the dashboard cannot bootstrap one from already-ingested messages — the lookup is
+  // proxied through a *registered endpoint name*, never a caller-supplied URL.
+  app.get("/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats", async (c) => {
+    const loaded = loadSource(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    try {
+      const limit = parseLimit(c.req.query("limit")) ?? 20;
+      const chats = await deps.feishuChatDirectory.search({
+        endpointName: loaded.source.endpointName,
+        scope: normalizeFeishuChatScope(c.req.query("scope")),
+        query: normalizeFeishuChatQuery(c.req.query("q")),
+        limit,
+      });
+      const allowlist = new Set(loaded.source.allowlist.map((entry) => entry.chatId));
+      return c.json({
+        chats: chats.map((chat) => ({ ...chat, inAllowlist: allowlist.has(chat.chatId) })),
+        total: chats.length,
+        limit,
+      });
+    } catch (error) {
+      if (error instanceof FeishuChatDirectoryError) {
+        return c.json({ error: "Feishu chat lookup failed", code: error.code }, error.status);
+      }
+      return feishuIngestErrorResponse(c, error);
+    }
+  });
+
   app.get("/api/workspaces/:workspaceId/feishu/messages", (c) => {
     const workspaceId = c.req.param("workspaceId");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
-      const messages = store.listFeishuMessages({
+      const limit = parseLimit(c.req.query("limit")) ?? 100;
+      const offset = parseOffset(c.req.query("offset"));
+      const page = store.listFeishuMessagesPage({
         workspaceId,
-        unprocessed: parseBooleanQuery(c.req.query("unprocessed"), "unprocessed"),
+        sourceId: cleanQuery(c.req.query("source") ?? c.req.query("source_id")),
+        query: cleanQuery(c.req.query("q")),
+        processed: resolveProcessedFilter(
+          parseBooleanQuery(c.req.query("processed"), "processed"),
+          parseBooleanQuery(c.req.query("unprocessed"), "unprocessed"),
+        ),
         since: cleanQuery(c.req.query("since")),
         until: cleanQuery(c.req.query("until")),
         chatId: cleanQuery(c.req.query("chat") ?? c.req.query("chat_id")),
-        limit: parseLimit(c.req.query("limit")),
+        limit,
+        offset,
       });
-      return c.json({ messages, total: messages.length });
+      const outcomes = store.listFeishuMessageOutcomesByMessageIds(page.messages.map((message) => message.messageId));
+      const outcomesByMessage = new Map<string, typeof outcomes>();
+      for (const outcome of outcomes) {
+        const entries = outcomesByMessage.get(outcome.messageId) ?? [];
+        entries.push(outcome);
+        outcomesByMessage.set(outcome.messageId, entries);
+      }
+      const messages = page.messages.map((message) => ({
+        ...message,
+        outcomes: outcomesByMessage.get(message.messageId) ?? [],
+      }));
+      return c.json({
+        messages,
+        total: page.total,
+        limit,
+        offset,
+        hasMore: offset + messages.length < page.total,
+      });
+    } catch (error) {
+      return feishuIngestErrorResponse(c, error);
+    }
+  });
+
+  app.get("/api/workspaces/:workspaceId/feishu/chats", (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const chats = store.listFeishuChats(workspaceId);
+    return c.json({ chats, total: chats.length });
+  });
+
+  app.get("/api/workspaces/:workspaceId/feishu/proposals", (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    try {
+      const limit = parseLimit(c.req.query("limit")) ?? 100;
+      const offset = parseOffset(c.req.query("offset"));
+      const page = store.listFeishuIssueProposals({
+        workspaceId,
+        status: parseProposalStatus(c.req.query("status")),
+        sourceId: cleanQuery(c.req.query("source") ?? c.req.query("source_id")),
+        limit,
+        offset,
+      });
+      return c.json({
+        proposals: page.proposals,
+        total: page.total,
+        limit,
+        offset,
+        hasMore: offset + page.proposals.length < page.total,
+      });
     } catch (error) {
       return feishuIngestErrorResponse(c, error);
     }
@@ -305,6 +440,28 @@ function parseLimit(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function parseOffset(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("offset must be a non-negative integer");
+  return parsed;
+}
+
+function resolveProcessedFilter(processed: boolean | undefined, unprocessed: boolean | undefined): boolean | undefined {
+  if (processed !== undefined && unprocessed !== undefined && processed === unprocessed) {
+    throw new Error("processed and unprocessed filters conflict");
+  }
+  if (processed !== undefined) return processed;
+  if (unprocessed !== undefined) return !unprocessed;
+  return undefined;
+}
+
+function parseProposalStatus(value: string | undefined): "pending" | "approved" | "rejected" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "pending" || value === "approved" || value === "rejected") return value;
+  throw new Error("status must be pending, approved, or rejected");
+}
+
 function cleanQuery(value: string | undefined): string | null {
   const cleaned = value?.trim();
   return cleaned ? cleaned : null;
@@ -335,6 +492,7 @@ function feishuIngestErrorResponse(c: Context, error: unknown): Response {
   if (
     message.includes("required")
     || message.includes("must be")
+    || message.includes("filters conflict")
     || message.includes("must reference")
     || message.includes("unsupported")
     || message.includes("invalid")

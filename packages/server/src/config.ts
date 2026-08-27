@@ -9,6 +9,7 @@ export interface MultiremiCliConfig {
   provider?: string;
   runtime_id?: string;
   runtime_name?: string;
+  device_name?: string;
   daemon_id?: string;
   max_concurrency?: number;
 }

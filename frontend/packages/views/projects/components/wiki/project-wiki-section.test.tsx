@@ -705,4 +705,13 @@ describe("ProjectWikiSection", () => {
     expect(label.tagName).toBe("SPAN");
     expect(label).toHaveClass("truncate");
   });
+
+  it("forces the mobile Wiki drawer to the specified 280px width", () => {
+    state.docs = [doc({ id: "d1", slug: "runbook", title: "Runbook" })];
+    renderSection();
+
+    fireEvent.click(screen.getByRole("button", { name: "Wiki" }));
+
+    expect(document.querySelector('[data-slot="sheet-content"]')).toHaveClass("!w-[280px]");
+  });
 });

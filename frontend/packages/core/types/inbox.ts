@@ -25,7 +25,11 @@ export type InboxItemType =
   | "autopilot_paused"
   | "autopilot_run_completed"
   | "autopilot_run_failed"
-  | "autopilot_run_overdue";
+  | "autopilot_run_overdue"
+  | "feishu_message_notification"
+  | "feishu_reply_draft"
+  | "feishu_issue_proposal"
+  | "feishu_ingest_connection_alert";
 
 export interface InboxItem {
   id: string;

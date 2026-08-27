@@ -860,7 +860,7 @@ export function ProjectWikiSection({
     <div className="flex min-h-0 flex-1">
       <aside className="hidden w-[280px] shrink-0 border-r lg:block">{sidebar}</aside>
       <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-        <SheetContent side="left" className="w-[280px] gap-0 p-0" showCloseButton={false}>
+        <SheetContent side="left" className="!w-[280px] gap-0 p-0" showCloseButton={false}>
           <SheetTitle className="sr-only">{t(($) => $.wiki.tab_wiki)}</SheetTitle>
           {sidebar}
         </SheetContent>
