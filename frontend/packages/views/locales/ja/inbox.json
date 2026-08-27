@@ -12,6 +12,7 @@
   "filters": {
     "label": "通知元",
     "all": "すべて",
+    "message_stream": "メッセージストリーム",
     "automation": "自動化",
     "mentions": "メンション",
     "assignments": "割り当て"

@@ -12,6 +12,7 @@
   "filters": {
     "label": "알림 소스",
     "all": "전체",
+    "message_stream": "메시지 스트림",
     "automation": "자동화",
     "mentions": "멘션",
     "assignments": "할당"

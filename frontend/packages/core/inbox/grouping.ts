@@ -6,7 +6,12 @@ import type { InboxItem } from "../types";
 import { isInboxLedgerType } from "@multiremi/contracts/inbox";
 import { isFeishuInboxType } from "../feishu/inbox";
 
-export type InboxSourceFilter = "all" | "automation" | "mentions" | "assignments";
+export type InboxSourceFilter =
+  | "all"
+  | "message_stream"
+  | "automation"
+  | "mentions"
+  | "assignments";
 export type InboxDateGroup = "today" | "yesterday" | "this_week" | "earlier";
 
 export interface InboxItemGroup {
@@ -61,11 +66,15 @@ export function filterInboxItemsBySource(
   source: InboxSourceFilter,
 ): InboxItem[] {
   if (source === "all") return items;
-  // Feishu ingestion is machine-driven inbound, same as an autopilot run — a
-  // user narrowing to "automation" is looking for both.
-  if (source === "automation") {
-    return items.filter((item) => item.type.startsWith("autopilot_") || isFeishuInboxType(item.type));
-  }
+  // Everything the message-ingestion pipeline produces, including its
+  // connection alert: when the stream breaks, this tab is where a reader looks
+  // for the reason. Feishu is the only source today; a second one adds its
+  // types to isFeishuInboxType's sibling and joins here.
+  if (source === "message_stream") return items.filter((item) => isFeishuInboxType(item.type));
+  // Ingested messages used to land here too, on the grounds that both are
+  // machine-driven inbound. They no longer do — chat volume dwarfs autopilot
+  // runs, so mixing them buried the runs this tab exists to surface.
+  if (source === "automation") return items.filter((item) => item.type.startsWith("autopilot_"));
   if (source === "mentions") return items.filter((item) => MENTION_TYPES.has(item.type));
   return items.filter((item) => ASSIGNMENT_TYPES.has(item.type));
 }

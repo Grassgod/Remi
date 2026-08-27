@@ -354,6 +354,7 @@ export function InboxPage() {
 
   const sourceFilters: Array<{ key: InboxSourceFilter; label: string }> = [
     { key: "all", label: t(($) => $.filters.all) },
+    { key: "message_stream", label: t(($) => $.filters.message_stream) },
     { key: "automation", label: t(($) => $.filters.automation) },
     { key: "mentions", label: t(($) => $.filters.mentions) },
     { key: "assignments", label: t(($) => $.filters.assignments) },

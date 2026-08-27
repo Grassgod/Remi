@@ -12,6 +12,7 @@
   "filters": {
     "label": "通知来源",
     "all": "全部",
+    "message_stream": "消息流",
     "automation": "自动化",
     "mentions": "提及",
     "assignments": "分配"

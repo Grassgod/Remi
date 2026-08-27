@@ -12,6 +12,7 @@
   "filters": {
     "label": "Notification source",
     "all": "All",
+    "message_stream": "Message stream",
     "automation": "Automation",
     "mentions": "Mentions",
     "assignments": "Assignments"

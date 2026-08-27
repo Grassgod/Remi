@@ -208,6 +208,40 @@ describe("InboxPage", () => {
     expect(screen.getByText("No notifications match this filter")).toBeInTheDocument();
   });
 
+  it("separates the ingested message stream from platform automation", async () => {
+    const at = new Date().toISOString();
+    listInbox.mockResolvedValue([
+      {
+        id: "feishu-message",
+        type: "feishu_message_notification",
+        issue_id: null,
+        title: "飞书消息提醒",
+        details: { message_id: "msg-1", chat_name: "Dev group" },
+        read: false,
+        archived: false,
+        created_at: at,
+      },
+      {
+        id: "autopilot-run",
+        type: "autopilot_run_completed",
+        issue_id: null,
+        title: "Daily summary completed",
+        read: false,
+        archived: false,
+        created_at: at,
+      },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Message stream" }));
+    expect(screen.getByText("feishu-message")).toBeInTheDocument();
+    expect(screen.queryByText("autopilot-run")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Automation" }));
+    expect(screen.getByText("autopilot-run")).toBeInTheDocument();
+    expect(screen.queryByText("feishu-message")).not.toBeInTheDocument();
+  });
+
   it("renders same-issue ledger history independently from newer action rows", async () => {
     listInbox.mockResolvedValue([
       {

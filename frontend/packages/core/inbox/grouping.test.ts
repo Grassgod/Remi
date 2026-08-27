@@ -70,7 +70,7 @@ describe("inbox grouping", () => {
     expect(filterInboxItemsBySource(items, "all")).toEqual(items);
   });
 
-  it("counts Feishu ingestion rows as automation", () => {
+  it("gives every ingestion row its own tab and leaves automation to autopilot", () => {
     const at = new Date().toISOString();
     const items = [
       item("autopilot", "autopilot_run_failed", at),
@@ -81,12 +81,17 @@ describe("inbox grouping", () => {
       item("comment", "comment_created", at),
     ];
 
-    expect(filterInboxItemsBySource(items, "automation").map((entry) => entry.id)).toEqual([
-      "autopilot",
+    // The connection alert belongs with the messages: a reader whose stream
+    // went quiet looks in this tab for the reason, not in automation.
+    expect(filterInboxItemsBySource(items, "message_stream").map((entry) => entry.id)).toEqual([
       "notification",
       "proposal",
       "draft",
       "alert",
+    ]);
+    // Chat volume would otherwise bury the autopilot runs this tab is for.
+    expect(filterInboxItemsBySource(items, "automation").map((entry) => entry.id)).toEqual([
+      "autopilot",
     ]);
   });
 
