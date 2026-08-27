@@ -286,6 +286,35 @@ export class TaskProgressTracker {
   }
 }
 
+/**
+ * Opening line written the moment a run starts, before the first model summary
+ * exists. The dual trigger (N messages AND T ms) means this line owns the first
+ * ~45s of every run, so it is real product copy rather than a status code: same
+ * voice as the model summaries (short, spoken Chinese, no tool jargon), picked
+ * at random so consecutive runs don't read like a stuck screen.
+ */
+export const TASK_STARTUP_LINES: readonly string[] = [
+  "接单了，正在读题",
+  "已就位，先把需求读三遍",
+  "正在装载上下文，马上进正题",
+  "袖子卷好了，准备开工",
+  "刚坐下，正在打开工程",
+  "任务已签收，开始理头绪",
+  "先摸清地形，再动手",
+  "咖啡续上了，开始干活",
+  "正在把需求翻译成人话",
+  "已经上手，正在找线头",
+  "先看看现场，不急着改",
+  "热身中，马上就有进展",
+];
+
+/** Random opener for a fresh run; `random` is injectable so tests stay deterministic. */
+export function pickTaskStartupLine(random: () => number = Math.random): string {
+  const index = Math.floor(random() * TASK_STARTUP_LINES.length);
+  const bounded = Math.min(Math.max(index, 0), TASK_STARTUP_LINES.length - 1);
+  return TASK_STARTUP_LINES[bounded]!;
+}
+
 export type ProgressRunOutcome = "completed" | "failed" | "cancelled";
 
 /** Narrow fetch shape so tests can inject a plain async function. */

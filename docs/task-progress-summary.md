@@ -5,6 +5,10 @@
 
 ## 工作方式
 
+- **开场白**：run 刚启动、第一条模型摘要还没生成时，daemon 先写入一条随机开场白
+  （`pickTaskStartupLine()` / `TASK_STARTUP_LINES`，`progress-summarizer.ts`）。
+  双触发意味着这条文案要独占每次 run 的前 ~45 秒，所以它按产品文案对待：
+  和模型摘要同一口吻的短中文，随机取一条，避免连续几次 run 看起来像卡住了。
 - **双触发（借鉴 MoA Task Summary）**：daemon 在 `session.run()` 事件循环里累计新增 task_messages，
   当「自上次摘要起新增 ≥N 条」且「距上次摘要 ≥T 毫秒」同时满足时触发一次摘要；
   run 终止（正常完成 / 失败 / 取消）时强制生成终态摘要（`final: true`，服务端允许写入已终态任务）。
@@ -60,5 +64,5 @@ OpenAI 兼容模型和 Claude 兜底模型。设置保存在 workspace `settings
 
 ## 测试
 
-- `tests/unit/daemon/progress-summarizer.test.ts`：触发计数 / 防抖 / 摘要压缩 / 凭证解析 / 单飞 / 失败隔离 / 终态 / 零配置 OpenAI 默认链 / OpenAI→API→CLI 降级 / CLI 超时。
+- `tests/unit/daemon/progress-summarizer.test.ts`：开场白随机取值与边界 / 触发计数 / 防抖 / 摘要压缩 / 凭证解析 / 单飞 / 失败隔离 / 终态 / 零配置 OpenAI 默认链 / OpenAI→API→CLI 降级 / CLI 超时。
 - `tests/unit/multiremi/store-tasks-repo.test.ts`：终态任务仅接受 `final` 摘要写入。

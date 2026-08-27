@@ -6,6 +6,7 @@ import {
   buildSummaryPrompt,
   digestTaskMessage,
   parseSummaryText,
+  pickTaskStartupLine,
   PROGRESS_SUMMARY_DEFAULTS,
   readCodexAuthApiKey,
   resolveProgressSummaryConfig,
@@ -13,6 +14,7 @@ import {
   resolveTaskProgressSummaryConfig,
   TaskProgressSummarizer,
   TaskProgressTracker,
+  TASK_STARTUP_LINES,
   type ProgressSummaryConfig,
   type ProgressSummaryResult,
   type SummaryCliSpawn,
@@ -823,5 +825,29 @@ describe("TaskProgressSummarizer", () => {
     expect(reported).toEqual([{ summary: "API 摘要" }]);
     expect(apiCalls).toBe(1);
     expect(cliCalls).toBe(0);
+  });
+});
+
+describe("task startup line", () => {
+  it("picks a distinct opener per run and stays inside the pool", () => {
+    const picked = TASK_STARTUP_LINES.map((_, index) =>
+      pickTaskStartupLine(() => index / TASK_STARTUP_LINES.length));
+    expect(picked).toEqual([...TASK_STARTUP_LINES]);
+    expect(new Set(picked).size).toBe(TASK_STARTUP_LINES.length);
+  });
+
+  it("clamps degenerate random values to a real line", () => {
+    expect(pickTaskStartupLine(() => 0)).toBe(TASK_STARTUP_LINES[0]!);
+    // Math.random() is [0,1), but a stubbed or drifting source must not yield undefined.
+    expect(pickTaskStartupLine(() => 1)).toBe(TASK_STARTUP_LINES[TASK_STARTUP_LINES.length - 1]!);
+    expect(pickTaskStartupLine(() => -1)).toBe(TASK_STARTUP_LINES[0]!);
+  });
+
+  it("keeps every opener short enough for the one-line progress row", () => {
+    for (const line of TASK_STARTUP_LINES) {
+      expect(line.trim()).toBe(line);
+      expect(line.length).toBeGreaterThan(0);
+      expect(line.length).toBeLessThanOrEqual(30);
+    }
   });
 });

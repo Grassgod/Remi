@@ -162,6 +162,7 @@ import {
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
 import {
+  pickTaskStartupLine,
   resolveTaskProgressSummaryConfig,
   resolveSummarizerCredentials,
   TaskProgressSummarizer,
@@ -2150,7 +2151,7 @@ export class MultiremiDaemon {
         });
       }
       this.enqueueTaskReport(task.id, "start", {});
-      this.enqueueTaskReport(task.id, "progress", { summary: "Agent execution started", step: 1, total: 3 });
+      this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(), step: 1, total: 3 });
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
       summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer);
       if (!summary.completed) {
