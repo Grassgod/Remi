@@ -124,6 +124,14 @@ import {
   type FeishuSidecarEndpointRegistry,
 } from "@multiremi/feishu-ingest/endpoints.js";
 import {
+  FeishuEndpointHealthChecker,
+  type FeishuEndpointHealthCheckerOptions,
+} from "@multiremi/feishu-ingest/health.js";
+import {
+  FeishuChatDirectory,
+  type FeishuChatDirectoryOptions,
+} from "@multiremi/feishu-ingest/chat-directory.js";
+import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
   authorizeDaemonWebSocketRequest,
@@ -208,6 +216,10 @@ export interface MultiremiApiOptions {
   feishuIngest?: FeishuIngestScheduler | null;
   /** Server-owned name-to-URL registry. User input never supplies a fetch URL. */
   feishuSidecarEndpoints?: FeishuSidecarEndpointRegistry;
+  /** Injectable endpoint probe dependencies for deterministic tests. */
+  feishuEndpointHealth?: FeishuEndpointHealthCheckerOptions;
+  /** Injectable candidate-chat lookup dependencies for deterministic tests. */
+  feishuChatDirectory?: FeishuChatDirectoryOptions;
   /** Undefined enables server-owned Issue title scanning; null explicitly disables it. */
   issueTitleScheduler?: IssueTitleScheduler | null;
   issueRetitle?: typeof retitleIssue;
@@ -235,6 +247,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const feishuSidecarEndpoints = options.feishuSidecarEndpoints ?? feishuSidecarEndpointsFromEnv();
+  const feishuEndpointHealth = new FeishuEndpointHealthChecker(
+    feishuSidecarEndpoints,
+    options.feishuEndpointHealth,
+  );
+  const feishuChatDirectory = new FeishuChatDirectory(feishuSidecarEndpoints, options.feishuChatDirectory);
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
     options.daemonDirectBaseUrl === undefined
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
@@ -258,6 +275,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     repositoryWiki,
     sessionArchives,
     feishuSidecarEndpoints,
+    feishuEndpointHealth,
+    feishuChatDirectory,
     daemonDirectBaseUrl,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
     issueRetitle: options.issueRetitle ?? retitleIssue,

@@ -48,6 +48,9 @@
     "no_matches_hint": "No machines match the current search or filter.",
     "select_machine": "Select a machine to inspect its runtimes.",
     "actions_aria": "Machine actions",
+    "name_edit_hint": "Rename machine",
+    "name_toast_updated": "Machine renamed",
+    "name_toast_failed": "Couldn't rename machine",
     "tabs": {
       "runtimes": "Runtimes",
       "ssh_mesh": "SSH access",
@@ -314,6 +317,8 @@
     "step1_label": "Install the Remi CLI",
     "step2_label": "Start the daemon",
     "step2_hint": "Writes the connection config, then keeps the daemon running in the background.",
+    "device_name_label": "Computer name (optional)",
+    "device_name_placeholder": "Leave blank to use this computer's hostname",
     "credential_loading": "Creating a secure connection credential...",
     "credential_error": "Couldn't create a connection credential.",
     "credential_error_detail": "Reason: {{reason}}",
@@ -454,6 +459,14 @@
     "empty_zero_cost": "Tokens recorded but cost calculation returned $0.",
     "unmapped_notice_one": "{{count}} model has no maintained price — its tokens are excluded from cost totals.",
     "unmapped_notice_other": "{{count}} models have no maintained price — their tokens are excluded from cost totals.",
+    "diagnostics": {
+      "summary": "Some tokens are excluded from cost totals: {{reasons}}",
+      "reason_unpriced_one": "{{count}} model without a price",
+      "reason_unpriced_other": "{{count}} models without a price",
+      "reason_total_only": "{{tokens}} historical tokens with no input/output split",
+      "show_detail": "Details",
+      "hide_detail": "Hide"
+    },
     "custom_pricing": {
       "open_button": "Set custom prices",
       "title": "Custom model prices",

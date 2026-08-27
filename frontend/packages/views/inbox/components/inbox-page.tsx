@@ -31,6 +31,7 @@ import {
   useMarkInboxItemsRead,
 } from "@multiremi/core/inbox/mutations";
 
+import { FeishuInboxActions } from "./feishu-inbox-actions";
 import { IssueDetail } from "../../issues/components";
 import { ErrorBoundary } from "@multiremi/ui/components/common/error-boundary";
 import { EmptyState } from "../../common/empty-state";
@@ -64,8 +65,8 @@ import {
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
 import { InboxListItem, useTimeAgo } from "./inbox-list-item";
-import { InboxDetailLabel, useTypeLabels } from "./inbox-detail-label";
-import { getAutopilotRunOutcome, getInboxDisplayTitle } from "./inbox-display";
+import { InboxDetailLabel, useInboxTitle, useTypeLabels } from "./inbox-detail-label";
+import { getAutopilotRunOutcome } from "./inbox-display";
 import { useT } from "../../i18n";
 
 // A failed inbox fetch resolves to an empty list, and an empty list renders
@@ -93,7 +94,7 @@ function InboxLoadError({ onRetry }: { onRetry: () => void }) {
 }
 
 export function InboxPage() {
-  const { t, i18n } = useT("inbox");
+  const { t } = useT("inbox");
   const { t: tCommon } = useT("common");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
@@ -234,6 +235,7 @@ export function InboxPage() {
   const markGroupReadMutation = useMarkInboxItemsRead();
   const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
+  const inboxTitle = useInboxTitle();
 
   // Auto-mark the selected display entry as read. A collapsed entry covers
   // every successful run represented by the row, including URL selection.
@@ -360,6 +362,7 @@ export function InboxPage() {
 
   const sourceFilters: Array<{ key: InboxSourceFilter; label: string }> = [
     { key: "all", label: t(($) => $.filters.all) },
+    { key: "message_stream", label: t(($) => $.filters.message_stream) },
     { key: "automation", label: t(($) => $.filters.automation) },
     { key: "mentions", label: t(($) => $.filters.mentions) },
     { key: "assignments", label: t(($) => $.filters.assignments) },
@@ -527,11 +530,7 @@ export function InboxPage() {
   ) : selected ? (
     <div className="p-6">
       <h2 className="text-lg font-semibold">
-        {getInboxDisplayTitle(selected, {
-          locale: i18n.resolvedLanguage ?? i18n.language,
-          scheduled: (time) => t(($) => $.autopilot.scheduled, { time }),
-          repeatedRuns: (title, count) => t(($) => $.autopilot.repeated_runs, { title, count }),
-        }, selectedEntry?.items.length ?? 1)}
+        {inboxTitle(selected, "detail", selectedEntry?.items.length ?? 1)}
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
         {typeLabels[selected.type]} · {timeAgo(selected.created_at)}
@@ -553,6 +552,9 @@ export function InboxPage() {
           <p className="mt-1 whitespace-pre-wrap text-sm">{selected.details.original_prompt}</p>
         </div>
       )}
+      {/* Renders nothing for non-Feishu rows. Approve/reject/ignore live here,
+          in the stream, so a decision never requires a trip to Settings. */}
+      <FeishuInboxActions item={selected} onArchive={() => handleArchive([selected.id])} />
       <div className="mt-4 flex gap-2">
         {selected.type === "quick_create_failed" && (
           <Button

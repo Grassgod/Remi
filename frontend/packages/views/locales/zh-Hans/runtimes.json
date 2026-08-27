@@ -46,6 +46,9 @@
     "no_matches_hint": "没有机器匹配当前搜索或筛选。",
     "select_machine": "选择一台机器查看它的运行时。",
     "actions_aria": "机器操作",
+    "name_edit_hint": "重命名机器",
+    "name_toast_updated": "机器已重命名",
+    "name_toast_failed": "重命名机器失败",
     "tabs": {
       "runtimes": "运行时",
       "ssh_mesh": "SSH 互联",
@@ -294,6 +297,8 @@
     "step1_label": "安装 Remi CLI",
     "step2_label": "启动守护进程",
     "step2_hint": "会写入连接配置并在后台保持守护进程运行。",
+    "device_name_label": "电脑名称（可选）",
+    "device_name_placeholder": "留空则使用这台电脑的 hostname",
     "credential_loading": "正在创建安全连接凭证...",
     "credential_error": "无法创建连接凭证。",
     "credential_error_detail": "原因：{{reason}}",
@@ -433,6 +438,13 @@
     "empty_pricing_hint": "可以设置自定义价格，把它们也纳入费用统计。",
     "empty_zero_cost": "记录到 token，但费用计算结果为 $0。",
     "unmapped_notice_other": "有 {{count}} 个模型没有维护价格，相关 token 未计入费用统计。",
+    "diagnostics": {
+      "summary": "部分 token 未计入费用统计：{{reasons}}",
+      "reason_unpriced_other": "{{count}} 个模型缺少价格",
+      "reason_total_only": "{{tokens}} 个历史 token 没有输入/输出拆分",
+      "show_detail": "查看说明",
+      "hide_detail": "收起"
+    },
     "custom_pricing": {
       "open_button": "设置自定义价格",
       "title": "自定义模型价格",

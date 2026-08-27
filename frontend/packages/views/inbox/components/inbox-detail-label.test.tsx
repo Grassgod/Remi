@@ -2,12 +2,16 @@ import { render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { InboxItem } from "@multiremi/core/types";
 import { describe, expect, it, vi } from "vitest";
+import enCommon from "../../locales/en/common.json";
 import enInbox from "../../locales/en/inbox.json";
+import zhCommon from "../../locales/zh-Hans/common.json";
 import zhInbox from "../../locales/zh-Hans/inbox.json";
-import { InboxDetailLabel } from "./inbox-detail-label";
+import { InboxDetailLabel, useInboxTitle } from "./inbox-detail-label";
+
+const TEST_RESOURCES = { en: { common: enCommon, inbox: enInbox } };
 
 vi.mock("@multiremi/core/workspace/hooks", () => ({
-  useActorName: () => ({ getActorName: (_type: string, id: string) => id }),
+  useActorName: () => ({ getActorName: () => "Someone" }),
 }));
 
 vi.mock("../../issues/components", () => ({
@@ -15,7 +19,7 @@ vi.mock("../../issues/components", () => ({
   PriorityIcon: () => null,
 }));
 
-function item(overrides: Partial<InboxItem> = {}): InboxItem {
+function autopilotItem(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
     id: "inbox-1",
     workspace_id: "workspace-1",
@@ -42,8 +46,8 @@ function renderLabel(value: InboxItem, locale: "en" | "zh-Hans" = "en") {
     <I18nProvider
       locale={locale}
       resources={{
-        en: { inbox: enInbox },
-        "zh-Hans": { inbox: zhInbox },
+        en: { common: enCommon, inbox: enInbox },
+        "zh-Hans": { common: zhCommon, inbox: zhInbox },
       }}
     >
       <InboxDetailLabel item={value} />
@@ -53,7 +57,7 @@ function renderLabel(value: InboxItem, locale: "en" | "zh-Hans" = "en") {
 
 describe("InboxDetailLabel autopilot outcomes", () => {
   it("renders a localized no-change result instead of the English fallback", () => {
-    renderLabel(item({
+    renderLabel(autopilotItem({
       details: {
         duration_seconds: 12,
         outcome: { kind: "no_change", text: null, links: [], counts: null },
@@ -66,7 +70,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
   });
 
   it("renders change counts and clickable PR/MR links", () => {
-    renderLabel(item({
+    renderLabel(autopilotItem({
       details: {
         duration_seconds: 9,
         outcome: {
@@ -93,7 +97,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
   });
 
   it("localizes the failure wrapper while preserving the cleaned agent summary", () => {
-    renderLabel(item({
+    renderLabel(autopilotItem({
       type: "autopilot_run_failed",
       details: {
         outcome: {
@@ -110,7 +114,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
 
   it("renders a plain-text completed summary exactly once", () => {
     const summary = "Published the repository wiki update successfully.";
-    renderLabel(item({
+    renderLabel(autopilotItem({
       body: "Completed in 8s | fallback",
       details: {
         outcome: { kind: "unknown", text: summary, links: [], counts: null },
@@ -120,5 +124,88 @@ describe("InboxDetailLabel autopilot outcomes", () => {
     expect(screen.getByText(`本次运行已完成：${summary}`)).toBeInTheDocument();
     expect(screen.getAllByText(new RegExp(summary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u")))
       .toHaveLength(1);
+  });
+});
+
+function feishuItem(overrides: Partial<InboxItem> = {}): InboxItem {
+  return {
+    id: "inbox-1",
+    workspace_id: "ws-1",
+    recipient_type: "member",
+    recipient_id: "user-1",
+    actor_type: null,
+    actor_id: null,
+    issue_id: null,
+    issue_status: null,
+    type: "feishu_message_notification",
+    severity: "info",
+    title: "飞书消息提醒",
+    body: null,
+    details: null,
+    read: false,
+    archived: false,
+    created_at: "2026-08-01T00:00:00.000Z",
+    ...overrides,
+  } as InboxItem;
+}
+
+function Probe({ value, variant }: { value: InboxItem; variant: "row" | "detail" }) {
+  const inboxTitle = useInboxTitle();
+  return <span data-testid="title">{inboxTitle(value, variant)}</span>;
+}
+
+function titleOf(value: InboxItem, variant: "row" | "detail" = "row"): string {
+  const { unmount } = render(
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <Probe value={value} variant={variant} />
+    </I18nProvider>,
+  );
+  const text = screen.getByTestId("title").textContent ?? "";
+  unmount();
+  return text;
+}
+
+describe("useInboxTitle", () => {
+  it("keeps the server title for a native notification", () => {
+    expect(titleOf(feishuItem({ type: "issue_assigned", title: "Fix the sidecar" }))).toBe(
+      "Fix the sidecar",
+    );
+  });
+
+  it("names Feishu on a row whose server title never mentions it", () => {
+    const title = titleOf(
+      feishuItem({
+        type: "feishu_issue_proposal",
+        title: "建议创建 Issue",
+        details: { message_id: "msg-1", proposal_id: "p-1", chat_name: "Dev group" },
+      } as Partial<InboxItem>),
+    );
+    expect(title).toBe("Feishu issue proposal · Dev group");
+  });
+
+  it("falls back to the type label when the row carries no chat name", () => {
+    expect(titleOf(feishuItem({ details: { message_id: "msg-1" } } as Partial<InboxItem>))).toBe(
+      "Feishu message",
+    );
+  });
+
+  it("shows the source rather than a chat on a connection alert", () => {
+    const title = titleOf(
+      feishuItem({
+        type: "feishu_ingest_connection_alert",
+        title: "飞书消息源连接异常",
+        details: { source_id: "src-1", source_name: "personal", consecutive_failures: 3 },
+      } as unknown as Partial<InboxItem>),
+    );
+    expect(title).toBe("Feishu ingestion alert · personal");
+  });
+
+  it("drops the type label in the detail heading, which prints it separately", () => {
+    const withChat = feishuItem({
+      details: { message_id: "msg-1", chat_name: "Dev group" },
+    } as Partial<InboxItem>);
+    expect(titleOf(withChat, "detail")).toBe("Dev group");
+    expect(titleOf(feishuItem({ details: { message_id: "msg-1" } } as Partial<InboxItem>), "detail"))
+      .toBe("Feishu message");
   });
 });

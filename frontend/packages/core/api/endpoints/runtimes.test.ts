@@ -14,6 +14,67 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("RuntimesEndpoints runtime response schema", () => {
+  const runtime = {
+    id: "runtime-1",
+    workspace_id: "ws-1",
+    daemon_id: "daemon-1",
+    name: "codex",
+    runtime_mode: "local",
+    provider: "codex",
+    launch_header: "Codex",
+    status: "online",
+    device_info: "Workstation · 1.0.0",
+    metadata: {},
+    owner_id: "user-1",
+    visibility: "private",
+    last_seen_at: null,
+    created_at: "2026-08-27T00:00:00.000Z",
+    updated_at: "2026-08-27T00:00:00.000Z",
+  };
+
+  it("defaults a missing daemon display name without dropping the runtime", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([runtime])));
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.listRuntimes({ workspace_id: "ws-1" })).resolves.toEqual([
+      { ...runtime, daemon_display_name: null },
+    ]);
+  });
+
+  it("falls back instead of exposing a malformed daemon display name", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([
+      { ...runtime, daemon_display_name: 42 },
+    ])));
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.listRuntimes({ workspace_id: "ws-1" })).resolves.toEqual([]);
+  });
+
+  it("submits and validates a daemon display-name update", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      workspace_id: "ws/1",
+      daemon_id: "daemon/1",
+      display_name: "Workstation",
+      display_name_customized: true,
+      updated_by: "user-1",
+      updated_at: "2026-08-27T00:00:00.000Z",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(
+      endpoints.updateDaemonDisplayName("ws/1", "daemon/1", "Workstation"),
+    ).resolves.toMatchObject({ display_name: "Workstation" });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/daemons/daemon%2F1?workspace_id=ws%2F1",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      display_name: "Workstation",
+    });
+  });
+});
+
 describe("RuntimesEndpoints daemon inventory", () => {
   it("loads the manager inventory including token-only daemons", async () => {
     const fetchMock = vi.fn().mockResolvedValue(

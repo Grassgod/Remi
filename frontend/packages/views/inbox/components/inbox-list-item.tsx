@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { StatusIcon } from "../../issues/components";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { Archive, ChevronDown, ChevronRight } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, MessageSquare } from "lucide-react";
+import { isFeishuInboxType } from "@multiremi/core/feishu/inbox";
 import type { InboxItem } from "@multiremi/core/types";
-import { InboxDetailLabel } from "./inbox-detail-label";
-import { getInboxDisplayTitle } from "./inbox-display";
+import { InboxDetailLabel, useInboxTitle } from "./inbox-detail-label";
 import { useT } from "../../i18n";
 
 // Hook returning a localized relative-time formatter — the i18n equivalent
@@ -41,18 +41,13 @@ export function InboxListItem({
   onItemClick?: (item: InboxItem) => void;
   onArchive: () => void;
 }) {
-  const { t, i18n } = useT("inbox");
+  const { t } = useT("inbox");
   const timeAgo = useTimeAgo();
   const [expanded, setExpanded] = useState(false);
   const merged = groupedItems.length > 1;
   const read = groupedItems.every((entry) => entry.read);
-  const localizer = {
-    locale: i18n.resolvedLanguage ?? i18n.language,
-    scheduled: (time: string) => t(($) => $.autopilot.scheduled, { time }),
-    repeatedRuns: (title: string, count: number) =>
-      t(($) => $.autopilot.repeated_runs, { title, count }),
-  };
-  const displayTitle = getInboxDisplayTitle(item, localizer, groupedItems.length);
+  const inboxTitle = useInboxTitle();
+  const displayTitle = inboxTitle(item, "row", groupedItems.length);
 
   const handleRowKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -118,9 +113,14 @@ export function InboxListItem({
               >
                 <Archive className="h-3.5 w-3.5" />
               </button>
-              {item.issue_status && (
+              {item.issue_status ? (
                 <StatusIcon status={item.issue_status} className="h-3.5 w-3.5 shrink-0" />
-              )}
+              ) : isFeishuInboxType(item.type) ? (
+                <MessageSquare
+                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                  aria-label={t(($) => $.list.feishu_source)}
+                />
+              ) : null}
             </div>
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-2">
@@ -151,7 +151,7 @@ export function InboxListItem({
             >
               <div className="flex items-center justify-between gap-3">
                 <span className={`min-w-0 truncate text-xs ${run.read ? "text-muted-foreground" : "font-medium"}`}>
-                  {getInboxDisplayTitle(run, localizer)}
+                  {inboxTitle(run, "row")}
                 </span>
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {timeAgo(run.created_at)}

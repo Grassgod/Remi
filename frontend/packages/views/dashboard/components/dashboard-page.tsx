@@ -51,7 +51,7 @@ import {
   hasUnpricedTokens,
   todayIso,
 } from "../../runtimes/utils";
-import { UnmappedPricingNotice } from "../../runtimes/components/usage-section";
+import { UsageDiagnosticsNotice } from "../../runtimes/components/usage-section";
 import { useT } from "../../i18n";
 import {
   aggregateAgentTokens,
@@ -434,24 +434,37 @@ export function DashboardPage() {
                 </div>
               )}
 
-              {/* Pricing-gap banner — only split tokens can become billable
-                  after a model rate is configured. Total-only history is
-                  explained by the dedicated notice below instead. */}
-              <UnmappedPricingNotice usage={splitUsageInWindow} />
+              {/* Cost-diagnostics strip — one collapsible line covering both
+                  reasons a token can be counted but not costed. It used to be
+                  two stacked open banners, and since neither clears on its own
+                  (an unpriced model stays unpriced until someone adds a rate;
+                  total-only history can never gain a split) they permanently
+                  owned the first screen (MUL-168). The total-only half in
+                  particular predates the daemon split fix (MUL-92) — the
+                  bridges reported context occupancy with no input/output
+                  dimension and never persisted one, so there is nothing to
+                  recover and no setting that makes those rows priceable.
+                  MUL-164 gave that half a one-way dismiss; folding it into
+                  the collapsible strip keeps the first screen clear *and*
+                  keeps the explanation reachable afterwards.
 
-              {totals.totalOnly > 0 && (
-                <div
-                  role="alert"
-                  className="flex items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs"
-                >
-                  <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
-                  <p className="min-w-0 flex-1 text-foreground">
-                    {t(($) => $.kpi.total_only_notice, {
-                      tokens: formatTokens(totals.totalOnly),
-                    })}
-                  </p>
-                </div>
-              )}
+                  `splitUsageInWindow` for the pricing gap: only split tokens
+                  can become billable once a rate is configured, so total-only
+                  rows must not be counted as "this model needs a price" — they
+                  get their own clause in the same strip. */}
+              <UsageDiagnosticsNotice
+                usage={splitUsageInWindow}
+                totalOnly={
+                  totals.totalOnly > 0
+                    ? {
+                        tokens: totals.totalOnly,
+                        description: t(($) => $.kpi.total_only_notice, {
+                          tokens: formatTokens(totals.totalOnly),
+                        }),
+                      }
+                    : undefined
+                }
+              />
 
               {/* KPI row — same 3-divide-x card grid the runtime usage
                   section uses, expanded to four tiles. Every tile prefers an

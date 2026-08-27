@@ -19,7 +19,7 @@
     "no_tasks": "No tasks in this window",
     "cost_unpriced": "No pricing for the models used — cost unavailable",
     "cost_total_only": "Only total tokens were recorded — cost unavailable",
-    "total_only_notice": "{{tokens}} historical tokens have totals only, without input/output splits, and are excluded from cost totals."
+    "total_only_notice": "{{tokens}} tokens recorded by older runtimes have totals only, without input/output splits, and are excluded from cost totals. Newer runs record the split, so this figure will not grow."
   },
   "dim": {
     "label": "Dimension",

@@ -584,6 +584,12 @@ function mappedOperationsCommand(route: string): string | null {
     [/^GET \/api\/workspaces\/:workspaceId\/feishu\/sources\/:sourceId$/, "feishu.source.get"],
     [/^GET \/api\/workspaces\/:workspaceId\/feishu\/sources\/:sourceId\/status$/, "feishu.source.status"],
     [/^PATCH \/api\/workspaces\/:workspaceId\/feishu\/sources\/:sourceId$/, "feishu.source.update"],
+    [/^DELETE \/api\/workspaces\/:workspaceId\/feishu\/sources\/:sourceId$/, "feishu.source.delete"],
+    [/^GET \/api\/workspaces\/:workspaceId\/feishu\/sources\/:sourceId\/available-chats$/, "feishu.source.available-chats"],
+    [/^GET \/api\/workspaces\/:workspaceId\/feishu\/endpoints$/, "feishu.endpoint.list"],
+    [/^POST \/api\/workspaces\/:workspaceId\/feishu\/endpoints\/:name\/check$/, "feishu.endpoint.check"],
+    [/^GET \/api\/workspaces\/:workspaceId\/feishu\/chats$/, "feishu.chats.list"],
+    [/^GET \/api\/workspaces\/:workspaceId\/feishu\/proposals$/, "feishu.proposals.list"],
     [/^GET \/api\/workspaces\/:workspaceId\/feishu\/messages$/, "feishu.messages.list"],
     [/^POST \/api\/workspaces\/:workspaceId\/feishu\/messages\/:messageId\/resolve$/, "feishu.messages.resolve"],
     [/^POST \/api\/workspaces\/:workspaceId\/feishu\/messages\/:messageId\/notify$/, "feishu.messages.notify"],
@@ -639,6 +645,12 @@ function exemptRoute(route: string): CliManifestRoute | null {
   }
   if (path === "/api/config" || path === "/api/contact-sales") {
     return exempt("pure_ui", "Browser bootstrap or presentation-only action has no meaningful CLI workflow.");
+  }
+  if (route === "PATCH /api/daemons/:daemonId") {
+    return exempt(
+      "pure_ui",
+      "MUL-156 exposes daemon display-name editing in the browser; a daemon rename CLI is intentionally out of scope.",
+    );
   }
   if (path === "/" || path === "/favicon.ico") {
     return exempt("public_bootstrap_asset", "Public service bootstrap asset has no user-side CLI operation.");

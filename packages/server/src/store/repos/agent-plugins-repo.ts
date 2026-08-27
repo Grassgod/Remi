@@ -1439,6 +1439,7 @@ function toRuntimeRef(row: Row) {
     provider: String(row.provider ?? "any"),
     daemonId: cleanString(row.daemon_id),
     legacyDaemonId: cleanString(row.legacy_daemon_id),
+    daemonDisplayName: cleanString(row.daemon_display_name),
     runtimeMode: String(row.runtime_mode ?? "local"),
     deviceInfo: String(row.device_info ?? ""),
     metadata: parseJson<Record<string, unknown>>(row.metadata, {}),

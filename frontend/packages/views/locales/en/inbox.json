@@ -12,6 +12,7 @@
   "filters": {
     "label": "Notification source",
     "all": "All",
+    "message_stream": "Message stream",
     "automation": "Automation",
     "mentions": "Mentions",
     "assignments": "Assignments"
@@ -28,6 +29,7 @@
     "mark_group_read": "Mark group as read",
     "mark_done_tooltip": "Mark as done",
     "archive_tooltip": "Archive",
+    "feishu_source": "Feishu message",
     "time": {
       "just_now": "just now",
       "minutes": "{{count}}m",
@@ -66,7 +68,11 @@
     "autopilot_paused": "Automation paused",
     "autopilot_run_completed": "Automation completed",
     "autopilot_run_failed": "Automation failed",
-    "autopilot_run_overdue": "Automation overdue"
+    "autopilot_run_overdue": "Automation overdue",
+    "feishu_message_notification": "Feishu message",
+    "feishu_reply_draft": "Feishu reply draft",
+    "feishu_issue_proposal": "Feishu issue proposal",
+    "feishu_ingest_connection_alert": "Feishu ingestion alert"
   },
   "labels": {
     "set_status_to": "Set status to",
@@ -79,7 +85,29 @@
     "removed_due_date": "Removed due date",
     "reacted_to_comment": "Reacted {{emoji}} to your comment",
     "created_with_agent": "Created with agent: {{identifier}}",
-    "failed_with_detail": "Failed: {{detail}}"
+    "failed_with_detail": "Failed: {{detail}}",
+    "feishu_source_failing": "{{source}} has failed {{failures}} times in a row"
+  },
+  "feishu": {
+    "approve": "Approve and create issue",
+    "reject": "Reject",
+    "ignore": "Ignore",
+    "mark_processed": "Mark as processed",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "open_in_feishu": "Open in Feishu",
+    "open_settings": "Open Feishu messages settings",
+    "ignore_reason_label": "Why are you ignoring this message?",
+    "process_reason_label": "How was this message handled?",
+    "reason_required": "Please enter a reason",
+    "approved": "Proposal approved",
+    "approved_with_issue": "Created {{identifier}}",
+    "rejected": "Proposal rejected",
+    "resolved": "Message resolved",
+    "action_failed": "Action failed",
+    "proposed_issue_title": "Proposed issue",
+    "draft_not_sent": "This draft has not been sent to Feishu. Replies are never sent automatically.",
+    "alert_error_code": "Error code: {{code}}"
   },
   "autopilot": {
     "scheduled": "Scheduled {{time}}",

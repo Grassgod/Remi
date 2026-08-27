@@ -535,7 +535,10 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
     const { runtime } = loaded;
-    return c.json({ runtime, usage: store.listRuntimeUsage(runtime.id) });
+    return c.json({
+      runtime: { ...runtime, daemon_display_name: runtime.daemonDisplayName },
+      usage: store.listRuntimeUsage(runtime.id),
+    });
   });
   app.patch("/api/runtimes/:id", async (c) => {
     const loaded = loadRuntimeForCurrentEditor(c, store, c.req.param("id"), "edit");

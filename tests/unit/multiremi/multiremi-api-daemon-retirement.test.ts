@@ -226,6 +226,139 @@ describe("Multiremi API — daemon retirement", () => {
     expect(body.daemons.some((daemon: any) => daemon.daemon_id === "daemon-inventory-retired")).toBeFalse();
   });
 
+  it("renames an owned daemon and exposes the display name on runtime responses", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({ id: "rename-owner", name: "Rename owner", role: "member" });
+    const ownerToken = await store.createAccessToken({
+      name: "Rename owner session",
+      type: "pat",
+      workspaceId: "local",
+      userId: "rename-owner",
+    });
+    const runtime = store.registerRuntime({
+      id: "rt-daemon-rename",
+      name: "codex",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "daemon-rename",
+      ownerId: "rename-owner",
+    });
+    const app = createMultiremiApp({ store });
+    const headers = {
+      Authorization: `Bearer ${ownerToken.token}`,
+      "Content-Type": "application/json",
+    };
+
+    const renamed = await app.request("/api/daemons/daemon-rename?workspace_id=local", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ display_name: "  My workstation  " }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({
+      workspace_id: "local",
+      daemon_id: "daemon-rename",
+      display_name: "My workstation",
+      display_name_customized: true,
+      updated_by: "rename-owner",
+    });
+    expect(store.getDaemonProfile("local", "daemon-rename")).toMatchObject({
+      displayName: "My workstation",
+      displayNameCustomized: true,
+      updatedBy: "rename-owner",
+    });
+
+    const list = await app.request("/api/runtimes?workspace_id=local", { headers });
+    expect((await list.json()).find((entry: any) => entry.id === runtime.id)).toMatchObject({
+      daemon_display_name: "My workstation",
+    });
+    const detail = await app.request(`/api/runtimes/${runtime.id}`, { headers });
+    expect((await detail.json()).runtime).toMatchObject({
+      daemon_display_name: "My workstation",
+    });
+  });
+
+  async function daemonRenameValidationFixture() {
+    const store = createStore();
+    store.createWorkspaceMember({ id: "rename-validator", name: "Rename validator", role: "member" });
+    const token = await store.createAccessToken({
+      name: "Rename validator session",
+      type: "pat",
+      workspaceId: "local",
+      userId: "rename-validator",
+    });
+    store.registerRuntime({
+      id: "rt-daemon-rename-validation",
+      name: "claude",
+      provider: "claude",
+      workspaceId: "local",
+      daemonId: "daemon-rename-validation",
+      ownerId: "rename-validator",
+    });
+    const app = createMultiremiApp({ store });
+    const headers = {
+      Authorization: `Bearer ${token.token}`,
+      "Content-Type": "application/json",
+    };
+    return { app, store, headers };
+  }
+
+  it("rejects an empty daemon display name", async () => {
+    const { app, store, headers } = await daemonRenameValidationFixture();
+    const response = await app.request(
+      "/api/daemons/daemon-rename-validation?workspace_id=local",
+      { method: "PATCH", headers, body: JSON.stringify({ display_name: "   " }) },
+    );
+    expect(response.status).toBe(400);
+    expect(store.getDaemonProfile("local", "daemon-rename-validation")).toBeNull();
+  });
+
+  it("rejects an overlong daemon display name", async () => {
+    const { app, store, headers } = await daemonRenameValidationFixture();
+    const response = await app.request(
+      "/api/daemons/daemon-rename-validation?workspace_id=local",
+      { method: "PATCH", headers, body: JSON.stringify({ display_name: "x".repeat(101) }) },
+    );
+    expect(response.status).toBe(400);
+    expect(store.getDaemonProfile("local", "daemon-rename-validation")).toBeNull();
+  });
+
+  it("rejects daemon rename attempts from another member", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({ id: "rename-owner-2", name: "Rename owner", role: "member" });
+    store.createWorkspaceMember({ id: "rename-other", name: "Rename other", role: "member" });
+    const otherToken = await store.createAccessToken({
+      name: "Other member session",
+      type: "pat",
+      workspaceId: "local",
+      userId: "rename-other",
+    });
+    store.registerRuntime({
+      id: "rt-daemon-rename-forbidden",
+      name: "codex",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "daemon-rename-forbidden",
+      ownerId: "rename-owner-2",
+    });
+    const app = createMultiremiApp({ store });
+
+    const response = await app.request(
+      "/api/daemons/daemon-rename-forbidden?workspace_id=local",
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${otherToken.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ display_name: "Hijacked" }),
+      },
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "daemon_owner_required" });
+    expect(store.getDaemonProfile("local", "daemon-rename-forbidden")).toBeNull();
+  });
+
   it("lets a member retire their own last-runtime daemon but rejects another member", async () => {
     const store = createStore();
     store.createWorkspaceMember({ id: "machine-owner", name: "Machine owner", role: "member" });

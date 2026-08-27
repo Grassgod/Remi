@@ -213,6 +213,78 @@ describe("estimateCost", () => {
     ).toBeCloseTo(1.75 + 14, 5);
   });
 
+  it("prices the three named GPT-5.6 tiers independently", () => {
+    // Sol / Terra / Luna replace the -mini / -nano suffixes of earlier
+    // generations, and the spread between them is 25x on input — inheriting
+    // one tier's rate for another would be a wild mis-estimate, so each is
+    // its own row. Rates are the standard short-context meter, Sol at the
+    // promotional $4/$20 the pricing page shows today (MUL-168).
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-sol",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(4 + 20, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-terra",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(2 + 12, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-luna",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.2 + 1.2, 5);
+    // GPT-5.6 is the first OpenAI family to publish a cache-write rate
+    // separate from input, instead of mirroring it like gpt-5.5 and older.
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-sol",
+        cache_read_tokens: 1_000_000,
+        cache_write_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(0.4 + 5, 5);
+    // The bare family name is not a SKU — it must not inherit a tier.
+    expect(isModelPriced("gpt-5.6")).toBe(false);
+    expect(
+      estimateCost({ ...zeroUsage, model: "gpt-5.2", input_tokens: 1_000_000 }),
+    ).toBeCloseTo(1.75, 5);
+  });
+
+  it("prices Claude Code's bare aliases at the SKU they point at", () => {
+    // Runtimes report the alias the user picked (`sonnet`, `opus[1m]`), not
+    // the resolved SKU. Before MUL-168 every Claude Code runtime therefore
+    // showed up as "no maintained price" while the SKU behind it was priced.
+    expect(
+      estimateCost({ ...zeroUsage, model: "sonnet", input_tokens: 1_000_000 }),
+    ).toBeCloseTo(3, 5);
+    expect(
+      estimateCost({ ...zeroUsage, model: "opus", output_tokens: 1_000_000 }),
+    ).toBeCloseTo(25, 5);
+    expect(
+      estimateCost({ ...zeroUsage, model: "haiku", input_tokens: 1_000_000 }),
+    ).toBeCloseTo(1, 5);
+    // The `[1m]` context tag rides tolerance 4 down to the bare alias, and
+    // Anthropic bills the 1M window at the standard tier — same row.
+    expect(
+      estimateCost({ ...zeroUsage, model: "opus[1m]", output_tokens: 1_000_000 }),
+    ).toBeCloseTo(25, 5);
+    expect(isModelPriced("sonnet[1m]")).toBe(true);
+    // Provider-prefixed spellings reach the same entry via tolerance 1.
+    expect(isModelPriced("anthropic/sonnet")).toBe(true);
+    // Still no startsWith behaviour: an unknown bare word stays unmapped.
+    expect(isModelPriced("sonnet-turbo")).toBe(false);
+  });
+
   it("flags catalog SKUs without a published price (gpt-5.5-mini) as unmapped", () => {
     // `gpt-5.5-mini` is in the Codex catalog but OpenAI hasn't published a
     // public rate. We refuse to absorb it into `gpt-5.5` — the diagnostic
@@ -257,21 +329,33 @@ describe("estimateCost", () => {
   // header comment. Pinning them in tests is what catches a future edit
   // that copies a price from a near-named neighbour by accident — the
   // mistake the previous attempt (PR #3170, closed) made.
-  it("prices deepseek-v4-flash at the official $0.14/$0.28 with ~50× cache-hit discount", () => {
-    // 1M input × $0.14 + 1M output × $0.28 + 1M cache read × $0.0028 = $0.4228.
-    const cost = estimateCost({
-      ...zeroUsage,
-      model: "deepseek-v4-flash",
-      input_tokens: 1_000_000,
-      output_tokens: 1_000_000,
-      cache_read_tokens: 1_000_000,
-    });
-    expect(cost).toBeCloseTo(0.14 + 0.28 + 0.0028, 5);
+  it("prices every current DeepSeek API SKU at the published peak rates", () => {
+    // The official sheet has time-based peak/off-peak rates. Aggregated usage
+    // cannot recover request time, so the maintained catalog uses peak rates
+    // rather than assuming every request received the 50%-off rate.
+    const cases = [
+      { model: "deepseek-v4-flash", input: 0.44, output: 1.32, cacheRead: 0.014 },
+      { model: "deepseek-v4-pro", input: 1.32, output: 3.96, cacheRead: 0.044 },
+      { model: "deepseek-v4-flash-vision-exp", input: 0.44, output: 1.32, cacheRead: 0.014 },
+    ] as const;
+
+    for (const { model, input, output, cacheRead } of cases) {
+      expect(
+        estimateCost({
+          ...zeroUsage,
+          model,
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+          cache_read_tokens: 1_000_000,
+        }),
+      ).toBeCloseTo(input + output + cacheRead, 5);
+      expect(isModelPriced(model)).toBe(true);
+    }
   });
 
   it("prices the deepseek-chat / deepseek-reasoner aliases at the same rate as deepseek-v4-flash", () => {
-    // The DeepSeek docs explicitly route both legacy names to v4-flash —
-    // they must hit the same numbers, not the older $0.27/$1.10 tier.
+    // The DeepSeek docs routed both legacy names to v4-flash. Historical rows
+    // using those aliases must hit the current Flash tier, not fall through.
     const flash = estimateCost({
       ...zeroUsage,
       model: "deepseek-v4-flash",

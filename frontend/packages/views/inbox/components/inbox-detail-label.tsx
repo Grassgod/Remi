@@ -3,9 +3,14 @@
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multiremi/core/issues/config";
 import { formatDateOnly } from "@multiremi/core/issues/date";
 import { useActorName } from "@multiremi/core/workspace/hooks";
+import { feishuInboxContext, feishuInboxOrigin } from "@multiremi/core/feishu/inbox";
 import { StatusIcon, PriorityIcon } from "../../issues/components";
 import type { InboxItem, InboxItemType, IssueStatus, IssuePriority } from "@multiremi/core/types";
-import { getAutopilotRunOutcome, getQuickCreateFailureDetail } from "./inbox-display";
+import {
+  getAutopilotRunOutcome,
+  getInboxDisplayTitle,
+  getQuickCreateFailureDetail,
+} from "./inbox-display";
 import { useT } from "../../i18n";
 
 // Hook returning the inbox-item type → human label map. Replaces the
@@ -37,6 +42,43 @@ export function useTypeLabels(): Record<InboxItemType, string> {
     autopilot_run_completed: t(($) => $.types.autopilot_run_completed),
     autopilot_run_failed: t(($) => $.types.autopilot_run_failed),
     autopilot_run_overdue: t(($) => $.types.autopilot_run_overdue),
+    feishu_message_notification: t(($) => $.types.feishu_message_notification),
+    feishu_reply_draft: t(($) => $.types.feishu_reply_draft),
+    feishu_issue_proposal: t(($) => $.types.feishu_issue_proposal),
+    feishu_ingest_connection_alert: t(($) => $.types.feishu_ingest_connection_alert),
+  };
+}
+
+/**
+ * The headline for an inbox row. Structured autopilot rows are rebuilt in the
+ * viewer's locale, while Feishu rows use the localized type label plus the chat
+ * (or, for an alert, the source) the row came from. Other rows retain the title
+ * sent by the server.
+ *
+ * The `"row"` variant carries the type label because a list row has no meta
+ * line; the `"detail"` variant drops it because the panel already prints the
+ * label under the heading.
+ */
+export function useInboxTitle(): (
+  item: InboxItem,
+  variant: "row" | "detail",
+  runCount?: number,
+) => string {
+  const { t, i18n } = useT("inbox");
+  const typeLabels = useTypeLabels();
+  return (item, variant, runCount = 1) => {
+    const context = feishuInboxContext(item);
+    if (!context) {
+      return getInboxDisplayTitle(item, {
+        locale: i18n.resolvedLanguage ?? i18n.language,
+        scheduled: (time) => t(($) => $.autopilot.scheduled, { time }),
+        repeatedRuns: (title, count) => t(($) => $.autopilot.repeated_runs, { title, count }),
+      }, runCount);
+    }
+    const label = typeLabels[item.type];
+    const origin = feishuInboxOrigin(context);
+    if (variant === "detail") return origin ?? label;
+    return origin ? `${label} · ${origin}` : label;
   };
 }
 
@@ -175,6 +217,29 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
     case "quick_create_failed": {
       const detail = getQuickCreateFailureDetail(item);
       if (detail) return <span>{t(($) => $.labels.failed_with_detail, { detail })}</span>;
+      return <span>{typeLabels[item.type]}</span>;
+    }
+    case "feishu_ingest_connection_alert": {
+      // The server body is rendered in a single language; rebuild the line
+      // from `details` so it follows the viewer's locale when it can.
+      const context = feishuInboxContext(item);
+      if (context?.sourceName && context.consecutiveFailures !== null) {
+        return (
+          <span>
+            {t(($) => $.labels.feishu_source_failing, {
+              source: context.sourceName,
+              failures: context.consecutiveFailures,
+            })}
+          </span>
+        );
+      }
+      if (item.body) return <span>{item.body}</span>;
+      return <span>{typeLabels[item.type]}</span>;
+    }
+    case "feishu_message_notification":
+    case "feishu_reply_draft":
+    case "feishu_issue_proposal": {
+      if (item.body) return <span>{item.body}</span>;
       return <span>{typeLabels[item.type]}</span>;
     }
     default:

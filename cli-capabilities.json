@@ -6186,6 +6186,104 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "feishu.source.delete": {
+      "command": "remi feishu source delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.endpoint.list": {
+      "command": "remi feishu endpoint list",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.endpoint.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.endpoint.check": {
+      "command": "remi feishu endpoint check",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.endpoint.check",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.source.available-chats": {
+      "command": "remi feishu source available-chats",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "feishu.source.available-chats",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.chats.list": {
+      "command": "remi feishu chats list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.chats.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "feishu.proposals.list": {
+      "command": "remi feishu proposals list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "feishu.proposals.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "feishu.messages.list": {
       "command": "remi feishu messages list",
       "aliases": [],
@@ -8050,6 +8148,9 @@
     "DELETE /api/workspaces/:id/runtime-provisions/:provisionId": {
       "command": "workspace.runtime-provision.delete"
     },
+    "DELETE /api/workspaces/:workspaceId/feishu/sources/:sourceId": {
+      "command": "feishu.source.delete"
+    },
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId": {
       "command": "scm.connection.delete"
     },
@@ -8873,14 +8974,26 @@
     "GET /api/workspaces/:id/ssh-mesh": {
       "command": "workspace.ssh-mesh.get"
     },
+    "GET /api/workspaces/:workspaceId/feishu/chats": {
+      "command": "feishu.chats.list"
+    },
+    "GET /api/workspaces/:workspaceId/feishu/endpoints": {
+      "command": "feishu.endpoint.list"
+    },
     "GET /api/workspaces/:workspaceId/feishu/messages": {
       "command": "feishu.messages.list"
+    },
+    "GET /api/workspaces/:workspaceId/feishu/proposals": {
+      "command": "feishu.proposals.list"
     },
     "GET /api/workspaces/:workspaceId/feishu/sources": {
       "command": "feishu.source.list"
     },
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId": {
       "command": "feishu.source.get"
+    },
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats": {
+      "command": "feishu.source.available-chats"
     },
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status": {
       "command": "feishu.source.status"
@@ -8930,6 +9043,11 @@
     },
     "PATCH /api/chat/sessions/:sessionId": {
       "command": "chat.update"
+    },
+    "PATCH /api/daemons/:daemonId": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "MUL-156 exposes daemon display-name editing in the browser; a daemon rename CLI is intentionally out of scope."
     },
     "PATCH /api/issues/:id": {
       "command": "issue.update"
@@ -9768,6 +9886,9 @@
     },
     "POST /api/workspaces/:id/ssh-mesh/test": {
       "command": "workspace.ssh-mesh.test"
+    },
+    "POST /api/workspaces/:workspaceId/feishu/endpoints/:name/check": {
+      "command": "feishu.endpoint.check"
     },
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue": {
       "command": "feishu.messages.create-issue"

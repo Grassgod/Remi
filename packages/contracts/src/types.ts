@@ -594,6 +594,7 @@ export interface MultiremiRuntime {
   provider: MultiremiAgentProvider | "any";
   daemonId: string | null;
   legacyDaemonId: string | null;
+  daemonDisplayName: string | null;
   runtimeMode: string;
   deviceInfo: string;
   metadata: Record<string, unknown>;
@@ -2923,6 +2924,16 @@ export interface MultiremiFeishuMessage {
   lastRetryAt: string | null;
 }
 
+export interface MultiremiFeishuChat {
+  sourceId: string;
+  chatId: string;
+  chatName: string | null;
+  chatType: string | null;
+  messageCount: number;
+  lastMessageAt: string;
+  inAllowlist: boolean;
+}
+
 export interface MultiremiFeishuSourceStatus {
   sourceId: string;
   unprocessedCount: number;
@@ -3004,6 +3015,21 @@ export interface MultiremiFeishuIssueProposal {
   resolvedAt: string | null;
   resolvedBy: string | null;
   createdAt: string;
+}
+
+export interface MultiremiFeishuIssueProposalMessageSummary {
+  messageId: string;
+  sourceId: string;
+  chatId: string;
+  chatName: string | null;
+  sender: Record<string, unknown>;
+  searchableText: string;
+  messageAppLink: string | null;
+  createdAt: string;
+}
+
+export interface MultiremiFeishuIssueProposalListItem extends MultiremiFeishuIssueProposal {
+  message: MultiremiFeishuIssueProposalMessageSummary;
 }
 
 // ─── Autopilots ──────────────────────────────────────────────────────────────────────────────────
@@ -4195,6 +4221,7 @@ export type MultiremiPlatformServiceId =
   | "api"
   | "web"
   | "ssh-mesh-control-plane"
+  | "feishu-sidecar"
   | "postgres"
   | "openviking";
 export type MultiremiPlatformServiceStatus = "ready" | "degraded" | "stopped" | "unknown";

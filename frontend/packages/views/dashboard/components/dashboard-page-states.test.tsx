@@ -101,12 +101,13 @@ vi.mock("../../runtimes/components/charts", () => ({
   WeeklyTasksChart: () => <div data-testid="chart" />,
 }));
 
-// Keep UnmappedPricingNotice real so dashboard-specific filtering is covered.
+// Keep UsageDiagnosticsNotice real so dashboard-specific filtering is covered.
 // The dialog itself is outside this suite's scope and need not mount its form.
 vi.mock("../../runtimes/components/custom-pricing-dialog", () => ({
   CustomPricingDialog: () => null,
 }));
 
+import { useUsageDiagnosticsStore } from "@multiremi/core/runtimes/usage-diagnostics-store";
 import { DashboardPage } from "./dashboard-page";
 
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -153,8 +154,19 @@ function setStates(overrides: Partial<Record<string, QueryState>> = {}) {
 
 beforeEach(() => {
   refetchCalls.length = 0;
+  // The diagnostics strip's collapse state is a persisted global store, so
+  // one test expanding it would leak into the next — through memory and
+  // through localStorage.
+  localStorage.clear();
+  useUsageDiagnosticsStore.setState({ expanded: false });
   cleanup();
 });
+
+// A model the shipped table deliberately has no row for. `gpt-5.5-mini` is
+// the resolver's own worked example of why there is no startsWith fallback:
+// it must NOT inherit `gpt-5.5`'s rate. Using a real catalog SKU here would
+// make these tests fail the moment that SKU gets a published price.
+const UNPRICED_MODEL = "gpt-5.5-mini";
 
 describe("DashboardPage — normal values", () => {
   it("renders real measurements for all four KPIs", () => {
@@ -203,14 +215,72 @@ describe("DashboardPage — normal values", () => {
 
     expect(screen.getAllByText("5.2M").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("~5.2M")).toBeTruthy();
-    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    // Collapsed by default (MUL-168): the summary line still names the
+    // reason, and the full sentence is one click away.
+    expect(
+      screen.getByText(/5.2M historical tokens with no input\/output split/),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    expect(screen.getByText(/5.2M tokens recorded by older runtimes have totals only/)).toBeTruthy();
     expect(screen.queryByText("$0.00")).toBeNull();
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("keeps the total-only explanation reachable after collapsing, and the KPIs honest", () => {
+    // The notice has no remedy — those rows were persisted without the
+    // input/output dimension — so it must get out of the way instead of
+    // nagging forever. MUL-164 did that with a one-way dismiss; MUL-168
+    // makes it a collapse, because a user who reads "some tokens aren't
+    // costed" a week later needs a way back to the reason (acceptance
+    // criterion 4). Either way it is a display decision only: the tokens
+    // still count toward volume and the cost tile still refuses to
+    // fabricate a number.
+    const totalOnly = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 5_181_880,
+      task_count: 27,
+    };
+    setStates({
+      daily: { data: [usageRow(totalOnly)] },
+      "by-agent": {
+        data: [usageRow({ ...totalOnly, agent_id: "agent-1" })],
+      },
+      "agent-runtime": { data: [{ ...RUN_TIME_ROW, task_count: 27 }] },
+      "runtime-daily": { data: [{ ...RUN_TIME_DAILY_ROW, task_count: 27 }] },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    expect(
+      screen.getByText(/5.2M tokens recorded by older runtimes have totals only/),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Hide/ }));
+    expect(
+      screen.queryByText(/5.2M tokens recorded by older runtimes have totals only/),
+    ).toBeNull();
+    expect(useUsageDiagnosticsStore.getState().expanded).toBe(false);
+
+    // The way back: the collapsed strip still names the reason, and the
+    // trigger is still there.
+    expect(
+      screen.getByText(/5.2M historical tokens with no input\/output split/),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    expect(
+      screen.getByText(/5.2M tokens recorded by older runtimes have totals only/),
+    ).toBeTruthy();
+
+    expect(screen.getAllByText("5.2M").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("$0.00")).toBeNull();
+  });
+
   it("does not offer custom pricing for total-only usage on an unpriced model", () => {
     const totalOnly = {
-      model: "gpt-5.6-sol",
+      model: UNPRICED_MODEL,
       input_tokens: 0,
       output_tokens: 0,
       cache_read_tokens: 0,
@@ -233,14 +303,20 @@ describe("DashboardPage — normal values", () => {
     renderWithI18n(<DashboardPage />);
 
     expect(screen.getAllByRole("alert")).toHaveLength(1);
-    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    expect(
+      screen.getByText(/5.2M historical tokens with no input\/output split/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/model without a price/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    expect(screen.getByText(/5.2M tokens recorded by older runtimes have totals only/)).toBeTruthy();
     expect(screen.queryByText(/model has no maintained price/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Set custom prices" })).toBeNull();
   });
 
-  it("keeps both notices when an unpriced model has split and total-only usage", () => {
+  it("keeps both reasons when an unpriced model has split and total-only usage", () => {
     const totalOnly = usageRow({
-      model: "gpt-5.6-sol",
+      model: UNPRICED_MODEL,
       input_tokens: 0,
       output_tokens: 0,
       cache_read_tokens: 0,
@@ -249,7 +325,7 @@ describe("DashboardPage — normal values", () => {
       task_count: 27,
     });
     const split = usageRow({
-      model: "gpt-5.6-sol",
+      model: UNPRICED_MODEL,
       input_tokens: 536,
       output_tokens: 174_228,
       cache_read_tokens: 24_578_049,
@@ -274,10 +350,54 @@ describe("DashboardPage — normal values", () => {
     });
     renderWithI18n(<DashboardPage />);
 
-    expect(screen.getAllByRole("alert")).toHaveLength(2);
-    expect(screen.getByText(/5.2M historical tokens have totals only/)).toBeTruthy();
+    // One strip, two reasons — before MUL-168 these were two stacked banners
+    // that between them owned the whole first screen.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(
+      screen.getByText(
+        /1 model without a price · 5.2M historical tokens with no input\/output split/,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    expect(screen.getByText(/5.2M tokens recorded by older runtimes have totals only/)).toBeTruthy();
     expect(screen.getByText(/1 model has no maintained price/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Set custom prices" })).toBeTruthy();
+  });
+
+  it("persists the open/closed choice across a page reload", async () => {
+    setStates({
+      daily: { data: [usageRow({ model: UNPRICED_MODEL })] },
+      "by-agent": {
+        data: [usageRow({ model: UNPRICED_MODEL, agent_id: "agent-1" })],
+      },
+    });
+    renderWithI18n(<DashboardPage />);
+
+    // Collapsed on arrival — the KPI tiles, not the diagnostic, own the
+    // first screen (MUL-168 acceptance criterion 3).
+    expect(screen.queryByText(/1 model has no maintained price/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Details/ }));
+    expect(screen.getByText(/1 model has no maintained price/)).toBeTruthy();
+    expect(localStorage.getItem("multimira_usage_diagnostics")).toContain(
+      '"expanded":true',
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Hide/ }));
+    const persisted = localStorage.getItem("multimira_usage_diagnostics") ?? "";
+    expect(persisted).toContain('"expanded":false');
+
+    // Simulate the reload the acceptance criterion is about: dirty the
+    // in-memory copy, put back what was on disk, rehydrate, mount again.
+    cleanup();
+    useUsageDiagnosticsStore.setState({ expanded: true });
+    localStorage.setItem("multimira_usage_diagnostics", persisted);
+    await useUsageDiagnosticsStore.persist.rehydrate();
+    renderWithI18n(<DashboardPage />);
+
+    expect(screen.getByText(/1 model without a price/)).toBeTruthy();
+    expect(screen.queryByText(/1 model has no maintained price/)).toBeNull();
   });
 });
 

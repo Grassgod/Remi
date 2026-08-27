@@ -46,6 +46,9 @@
     "no_matches_hint": "現在の検索またはフィルターに一致するマシンがありません。",
     "select_machine": "マシンを選択して、そのランタイムを確認してください。",
     "actions_aria": "マシン操作",
+    "name_edit_hint": "マシン名を変更",
+    "name_toast_updated": "マシン名を変更しました",
+    "name_toast_failed": "マシン名を変更できませんでした",
     "tabs": {
       "runtimes": "ランタイム",
       "ssh_mesh": "SSH 接続",
@@ -294,6 +297,8 @@
     "step1_label": "Remi CLI をインストール",
     "step2_label": "デーモンを起動",
     "step2_hint": "接続設定を書き込み、その後デーモンをバックグラウンドで実行し続けます。",
+    "device_name_label": "コンピュータ名（任意）",
+    "device_name_placeholder": "空欄の場合はこのコンピュータのホスト名を使用",
     "credential_loading": "安全な接続認証情報を作成しています...",
     "credential_error": "接続認証情報を作成できませんでした。",
     "credential_error_detail": "理由：{{reason}}",
@@ -433,6 +438,13 @@
     "empty_pricing_hint": "コスト合計に含めるには、カスタム単価を設定してください。",
     "empty_zero_cost": "トークンは記録されましたが、コスト計算の結果は $0 でした。",
     "unmapped_notice_other": "管理された価格がないモデルが {{count}} 個あり、そのトークンはコスト合計から除外されています。",
+    "diagnostics": {
+      "summary": "一部のトークンはコスト合計に含まれていません：{{reasons}}",
+      "reason_unpriced_other": "価格未設定のモデル {{count}} 個",
+      "reason_total_only": "入力/出力の内訳がない過去のトークン {{tokens}}",
+      "show_detail": "詳細",
+      "hide_detail": "閉じる"
+    },
     "custom_pricing": {
       "open_button": "カスタム価格を設定",
       "title": "カスタムモデル価格",

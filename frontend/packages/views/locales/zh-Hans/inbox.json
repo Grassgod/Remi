@@ -12,6 +12,7 @@
   "filters": {
     "label": "通知来源",
     "all": "全部",
+    "message_stream": "消息流",
     "automation": "自动化",
     "mentions": "提及",
     "assignments": "分配"
@@ -28,6 +29,7 @@
     "mark_group_read": "本组标为已读",
     "mark_done_tooltip": "标为已完成",
     "archive_tooltip": "归档",
+    "feishu_source": "飞书消息",
     "time": {
       "just_now": "刚刚",
       "minutes": "{{count}} 分钟",
@@ -66,7 +68,11 @@
     "autopilot_paused": "自动化已暂停",
     "autopilot_run_completed": "自动化已完成",
     "autopilot_run_failed": "自动化失败",
-    "autopilot_run_overdue": "自动化已逾期"
+    "autopilot_run_overdue": "自动化已逾期",
+    "feishu_message_notification": "飞书消息",
+    "feishu_reply_draft": "飞书回复草稿",
+    "feishu_issue_proposal": "飞书 Issue 提议",
+    "feishu_ingest_connection_alert": "飞书拉取告警"
   },
   "labels": {
     "set_status_to": "状态设为",
@@ -79,7 +85,29 @@
     "removed_due_date": "移除了截止日期",
     "reacted_to_comment": "用 {{emoji}} 回应了你的评论",
     "created_with_agent": "通过智能体创建：{{identifier}}",
-    "failed_with_detail": "失败：{{detail}}"
+    "failed_with_detail": "失败：{{detail}}",
+    "feishu_source_failing": "{{source}} 已连续失败 {{failures}} 次"
+  },
+  "feishu": {
+    "approve": "批准并创建 Issue",
+    "reject": "拒绝",
+    "ignore": "忽略",
+    "mark_processed": "标记为已处理",
+    "confirm": "确认",
+    "cancel": "取消",
+    "open_in_feishu": "在飞书中打开",
+    "open_settings": "打开飞书消息设置",
+    "ignore_reason_label": "为什么忽略这条消息？",
+    "process_reason_label": "这条消息是如何处理的？",
+    "reason_required": "请填写原因",
+    "approved": "已批准提议",
+    "approved_with_issue": "已创建 {{identifier}}",
+    "rejected": "已拒绝提议",
+    "resolved": "已处理该消息",
+    "action_failed": "操作失败",
+    "proposed_issue_title": "提议的 Issue",
+    "draft_not_sent": "该草稿尚未发送到飞书。回复永远不会自动发送。",
+    "alert_error_code": "错误码：{{code}}"
   },
   "autopilot": {
     "scheduled": "定时 {{time}}",

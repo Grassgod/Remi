@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { AgentRuntime } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -34,7 +34,9 @@ vi.mock("@multiremi/core/runtimes/mutations", () => ({
     isPending: false,
     mutateAsync: vi.fn(),
   }),
+  useUpdateRuntime: () => ({ mutateAsync: vi.fn().mockResolvedValue({}) }),
 }));
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 
 vi.mock("@multiremi/core/runtimes", () => ({
   deriveRuntimeHealth: () => "online",
@@ -148,6 +150,36 @@ function renderActionsCell(row: RuntimeRow) {
   );
 }
 
+function renderRuntimeCell(row: RuntimeRow, onRowClick: () => void) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+  function Harness() {
+    const { t } = useT("runtimes");
+    const columns = createRuntimeColumns({
+      showOwner: false,
+      latestCliVersion: null,
+      wsId: "ws-1",
+      now: Date.now(),
+      t,
+    });
+    const runtime = columns.find((column) => column.id === "runtime");
+    if (!runtime || typeof runtime.cell !== "function") throw new Error("runtime column missing");
+    return (
+      <div onClick={onRowClick}>
+        {runtime.cell({ row: { original: row } } as unknown as Parameters<typeof runtime.cell>[0])}
+      </div>
+    );
+  }
+
+  return render(
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <QueryClientProvider client={qc}>
+        <Harness />
+      </QueryClientProvider>
+    </I18nProvider>,
+  );
+}
+
 describe("runtime list row menu", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -185,5 +217,16 @@ describe("runtime list row menu", () => {
       ),
     );
     expect(screen.queryByLabelText("Row actions")).not.toBeInTheDocument();
+  });
+
+  it("keeps runtime inline editing from triggering row navigation", () => {
+    const onRowClick = vi.fn();
+    renderRuntimeCell(makeRow(makeRuntime({ name: "codex" })), onRowClick);
+
+    fireEvent.click(screen.getByTitle("Rename runtime"));
+    expect(screen.getByDisplayValue("codex")).toBeInTheDocument();
+    fireEvent.click(screen.getByDisplayValue("codex"));
+
+    expect(onRowClick).not.toHaveBeenCalled();
   });
 });

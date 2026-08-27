@@ -19,7 +19,7 @@
     "no_tasks": "区间内没有任务",
     "cost_unpriced": "所用模型缺少定价，费用不可用",
     "cost_total_only": "仅记录了 token 总量，费用不可用",
-    "total_only_notice": "有 {{tokens}} 个历史 token 仅记录了总量，没有输入/输出拆分，未计入费用统计。"
+    "total_only_notice": "有 {{tokens}} 个 token 由旧版运行时记录，只有总量、没有输入/输出拆分，未计入费用统计。新版本已记录拆分，该数字不会再增长。"
   },
   "dim": {
     "label": "维度",

@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 637,
+    "routeCount": 644,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 419,
+      "compat": 426,
       "root": 13
     },
-    "getRoutes": 274,
-    "getRoutesWithBody": 271,
+    "getRoutes": 278,
+    "getRoutesWithBody": 275,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 363,
+    "mutationRoutes": 366,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -121,6 +121,7 @@
     "DELETE /api/workspaces/:id/repos/:repositoryId",
     "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "DELETE /api/workspaces/:id/runtime-provisions/:provisionId",
+    "DELETE /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -382,9 +383,13 @@
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/chats",
+    "GET /api/workspaces/:workspaceId/feishu/endpoints",
     "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/proposals",
     "GET /api/workspaces/:workspaceId/feishu/sources",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
@@ -400,6 +405,7 @@
     "PATCH /api/autopilots/:id",
     "PATCH /api/autopilots/:id/triggers/:triggerId",
     "PATCH /api/chat/sessions/:sessionId",
+    "PATCH /api/daemons/:daemonId",
     "PATCH /api/issues/:id",
     "PATCH /api/issues/:id/sessions/:sessionId",
     "PATCH /api/me",
@@ -646,6 +652,7 @@
     "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
+    "POST /api/workspaces/:workspaceId/feishu/endpoints/:name/check",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply",
     "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify",
@@ -1012,9 +1019,13 @@
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
     "GET /api/workspaces/:id/session-archive",
     "GET /api/workspaces/:id/ssh-mesh",
+    "GET /api/workspaces/:workspaceId/feishu/chats",
+    "GET /api/workspaces/:workspaceId/feishu/endpoints",
     "GET /api/workspaces/:workspaceId/feishu/messages",
+    "GET /api/workspaces/:workspaceId/feishu/proposals",
     "GET /api/workspaces/:workspaceId/feishu/sources",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+    "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
@@ -4743,6 +4754,7 @@
             "id": "rt_n55323",
             "workspace_id": "local",
             "daemon_id": "dmn_flow",
+            "daemon_display_name": "flow-device",
             "name": "flow-runtime",
             "runtime_mode": "local",
             "provider": "claude",
@@ -7795,6 +7807,39 @@
             "allowed": true
           },
           {
+            "id": "feishu.chats.list",
+            "command": "remi feishu chats list",
+            "capability": "feishu.chats.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.endpoint.check",
+            "command": "remi feishu endpoint check",
+            "capability": "feishu.endpoint.check",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.endpoint.list",
+            "command": "remi feishu endpoint list",
+            "capability": "feishu.endpoint.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "feishu.messages.create-issue",
             "command": "remi feishu messages create-issue",
             "capability": "feishu.messages.create-issue",
@@ -7872,6 +7917,17 @@
             "allowed": true
           },
           {
+            "id": "feishu.proposals.list",
+            "command": "remi feishu proposals list",
+            "capability": "feishu.proposals.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "feishu.proposals.reject",
             "command": "remi feishu proposals reject",
             "capability": "feishu.proposals.reject",
@@ -7886,6 +7942,28 @@
             "id": "feishu.source.add",
             "command": "remi feishu source add",
             "capability": "feishu.source.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.available-chats",
+            "command": "remi feishu source available-chats",
+            "capability": "feishu.source.available-chats",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "feishu.source.delete",
+            "command": "remi feishu source delete",
+            "capability": "feishu.source.delete",
             "outputs": [
               "table",
               "json",
@@ -17676,6 +17754,7 @@
             "provider": "claude",
             "daemonId": "dmn_snapshot",
             "legacyDaemonId": null,
+            "daemonDisplayName": null,
             "runtimeMode": "local",
             "deviceInfo": "",
             "metadata": {},
@@ -17721,6 +17800,7 @@
           "provider": "claude",
           "daemonId": "dmn_snapshot",
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -19213,6 +19293,7 @@
           "id": "rt_snapshot",
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
+          "daemon_display_name": null,
           "name": "snapshot-runtime",
           "runtime_mode": "local",
           "provider": "claude",
@@ -19240,6 +19321,7 @@
           "provider": "claude",
           "daemonId": "dmn_snapshot",
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -19268,7 +19350,8 @@
           ],
           "lastHeartbeatAt": "<timestamp>",
           "createdAt": "<timestamp>",
-          "updatedAt": "<timestamp>"
+          "updatedAt": "<timestamp>",
+          "daemon_display_name": null
         },
         "usage": [
           {
@@ -20525,13 +20608,49 @@
       }
     },
     {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/chats",
+      "route": "GET /api/workspaces/:workspaceId/feishu/chats",
+      "path": "/api/workspaces/local/feishu/chats",
+      "status": 200,
+      "body": {
+        "chats": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/endpoints",
+      "route": "GET /api/workspaces/:workspaceId/feishu/endpoints",
+      "path": "/api/workspaces/local/feishu/endpoints",
+      "status": 200,
+      "body": {
+        "configured": false,
+        "endpoints": []
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/messages",
       "route": "GET /api/workspaces/:workspaceId/feishu/messages",
       "path": "/api/workspaces/local/feishu/messages",
       "status": 200,
       "body": {
         "messages": [],
-        "total": 0
+        "total": 0,
+        "limit": 100,
+        "offset": 0,
+        "hasMore": false
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/proposals",
+      "route": "GET /api/workspaces/:workspaceId/feishu/proposals",
+      "path": "/api/workspaces/local/feishu/proposals",
+      "status": 200,
+      "body": {
+        "proposals": [],
+        "total": 0,
+        "limit": 100,
+        "offset": 0,
+        "hasMore": false
       }
     },
     {
@@ -20548,6 +20667,15 @@
       "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
       "route": "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
       "path": "/api/workspaces/local/feishu/sources/fsrc_snapshot",
+      "status": 404,
+      "body": {
+        "error": "Feishu source not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
+      "route": "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
+      "path": "/api/workspaces/local/feishu/sources/fsrc_snapshot/available-chats",
       "status": 404,
       "body": {
         "error": "Feishu source not found"
@@ -22803,6 +22931,7 @@
           "provider": "codex",
           "daemonId": null,
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -22838,6 +22967,7 @@
           "provider": "claude",
           "daemonId": "dmn_snapshot",
           "legacyDaemonId": null,
+          "daemonDisplayName": null,
           "runtimeMode": "local",
           "deviceInfo": "",
           "metadata": {},
@@ -22879,6 +23009,7 @@
         "id": "rt_snapshot",
         "workspace_id": "local",
         "daemon_id": "dmn_snapshot",
+        "daemon_display_name": null,
         "name": "flow-runtime-compat",
         "runtime_mode": "local",
         "provider": "claude",
