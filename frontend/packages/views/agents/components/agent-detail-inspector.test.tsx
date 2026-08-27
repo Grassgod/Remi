@@ -137,7 +137,9 @@ function renderInspector(agent = makeAgent(), canEdit = true) {
         owner={null}
         presence={null}
         canEdit={canEdit}
+        canManageSupervisor={canEdit}
         onUpdate={onUpdate}
+        onSetSupervisor={onUpdate}
         onShowIntegrations={vi.fn()}
       />
     </I18nProvider>,
@@ -292,5 +294,40 @@ describe("AgentDetailInspector model editing", () => {
     expect(onUpdate).toHaveBeenCalledWith("agent-1", {
       model: "claude-opus",
     });
+  });
+});
+
+describe("AgentDetailInspector supervisor authority", () => {
+  it("lets workspace administrators toggle supervisor authority", async () => {
+    const user = userEvent.setup();
+    const { onUpdate } = renderInspector(makeAgent({ supervisor: false }));
+
+    await user.click(screen.getByRole("switch", { name: "Task supervisor" }));
+
+    expect(onUpdate).toHaveBeenCalledWith("agent-1", true);
+  });
+
+  it("shows the state but disables changes for non-administrators", () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <AgentDetailInspector
+          agent={makeAgent({ supervisor: true })}
+          owner={null}
+          presence={null}
+          canEdit
+          canManageSupervisor={false}
+          onUpdate={onUpdate}
+          onSetSupervisor={onUpdate}
+          onShowIntegrations={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("switch", { name: "Task supervisor" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByText("Enabled")).toBeInTheDocument();
   });
 });

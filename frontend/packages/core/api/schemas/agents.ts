@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   Agent,
+  AgentSupervisorState,
   AgentTemplate,
   AgentTemplateSummary,
   CreateAgentFromTemplateResponse,
@@ -91,3 +92,13 @@ export const EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE: CreateAgentFromTemplateR
   imported_skill_ids: [],
   reused_skill_ids: [],
 };
+
+export const AgentSupervisorStateSchema = z.object({
+  id: z.string(),
+  supervisor: z.boolean(),
+}).loose();
+
+export const emptyAgentSupervisorState = (
+  id: string,
+  supervisor: boolean,
+): AgentSupervisorState => ({ id, supervisor });

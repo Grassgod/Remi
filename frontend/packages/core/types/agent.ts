@@ -266,12 +266,24 @@ export interface Agent {
    * (MUL-2339).
    */
   thinking_level?: string;
+  /**
+   * Grants the task-scoped Organizer supervisor capability. The workspace
+   * Organizer mode still decides whether the agent can only report or may
+   * intervene in other tasks. Older backends omit this field; treat it as
+   * false.
+   */
+  supervisor?: boolean;
   owner_id: string | null;
   skills: AgentSkillSummary[];
   created_at: string;
   updated_at: string;
   archived_at: string | null;
   archived_by: string | null;
+}
+
+export interface AgentSupervisorState {
+  id: string;
+  supervisor: boolean;
 }
 
 /**

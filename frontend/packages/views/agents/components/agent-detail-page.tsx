@@ -17,6 +17,7 @@ import {
   useWorkspacePresenceMap,
 } from "@multiremi/core/agents";
 import { api, ApiError } from "@multiremi/core/api";
+import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import {
@@ -64,6 +65,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const qc = useQueryClient();
+  const user = useAuthStore((state) => state.user);
 
   const {
     data: agents = [],
@@ -100,6 +102,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   // returns below don't violate the rules of hooks. Backend gates archive
   // and restore identically to edit, so a single `canEdit` covers them all.
   const { canEdit } = useAgentPermissions(agent, wsId);
+  const currentMember = members.find((member) => member.user_id === user?.id);
+  const canManageSupervisor =
+    currentMember?.role === "owner" || currentMember?.role === "admin";
 
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -159,6 +164,34 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       toast.success(t(($) => $.detail.agent_archived_toast));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.detail.archive_failed_toast));
+    }
+  };
+
+  const handleSetSupervisor = async (id: string, enabled: boolean) => {
+    const queryKey = workspaceKeys.agents(wsId);
+    const previous = qc.getQueryData<Agent[]>(queryKey)?.find((item) => item.id === id);
+    qc.setQueryData<Agent[]>(queryKey, (old) =>
+      old?.map((item) => (item.id === id ? { ...item, supervisor: enabled } : item)),
+    );
+    try {
+      await api.setAgentSupervisor(id, enabled);
+      qc.invalidateQueries({ queryKey });
+      toast.success(t(($) => $.detail.supervisor_updated_toast));
+    } catch (error) {
+      if (previous) {
+        qc.setQueryData<Agent[]>(queryKey, (old) =>
+          old?.map((item) =>
+            item.id === id ? { ...item, supervisor: previous.supervisor } : item,
+          ),
+        );
+      }
+      qc.invalidateQueries({ queryKey });
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t(($) => $.detail.supervisor_update_failed_toast),
+      );
+      throw error;
     }
   };
 
@@ -291,7 +324,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           owner={owner}
           presence={presence}
           canEdit={canEdit.allowed}
+          canManageSupervisor={canManageSupervisor && !isArchived}
           onUpdate={handleUpdate}
+          onSetSupervisor={handleSetSupervisor}
           onShowIntegrations={() => setTabNavIntent("integrations")}
         />
 

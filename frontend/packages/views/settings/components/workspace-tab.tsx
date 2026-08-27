@@ -41,6 +41,7 @@ import { AvatarUploadButton } from "../../common/avatar-upload-button";
 import { useNavigation } from "../../navigation";
 import { DeleteWorkspaceDialog } from "./delete-workspace-dialog";
 import { WorkspaceEnvSection } from "./workspace-env-section";
+import { OrganizerSettingsSection } from "./organizer-settings-section";
 import { useT } from "../../i18n";
 
 export function WorkspaceTab() {
@@ -352,6 +353,13 @@ export function WorkspaceTab() {
           </CardContent>
         </Card>
       </section>
+
+      {membersFetched && (
+        <OrganizerSettingsSection
+          workspaceId={workspace.id}
+          canManage={canManageWorkspace}
+        />
+      )}
 
       {/* Workspace env — the backend endpoint is owner/admin only, so hide the
           section (rather than render a 403 toast trap) for plain members.

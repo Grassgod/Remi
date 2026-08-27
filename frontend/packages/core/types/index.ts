@@ -12,6 +12,7 @@ export type {
 } from "./issue";
 export type {
   Agent,
+  AgentSupervisorState,
   AgentStatus,
   AgentRuntimeMode,
   AgentVisibility,
@@ -73,6 +74,8 @@ export type {
 export type {
   Workspace,
   WorkspaceRepo,
+  OrganizerMode,
+  WorkspaceOrganizerSettings,
   WorkspacePromptSettings,
   PlatformPromptTemplatePreview,
   UpdateWorkspacePromptSettingsRequest,

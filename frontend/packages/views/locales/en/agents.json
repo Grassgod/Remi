@@ -127,7 +127,9 @@
     "agent_archived_toast": "Agent archived",
     "archive_failed_toast": "Failed to archive agent",
     "agent_restored_toast": "Agent restored",
-    "restore_failed_toast": "Failed to restore agent"
+    "restore_failed_toast": "Failed to restore agent",
+    "supervisor_updated_toast": "Supervisor authority updated",
+    "supervisor_update_failed_toast": "Failed to update supervisor authority"
   },
   "inspector": {
     "section_properties": "Properties",
@@ -154,7 +156,10 @@
     "description_placeholder": "What does this agent do?",
     "save": "Save",
     "cancel": "Cancel",
-    "prop_engine": "Engine"
+    "prop_engine": "Engine",
+    "prop_supervisor": "Task supervisor",
+    "supervisor_enabled": "Enabled",
+    "supervisor_disabled": "Disabled"
   },
   "skill_attach": {
     "trigger_aria": "Attach a workspace skill",
