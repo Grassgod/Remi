@@ -15,6 +15,7 @@ import {
 import {
   filterInboxItemsBySource,
   groupInboxItemsByDate,
+  inboxDisplayEntryIds,
   inboxItemSelectionKey,
   inboxItemSelectionKind,
   type InboxDateGroup,
@@ -22,8 +23,7 @@ import {
   type InboxSourceFilter,
 } from "@multiremi/core/inbox";
 import {
-  useMarkInboxRead,
-  useArchiveInbox,
+  useArchiveInboxItems,
   useMarkAllInboxRead,
   useArchiveAllInbox,
   useArchiveAllReadInbox,
@@ -64,8 +64,8 @@ import {
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
 import { InboxListItem, useTimeAgo } from "./inbox-list-item";
-import { useTypeLabels } from "./inbox-detail-label";
-import { getInboxDisplayTitle } from "./inbox-display";
+import { InboxDetailLabel, useTypeLabels } from "./inbox-detail-label";
+import { getAutopilotRunOutcome, getInboxDisplayTitle } from "./inbox-display";
 import { useT } from "../../i18n";
 
 // A failed inbox fetch resolves to an empty list, and an empty list renders
@@ -137,6 +137,10 @@ export function InboxPage() {
   const itemGroups = useMemo(() => groupInboxItemsByDate(filteredItems), [filteredItems]);
 
   const selected = items.find((item) => inboxItemSelectionKey(item) === selectedKey) ?? null;
+  const selectedEntry = itemGroups
+    .flatMap((group) => group.entries)
+    .find((entry) => entry.items.some((item) => inboxItemSelectionKey(item) === selectedKey))
+    ?? null;
 
   // Track the last key we actually resolved against the inbox list. Lets the
   // fallback effect distinguish "shared-link to a notification not in our
@@ -222,8 +226,7 @@ export function InboxPage() {
   const isMobile = useIsMobile();
   const unreadCount = useInboxUnreadCount(wsId);
 
-  const markReadMutation = useMarkInboxRead();
-  const archiveMutation = useArchiveInbox();
+  const archiveMutation = useArchiveInboxItems();
   const markAllReadMutation = useMarkAllInboxRead();
   const archiveAllMutation = useArchiveAllInbox();
   const archiveAllReadMutation = useArchiveAllReadInbox();
@@ -232,18 +235,21 @@ export function InboxPage() {
   const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
 
-
-  // Auto-mark-read whenever a selected item is unread — covers both click-
-  // to-select and URL-param-select (e.g. OS notification click on desktop).
+  // Auto-mark the selected display entry as read. A collapsed entry covers
+  // every successful run represented by the row, including URL selection.
   // The mutation flips `read: true` optimistically, so this effect settles
   // in one pass and can't loop. Kept in a `useEffect` rather than inlined
   // in handleSelect so URL-driven selection triggers it too.
-  const markReadMutate = markReadMutation.mutate;
-  const selectedId = selected?.id;
-  const selectedRead = selected?.read;
+  const markReadMutate = markGroupReadMutation.mutate;
+  const selectedUnreadIds = selectedEntry
+    ? selectedEntry.items.filter((item) => !item.read).map((item) => item.id)
+    : selected && !selected.read
+      ? [selected.id]
+      : [];
+  const selectedUnreadKey = selectedUnreadIds.join(",");
   useEffect(() => {
-    if (!selectedId || selectedRead) return;
-    markReadMutate(selectedId, {
+    if (!selectedUnreadKey) return;
+    markReadMutate(selectedUnreadKey.split(","), {
       onError: (err) =>
         toast.error(
           err instanceof Error && err.message
@@ -251,7 +257,7 @@ export function InboxPage() {
             : t(($) => $.errors.mark_read_failed),
         ),
     });
-  }, [selectedId, selectedRead, markReadMutate, t]);
+  }, [selectedUnreadKey, markReadMutate, t]);
 
   const handleSelect = (item: InboxItem) => {
     setSelectedKey(
@@ -261,23 +267,24 @@ export function InboxPage() {
     );
   };
 
-  const handleArchive = (id: string) => {
-    const idx = items.findIndex((i) => i.id === id);
-    const archived = idx >= 0 ? items[idx] : null;
-    const wasSelected =
-      !!archived && inboxItemSelectionKey(archived) === selectedKey;
+  const handleArchive = (ids: string[]) => {
+    const archivedIds = new Set(ids);
+    const idx = items.findIndex((item) => archivedIds.has(item.id));
+    const wasSelected = selected ? archivedIds.has(selected.id) : false;
     if (wasSelected) {
       // List is sorted newest-first; prefer the next (older) item, fall back
       // to the previous (newer) one when archiving at the bottom, and only
       // clear the selection when nothing else is left.
-      const next = items[idx + 1] ?? items[idx - 1] ?? null;
+      const next = items.slice(Math.max(0, idx + 1)).find((item) => !archivedIds.has(item.id))
+        ?? items.slice(0, Math.max(0, idx)).reverse().find((item) => !archivedIds.has(item.id))
+        ?? null;
       setSelectedKey(
         next ? inboxItemSelectionKey(next) : "",
         next?.details?.issue_session_id ?? undefined,
         next ? inboxItemSelectionKind(next) : "issue",
       );
     }
-    archiveMutation.mutate(id, {
+    archiveMutation.mutate(ids, {
       onError: (err) =>
         toast.error(
           err instanceof Error && err.message
@@ -467,13 +474,15 @@ export function InboxPage() {
                 {t(($) => $.list.mark_group_read)}
               </Button>
             </div>
-            {group.items.map((item) => (
+            {group.entries.map((entry) => (
               <InboxListItem
-                key={item.id}
-                item={item}
-                isSelected={inboxItemSelectionKey(item) === selectedKey}
-                onClick={() => handleSelect(item)}
-                onArchive={() => handleArchive(item.id)}
+                key={entry.item.id}
+                item={entry.item}
+                groupedItems={entry.items}
+                isSelected={entry.items.some((item) => inboxItemSelectionKey(item) === selectedKey)}
+                onClick={() => handleSelect(entry.item)}
+                onItemClick={handleSelect}
+                onArchive={() => handleArchive(inboxDisplayEntryIds(entry))}
               />
             ))}
           </section>
@@ -511,17 +520,26 @@ export function InboxPage() {
           if (inboxItemSelectionKind(selected) === "issue") setSelectedKey("");
         }}
         onDone={() => {
-          handleArchive(selected.id);
+          handleArchive(selectedEntry ? inboxDisplayEntryIds(selectedEntry) : [selected.id]);
         }}
       />
     </ErrorBoundary>
   ) : selected ? (
     <div className="p-6">
-      <h2 className="text-lg font-semibold">{getInboxDisplayTitle(selected)}</h2>
+      <h2 className="text-lg font-semibold">
+        {getInboxDisplayTitle(selected, {
+          scheduled: (time) => t(($) => $.autopilot.scheduled, { time }),
+          repeatedRuns: (title, count) => t(($) => $.autopilot.repeated_runs, { title, count }),
+        }, selectedEntry?.items.length ?? 1)}
+      </h2>
       <p className="mt-1 text-sm text-muted-foreground">
         {typeLabels[selected.type]} · {timeAgo(selected.created_at)}
       </p>
-      {selected.body && (
+      {getAutopilotRunOutcome(selected) ? (
+        <div className="mt-4 text-sm leading-relaxed text-foreground/80">
+          <InboxDetailLabel item={selected} />
+        </div>
+      ) : selected.body && (
         <div className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">
           {selected.body}
         </div>
@@ -560,7 +578,7 @@ export function InboxPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => handleArchive(selected.id)}
+          onClick={() => handleArchive(selectedEntry ? inboxDisplayEntryIds(selectedEntry) : [selected.id])}
         >
           <Archive className="mr-1.5 h-3.5 w-3.5" />
           {t(($) => $.detail.archive)}

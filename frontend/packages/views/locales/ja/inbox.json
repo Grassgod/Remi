@@ -81,6 +81,20 @@
     "created_with_agent": "エージェントで作成: {{identifier}}",
     "failed_with_detail": "失敗: {{detail}}"
   },
+  "autopilot": {
+    "scheduled": "スケジュール {{time}}",
+    "repeated_runs_other": "{{title}} ほか {{count}} 件の実行",
+    "expand_runs": "実行履歴を展開",
+    "collapse_runs": "実行履歴を折りたたむ",
+    "no_change": "変更なし",
+    "completed": "実行が完了しました",
+    "failed": "実行に失敗しました",
+    "failed_with_summary": "失敗: {{summary}}",
+    "changes_other": "{{count}} 件の変更",
+    "duration": "所要時間 {{seconds}}秒",
+    "pull_request": "PR #{{number}}",
+    "merge_request": "MR #{{number}}"
+  },
   "errors": {
     "mark_read_failed": "既読にできませんでした",
     "archive_failed": "アーカイブできませんでした",

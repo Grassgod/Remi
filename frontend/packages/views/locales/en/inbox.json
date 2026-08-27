@@ -81,6 +81,22 @@
     "created_with_agent": "Created with agent: {{identifier}}",
     "failed_with_detail": "Failed: {{detail}}"
   },
+  "autopilot": {
+    "scheduled": "Scheduled {{time}}",
+    "repeated_runs_one": "{{title}} · {{count}} run",
+    "repeated_runs_other": "{{title}} · {{count}} runs",
+    "expand_runs": "Expand runs",
+    "collapse_runs": "Collapse runs",
+    "no_change": "No changes",
+    "completed": "Run completed",
+    "failed": "Run failed",
+    "failed_with_summary": "Failed: {{summary}}",
+    "changes_one": "{{count}} change",
+    "changes_other": "{{count}} changes",
+    "duration": "Took {{seconds}}s",
+    "pull_request": "PR #{{number}}",
+    "merge_request": "MR #{{number}}"
+  },
   "errors": {
     "mark_read_failed": "Failed to mark as read",
     "archive_failed": "Failed to archive",

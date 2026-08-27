@@ -135,6 +135,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       run_id: completedRun.id,
       task_id: completedRun.taskId,
       trigger: "schedule",
+      triggered_at: completedRun.triggeredAt,
       duration_seconds: expect.any(Number),
       issue_id: null,
       trigger_object: {
@@ -161,6 +162,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       run_id: failedRun.id,
       task_id: failedRun.taskId,
       trigger: "api",
+      triggered_at: failedRun.triggeredAt,
       duration_seconds: expect.any(Number),
       issue_id: null,
       trigger_object: null,

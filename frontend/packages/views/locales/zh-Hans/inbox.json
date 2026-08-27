@@ -81,6 +81,20 @@
     "created_with_agent": "通过智能体创建：{{identifier}}",
     "failed_with_detail": "失败：{{detail}}"
   },
+  "autopilot": {
+    "scheduled": "定时 {{time}}",
+    "repeated_runs_other": "{{title}} 等 {{count}} 次运行",
+    "expand_runs": "展开运行记录",
+    "collapse_runs": "收起运行记录",
+    "no_change": "本次无变更",
+    "completed": "本次运行已完成",
+    "failed": "本次运行失败",
+    "failed_with_summary": "失败：{{summary}}",
+    "changes_other": "{{count}} 个改动",
+    "duration": "耗时 {{seconds}} 秒",
+    "pull_request": "PR #{{number}}",
+    "merge_request": "MR #{{number}}"
+  },
   "errors": {
     "mark_read_failed": "标为已读失败",
     "archive_failed": "归档失败",

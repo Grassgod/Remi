@@ -18,7 +18,7 @@ export interface AutopilotOutcome {
 const NO_CHANGE_PATTERN = /(?:\bno changes?\b|\balready up[ -]to[ -]date\b|\bnothing to update\b|\bworking copy remains clean\b|无变更|没有变化|无需更新)/iu;
 const PROCESS_NARRATION_PATTERN = /^(?:let me\b|now\s+let(?:'|’)s\b|i(?:'|’)ll\b|checking\b|good\s*[,，]|next\s*[,，])/iu;
 const COMPLETE_SENTENCE_END_PATTERN = /[.!?。！？](?:["'”’）)\]}]+)?$/u;
-const LINK_PATTERN = /https?:\/\/(?:www\.)?(github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)|code\.byted\.org\/[^\s]+?\/merge_requests\/(\d+))(?=$|[\s)\]}>.,!?，。！？])/giu;
+const LINK_PATTERN = /https?:\/\/(?:www\.)?(github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)|code\.byted\.org\/[^\s]+?\/merge_requests\/(\d+))(?=$|[\s`)\]}>.,!?，。！？])/giu;
 
 export function summarizeAutopilotOutcome(
   value: string | null | undefined,
@@ -71,7 +71,7 @@ export function autopilotOutcomeBody(
   const linkSummary = outcome.links.length > 0
     ? `Created ${outcome.links.length} change${outcome.links.length === 1 ? "" : "s"}: ${outcome.links.map((link) => link.url).join(", ")}.`
     : null;
-  return `${prefix} | ${[outcome.text, linkSummary].filter(Boolean).join(" ")}`;
+  return `${prefix} | ${linkSummary ?? outcome.text ?? "Run completed."}`;
 }
 
 function extractOutcomeLinks(value: string): AutopilotOutcomeLink[] {

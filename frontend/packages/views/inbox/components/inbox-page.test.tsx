@@ -9,6 +9,7 @@ const TEST_RESOURCES = { en: { common: enCommon, inbox: enInbox } };
 
 const listInbox = vi.hoisted(() => vi.fn());
 const markItemsRead = vi.hoisted(() => vi.fn());
+const archiveItems = vi.hoisted(() => vi.fn());
 const navigationState = vi.hoisted(() => ({
   searchParams: new URLSearchParams(),
 }));
@@ -56,6 +57,7 @@ vi.mock("@multiremi/core/inbox/mutations", () => {
   return {
     useMarkInboxRead: noopMutation,
     useArchiveInbox: noopMutation,
+    useArchiveInboxItems: () => ({ mutate: archiveItems, isPending: false }),
     useMarkAllInboxRead: noopMutation,
     useArchiveAllInbox: noopMutation,
     useArchiveAllReadInbox: noopMutation,
@@ -102,14 +104,21 @@ vi.mock("../../navigation", () => ({
 vi.mock("./inbox-list-item", () => ({
   InboxListItem: ({
     item,
+    groupedItems,
     onClick,
+    onArchive,
   }: {
     item: { id: string };
+    groupedItems?: Array<{ id: string }>;
     onClick: () => void;
+    onArchive: () => void;
   }) => (
-    <button type="button" data-testid="inbox-row" onClick={onClick}>
-      {item.id}
-    </button>
+    <div>
+      <button type="button" data-testid="inbox-row" onClick={onClick}>
+        {item.id}{groupedItems && groupedItems.length > 1 ? ` (${groupedItems.length})` : ""}
+      </button>
+      <button type="button" aria-label={`Archive ${item.id}`} onClick={onArchive}>Archive</button>
+    </div>
   ),
   useTimeAgo: () => () => "just now",
 }));
@@ -302,6 +311,47 @@ describe("InboxPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Mark group as read" }));
     expect(markItemsRead).toHaveBeenCalledWith(
       ["today-1", "today-2"],
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
+  });
+
+  it("applies collapsed-run read and archive operations to every covered row", async () => {
+    const details = { autopilot_id: "autopilot-1", autopilot_title: "Atlas" };
+    listInbox.mockResolvedValue([
+      {
+        id: "run-latest",
+        type: "autopilot_run_completed",
+        issue_id: null,
+        title: "Latest",
+        severity: "info",
+        details,
+        read: false,
+        archived: false,
+        created_at: "2026-08-27T10:00:00.000Z",
+      },
+      {
+        id: "run-earlier",
+        type: "autopilot_run_completed",
+        issue_id: null,
+        title: "Earlier",
+        severity: "info",
+        details,
+        read: false,
+        archived: false,
+        created_at: "2026-08-27T09:00:00.000Z",
+      },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "run-latest (2)" }));
+    await waitFor(() => expect(markItemsRead).toHaveBeenCalledWith(
+      ["run-latest", "run-earlier"],
+      expect.objectContaining({ onError: expect.any(Function) }),
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "Archive run-latest" }));
+    expect(archiveItems).toHaveBeenCalledWith(
+      ["run-latest", "run-earlier"],
       expect.objectContaining({ onError: expect.any(Function) }),
     );
   });

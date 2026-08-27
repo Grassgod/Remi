@@ -81,6 +81,20 @@
     "created_with_agent": "에이전트가 생성: {{identifier}}",
     "failed_with_detail": "실패: {{detail}}"
   },
+  "autopilot": {
+    "scheduled": "예약 {{time}}",
+    "repeated_runs_other": "{{title}} 외 {{count}}회 실행",
+    "expand_runs": "실행 기록 펼치기",
+    "collapse_runs": "실행 기록 접기",
+    "no_change": "변경 사항 없음",
+    "completed": "실행 완료",
+    "failed": "실행 실패",
+    "failed_with_summary": "실패: {{summary}}",
+    "changes_other": "변경 {{count}}건",
+    "duration": "소요 시간 {{seconds}}초",
+    "pull_request": "PR #{{number}}",
+    "merge_request": "MR #{{number}}"
+  },
   "errors": {
     "mark_read_failed": "읽음 표시를 하지 못했습니다",
     "archive_failed": "보관하지 못했습니다",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  autopilotOutcomeBody,
   autopilotTriggerObjectLabel,
   summarizeAutopilotOutcome,
 } from "@multiremi/store/autopilot-run-notification.js";
@@ -37,10 +38,11 @@ describe("autopilot run notifications", () => {
   });
 
   it("extracts pull request and merge request links with counts", () => {
-    expect(summarizeAutopilotOutcome([
+    const outcome = summarizeAutopilotOutcome([
       "Created https://github.com/Grassgod/Remi/pull/123.",
       "See https://code.byted.org/taoze/personal_automation/merge_requests/45 for the other change.",
-    ].join("\n"))).toMatchObject({
+    ].join("\n"));
+    expect(outcome).toMatchObject({
       kind: "changes",
       links: [
         { kind: "pull_request", url: "https://github.com/Grassgod/Remi/pull/123", number: 123 },
@@ -48,6 +50,9 @@ describe("autopilot run notifications", () => {
       ],
       counts: { changes: 2, pull_requests: 1, merge_requests: 1 },
     });
+    expect(autopilotOutcomeBody(outcome, 12)).toBe(
+      "Completed in 12s | Created 2 changes: https://github.com/Grassgod/Remi/pull/123, https://code.byted.org/taoze/personal_automation/merge_requests/45.",
+    );
   });
 
   it("takes complete sentences from the tail without starting mid-sentence", () => {
