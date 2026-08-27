@@ -456,6 +456,14 @@
     "empty_zero_cost": "토큰은 기록됐지만 비용 계산 결과가 $0입니다.",
     "unmapped_notice_one": "기본 가격이 등록되지 않은 모델 {{count}}개가 있어 해당 토큰은 비용 합계에서 제외됩니다.",
     "unmapped_notice_other": "기본 가격이 등록되지 않은 모델 {{count}}개가 있어 해당 토큰은 비용 합계에서 제외됩니다.",
+    "diagnostics": {
+      "summary": "일부 토큰이 비용 합계에서 제외되었습니다: {{reasons}}",
+      "reason_unpriced_one": "가격이 없는 모델 {{count}}개",
+      "reason_unpriced_other": "가격이 없는 모델 {{count}}개",
+      "reason_total_only": "입력/출력 구분이 없는 과거 토큰 {{tokens}}개",
+      "show_detail": "자세히 보기",
+      "hide_detail": "접기"
+    },
     "custom_pricing": {
       "open_button": "사용자 지정 가격 설정",
       "title": "사용자 지정 모델 가격",

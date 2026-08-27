@@ -435,6 +435,13 @@
     "empty_pricing_hint": "可以设置自定义价格，把它们也纳入费用统计。",
     "empty_zero_cost": "记录到 token，但费用计算结果为 $0。",
     "unmapped_notice_other": "有 {{count}} 个模型没有维护价格，相关 token 未计入费用统计。",
+    "diagnostics": {
+      "summary": "部分 token 未计入费用统计：{{reasons}}",
+      "reason_unpriced_other": "{{count}} 个模型缺少价格",
+      "reason_total_only": "{{tokens}} 个历史 token 没有输入/输出拆分",
+      "show_detail": "查看说明",
+      "hide_detail": "收起"
+    },
     "custom_pricing": {
       "open_button": "设置自定义价格",
       "title": "自定义模型价格",

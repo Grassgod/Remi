@@ -456,6 +456,14 @@
     "empty_zero_cost": "Tokens recorded but cost calculation returned $0.",
     "unmapped_notice_one": "{{count}} model has no maintained price — its tokens are excluded from cost totals.",
     "unmapped_notice_other": "{{count}} models have no maintained price — their tokens are excluded from cost totals.",
+    "diagnostics": {
+      "summary": "Some tokens are excluded from cost totals: {{reasons}}",
+      "reason_unpriced_one": "{{count}} model without a price",
+      "reason_unpriced_other": "{{count}} models without a price",
+      "reason_total_only": "{{tokens}} historical tokens with no input/output split",
+      "show_detail": "Details",
+      "hide_detail": "Hide"
+    },
     "custom_pricing": {
       "open_button": "Set custom prices",
       "title": "Custom model prices",
