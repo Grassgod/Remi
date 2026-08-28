@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 649,
+    "routeCount": 651,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 431,
+      "compat": 433,
       "root": 13
     },
     "getRoutes": 280,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 368,
+    "mutationRoutes": 371,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",

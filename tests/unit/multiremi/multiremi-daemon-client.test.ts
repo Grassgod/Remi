@@ -296,6 +296,24 @@ describe("MultiremiDaemonClient workspace configuration", () => {
     expect(heartbeat.botProjects).toEqual([{ id: "prj_1", title: "Remi", cwd: "/work/remi" }]);
   });
 
+  it("combines agent, project, and bot menu capabilities in one heartbeat", async () => {
+    let requestBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({ status: "ok" });
+    }) as unknown as typeof globalThis.fetch;
+
+    await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .heartbeatRuntime("runtime-1", undefined, undefined, "agt_bot", true, true);
+
+    expect(requestBody).toMatchObject({
+      runtime_id: "runtime-1",
+      bot_agent_id: "agt_bot",
+      include_bot_projects: true,
+      supports_bot_menu: true,
+    });
+  });
+
   it("returns heartbeat-delivered settings and Relay configuration", async () => {
     globalThis.fetch = (async () => Response.json({
       status: "ok",
