@@ -172,6 +172,7 @@
     "add_sub_issue_tooltip": "Add sub-issue",
     "add_sub_issue_aria": "Add sub-issue",
     "section_properties": "Properties",
+    "section_sub_issues": "Sub-issues",
     "section_parent_issue": "Parent issue",
     "section_code_changes": "Code changes",
     "section_metadata": "Metadata",
