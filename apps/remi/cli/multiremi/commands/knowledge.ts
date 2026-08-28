@@ -14,7 +14,8 @@ import {
   citationRefsOption,
   readOptionalTextBody,
 } from "./fields.js";
-import { wikiDiff, wikiPull, wikiPush, wikiStatus } from "./wiki-working-copy.js";
+import { wikiDiff, wikiMove, wikiPull, wikiPush, wikiStatus } from "./wiki-working-copy.js";
+import { wikiLint, wikiMerge } from "./wiki-librarian.js";
 
 type KnowledgeKind = "memory" | "wiki";
 
@@ -67,6 +68,25 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await wikiDiff(options, requireProject("wiki", "diff", options));
     return;
   }
+  if (action === "mv") {
+    const ref = positional[1]?.trim();
+    const destination = positional[2]?.trim();
+    if (!ref || !destination) throw new Error("usage: multiremi wiki mv <ref> <new-path> [--project <project-id>]");
+    await wikiMove(options, projectOption(options), ref, destination);
+    return;
+  }
+  if (action === "lint") {
+    await wikiLint(options, requireProject("wiki", "lint", options));
+    return;
+  }
+  if (action === "merge") {
+    const target = positional[1]?.trim();
+    const sources = positional.slice(2).map((value) => value.trim()).filter(Boolean);
+    if (!target || !sources.length) throw new Error("usage: multiremi wiki merge <target> <source...> --project <project-id> --yes");
+    if (!hasOption(options, "yes")) throw new Error("wiki merge requires --yes");
+    await wikiMerge(options, requireProject("wiki", "merge", options), target, sources);
+    return;
+  }
   if (action === "push") {
     await wikiPush(options, projectOption(options));
     return;
@@ -105,7 +125,7 @@ export async function wiki(positional: string[], options: CliOptions): Promise<v
     await backlinks("wiki", positional[1], options);
     return;
   }
-  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|push ...");
+  throw new Error("usage: multiremi wiki list|search|read|create|update|delete|history|backlinks|pull|status|diff|mv|lint|merge|push ...");
 }
 
 async function listKnowledge(kind: KnowledgeKind, options: CliOptions): Promise<void> {
@@ -175,6 +195,7 @@ async function createKnowledge(kind: KnowledgeKind, options: CliOptions): Promis
     ...(kind === "memory" ? { pinned: true } : {}),
   };
   addStringBodyField(body, options, "slug", "slug");
+  addStringBodyField(body, options, "path", "path");
   addStringBodyField(body, options, "summary", "summary", false, true);
   await addKnowledgeBodyFields(body, options);
   if (kind === "memory") {
@@ -201,10 +222,11 @@ async function updateKnowledge(
   const ref = requireRef(kind, "update", rawRef);
   const body: Record<string, unknown> = {};
   addStringBodyField(body, options, "title", "title");
+  addStringBodyField(body, options, "path", "path");
   addStringBodyField(body, options, "summary", "summary", false, true);
   await addKnowledgeBodyFields(body, options);
   if (Object.keys(body).length === 0) {
-    throw new Error("no fields to update; pass --title, --summary, --tags, --pinned, --ref, or --content");
+    throw new Error("no fields to update; pass --title, --path, --summary, --tags, --pinned, --ref, or --content");
   }
   const expectedVersion = integerOption(options, "expected-version");
   if (expectedVersion !== null) body.expected_version = expectedVersion;

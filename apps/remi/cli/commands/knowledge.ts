@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { CliError, type CliOptionSpec, type CommandInvocation, type CommandSpec } from "../core/index.js";
 import type { CliOptions } from "../multiremi/options.js";
-import { wikiDiff, wikiPull, wikiPush, wikiStatus } from "../multiremi/commands/wiki-working-copy.js";
+import { wikiDiff, wikiMove, wikiPull, wikiPush, wikiStatus } from "../multiremi/commands/wiki-working-copy.js";
+import { wikiLint, wikiMerge } from "../multiremi/commands/wiki-librarian.js";
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
@@ -32,6 +33,7 @@ const KNOWLEDGE_FIELDS: readonly CliOptionSpec[] = [
   PROJECT_OPTION,
   { name: "title", type: "string", valueName: "title", description: "Document title" },
   { name: "slug", type: "string", valueName: "slug", description: "Document slug" },
+  { name: "path", type: "string", valueName: "path", description: "Workspace-relative Markdown path" },
   { name: "summary", type: "string", valueName: "text", description: "Document summary" },
   { name: "content", type: "string", valueName: "text", description: "Document body", conflictsWith: ["content-file", "content-stdin"] },
   { name: "content-file", type: "string", valueName: "path|-", description: "Read document body from a file or stdin", conflictsWith: ["content", "content-stdin"] },
@@ -268,7 +270,7 @@ function migrationSpec(
 }
 
 function wikiWorkingCopySpecs(): CommandSpec[] {
-  return (["pull", "status", "diff", "push"] as const).map((action) => spec(
+  const specs = (["pull", "status", "diff", "push"] as const).map((action) => spec(
     `wiki.${action}`,
     ["wiki", action],
     `${action[0]!.toUpperCase()}${action.slice(1)} the wiki working copy`,
@@ -290,6 +292,65 @@ function wikiWorkingCopySpecs(): CommandSpec[] {
       else await wikiPush(options, projectId);
     },
   ));
+  specs.push(spec(
+    "wiki.mv",
+    ["wiki", "mv"],
+    "Move a Wiki page without changing its identity",
+    "write",
+    [refPositional("document"), { name: "new-path", required: true }],
+    [PROJECT_OPTION],
+    async (invocation) => {
+      const projectRef = projectOption(invocation);
+      const project = projectRef
+        ? await resolveProject(await clientFor(invocation), requiredWorkspace(invocation), projectRef)
+        : null;
+      await wikiMove(
+        legacyOptions(invocation),
+        project ? String(project.id) : null,
+        positional(invocation, 0, "document"),
+        positional(invocation, 1, "new-path"),
+      );
+    },
+  ));
+  specs.push(spec(
+    "wiki.lint",
+    ["wiki", "lint"],
+    "Report duplicate, contradictory, orphaned, and broken-link Wiki pages",
+    "read",
+    [],
+    [PROJECT_OPTION],
+    async (invocation) => {
+      const project = await resolveProject(
+        await clientFor(invocation),
+        requiredWorkspace(invocation),
+        requireProjectOption(invocation),
+      );
+      await wikiLint(legacyOptions(invocation), String(project.id));
+    },
+  ));
+  specs.push(spec(
+    "wiki.merge",
+    ["wiki", "merge"],
+    "Merge source Wiki pages into a target and preserve their references",
+    "destructive",
+    [refPositional("target"), { name: "source", required: true, variadic: true }],
+    [PROJECT_OPTION, YES_OPTION],
+    async (invocation) => {
+      requireConfirmation(invocation);
+      const project = await resolveProject(
+        await clientFor(invocation),
+        requiredWorkspace(invocation),
+        requireProjectOption(invocation),
+      );
+      await wikiMerge(
+        legacyOptions(invocation),
+        String(project.id),
+        positional(invocation, 0, "target"),
+        invocation.positionals.slice(1),
+      );
+    },
+  ));
+  return specs;
 }
 
 async function projectRequest(
@@ -329,6 +390,7 @@ async function knowledgeBody(invocation: CommandInvocation, kind: KnowledgeKind,
     kind: creating ? kind : undefined,
     title: rawOption(invocation, "title"),
     slug: rawOption(invocation, "slug"),
+    path: rawOption(invocation, "path"),
     summary: "summary" in invocation.options ? rawOption(invocation, "summary") || null : undefined,
     body: content,
     tags: "tags" in invocation.options ? csvOption(invocation, "tags") ?? [] : undefined,

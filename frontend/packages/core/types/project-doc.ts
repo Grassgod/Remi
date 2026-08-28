@@ -27,6 +27,7 @@ export interface ProjectDoc {
   workspace_id: string;
   kind: ProjectDocKind;
   slug: string;
+  path: string;
   title: string;
   summary: string | null;
   body: string;

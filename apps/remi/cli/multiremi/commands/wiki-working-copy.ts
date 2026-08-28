@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { normalizeWikiPath } from "@multiremi/contracts/wiki-path";
 import { tmpdir } from "node:os";
 import type { CliOptions } from "../options.js";
 import { rawStringOption } from "../options.js";
@@ -25,6 +26,7 @@ interface WikiDoc {
   projectId: string;
   workspaceId: string;
   slug: string;
+  path: string;
   title: string;
   summary: string | null;
   body: string;
@@ -39,6 +41,7 @@ interface WikiManifestEntry {
   id: string;
   slug: string;
   path: string;
+  movedTo?: string;
   title: string;
   summary: string | null;
   tags: string[];
@@ -77,7 +80,7 @@ interface WikiChange {
 
 type PushAction =
   | { kind: "create"; slug: string; body: string; path: string; localSnapshot: string }
-  | { kind: "update"; slug: string; body: string; path: string; version: number; localSnapshot: string }
+  | { kind: "update"; id: string; slug: string; body: string; path: string; previousPath: string; version: number; localSnapshot: string }
   | { kind: "delete"; slug: string; path: string; version: number; localSnapshot: null };
 
 interface PushPlan {
@@ -107,6 +110,7 @@ interface RepositoryWikiManifestEntry {
   repositoryId: string;
   repositoryName: string;
   path: string;
+  movedTo?: string;
   version: number;
   sourceRevision: string | null;
   sha256: string;
@@ -123,7 +127,7 @@ interface RepositoryWikiManifest {
 
 type RepositoryPushAction =
   | { kind: "create"; repositoryId: string; path: string; repositoryPath: string; body: string; localSnapshot: string }
-  | { kind: "update"; repositoryId: string; id: string; path: string; body: string; version: number; localSnapshot: string }
+  | { kind: "update"; repositoryId: string; id: string; path: string; previousPath: string; repositoryPath: string; body: string; version: number; localSnapshot: string }
   | { kind: "delete"; repositoryId: string; id: string; path: string; version: number; localSnapshot: null };
 
 interface RepositoryPushPlan {
@@ -171,9 +175,12 @@ export async function wikiDiff(options: CliOptions, projectId: string): Promise<
   await withWikiLock(paths, async () => {
     const manifest = requireManifest(paths, projectId);
     const changes = workingCopyStatus(paths, manifest, await fetchWikiDocs(projectId, options));
+    const moveTargets = detectProjectMoveTargets(paths, manifest, localMarkdownPaths(paths));
     let wrote = false;
     for (const change of changes.filter((entry) => entry.localChanged)) {
-      const entry = manifest.docs.find((candidate) => candidate.path === change.path);
+      const entry = manifest.docs.find((candidate) =>
+        candidate.path === change.path || moveTargets.get(candidate.id) === change.path
+      );
       const basePath = entry ? join(paths.baseFiles, entry.path) : emptyFile(paths, ".empty-base");
       const localPath = readLocalText(paths, change.path) !== null
         ? join(paths.wiki, change.path)
@@ -190,6 +197,59 @@ export async function wikiDiff(options: CliOptions, projectId: string): Promise<
       }
     }
     if (!wrote) console.log("Wiki working copy is clean.");
+  });
+}
+
+export async function wikiMove(
+  options: CliOptions,
+  projectId: string | null,
+  ref: string,
+  destination: string,
+): Promise<void> {
+  const paths = wikiPaths(options);
+  await withWikiLock(paths, async () => {
+    const manifest = projectId ? requireManifest(paths, projectId) : readManifest(paths);
+    const repositoryManifest = readRepositoryWikiManifest(paths);
+    const projectMatches = manifest?.docs.filter((entry) =>
+      entry.id === ref || entry.slug === ref || entry.path === ref || entry.movedTo === ref
+    ) ?? [];
+    const repositoryMatches = repositoryManifest?.docs.filter((entry) => {
+      const repositoryPath = entry.path.split("/").slice(1).join("/");
+      return entry.id === ref || entry.path === ref || entry.movedTo === ref || repositoryPath === ref;
+    }) ?? [];
+    if (projectMatches.length + repositoryMatches.length !== 1) {
+      throw new Error(projectMatches.length + repositoryMatches.length === 0
+        ? `Wiki page not found: ${ref}`
+        : `Wiki page reference is ambiguous: ${ref}`);
+    }
+
+    if (projectMatches.length === 1 && manifest) {
+      const entry = projectMatches[0]!;
+      const nextPath = normalizeProjectWorkingPath(destination);
+      if (manifest.docs.some((candidate) => candidate.id !== entry.id && (candidate.path === nextPath || candidate.movedTo === nextPath))) {
+        throw new Error(`Wiki destination already exists: ${nextPath}`);
+      }
+      moveRegularFile(paths, paths.wiki, entry.movedTo ?? entry.path, nextPath, "Wiki page");
+      entry.movedTo = nextPath;
+      writeManifest(paths, manifest);
+      printJson({ moved: true, kind: "project", id: entry.id, slug: entry.slug, from: entry.path, to: nextPath });
+      return;
+    }
+
+    const entry = repositoryMatches[0]!;
+    const repository = repositoryManifest!.repositories.find((candidate) => candidate.id === entry.repositoryId)!;
+    const normalized = normalizeWikiPath(destination);
+    const nextPath = normalized.startsWith(`${repository.directory}/`)
+      ? normalized
+      : `${repository.directory}/${normalized}`;
+    if (!validRepositoryManifestPath(nextPath)) throw new Error(`Unsafe Repository Wiki path: ${destination}`);
+    if (repositoryManifest!.docs.some((candidate) => candidate.id !== entry.id && (candidate.path === nextPath || candidate.movedTo === nextPath))) {
+      throw new Error(`Wiki destination already exists: ${nextPath}`);
+    }
+    moveRegularFile(paths, repositoryWikiRoot(paths), entry.movedTo ?? entry.path, nextPath, "Repository Wiki page");
+    entry.movedTo = nextPath;
+    writeRepositoryManifest(paths, repositoryManifest!);
+    printJson({ moved: true, kind: "repository", id: entry.id, repository_id: entry.repositoryId, from: entry.path, to: nextPath });
   });
 }
 
@@ -236,6 +296,7 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
         const body: Record<string, unknown> = {
           kind: "wiki",
           slug: action.slug,
+          path: action.path,
           title: wikiTitle(action.slug, action.body),
           body: apiBody(action.body),
         };
@@ -248,7 +309,7 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
         await multiremiApiRequest(
           "PUT",
           `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(action.slug)}`,
-          { body: apiBody(action.body), expected_version: action.version },
+          { path: action.path, body: apiBody(action.body), expected_version: action.version },
           options,
         );
         continue;
@@ -276,6 +337,7 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
         await multiremiApiRequest("POST", root, body, options);
       } else if (action.kind === "update") {
         await multiremiApiRequest("PUT", `${root}/${encodeURIComponent(action.id)}`, {
+          path: action.repositoryPath,
           body: apiBody(action.body),
           expected_version: action.version,
           status: "healthy",
@@ -315,23 +377,27 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
 function workingCopyStatus(paths: WikiPaths, manifest: WikiManifest, remoteDocs: WikiDoc[]): WikiChange[] {
   const remoteById = new Map(remoteDocs.map((doc) => [doc.id, doc]));
   const remoteBySlug = new Map(remoteDocs.map((doc) => [doc.slug, doc]));
-  const trackedPaths = new Set(manifest.docs.map((entry) => entry.path));
+  const localPaths = localMarkdownPaths(paths);
+  const moveTargets = detectProjectMoveTargets(paths, manifest, localPaths);
+  const trackedPaths = new Set(manifest.docs.flatMap((entry) => [entry.path, moveTargets.get(entry.id)].filter((path): path is string => Boolean(path))));
   const changes: WikiChange[] = [];
   for (const entry of manifest.docs) {
     const base = readVerifiedBase(paths, entry);
-    const local = readLocalText(paths, entry.path);
+    const localPath = moveTargets.get(entry.id) ?? entry.path;
+    const moved = localPath !== entry.path;
+    const local = readLocalText(paths, localPath);
     const remote = remoteById.get(entry.id) ?? remoteBySlug.get(entry.slug);
     const remoteText = remote ? markdownFile(remote.body) : null;
     const localChanged = local !== base;
-    const remoteChanged = remoteText !== base;
+    const remoteChanged = remoteText !== base || Boolean(remote && remote.path !== entry.path);
     let state: WikiChange["state"] = "unchanged";
     if (local === null && base !== null) state = remoteChanged ? "diverged" : "deleted";
     else if (localChanged && remoteChanged && local !== remoteText) state = "diverged";
-    else if (localChanged) state = "modified";
+    else if (moved || localChanged) state = "modified";
     else if (remoteChanged) state = "remote_changed";
-    changes.push({ slug: entry.slug, path: entry.path, state, localChanged, remoteChanged });
+    changes.push({ slug: entry.slug, path: localPath, state, localChanged: localChanged || moved, remoteChanged });
   }
-  for (const path of localMarkdownPaths(paths)) {
+  for (const path of localPaths) {
     if (trackedPaths.has(path)) continue;
     changes.push({ slug: slugFromPath(path), path, state: "added", localChanged: true, remoteChanged: false });
   }
@@ -341,16 +407,21 @@ function workingCopyStatus(paths: WikiPaths, manifest: WikiManifest, remoteDocs:
 function buildPushPlan(paths: WikiPaths, manifest: WikiManifest, remoteDocs: WikiDoc[]): PushPlan {
   const remoteById = new Map(remoteDocs.map((doc) => [doc.id, doc]));
   const remoteBySlug = new Map(remoteDocs.map((doc) => [doc.slug, doc]));
-  const trackedPaths = new Set(manifest.docs.map((entry) => entry.path));
+  const localPaths = localMarkdownPaths(paths);
+  const moveTargets = detectProjectMoveTargets(paths, manifest, localPaths);
+  const trackedPaths = new Set(manifest.docs.flatMap((entry) => [entry.path, moveTargets.get(entry.id)].filter((path): path is string => Boolean(path))));
   const actions: PushAction[] = [];
   const conflicts: PushPlan["conflicts"] = [];
 
   for (const entry of manifest.docs) {
     const base = readVerifiedBase(paths, entry);
-    const local = readLocalText(paths, entry.path);
+    const localPath = moveTargets.get(entry.id) ?? entry.path;
+    const moved = localPath !== entry.path;
+    const local = readLocalText(paths, localPath);
     const remote = remoteById.get(entry.id) ?? remoteBySlug.get(entry.slug);
+    const targetPath = moved ? localPath : remote?.path ?? entry.path;
     const remoteText = remote ? markdownFile(remote.body) : null;
-    if (local === base) continue;
+    if (local === base && !moved) continue;
     if (local === null) {
       if (remoteText === null) continue;
       if (remoteText === base) {
@@ -360,9 +431,9 @@ function buildPushPlan(paths: WikiPaths, manifest: WikiManifest, remoteDocs: Wik
       }
       continue;
     }
-    if (remoteText === local) continue;
+    if (remoteText === local && (!moved || remote?.path === localPath)) continue;
     if (remoteText === base && remote) {
-      actions.push({ kind: "update", slug: remote.slug, path: entry.path, version: remote.version, body: local, localSnapshot: local });
+      actions.push({ kind: "update", id: remote.id, slug: remote.slug, path: targetPath, previousPath: entry.path, version: remote.version, body: local, localSnapshot: local });
       continue;
     }
     if (remoteText === null) {
@@ -373,13 +444,15 @@ function buildPushPlan(paths: WikiPaths, manifest: WikiManifest, remoteDocs: Wik
     if (merged.conflicted) {
       conflicts.push({ slug: entry.slug, path: entry.path, reason: "content conflict", body: merged.body });
     } else {
-      actions.push({ kind: "update", slug: remote!.slug, path: entry.path, version: remote!.version, body: merged.body, localSnapshot: local });
+      actions.push({ kind: "update", id: remote!.id, slug: remote!.slug, path: targetPath, previousPath: entry.path, version: remote!.version, body: merged.body, localSnapshot: local });
     }
   }
 
-  for (const path of localMarkdownPaths(paths)) {
+  const usedSlugs = new Set(remoteDocs.map((doc) => doc.slug));
+  for (const path of localPaths) {
     if (trackedPaths.has(path)) continue;
-    const slug = slugFromPath(path);
+    const slug = uniqueSlugFromPath(path, usedSlugs);
+    usedSlugs.add(slug);
     const local = readLocalText(paths, path) ?? "";
     const remote = remoteBySlug.get(slug);
     if (!remote) {
@@ -422,16 +495,20 @@ function buildRepositoryPushPlan(
   remoteByRepository: Map<string, RepositoryWikiDoc[]>,
 ): RepositoryPushPlan {
   const remoteById = new Map([...remoteByRepository.values()].flat().map((doc) => [doc.id, doc]));
-  const trackedPaths = new Set(manifest.docs.map((entry) => entry.path));
+  const localPaths = repositoryMarkdownPaths(paths);
+  const moveTargets = detectRepositoryMoveTargets(paths, manifest, localPaths);
+  const trackedPaths = new Set(manifest.docs.flatMap((entry) => [entry.path, moveTargets.get(entry.id)].filter((path): path is string => Boolean(path))));
   const actions: RepositoryPushAction[] = [];
   const conflicts: RepositoryPushPlan["conflicts"] = [];
 
   for (const entry of manifest.docs) {
     const base = readRepositoryBase(paths, entry);
-    const local = readRepositoryLocal(paths, entry.path);
+    const localPath = moveTargets.get(entry.id) ?? entry.path;
+    const moved = localPath !== entry.path;
+    const local = readRepositoryLocal(paths, localPath);
     const remote = remoteById.get(entry.id);
     const remoteText = remote ? markdownFile(remote.body) : null;
-    if (local === base) continue;
+    if (local === base && !moved) continue;
     if (local === null) {
       if (remoteText === null) continue;
       if (remoteText === base) {
@@ -441,9 +518,10 @@ function buildRepositoryPushPlan(
       }
       continue;
     }
-    if (remoteText === local) continue;
+    const repositoryPath = localPath.split("/").slice(1).join("/");
+    if (remoteText === local && (!moved || remote?.path === repositoryPath)) continue;
     if (remoteText === base && remote) {
-      actions.push({ kind: "update", repositoryId: entry.repositoryId, id: entry.id, path: entry.path, version: remote.version, body: local, localSnapshot: local });
+      actions.push({ kind: "update", repositoryId: entry.repositoryId, id: entry.id, path: localPath, previousPath: entry.path, repositoryPath, version: remote.version, body: local, localSnapshot: local });
       continue;
     }
     if (remoteText === null) {
@@ -454,11 +532,11 @@ function buildRepositoryPushPlan(
     if (merged.conflicted) {
       conflicts.push({ repository_id: entry.repositoryId, path: entry.path, reason: "content conflict", body: merged.body });
     } else {
-      actions.push({ kind: "update", repositoryId: entry.repositoryId, id: entry.id, path: entry.path, version: remote!.version, body: merged.body, localSnapshot: local });
+      actions.push({ kind: "update", repositoryId: entry.repositoryId, id: entry.id, path: localPath, previousPath: entry.path, repositoryPath, version: remote!.version, body: merged.body, localSnapshot: local });
     }
   }
 
-  for (const path of repositoryMarkdownPaths(paths)) {
+  for (const path of localPaths) {
     if (trackedPaths.has(path)) continue;
     const repository = manifest.repositories.find((candidate) => path.startsWith(`${candidate.directory}/`));
     if (!repository) continue;
@@ -517,6 +595,7 @@ function reconcileRepositoryAfterPush(
 ): void {
   const previousById = new Map(previous.docs.map((entry) => [entry.id, entry]));
   const actionByPath = new Map(plan.actions.map((action) => [action.path, action]));
+  const updateActionById = new Map(plan.actions.filter((action): action is Extract<RepositoryPushAction, { kind: "update" }> => action.kind === "update").map((action) => [action.id, action]));
   const next: RepositoryWikiManifestEntry[] = [];
   const seen = new Set<string>();
   const baseRoot = repositoryBaseRoot(paths);
@@ -527,17 +606,28 @@ function reconcileRepositoryAfterPush(
   for (const repository of previous.repositories) {
     ensureSafeDirectory(paths.root, join(wikiRoot, repository.directory));
     for (const doc of remoteByRepository.get(repository.id) ?? []) {
-      const path = `${repository.directory}/${doc.path}`;
       const prior = previousById.get(doc.id);
-      const action = actionByPath.get(path);
+      const updateAction = updateActionById.get(doc.id);
+      const path = updateAction?.path ?? `${repository.directory}/${doc.path}`;
+      const action = updateAction ?? actionByPath.get(path);
       const local = readRepositoryLocal(paths, path);
       const remoteText = markdownFile(doc.body);
       const entry = repositoryManifestEntry(repository, doc, path, remoteText);
       if (!prior || (action && local === action.localSnapshot)) {
         writeAtomic(paths, join(wikiRoot, path), remoteText);
         writeReadOnly(paths, join(baseRoot, path), remoteText);
+        if (prior && prior.path !== path) {
+          rmWritable(paths, join(wikiRoot, prior.path));
+          rmWritable(paths, join(baseRoot, prior.path));
+        }
         next.push(entry);
+      } else if (prior.movedTo) {
+        next.push(prior);
       } else if (local === readRepositoryBase(paths, prior)) {
+        if (prior.path !== path) {
+          rmWritable(paths, join(wikiRoot, prior.path));
+          rmWritable(paths, join(baseRoot, prior.path));
+        }
         writeAtomic(paths, join(wikiRoot, path), remoteText);
         writeReadOnly(paths, join(baseRoot, path), remoteText);
         next.push(entry);
@@ -622,21 +712,31 @@ function reconcileWorkingCopy(paths: WikiPaths, projectId: string, remoteDocs: W
   for (const remote of remoteDocs) {
     const prior = previousById.get(remote.id) ?? previousBySlug.get(remote.slug);
     if (prior) matchedPriorPaths.add(prior.path);
-    const path = prior?.path ?? `${safeSlug(remote.slug)}.md`;
-    const basePath = join(paths.baseFiles, path);
+    const path = remote.path;
+    const localPath = prior?.movedTo ?? prior?.path ?? path;
+    const basePath = join(paths.baseFiles, prior?.path ?? path);
     const remoteText = markdownFile(remote.body);
     const entry = manifestEntry(remote, path, remoteText);
-    const local = readLocalText(paths, path);
+    const local = readLocalText(paths, localPath);
     if (!prior) {
       if (force || local === null) writeAtomic(paths, join(paths.wiki, path), remoteText);
-      writeReadOnly(paths, basePath, remoteText);
+      writeReadOnly(paths, join(paths.baseFiles, path), remoteText);
       docs.push(entry);
       continue;
     }
     const base = force ? readRegularText(paths.root, basePath, "Wiki baseline") : readVerifiedBase(paths, prior);
+    if (prior.movedTo) {
+      docs.push(prior);
+      continue;
+    }
+    const pathChanged = prior.path !== path;
     if (force || local === base) {
+      if (pathChanged) {
+        rmWritable(paths, join(paths.wiki, prior.path));
+        rmWritable(paths, join(paths.baseFiles, prior.path));
+      }
       writeAtomic(paths, join(paths.wiki, path), remoteText);
-      writeReadOnly(paths, basePath, remoteText);
+      writeReadOnly(paths, join(paths.baseFiles, path), remoteText);
       docs.push(entry);
       continue;
     }
@@ -671,17 +771,19 @@ function reconcileAfterPush(paths: WikiPaths, projectId: string, remoteDocs: Wik
   const previousById = new Map(previous.docs.map((entry) => [entry.id, entry]));
   const previousBySlug = new Map(previous.docs.map((entry) => [entry.slug, entry]));
   const actionsByPath = new Map(plan.actions.map((action) => [action.path, action]));
+  const updateActionsById = new Map(plan.actions.filter((action): action is Extract<PushAction, { kind: "update" }> => action.kind === "update").map((action) => [action.id, action]));
   const matchedPriorPaths = new Set<string>();
   const docs: WikiManifestEntry[] = [];
 
   for (const remote of remoteDocs) {
     const prior = previousById.get(remote.id) ?? previousBySlug.get(remote.slug);
     if (prior) matchedPriorPaths.add(prior.path);
-    const path = prior?.path ?? `${safeSlug(remote.slug)}.md`;
+    const updateAction = updateActionsById.get(remote.id);
+    const path = updateAction?.path ?? remote.path;
     const local = readLocalText(paths, path);
     const remoteText = markdownFile(remote.body);
     const entry = manifestEntry(remote, path, remoteText);
-    const action = actionsByPath.get(path);
+    const action = updateAction ?? actionsByPath.get(path);
     if (!prior) {
       if ((!action && local === null) || (action && local === action.localSnapshot)) {
         writeAtomic(paths, join(paths.wiki, path), remoteText);
@@ -696,6 +798,10 @@ function reconcileAfterPush(paths: WikiPaths, projectId: string, remoteDocs: Wik
       if (local === action.localSnapshot) {
         writeAtomic(paths, join(paths.wiki, path), remoteText);
         writeReadOnly(paths, join(paths.baseFiles, path), remoteText);
+        if (prior.path !== path) {
+          rmWritable(paths, join(paths.wiki, prior.path));
+          rmWritable(paths, join(paths.baseFiles, prior.path));
+        }
         docs.push(entry);
       } else {
         // Another process edited this file while the push was in flight. Keep
@@ -768,6 +874,7 @@ function parseWikiDoc(value: unknown): WikiDoc {
   const projectId = field(value, "project_id", "projectId");
   const workspaceId = field(value, "workspace_id", "workspaceId");
   const slug = field(value, "slug");
+  const rawPath = field(value, "path") || `${safeSlug(slug)}.md`;
   const title = field(value, "title");
   if (!id || !projectId || !slug || !title) throw new Error("Wiki document is missing id, project, slug, or title");
   return {
@@ -775,6 +882,7 @@ function parseWikiDoc(value: unknown): WikiDoc {
     projectId,
     workspaceId,
     slug,
+    path: normalizeProjectWorkingPath(rawPath),
     title,
     summary: nullableField(value, "summary"),
     body: typeof value.body === "string" ? value.body : "",
@@ -859,6 +967,7 @@ function readManifest(paths: WikiPaths): WikiManifest | null {
       || typeof entry.slug !== "string"
       || !entry.slug
       || !validManifestPath(entry.path)
+      || (entry.movedTo !== undefined && !validManifestPath(entry.movedTo))
       || typeof entry.sha256 !== "string"
       || !/^[a-f0-9]{64}$/.test(entry.sha256)
     ) {
@@ -868,6 +977,10 @@ function readManifest(paths: WikiPaths): WikiManifest | null {
       throw new Error("Wiki manifest contains duplicate document identities or paths");
     }
     pathsSeen.add(entry.path);
+    if (entry.movedTo) {
+      if (pathsSeen.has(entry.movedTo)) throw new Error("Wiki manifest contains duplicate document identities or paths");
+      pathsSeen.add(entry.movedTo);
+    }
     idsSeen.add(entry.id);
   }
   return value as WikiManifest;
@@ -916,6 +1029,7 @@ function readRepositoryWikiManifest(paths: WikiPaths): RepositoryWikiManifest | 
       !entry?.id
       || !repositoryIds.has(entry.repositoryId)
       || !validRepositoryManifestPath(entry.path)
+      || (entry.movedTo !== undefined && !validRepositoryManifestPath(entry.movedTo))
       || !directories.has(entry.path.split("/")[0] ?? "")
       || !/^[a-f0-9]{64}$/.test(entry.sha256)
       || docIds.has(entry.id)
@@ -925,6 +1039,10 @@ function readRepositoryWikiManifest(paths: WikiPaths): RepositoryWikiManifest | 
     }
     docIds.add(entry.id);
     docPaths.add(entry.path);
+    if (entry.movedTo) {
+      if (docPaths.has(entry.movedTo)) throw new Error("Repository Wiki manifest contains an invalid or duplicate document");
+      docPaths.add(entry.movedTo);
+    }
   }
   return value as RepositoryWikiManifest;
 }
@@ -941,14 +1059,18 @@ function validRepositoryDirectory(value: unknown): value is string {
 }
 
 function validRepositoryRelativePath(value: unknown): value is string {
-  if (typeof value !== "string" || value.length < 4 || value.length > 512 || !value.toLowerCase().endsWith(".md") || value.includes("\\") || value.includes("\0")) return false;
-  return value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+  if (typeof value !== "string") return false;
+  try {
+    return normalizeWikiPath(value) === value;
+  } catch {
+    return false;
+  }
 }
 
 function validRepositoryManifestPath(value: unknown): value is string {
-  if (!validRepositoryRelativePath(value)) return false;
+  if (typeof value !== "string") return false;
   const [directory, ...rest] = value.split("/");
-  return validRepositoryDirectory(directory) && rest.length > 0;
+  return validRepositoryDirectory(directory) && rest.length > 0 && validRepositoryRelativePath(rest.join("/"));
 }
 
 function readRepositoryLocal(paths: WikiPaths, path: string): string | null {
@@ -985,16 +1107,64 @@ function repositoryMarkdownPaths(paths: WikiPaths): string[] {
   return files.sort();
 }
 
+function detectProjectMoveTargets(paths: WikiPaths, manifest: WikiManifest, localPaths: string[]): Map<string, string> {
+  const targets = new Map<string, string>();
+  const claimed = new Set<string>();
+  for (const entry of manifest.docs) {
+    if (!entry.movedTo) continue;
+    if (!validManifestPath(entry.movedTo)) throw new Error(`Unsafe Wiki move destination: ${entry.movedTo}`);
+    targets.set(entry.id, entry.movedTo);
+    claimed.add(entry.movedTo);
+  }
+  const known = new Set(manifest.docs.flatMap((entry) => [entry.path, entry.movedTo].filter((path): path is string => Boolean(path))));
+  const candidates = localPaths.filter((path) => !known.has(path));
+  for (const entry of manifest.docs) {
+    if (targets.has(entry.id) || readLocalText(paths, entry.path) !== null) continue;
+    const base = readVerifiedBase(paths, entry);
+    const matches = candidates.filter((path) => !claimed.has(path) && readLocalText(paths, path) === base);
+    if (matches.length !== 1) continue;
+    targets.set(entry.id, matches[0]!);
+    claimed.add(matches[0]!);
+  }
+  return targets;
+}
+
+function detectRepositoryMoveTargets(
+  paths: WikiPaths,
+  manifest: RepositoryWikiManifest,
+  localPaths: string[],
+): Map<string, string> {
+  const targets = new Map<string, string>();
+  const claimed = new Set<string>();
+  for (const entry of manifest.docs) {
+    if (!entry.movedTo) continue;
+    if (!validRepositoryManifestPath(entry.movedTo)) throw new Error(`Unsafe Repository Wiki move destination: ${entry.movedTo}`);
+    targets.set(entry.id, entry.movedTo);
+    claimed.add(entry.movedTo);
+  }
+  const known = new Set(manifest.docs.flatMap((entry) => [entry.path, entry.movedTo].filter((path): path is string => Boolean(path))));
+  const candidates = localPaths.filter((path) => !known.has(path));
+  for (const entry of manifest.docs) {
+    if (targets.has(entry.id) || readRepositoryLocal(paths, entry.path) !== null) continue;
+    const base = readRepositoryBase(paths, entry);
+    const directory = entry.path.split("/")[0];
+    const matches = candidates.filter((path) =>
+      !claimed.has(path) && path.startsWith(`${directory}/`) && readRepositoryLocal(paths, path) === base
+    );
+    if (matches.length !== 1) continue;
+    targets.set(entry.id, matches[0]!);
+    claimed.add(matches[0]!);
+  }
+  return targets;
+}
+
 function validManifestPath(value: unknown): value is string {
-  return typeof value === "string"
-    && value.length > 3
-    && value.length <= 200
-    && value.toLowerCase().endsWith(".md")
-    && value !== "."
-    && value !== ".."
-    && !value.includes("/")
-    && !value.includes("\\")
-    && !value.includes("\0");
+  if (typeof value !== "string") return false;
+  try {
+    return normalizeProjectWorkingPath(value) === value;
+  } catch {
+    return false;
+  }
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -1005,10 +1175,23 @@ function isWithin(root: string, candidate: string): boolean {
 function localMarkdownPaths(paths: WikiPaths): string[] {
   if (!existsSync(paths.wiki)) return [];
   assertSafeDirectory(paths.root, paths.wiki);
-  return readdirSync(paths.wiki, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md") && !entry.name.startsWith("."))
-    .map((entry) => entry.name)
-    .sort();
+  const files: string[] = [];
+  const visit = (directory: string, depth: number): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const target = join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`Wiki path is a symbolic link: ${target}`);
+      if (entry.isDirectory()) {
+        if (depth === 0 && entry.name === "repositories") continue;
+        visit(target, depth + 1);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md") && !entry.name.startsWith(".")) {
+        const path = relative(paths.wiki, target).split("\\").join("/");
+        if (!validManifestPath(path)) throw new Error(`Unsafe Wiki path: ${path}`);
+        files.push(path);
+      }
+    }
+  };
+  visit(paths.wiki, 0);
+  return files.sort();
 }
 
 function safeSlug(value: string): string {
@@ -1017,7 +1200,25 @@ function safeSlug(value: string): string {
 }
 
 function slugFromPath(path: string): string {
-  return path.replace(/\.md$/i, "");
+  return safeSlug(path.split("/").at(-1)?.replace(/\.md$/i, "") ?? "");
+}
+
+function uniqueSlugFromPath(path: string, used: Set<string>): string {
+  const base = slugFromPath(path);
+  if (!used.has(base)) return base;
+  for (let suffix = 2; suffix < 10_000; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  throw new Error(`Unable to allocate a unique Wiki slug for ${path}`);
+}
+
+function normalizeProjectWorkingPath(value: unknown): string {
+  const path = normalizeWikiPath(value);
+  if (path === "repositories.md" || path.startsWith("repositories/")) {
+    throw new Error("Project Wiki path uses the reserved repositories directory");
+  }
+  return path;
 }
 
 function wikiTitle(slug: string, body: string): string {
@@ -1104,6 +1305,16 @@ function writeAtomic(paths: WikiPaths, path: string, value: string): void {
   }
 }
 
+function moveRegularFile(paths: WikiPaths, root: string, from: string, to: string, label: string): void {
+  const source = join(root, ...from.split("/"));
+  const destination = join(root, ...to.split("/"));
+  if (source === destination) return;
+  if (readRegularText(paths.root, source, label) === null) throw new Error(`${label} not found: ${from}`);
+  assertSafeFileTarget(paths.root, destination);
+  if (existsSync(destination)) throw new Error(`Wiki destination already exists: ${to}`);
+  renameSync(source, destination);
+}
+
 function rmWritable(paths: WikiPaths, path: string): void {
   assertSafeFileTarget(paths.root, path);
   if (!existsSync(path)) return;
@@ -1125,6 +1336,11 @@ function clearConflicts(paths: WikiPaths): void {
 
 function writeManifest(paths: WikiPaths, manifest: WikiManifest): WikiManifest {
   writeAtomic(paths, paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
+}
+
+function writeRepositoryManifest(paths: WikiPaths, manifest: RepositoryWikiManifest): RepositoryWikiManifest {
+  writeAtomic(paths, repositoryManifestPath(paths), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }
 

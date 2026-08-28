@@ -103,7 +103,7 @@ describe("store migrations", () => {
     ]));
     expect(columnNames(database, "multiremi_agent_plugin_bindings")).not.toContain("task_kind");
     expect(columnNames(database, "multiremi_project_docs")).toEqual(expect.arrayContaining([
-      "storage_backend", "content_uri", "content_sha256", "sync_status", "sync_error", "snapshot_oid",
+      "path", "storage_backend", "content_uri", "content_sha256", "sync_status", "sync_error", "snapshot_oid",
     ]));
     expect(columnNames(database, "multiremi_project_doc_revisions")).toEqual(expect.arrayContaining([
       "content_uri", "content_sha256", "snapshot_oid",
@@ -134,6 +134,54 @@ describe("store migrations", () => {
       "auto_update_last_checked_at",
       "auto_update_last_result",
     ]));
+  });
+
+  it("backfills Project Wiki paths from stable slugs on legacy databases", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_project_docs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        kind TEXT NOT NULL DEFAULT 'wiki',
+        slug TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT,
+        body TEXT NOT NULL DEFAULT '',
+        tags TEXT NOT NULL DEFAULT '[]',
+        pinned INTEGER NOT NULL DEFAULT 0,
+        refs TEXT NOT NULL DEFAULT '[]',
+        source_task_id TEXT,
+        source_issue_id TEXT,
+        author_type TEXT,
+        author_id TEXT,
+        updated_by_type TEXT,
+        updated_by_id TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        storage_backend TEXT NOT NULL DEFAULT 'sql',
+        content_uri TEXT,
+        content_sha256 TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'sql',
+        sync_error TEXT,
+        snapshot_oid TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id, slug)
+      );
+      INSERT INTO multiremi_project_docs (
+        id, project_id, slug, title, created_at, updated_at
+      ) VALUES (
+        'pdoc_legacy', 'prj_legacy', 'build-guide', 'Build guide',
+        '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_project_docs")).toContain("path");
+    expect(database.query("SELECT slug, path FROM multiremi_project_docs WHERE id = 'pdoc_legacy'").get())
+      .toEqual({ slug: "build-guide", path: "build-guide.md" });
   });
 
   it("backfills daemon display names idempotently without overwriting customized profiles", () => {

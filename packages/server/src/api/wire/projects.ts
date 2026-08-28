@@ -298,6 +298,7 @@ export function projectDocCompatibilityResponse(doc: MultiremiProjectDoc): Recor
     workspace_id: doc.workspaceId,
     kind: doc.kind,
     slug: doc.slug,
+    path: doc.path,
     title: doc.title,
     summary: doc.summary,
     body: doc.body,
@@ -320,6 +321,7 @@ export function projectDocIndexEntryCompatibilityResponse(entry: MultiremiProjec
   return {
     id: entry.id,
     slug: entry.slug,
+    path: entry.path,
     title: entry.title,
     summary: entry.summary,
     body: entry.body,
@@ -349,10 +351,20 @@ export function projectDocErrorResponse(c: Context, err: unknown): Response | nu
   const message = err.message;
   if (message.startsWith("Project not found")) return c.json({ error: "project not found" }, 404);
   if (message.startsWith("Project doc not found")) return c.json({ error: "project doc not found" }, 404);
-  if (message === "title is required" || message === "memory body is required" || message.startsWith("unknown kind")) {
+  if (
+    message === "title is required"
+    || message === "memory body is required"
+    || message === "invalid project wiki path"
+    || message.startsWith("unknown kind")
+  ) {
     return c.json({ error: message }, 400);
   }
   if (message === "project doc version conflict") return c.json({ error: message }, 409);
+  if (message.includes("project doc slug conflict")) return c.json({ error: "a doc with this slug already exists" }, 409);
+  if (message.includes("project doc path conflict")) return c.json({ error: "a doc with this path already exists" }, 409);
+  if (message.includes("multiremi_project_docs.project_id, multiremi_project_docs.path") || message.includes("idx_multiremi_project_docs_path")) {
+    return c.json({ error: "a doc with this path already exists" }, 409);
+  }
   // Both dialects report the (project_id, slug) UNIQUE violation differently.
   if (message.includes("UNIQUE constraint failed") || message.includes("duplicate key value violates unique constraint")) {
     return c.json({ error: "a doc with this slug already exists" }, 409);

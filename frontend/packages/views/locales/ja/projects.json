@@ -175,6 +175,8 @@
     "memory_no_results": "フィルターに一致するメモリはありません。",
     "memory_clear_filters": "フィルターをクリア",
     "pages_label": "Wiki ページ",
+    "pages_search": "ページを絞り込む...",
+    "pages_no_match": "フィルターに一致する Wiki ページはありません。",
     "repository_facts": "リポジトリの事実",
     "pages_empty": "ページはまだありません",
     "pinned_badge": "ピン留め",

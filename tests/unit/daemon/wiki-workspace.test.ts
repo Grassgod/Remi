@@ -31,6 +31,20 @@ describe("Issue Wiki workspace", () => {
     expect(readFileSync(join(root, ".multiremi", "wiki-base", "files", "guide.md"), "utf8")).toBe("remote v2\n");
   });
 
+  test("materializes nested Project Wiki paths and rejects unsafe paths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-issue-wiki-nested-"));
+    roots.push(root);
+    await prepareIssueWikiWorkspace(root, task("nested", 1, { path: "architecture/components/guide.md" }));
+    expect(readFileSync(join(root, "wiki", "architecture", "components", "guide.md"), "utf8")).toBe("nested\n");
+    expect(JSON.parse(readFileSync(join(root, ".multiremi", "wiki-base", "manifest.json"), "utf8")).docs[0])
+      .toMatchObject({ id: "pdoc_1", slug: "guide", path: "architecture/components/guide.md" });
+
+    const unsafeRoot = mkdtempSync(join(tmpdir(), "multiremi-issue-wiki-unsafe-path-"));
+    roots.push(unsafeRoot);
+    await expect(prepareIssueWikiWorkspace(unsafeRoot, task("unsafe", 1, { path: "../escape.md" })))
+      .rejects.toThrow("Project Wiki path is invalid");
+  });
+
   test("fails closed when an Issue changes projects", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-issue-wiki-project-"));
     roots.push(root);
@@ -159,7 +173,7 @@ describe("Issue Wiki workspace", () => {
 function task(
   body: string,
   version: number,
-  overrides: { projectId?: string; docId?: string } = {},
+  overrides: { projectId?: string; docId?: string; path?: string } = {},
 ): AgentTask {
   const projectId = overrides.projectId ?? "prj_1";
   return {
@@ -182,6 +196,7 @@ function task(
       workspaceId: "local",
       kind: "wiki",
       slug: "guide",
+      path: overrides.path,
       title: "Guide",
       summary: null,
       body,

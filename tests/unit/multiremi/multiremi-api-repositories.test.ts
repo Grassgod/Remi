@@ -74,9 +74,17 @@ describe("Multiremi API - workspace repositories", () => {
     expect(automations.map((item) => item.title).sort()).toEqual([
       "Atlas · Project Knowledge",
       "Atlas · Repository Wiki",
+      "Atlas · Wiki Librarian",
     ]);
     expect(automations.flatMap((item) => store.listAutopilotTriggers(item.id).map((trigger) => trigger.kind)).sort())
-      .toEqual(["scm_event", "system_event"]);
+      .toEqual(["schedule", "scm_event", "system_event"]);
+    const librarian = automations.find((item) => item.title === "Atlas · Wiki Librarian")!;
+    expect(store.listAutopilotTriggers(librarian.id)[0]).toMatchObject({
+      kind: "schedule",
+      cronExpression: "0 3 * * *",
+      timezone: "UTC",
+      enabled: true,
+    });
 
     const repositoryAutomation = automations.find((item) => item.managedKind === "atlas_repository_wiki")!;
     const agentEdit = await app.request(`/api/agents/${atlas!.id}`, {

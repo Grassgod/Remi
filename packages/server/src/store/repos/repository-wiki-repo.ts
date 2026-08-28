@@ -9,6 +9,7 @@ import type {
   MultiremiRepositoryWikiStatus,
   UpdateRepositoryWikiDocInput,
 } from "@multiremi/contracts/types.js";
+import { normalizeWikiPath } from "@multiremi/contracts/wiki-path";
 
 type Row = Record<string, unknown>;
 
@@ -186,12 +187,11 @@ export class RepositoryWikiRepo {
 }
 
 export function normalizeRepositoryWikiPath(value: unknown): string {
-  const text = String(value ?? "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-  if (!text || text.length > 512 || text.includes("\0")) throw new Error("invalid repository wiki path");
-  const parts = text.split("/");
-  if (parts.some((part) => !part || part === "." || part === "..")) throw new Error("invalid repository wiki path");
-  const normalized = parts.join("/");
-  return normalized.toLowerCase().endsWith(".md") ? normalized : `${normalized}.md`;
+  try {
+    return normalizeWikiPath(value);
+  } catch {
+    throw new Error("invalid repository wiki path");
+  }
 }
 
 function slugify(value: string): string {

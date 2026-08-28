@@ -1067,6 +1067,7 @@ export function runMigrations(db: SqlDatabase): void {
       workspace_id TEXT NOT NULL DEFAULT 'local',
       kind TEXT NOT NULL DEFAULT 'wiki',
       slug TEXT NOT NULL,
+      path TEXT NOT NULL,
       title TEXT NOT NULL,
       summary TEXT,
       body TEXT NOT NULL DEFAULT '',
@@ -1089,6 +1090,7 @@ export function runMigrations(db: SqlDatabase): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(project_id, slug),
+      UNIQUE(project_id, path),
       FOREIGN KEY(project_id) REFERENCES multiremi_projects(id) ON DELETE CASCADE
     );
 
@@ -2306,6 +2308,9 @@ export function runMigrations(db: SqlDatabase): void {
   // only dev databases predate the column, but CREATE TABLE IF NOT EXISTS never
   // revisits an existing table — so it gets patched in like every other column.
   addColumnIfMissing(db, "multiremi_project_docs", "refs TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "multiremi_project_docs", "path TEXT");
+  db.run("UPDATE multiremi_project_docs SET path = slug || '.md' WHERE path IS NULL OR TRIM(path) = ''");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_project_docs_path ON multiremi_project_docs(project_id, path)");
   addColumnIfMissing(db, "multiremi_project_docs", "storage_backend TEXT NOT NULL DEFAULT 'sql'");
   addColumnIfMissing(db, "multiremi_project_docs", "content_uri TEXT");
   addColumnIfMissing(db, "multiremi_project_docs", "content_sha256 TEXT");

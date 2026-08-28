@@ -176,6 +176,8 @@
     "memory_no_results": "필터와 일치하는 메모리가 없습니다.",
     "memory_clear_filters": "필터 지우기",
     "pages_label": "Wiki 페이지",
+    "pages_search": "페이지 필터...",
+    "pages_no_match": "필터와 일치하는 Wiki 페이지가 없습니다.",
     "repository_facts": "저장소 사실",
     "pages_empty": "아직 페이지가 없습니다",
     "pinned_badge": "고정됨",

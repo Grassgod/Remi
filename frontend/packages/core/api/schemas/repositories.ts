@@ -115,6 +115,8 @@ export const atlasWikiSetupStatusSchema = z.object({
   repository_trigger_id: z.string().nullable().default(null),
   project_autopilot_id: z.string().nullable().default(null),
   project_trigger_id: z.string().nullable().default(null),
+  librarian_autopilot_id: z.string().nullable().default(null),
+  librarian_trigger_id: z.string().nullable().default(null),
   scm_warning: z.string().nullable().optional(),
 }).loose();
 
@@ -141,6 +143,8 @@ export const EMPTY_ATLAS_WIKI_SETUP_STATUS: AtlasWikiSetupStatus = {
   repository_trigger_id: null,
   project_autopilot_id: null,
   project_trigger_id: null,
+  librarian_autopilot_id: null,
+  librarian_trigger_id: null,
 };
 
 export const EMPTY_REPOSITORY_LIST_RESPONSE: WorkspaceRepositoryListResponse = {

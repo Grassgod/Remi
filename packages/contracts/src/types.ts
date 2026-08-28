@@ -2496,6 +2496,8 @@ export interface MultiremiProjectDoc {
   workspaceId: string;
   kind: MultiremiProjectDocKind;
   slug: string;
+  /** Workspace-relative Markdown path. Slug remains the stable document identity. */
+  path: string;
   title: string;
   summary: string | null;
   body: string;
@@ -2644,6 +2646,7 @@ export interface MultiremiWorkspaceProjectDoc extends MultiremiProjectDoc {
 export interface MultiremiProjectDocIndexEntry {
   id: string;
   slug: string;
+  path: string;
   title: string;
   summary: string | null;
   /** memory entries carry a body (trimmed to 500 chars); wiki entries are null. */
@@ -2737,6 +2740,7 @@ export interface CreateProjectDocInput {
   id?: string;
   kind?: string | null;
   slug?: string | null;
+  path?: string | null;
   title?: string;
   summary?: string | null;
   body?: string | null;
@@ -2755,6 +2759,7 @@ export interface CreateProjectDocInput {
 
 export interface UpdateProjectDocInput {
   slug?: string | null;
+  path?: string | null;
   title?: string;
   summary?: string | null;
   body?: string | null;

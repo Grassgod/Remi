@@ -8,9 +8,9 @@ import {
   BookText,
   Brain,
   FileQuestion,
-  FileText,
   Files,
   GitFork,
+  PanelLeft,
   Pin,
   Search,
 } from "lucide-react";
@@ -19,6 +19,7 @@ import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import { Sheet, SheetContent, SheetTitle } from "@multiremi/ui/components/ui/sheet";
 import { projectDocListOptions } from "@multiremi/core/project-docs";
 import { projectResourcesOptions } from "@multiremi/core/projects";
 import { repositoryListOptions } from "@multiremi/core/repositories";
@@ -29,6 +30,7 @@ import type { ProjectDoc } from "@multiremi/core/types";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import { DocRefs } from "../../../common/doc-refs";
 import { EmptyState } from "../../../common/empty-state";
+import { WikiDirectoryTree, WikiPathBreadcrumb } from "../../../common/wiki-directory-tree";
 import { ReadonlyContent } from "../../../editor";
 import { AppLink } from "../../../navigation";
 import { useT } from "../../../i18n";
@@ -79,8 +81,8 @@ function SidebarRow({
     </>
   );
   const className = cn(
-    "flex w-auto max-w-64 shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors xl:w-full xl:max-w-none",
-    nested && "xl:pl-6",
+    "flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-sm transition-colors",
+    nested && "pl-6",
     active
       ? nested
         ? "bg-accent/40 font-medium text-foreground"
@@ -192,6 +194,7 @@ function WikiPagePane({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) 
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-5">
+      <WikiPathBreadcrumb path={projectWikiPath(doc)} className="mb-1.5" />
       <h2 className="text-lg font-semibold">{doc.title}</h2>
       {doc.summary && (
         <p className="mt-1 text-sm text-muted-foreground">{doc.summary}</p>
@@ -683,6 +686,8 @@ export function ProjectWikiSection({
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
+  const [pageFilter, setPageFilter] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const docsQuery = useQuery(projectDocListOptions(wsId, projectId));
   const resourcesQuery = useQuery(projectResourcesOptions(wsId, projectId));
   const repositoriesQuery = useQuery(repositoryListOptions(wsId));
@@ -703,6 +708,12 @@ export function ProjectWikiSection({
     .filter((doc) => doc.kind === "wiki")
     .sort(byUpdatedAtDesc);
   const visibleWikiDocs = wikiDocs.filter((doc) => doc.slug !== "_schema");
+  const treePages = useMemo(() => visibleWikiDocs.map((doc) => ({
+    id: doc.id,
+    path: projectWikiPath(doc),
+    title: doc.title,
+    searchText: `${doc.summary ?? ""}\n${doc.tags.join(" ")}`,
+  })), [visibleWikiDocs]);
 
   // Nothing prefetches this key, so the first open of every Wiki tab starts
   // here. Falling through to the empty state instead would claim the project
@@ -771,10 +782,9 @@ export function ProjectWikiSection({
     ? (wikiDocs.find((doc) => doc.id === selectedRef) ??
       wikiDocs.find((doc) => doc.slug === selectedRef))
     : undefined;
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
-      <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b px-2 xl:block xl:h-auto xl:w-56 xl:space-y-0.5 xl:overflow-y-auto xl:border-b-0 xl:border-r xl:p-2">
+  const sidebar = (
+    <nav className="flex h-full min-h-0 w-full flex-col p-2" aria-label={t(($) => $.wiki.tab_wiki)}>
+      <div className="shrink-0 space-y-0.5">
         <SidebarRow
           icon={<Brain className="h-4 w-4 shrink-0" />}
           label={t(($) => $.wiki.memory_node)}
@@ -808,29 +818,67 @@ export function ProjectWikiSection({
           label={t(($) => $.wiki.pages_label)}
           count={visibleWikiDocs.length}
           active={Boolean(selectedRef)}
-          href={
-            visibleWikiDocs[0]
-              ? paths.projectWikiPage(
-                  projectId,
-                  visibleWikiDocs[0].slug || visibleWikiDocs[0].id,
-                )
-              : undefined
-          }
+          href={visibleWikiDocs[0]
+            ? paths.projectWikiPage(projectId, visibleWikiDocs[0].slug || visibleWikiDocs[0].id)
+            : undefined}
           disabledTitle={t(($) => $.wiki.pages_empty)}
           markCurrent={false}
         />
-        {visibleWikiDocs.map((doc) => (
-          <SidebarRow
-            key={doc.id}
-            icon={<FileText className="h-4 w-4 shrink-0" />}
-            label={doc.title}
-            active={selectedDoc?.id === doc.id}
-            href={paths.projectWikiPage(projectId, doc.slug || doc.id)}
-            nested
-          />
-        ))}
       </div>
-      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+      {visibleWikiDocs.length > 0 && (
+        <>
+          <div className="relative my-2 shrink-0">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={pageFilter}
+              onChange={(event) => setPageFilter(event.target.value)}
+              placeholder={t(($) => $.wiki.pages_search)}
+              aria-label={t(($) => $.wiki.pages_search)}
+              className="h-8 pl-8 text-sm"
+            />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <WikiDirectoryTree
+              pages={treePages}
+              selectedId={selectedDoc?.id}
+              filter={pageFilter}
+              noMatches={t(($) => $.wiki.pages_no_match)}
+              baseDepth={1}
+              hrefFor={(page) => {
+                const doc = visibleWikiDocs.find((candidate) => candidate.id === page.id)!;
+                return paths.projectWikiPage(projectId, doc.slug || doc.id);
+              }}
+              onNavigate={() => setSidebarOpen(false)}
+            />
+          </div>
+        </>
+      )}
+    </nav>
+  );
+
+  return (
+    <div className="flex min-h-0 flex-1">
+      <aside className="hidden w-[280px] shrink-0 border-r lg:block">{sidebar}</aside>
+      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent side="left" className="!w-[280px] gap-0 p-0" showCloseButton={false}>
+          <SheetTitle className="sr-only">{t(($) => $.wiki.tab_wiki)}</SheetTitle>
+          {sidebar}
+        </SheetContent>
+      </Sheet>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex h-10 shrink-0 items-center border-b px-2 lg:hidden">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setSidebarOpen(true)}
+            aria-label={t(($) => $.wiki.tab_wiki)}
+            title={t(($) => $.wiki.tab_wiki)}
+          >
+            <PanelLeft className="size-4" />
+          </Button>
+        </div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {selectedDoc ? (
           <div className="h-full overflow-y-auto">
             <WikiPagePane doc={selectedDoc} pages={wikiDocs} />
@@ -840,6 +888,7 @@ export function ProjectWikiSection({
         ) : (
           <MemoryPane docs={memoryDocs} pages={wikiDocs} />
         )}
+        </div>
       </div>
     </div>
   );
@@ -855,4 +904,8 @@ function canonicalRepositoryUrl(value: string): string {
   } catch {
     return trimmed.toLowerCase().replace(/\.git$/i, "").replace(/\/+$/, "");
   }
+}
+
+function projectWikiPath(doc: ProjectDoc): string {
+  return doc.path || `${doc.slug || doc.id}.md`;
 }

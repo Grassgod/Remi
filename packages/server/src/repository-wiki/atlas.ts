@@ -4,6 +4,7 @@ import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 export const ATLAS_AGENT_NAME = "Atlas · LLM Wiki";
 export const ATLAS_PROJECT_AUTOPILOT_TITLE = "Atlas · Project Knowledge";
 export const ATLAS_REPOSITORY_WIKI_AUTOPILOT_TITLE = "Atlas · Repository Wiki";
+export const ATLAS_WIKI_LIBRARIAN_AUTOPILOT_TITLE = "Atlas · Wiki Librarian";
 export const ATLAS_PROJECT_AUTOPILOT_KIND = "atlas_project_knowledge" as const;
 export const ATLAS_REPOSITORY_WIKI_AUTOPILOT_KIND = "atlas_repository_wiki" as const;
 
