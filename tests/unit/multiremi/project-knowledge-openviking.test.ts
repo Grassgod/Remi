@@ -28,10 +28,12 @@ class FakeOpenViking implements OpenVikingClientContract {
   failRemovesAfterDelete = 0;
   failHealth = false;
   findTargets: Array<string | string[]> = [];
+  readCalls: string[] = [];
 
   async health(): Promise<void> { if (this.failHealth) throw new Error("unavailable"); }
   async ensureDirectory(uri: string): Promise<void> { this.directories.add(uri); }
   async read(uri: string): Promise<string> {
+    this.readCalls.push(uri);
     const value = this.files.get(uri);
     if (value === undefined) throw new Error(`not found: ${uri}`);
     return value;
@@ -137,10 +139,18 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     expect(sqlRows.every((row) => row.storage_backend === "openviking" && row.sync_status === "ready")).toBe(true);
     expect((await service.getProjectDocByRef(alpha.id, memory.slug))?.body).toBe("The platform team owns Phoenix rollback.");
 
+    const readsBeforeRecall = client.readCalls.length;
     const hits = await service.recallProjectDocs(alpha.id, "Phoenix rollback", { kind: "memory" });
     expect(hits.map((hit) => hit.doc.id)).toEqual([memory.id]);
     expect(hits[0]).toMatchObject({ score: 0.9, snippet: "match:Phoenix rollback" });
+    expect(hits[0]!.doc.body).toBe("");
+    expect(client.readCalls).toHaveLength(readsBeforeRecall);
     expect(client.findTargets.at(-1)).toBe(`viking://resources/multiremi/workspaces/local/projects/${alpha.id}/knowledge/memory`);
+
+    const searched = await service.searchProjectDocs(alpha.id, "Phoenix rollback", { kind: "memory" });
+    expect(searched).toHaveLength(1);
+    expect(searched[0]!.body).toBe("The platform team owns Phoenix rollback.");
+    expect(client.readCalls).toHaveLength(readsBeforeRecall + 1);
 
     const updated = await service.updateProjectDoc(alpha.id, memory.slug, {
       body: "Phoenix rollback belongs to Release Engineering.",

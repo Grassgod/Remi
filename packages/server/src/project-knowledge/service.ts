@@ -66,6 +66,7 @@ export interface ProjectKnowledgeServiceContract {
 export class ProjectKnowledgeUnavailableError extends Error {}
 
 const log = createLogger("project-knowledge");
+const SEARCH_HYDRATE_CONCURRENCY = 4;
 
 export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract {
   constructor(
@@ -225,7 +226,23 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     query: string,
     input: ProjectKnowledgeSearchOptions = {},
   ): Promise<ProjectKnowledgeDoc[]> {
-    return (await this.recallProjectDocs(projectId, query, input)).map((hit) => hit.doc);
+    const hits = await this.recallProjectDocs(projectId, query, input);
+    if (this.mode !== "openviking") return hits.map((hit) => hit.doc);
+
+    const docs: ProjectKnowledgeDoc[] = [];
+    for (let offset = 0; offset < hits.length; offset += SEARCH_HYDRATE_CONCURRENCY) {
+      const batch = hits.slice(offset, offset + SEARCH_HYDRATE_CONCURRENCY);
+      const hydrated = await Promise.all(batch.map(async (hit) => {
+        try {
+          return await this.hydrate(hit.doc);
+        } catch (error) {
+          log.warn(`skipping unreadable OpenViking search hit ${hit.doc.id}: ${safeError(error)}`);
+          return null;
+        }
+      }));
+      docs.push(...hydrated.filter((doc): doc is ProjectKnowledgeDoc => doc !== null));
+    }
+    return docs;
   }
 
   async recallProjectDocs(
@@ -259,7 +276,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
       if (!hit.uri.endsWith(".md") || hit.uri.endsWith("/.abstract.md")) continue;
       const metadata = this.findDocByUri(projectId, hit.uri);
       if (!metadata || (kind && metadata.kind !== kind)) continue;
-      output.push({ doc: await this.hydrate(metadata), score: hit.score, snippet: hit.abstract, uri: hit.uri });
+      output.push({ doc: asKnowledgeDoc(metadata), score: hit.score, snippet: hit.abstract, uri: hit.uri });
     }
     return output.slice(0, limit);
   }
