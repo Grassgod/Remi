@@ -18,6 +18,21 @@ function delegationReturnReason(reason: string | undefined, t: IssuesT): string 
   }
 }
 
+function childDoneParentReason(reason: string | undefined, t: IssuesT): string {
+  switch (reason) {
+    case "no_assignee":
+      return t(($) => $.activity.child_done_parent_reason_no_assignee);
+    case "agent_unavailable":
+      return t(($) => $.activity.child_done_parent_reason_agent_unavailable);
+    case "squad_leader_unavailable":
+      return t(($) => $.activity.child_done_parent_reason_squad_leader_unavailable);
+    case "active_task_exists":
+      return t(($) => $.activity.child_done_parent_reason_active_task_exists);
+    default:
+      return reason?.trim() || t(($) => $.activity.reason_unknown);
+  }
+}
+
 function commentMentionReason(reason: string | undefined, t: IssuesT): string {
   switch (reason) {
     case "self_mention":
@@ -103,6 +118,12 @@ export function formatActivity(
     case "delegation_return_skipped":
       return t(($) => $.activity.delegation_return_skipped, {
         reason: delegationReturnReason(details.reason, t),
+      });
+    case "child_done_parent_triggered":
+      return t(($) => $.activity.child_done_parent_triggered);
+    case "child_done_parent_skipped":
+      return t(($) => $.activity.child_done_parent_skipped, {
+        reason: childDoneParentReason(details.reason, t),
       });
     case "comment_mention_skipped":
       return t(($) => $.activity.comment_mention_skipped, {
