@@ -158,6 +158,54 @@ describe("ApiClient schema fallback", () => {
       const res = await client.listChildIssues("issue-1");
       expect(res).toEqual({ issues: [] });
     });
+
+    it("normalizes the native camelCase issue shape from the Bun API", async () => {
+      stubFetchJson({
+        issues: [{
+          id: "child-1",
+          workspaceId: "ws-1",
+          number: 2,
+          key: "MUL-2",
+          title: "Child issue",
+          description: null,
+          status: "in_review",
+          priority: "none",
+          assigneeType: null,
+          assigneeId: null,
+          createdBy: null,
+          parentIssueId: "parent-1",
+          issueKind: "execution",
+          sourceIssueId: null,
+          projectId: null,
+          position: 0,
+          startDate: null,
+          dueDate: null,
+          metadata: {},
+          completedAt: null,
+          archivedAt: null,
+          createdAt: "2026-08-28T00:00:00Z",
+          updatedAt: "2026-08-28T00:00:00Z",
+        }],
+      });
+      const client = new ApiClient("https://api.example.test");
+
+      const res = await client.listChildIssues("parent-1");
+
+      expect(res.issues).toHaveLength(1);
+      expect(res.issues[0]).toMatchObject({
+        id: "child-1",
+        workspace_id: "ws-1",
+        identifier: "MUL-2",
+        status: "in_review",
+        creator_type: "member",
+        creator_id: "local",
+        parent_issue_id: "parent-1",
+        issue_kind: "execution",
+        project_id: null,
+        created_at: "2026-08-28T00:00:00Z",
+        updated_at: "2026-08-28T00:00:00Z",
+      });
+    });
   });
 
   // Agent template catalog is hit by the desktop create-agent picker.
