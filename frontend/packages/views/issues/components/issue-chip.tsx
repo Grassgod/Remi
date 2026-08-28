@@ -1,7 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { issueListOptions, issueDetailOptions } from "@multiremi/core/issues/queries";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { findCachedIssue, issueDetailOptions } from "@multiremi/core/issues/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { StatusIcon } from "./status-icon";
 
@@ -32,10 +32,14 @@ const BASE_CLASS =
 
 export function IssueChip({ issueId, fallbackLabel, className }: IssueChipProps) {
   const wsId = useWorkspaceId();
-  const { data: issues = [] } = useQuery(issueListOptions(wsId));
-  const listIssue = issues.find((i) => i.id === issueId);
+  const queryClient = useQueryClient();
+  // Passive cache read, never a fetch. Chips render inline in comment bodies,
+  // so subscribing to the issue list here made every mention-bearing issue pay
+  // for the full per-status list fan-out (MUL-172).
+  const listIssue = findCachedIssue(queryClient, wsId, issueId);
 
-  // Fallback fetch for issues outside the first page of the list (e.g. Done).
+  // Fallback fetch for issues outside the first page of the list (e.g. Done),
+  // and for anything not in the cache at all.
   const { data: detailIssue } = useQuery({
     ...issueDetailOptions(wsId, issueId),
     enabled: !listIssue,

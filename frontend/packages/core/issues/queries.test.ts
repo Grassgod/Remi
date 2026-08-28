@@ -11,6 +11,7 @@ import {
   PROJECT_GANTT_MAX_ISSUES,
   PROJECT_GANTT_PAGE_LIMIT,
   childrenByParentsOptions,
+  findCachedIssue,
   issueKeys,
   projectGanttIssuesOptions,
 } from "./queries";
@@ -239,5 +240,64 @@ describe("childrenByParentsOptions chunking", () => {
 
     expect(grouped.get("p-0")).toHaveLength(1);
     expect(grouped.get(lastId)).toHaveLength(1);
+  });
+});
+
+describe("findCachedIssue", () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  });
+
+  afterEach(() => {
+    qc.clear();
+  });
+
+  /** The bucketed shape `issueListOptions` caches (pre-`select`). */
+  function seed(key: readonly unknown[], issues: Issue[]) {
+    qc.setQueryData(key, {
+      byStatus: { todo: { issues, total: issues.length } },
+    });
+  }
+
+  it("finds an issue cached under a sorted key when the caller knows no sort", () => {
+    // The MUL-172 regression: the list page writes under `listSorted(ws, sort)`,
+    // and a lookup-only caller has no sort to pass. Matching on the shared
+    // prefix is what makes the seed hit instead of triggering a fresh fan-out.
+    seed(issueKeys.listSorted(WS_ID, { sort_by: "priority" }), [makeIssue(7)]);
+
+    expect(findCachedIssue(qc, WS_ID, "issue-7")?.identifier).toBe("MUL-7");
+  });
+
+  it("also reads the my-issues caches, so the seed survives either entry path", () => {
+    seed(issueKeys.myListSorted(WS_ID, "all", {}, { sort_by: "priority" }), [makeIssue(9)]);
+
+    expect(findCachedIssue(qc, WS_ID, "issue-9")?.identifier).toBe("MUL-9");
+  });
+
+  it("never issues a request — a cache miss returns undefined, not a fetch", () => {
+    const listIssues = vi
+      .fn<(params?: ListIssuesParams) => Promise<ListIssuesResponse>>()
+      .mockResolvedValue({ issues: [makeIssue(1)], total: 1 });
+    installFakeApi(listIssues);
+
+    expect(findCachedIssue(qc, WS_ID, "issue-absent")).toBeUndefined();
+    expect(listIssues).not.toHaveBeenCalled();
+  });
+
+  it("ignores caches under the same prefix that are not bucketed lists", () => {
+    // `myAll` also covers assignee-group queries, which cache a
+    // GroupedIssuesResponse — reading those must not throw.
+    qc.setQueryData(issueKeys.myAssigneeGroups(WS_ID, {}), { groups: [] });
+    seed(issueKeys.listSorted(WS_ID), [makeIssue(3)]);
+
+    expect(findCachedIssue(qc, WS_ID, "issue-3")?.identifier).toBe("MUL-3");
+  });
+
+  it("scopes to the workspace", () => {
+    seed(issueKeys.listSorted(WS_ID), [makeIssue(5)]);
+
+    expect(findCachedIssue(qc, "ws-other", "issue-5")).toBeUndefined();
   });
 });
