@@ -1767,6 +1767,13 @@ export class TasksRepo {
       const followUps = this.afterTaskTerminal(failed, "failed", input.error, true);
       return { task: failed, followUps };
     })();
+    if (
+      !terminal.followUps.retry
+      && terminal.task.issueId
+      && terminal.task.failureReason === "agent_error.context_overflow"
+    ) {
+      this.postContextOverflowSystemComment(terminal.task);
+    }
     if (terminal.followUps.retry) this.ctx.notifyTaskEnqueued(terminal.followUps.retry);
     if (terminal.followUps.delegationReturn) this.ctx.notifyTaskEnqueued(terminal.followUps.delegationReturn);
     const task = terminal.task;
@@ -2604,6 +2611,18 @@ export class TasksRepo {
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.
       log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private postContextOverflowSystemComment(task: MultiremiTask): void {
+    if (!task.issueId) return;
+    const body = "The agent could not complete this task because its context still exceeded the provider limit "
+      + `at attempt ${task.attempt} of ${task.maxAttempts}. Automatic retries use progressively smaller Session `
+      + "projections. Start a new Session, or publish and condense a checkpoint before retrying.";
+    try {
+      this.ctx.issues().createTaskFailureSystemComment(task.issueId, task.issueSessionId, task.id, body);
+    } catch (err) {
+      log.warn(`context overflow system comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

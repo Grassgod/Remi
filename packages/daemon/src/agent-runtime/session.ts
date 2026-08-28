@@ -88,6 +88,9 @@ export class AgentSession {
     if (staleSession && recovered === null) {
       throw new Error("Stale provider session: no conversation found");
     }
+    if (promptTooLong && recovered === null) {
+      throw new Error("Prompt is too long: context length exceeded");
+    }
 
     return {
       response: resultResponse,

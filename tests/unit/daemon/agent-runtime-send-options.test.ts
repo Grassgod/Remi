@@ -13,6 +13,7 @@ import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { AgentSessionConfig, EphemeralContext, PersistentContext } from "@daemon/agent-runtime/types.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { Provider, ProviderEvent, SendOptions } from "@shared/contracts/provider-types.js";
+import { classifyDaemonTaskFailure, TaskFailureReason } from "@multiremi/task-failure.js";
 
 function ephemeralContext(agent: Partial<NonNullable<AgentTask["agent"]>>, task: Partial<AgentTask> = {}): EphemeralContext {
   return {
@@ -179,6 +180,34 @@ test("ephemeral stale sessions report once and never replay inside the daemon", 
   await expect(drain()).rejects.toThrow("Stale provider session: no conversation found");
   expect(sends).toBe(1);
   expect(clears).toBe(0);
+});
+
+test("ephemeral prompt overflow throws once and classifies as context overflow", async () => {
+  let sends = 0;
+  const provider = {
+    name: "overflow",
+    async send() { return { text: "" }; },
+    async *sendStream(): AsyncGenerator<ProviderEvent> {
+      sends += 1;
+      yield {
+        sessionUpdate: "agent_message_chunk",
+        content: [{ type: "text", text: "Prompt is too long" }],
+      } as ProviderEvent;
+    },
+    getLastResponse: () => null,
+    async healthCheck() { return true; },
+  } as Provider;
+  const config = new AgentRuntime().assemble(ephemeralContext({ provider: "codex" }));
+  const drain = async () => {
+    for await (const _event of new AgentSession(provider, config).run("oversized prompt")) {
+      // The provider error text is consumed, then surfaced as a stable exception.
+    }
+  };
+
+  await expect(drain()).rejects.toThrow("Prompt is too long: context length exceeded");
+  expect(sends).toBe(1);
+  expect(classifyDaemonTaskFailure("codex", "Prompt is too long: context length exceeded"))
+    .toBe(TaskFailureReason.AgentContextOverflow);
 });
 
 test("AgentSession forwards the assembled system prompt and memory context", async () => {

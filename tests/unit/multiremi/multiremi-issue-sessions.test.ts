@@ -280,6 +280,118 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(store.buildTaskSessionProjection(retry!.id)?.mode).toBe("bootstrap");
   });
 
+  it("degrades context-overflow retries, resets provider state, and stops at max attempts", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_context_overflow",
+      name: "Context overflow runtime",
+      provider: "codex",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({ name: "Context agent", provider: "codex" });
+    const issue = store.createIssue({ title: "Context retry", workspaceId: "local" });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+
+    const seed = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Seed provider state" });
+    expect(store.claimTask(runtime.id)?.id).toBe(seed.id);
+    store.startTask(seed.id);
+    store.buildTaskSessionProjection(seed.id);
+    store.completeTask(seed.id, { output: "Seeded", sessionId: "dead_context_session" });
+
+    const first = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      issueSessionId: session.id,
+      prompt: "Process the long history",
+      maxAttempts: 3,
+    });
+    expect(first.sessionId).toBe("dead_context_session");
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.failTask(first.id, {
+      error: "Prompt is too long: context length exceeded",
+      failureReason: "agent_error.context_overflow",
+    });
+
+    const second = store.listTasksForIssue(issue.id).find((task) => task.parentTaskId === first.id)!;
+    expect(second).toMatchObject({
+      status: "queued",
+      attempt: 2,
+      projectionDegradeLevel: 1,
+      sessionId: null,
+      runtimeId: null,
+    });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      providerSessionId: null,
+      cursorSeq: 0,
+    });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(second.id);
+    store.startTask(second.id);
+    store.failTask(second.id, {
+      error: "Prompt is too long: context length exceeded",
+      failureReason: "agent_error.context_overflow",
+    });
+    const third = store.listTasksForIssue(issue.id).find((task) => task.parentTaskId === second.id)!;
+    expect(third).toMatchObject({
+      status: "queued",
+      attempt: 3,
+      projectionDegradeLevel: 2,
+      sessionId: null,
+      runtimeId: null,
+    });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(third.id);
+    store.startTask(third.id);
+    store.failTask(third.id, {
+      error: "Prompt is too long: context length exceeded",
+      failureReason: "agent_error.context_overflow",
+    });
+
+    expect(store.listTasksForIssue(issue.id).some((task) => task.parentTaskId === third.id)).toBe(false);
+    const systemComment = store.listIssueComments(issue.id)
+      .find((comment) => comment.authorType === "system" && comment.taskId === third.id);
+    expect(systemComment?.type).toBe("system");
+    expect(systemComment?.issueSessionId).toBe(session.id);
+    expect(systemComment?.body).toContain("progressively smaller Session projections");
+    expect(systemComment?.body).not.toContain("Prompt is too long");
+  });
+
+  it("bounds and records a valid bootstrap projection for more than 300 Session events", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Long-history agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Long history", workspaceId: "local" });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    for (let index = 0; index < 320; index += 1) {
+      store.appendSessionEvent(session.id, {
+        authorType: "member",
+        authorId: null,
+        kind: index === 25 ? "result_published" : "message",
+        body: `event-${index}:` + "x".repeat(1_000),
+      });
+    }
+    const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Use bounded history" });
+
+    const projection = store.buildTaskSessionProjection(task.id)!;
+    expect(projection.mode).toBe("bootstrap");
+    expect(projection.truncated).toBe(true);
+    expect(projection.omittedEvents).toBeGreaterThan(0);
+    expect(projection.estimatedTokens).toBeLessThanOrEqual(64_000);
+    expect(projection.jsonl.split("\n").every((line) => {
+      try {
+        JSON.parse(line);
+        return true;
+      } catch {
+        return false;
+      }
+    })).toBe(true);
+    expect(store.getTask(task.id)).toMatchObject({
+      projectionTruncated: true,
+      projectionOmittedEvents: projection.omittedEvents,
+      projectionEstimatedTokens: projection.estimatedTokens,
+    });
+  });
+
   it("drops a lane when its agent switches provider instead of resuming foreign ACP state", () => {
     const store = createStore();
     const runtime = store.registerRuntime({
