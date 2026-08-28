@@ -2,8 +2,8 @@
  * `remi doctor` — Health check for Remi installation.
  *
  * Checks three dimensions:
- * 1. Runtime: Bun, PM2, Claude CLI installed and version OK
- * 2. Config: DB has required fields
+ * 1. Runtime: Bun and Claude CLI installed and version OK
+ * 2. Config: environment has required fields
  * 3. Auth: Claude logged in, Feishu tokens valid, optional API keys
  */
 
@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "@shared/version.js";
+import { loadConfig } from "@shared/config.js";
 import * as ui from "./ui.js";
 
 interface CheckResult {
@@ -42,15 +43,6 @@ function checkBun(): CheckResult {
   }
 }
 
-function checkPM2(): CheckResult {
-  try {
-    const version = execVersion("pm2 --version");
-    return { status: "pass", message: `PM2 ${version}` };
-  } catch {
-    return { status: "fail", message: "PM2 not found — install with: bun add -g pm2" };
-  }
-}
-
 function checkClaudeCLI(): CheckResult {
   try {
     const version = execVersion("claude --version 2>/dev/null || claude -v 2>/dev/null");
@@ -62,39 +54,31 @@ function checkClaudeCLI(): CheckResult {
 
 // ── Config Checks ────────────────────────────────────────────
 
-function checkConfigStore(): CheckResult {
+function checkEnvironmentConfig(): CheckResult {
   try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    if (store.isEmpty()) {
-      return { status: "fail", message: "Config DB is empty — run: remi login" };
-    }
-    return { status: "pass", message: "Config DB has data" };
+    loadConfig();
+    return { status: "pass", message: "Environment configuration parsed" };
   } catch (e) {
-    return { status: "fail", message: `Config DB error: ${(e as Error).message}` };
+    return { status: "fail", message: `Environment configuration error: ${(e as Error).message}` };
   }
 }
 
 function checkFeishuConfig(): CheckResult {
   try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const feishu = store.getSection("feishu") as Record<string, unknown> | undefined;
+    const { feishu } = loadConfig();
 
-    const hasAppId = feishu?.appId && String(feishu.appId).length > 0;
-    const hasAppSecret = feishu?.appSecret && String(feishu.appSecret).length > 0;
+    const hasAppId = feishu.appId.length > 0;
+    const hasAppSecret = feishu.appSecret.length > 0;
 
     if (!hasAppId || !hasAppSecret) {
       const missing = [];
-      if (!hasAppId) missing.push("appId");
-      if (!hasAppSecret) missing.push("appSecret");
-      return { status: "fail", message: `Feishu config incomplete — missing: ${missing.join(", ")}` };
+      if (!hasAppId) missing.push("FEISHU_APP_ID");
+      if (!hasAppSecret) missing.push("FEISHU_APP_SECRET");
+      return { status: "fail", message: `Feishu env incomplete — missing: ${missing.join(", ")}` };
     }
-    return { status: "pass", message: "Feishu appId + appSecret configured" };
-  } catch {
-    return { status: "fail", message: "Cannot check Feishu config — DB not available" };
+    return { status: "pass", message: "FEISHU_APP_ID + FEISHU_APP_SECRET configured" };
+  } catch (e) {
+    return { status: "fail", message: `Cannot parse Feishu env: ${(e as Error).message}` };
   }
 }
 
@@ -153,47 +137,12 @@ function checkFeishuTokens(): CheckResult {
 
 function checkGeminiKey(): CheckResult {
   try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const google = store.getSection("google") as Record<string, unknown> | undefined;
+    const { google } = loadConfig();
     if (google?.apiKey) {
       return { status: "pass", message: "Gemini API key configured" };
     }
   } catch {}
   return { status: "warn", message: "Gemini API key not configured (image generation disabled)" };
-}
-
-function checkEmbeddingKey(): CheckResult {
-  try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const embedding = store.getSection("embedding") as Record<string, unknown> | undefined;
-    if (embedding?.apiKey) {
-      return { status: "pass", message: "Embedding API key configured" };
-    }
-  } catch {}
-  return { status: "warn", message: "Embedding API key not configured (vector search disabled)" };
-}
-
-// ── PM2 Service Checks ───────────────────────────────────────
-
-function checkPM2Services(): CheckResult {
-  try {
-    const output = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 10_000 });
-    const apps = JSON.parse(output) as Array<{ name: string; pm2_env?: { status?: string }; pid?: number }>;
-    if (apps.length === 0) {
-      return { status: "warn", message: "No PM2 services running" };
-    }
-    const summary = apps.map((a) => {
-      const status = a.pm2_env?.status ?? "unknown";
-      return `${a.name}(${status})`;
-    }).join(", ");
-    return { status: "pass", message: `PM2 services: ${summary}` };
-  } catch {
-    return { status: "warn", message: "PM2 not running or no services" };
-  }
 }
 
 // ── Storage Checks ───────────────────────────────────────────
@@ -231,12 +180,11 @@ export async function runDoctor(_args: string[]): Promise<void> {
   // Runtime
   ui.header("Runtime");
   render(check(checkBun));
-  render(check(checkPM2));
   render(check(checkClaudeCLI));
 
   // Config
   ui.header("Config");
-  render(check(checkConfigStore));
+  render(check(checkEnvironmentConfig));
   render(check(checkFeishuConfig));
 
   // Auth
@@ -244,11 +192,6 @@ export async function runDoctor(_args: string[]): Promise<void> {
   render(check(checkClaudeAuth));
   render(check(checkFeishuTokens));
   render(check(checkGeminiKey));
-  render(check(checkEmbeddingKey));
-
-  // Services
-  ui.header("Services");
-  render(check(checkPM2Services));
 
   // Storage
   ui.header("Storage");

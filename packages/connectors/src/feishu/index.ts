@@ -3,7 +3,7 @@
  */
 
 import type { FeishuConfig } from "@shared/config.js";
-import type { GroupPolicy } from "./config.js";
+import type { FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
@@ -28,6 +28,7 @@ import { createAdapter } from "./sdk.js";
 const log = createLogger("feishu");
 
 export { approvePlanOption, rejectPermissionOption, isPlanApproval } from "./sdk.js";
+export type { FeishuSenderAuthorizer } from "./config.js";
 
 // ── Plan reading helper ───────────────────────────────────────
 
@@ -58,6 +59,7 @@ export class FeishuConnector implements Connector {
   constructor(
     config: FeishuConfig & { domain?: string; connectionMode?: string },
     groupPolicy?: GroupPolicy,
+    authorizeSender?: FeishuSenderAuthorizer,
   ) {
     this._config = config;
     this._channel = createLarkChannel({
@@ -71,6 +73,7 @@ export class FeishuConnector implements Connector {
     // connector never reaches up into the remi product for its store.
     this._groupPolicy = groupPolicy ?? { getByChatId: () => null };
     this._channel.setGroupPolicy(this._groupPolicy);
+    if (authorizeSender) this._channel.setSenderAuthorizer(authorizeSender);
   }
 
   setAbortHandler(handler: (sessionKey: string) => Promise<void>): void {

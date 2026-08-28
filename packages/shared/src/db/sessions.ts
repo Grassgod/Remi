@@ -42,6 +42,10 @@ export function getSessionByName(displayName: string): SessionRow | null {
   return db().query("SELECT * FROM sessions WHERE display_name = ?").get(displayName) as SessionRow | null;
 }
 
+export function getSessionsByCwd(cwd: string): SessionRow[] {
+  return db().query("SELECT * FROM sessions WHERE cwd = ? ORDER BY session_key").all(cwd) as SessionRow[];
+}
+
 export function listActiveSessions(): SessionRow[] {
   return db().query("SELECT * FROM sessions WHERE status = 'active' ORDER BY last_active DESC").all() as SessionRow[];
 }
@@ -145,6 +149,126 @@ export function clearSessionId(sessionKey: string): void {
     "UPDATE sessions SET session_id = '', last_active = ? WHERE session_key = ?",
     [Date.now(), sessionKey],
   );
+}
+
+export interface EnsureTopicSessionBindingResult {
+  row: SessionRow;
+  bound: boolean;
+}
+
+/** Bind a new/unbound persistent session to one topic directory. */
+export function ensureTopicSessionBinding(
+  sessionKey: string,
+  topicCwd: string,
+): EnsureTopicSessionBindingResult {
+  const database = db();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = database.query("SELECT * FROM sessions WHERE session_key = ?").get(sessionKey) as SessionRow | null;
+    if (existing?.cwd && existing.cwd !== topicCwd) {
+      database.exec("COMMIT");
+      return { row: existing, bound: false };
+    }
+    const owners = database.query(
+      "SELECT session_key FROM sessions WHERE cwd = ? AND session_key != ?",
+    ).all(topicCwd, sessionKey) as Array<{ session_key: string }>;
+    if (owners.length > 0) {
+      throw new Error(`Topic workspace ${topicCwd} is already bound to session ${owners[0]!.session_key}`);
+    }
+    const now = Date.now();
+    if (existing) {
+      if (existing.cwd === topicCwd) {
+        database.run(
+          "UPDATE sessions SET last_active = ?, status = 'active' WHERE session_key = ?",
+          [now, sessionKey],
+        );
+      } else {
+        database.run(
+          "UPDATE sessions SET cwd = ?, session_id = '', last_active = ?, status = 'active' WHERE session_key = ?",
+          [topicCwd, now, sessionKey],
+        );
+      }
+    } else {
+      const taken = new Set(
+        (database.query("SELECT display_name FROM sessions").all() as Array<{ display_name: string }>)
+          .map((entry) => entry.display_name),
+      );
+      const displayName = generateUniqueName(sessionKey, taken);
+      database.run(
+        `INSERT INTO sessions (session_key, session_id, display_name, cwd, created_at, last_active, status)
+         VALUES (?, '', ?, ?, ?, ?, 'active')`,
+        [sessionKey, displayName, topicCwd, now, now],
+      );
+    }
+    const row = database.query("SELECT * FROM sessions WHERE session_key = ?").get(sessionKey) as SessionRow;
+    database.exec("COMMIT");
+    return { row, bound: true };
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
+}
+
+/** Atomically move a session binding and reset its provider session. */
+export function moveSessionCwdAndClearId(
+  sessionKey: string,
+  expectedCwd: string,
+  nextCwd: string,
+): void {
+  const database = db();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const owners = database.query("SELECT session_key FROM sessions WHERE cwd = ?").all(expectedCwd) as Array<{ session_key: string }>;
+    if (owners.length !== 1 || owners[0]!.session_key !== sessionKey) {
+      throw new Error(
+        `Expected topic session ${sessionKey} to be the sole owner of ${expectedCwd}; found ${owners.map((row) => row.session_key).join(", ") || "none"}`,
+      );
+    }
+    database.run(
+      "UPDATE sessions SET cwd = ?, session_id = '', last_active = ?, status = 'active' WHERE session_key = ?",
+      [nextCwd, Date.now(), sessionKey],
+    );
+    database.exec("COMMIT");
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
+}
+
+/** Move a binding when it still points at the Issue; preserve explicit user overrides. */
+export function returnSessionToTopic(
+  sessionKey: string,
+  issueCwd: string,
+  topicCwd: string,
+): "moved" | "missing" | "overridden" {
+  const database = db();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database.query("SELECT * FROM sessions WHERE session_key = ?").get(sessionKey) as SessionRow | null;
+    if (!row) {
+      database.exec("COMMIT");
+      return "missing";
+    }
+    if (row.cwd !== issueCwd) {
+      database.exec("COMMIT");
+      return "overridden";
+    }
+    const owners = database.query(
+      "SELECT session_key FROM sessions WHERE cwd = ? AND session_key != ?",
+    ).all(topicCwd, sessionKey) as Array<{ session_key: string }>;
+    if (owners.length > 0) {
+      throw new Error(`Topic workspace ${topicCwd} is already bound to session ${owners[0]!.session_key}`);
+    }
+    database.run(
+      "UPDATE sessions SET cwd = ?, session_id = '', last_active = ?, status = 'active' WHERE session_key = ?",
+      [topicCwd, Date.now(), sessionKey],
+    );
+    database.exec("COMMIT");
+    return "moved";
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
 }
 
 // ── Migration from sessions.json ────────────────────────────

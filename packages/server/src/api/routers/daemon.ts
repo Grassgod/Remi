@@ -33,6 +33,7 @@ import {
   currentAccessToken,
   currentRequestUserId,
   currentWorkspaceRoleStrict,
+  daemonBotAgentResponse,
   daemonHeartbeatHttpResponse,
   daemonTaskClaimResponse,
   daemonTaskMessageWireResponse,
@@ -41,6 +42,7 @@ import {
 } from "../wire/index.js";
 import type {
   MultiremiDaemonSshMeshStatus,
+  ReportBotMenuPublishInput,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
   MultiremiTask,
@@ -281,6 +283,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyDaemonTokenWorkspace(c, body.workspace_id);
     if (denied) return denied;
     const registerWorkspace = String(body.workspace_id ?? "").trim() || "local";
+    const botAgent = resolveBotAgent(store, registerWorkspace, body.bot_agent_id);
+    if ("error" in botAgent) return c.json({ error: botAgent.error }, botAgent.status);
     const registerDaemonId = String(body.daemon_id ?? "").trim();
     if (registerDaemonId && store.isDaemonRetired(registerWorkspace, registerDaemonId)) {
       return c.json({ error: "daemon has been retired", code: "daemon_retired" }, 410);
@@ -315,7 +319,14 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         currentAccessToken(c)?.type !== "daemon" && (!authToken || usesMasterToken),
     });
     if ("error" in result) return c.json({ error: result.error }, result.status);
-    return c.json(result);
+    if (botAgent.agent || body.include_bot_projects) c.header("Cache-Control", "no-store");
+    return c.json({
+      ...result,
+      ...(botAgent.agent ? { bot_agent: daemonBotAgentResponse(botAgent.agent) } : {}),
+      ...(body.include_bot_projects
+        ? { bot_projects: daemonBotProjects(store, registerWorkspace, registerDaemonId) }
+        : {}),
+    });
   });
   app.post("/api/daemon/deregister", async (c) => {
     const body = await readJsonStrict<{ runtime_ids?: string[] }>(c);
@@ -335,6 +346,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
       drain_ack_generation?: number;
       active_task_count?: number;
+      bot_agent_id?: string;
+      include_bot_projects?: boolean;
+      supports_bot_menu?: boolean;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -359,6 +373,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       supportsBatchImport: body.supports_batch_import ?? false,
       supportsDirectoryScan: body.supports_directory_scan ?? false,
       agentPluginProtocol: reportsAgentPluginProtocol ? body.agent_plugin_protocol : undefined,
+      supportsBotMenu: body.supports_bot_menu,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     if (reportsSshMeshProtocol) {
@@ -384,6 +399,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const response = daemonHeartbeatHttpResponse(ack);
     const runtime = store.getRuntime(runtimeId);
     const workspaceId = runtime?.workspaceId ?? "local";
+    const botAgent = resolveBotAgent(store, workspaceId, body.bot_agent_id);
+    if ("error" in botAgent) return c.json({ error: botAgent.error }, botAgent.status);
     const workspaceConfig = workspaceReposResponse(
       store,
       workspaceId,
@@ -393,7 +410,34 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       response.workspace_settings = workspaceConfig.settings ?? {};
       if (callerCanReceiveRelay(c, store, workspaceId)) response.relay = workspaceConfig.relay;
     }
+    if (botAgent.agent) {
+      response.bot_agent = daemonBotAgentResponse(botAgent.agent);
+    }
+    if (body.include_bot_projects) {
+      response.bot_projects = daemonBotProjects(store, workspaceId, runtime?.daemonId ?? "");
+    }
+    if (botAgent.agent || body.include_bot_projects) {
+      c.header("Cache-Control", "no-store");
+    }
     return c.json(response);
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const requestId = c.req.param("requestId");
+    const request = store.getBotMenuPublishRequest(runtimeId, requestId);
+    if (!request) return c.json({ error: "request not found" }, 404);
+    if (request.status === "completed" || request.status === "failed" || request.status === "timeout") {
+      return c.json({ status: "ok" });
+    }
+    const body = await readJsonStrict<ReportBotMenuPublishInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (body.status !== "completed" && body.status !== "failed") {
+      return c.json({ error: "invalid bot menu publish status" }, 400);
+    }
+    store.reportBotMenuPublishResult(runtimeId, requestId, body);
+    return c.json({ status: "ok" });
   });
   app.get("/api/daemon/ssh-mesh/config", (c) => {
     const runtimeId = String(c.req.query("runtime_id") ?? "").trim();
@@ -422,6 +466,20 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const response = workspaceReposResponse(store, c.req.param("workspaceId"), includeRelay);
     if (!response) return c.json({ error: "workspace not found" }, 404);
     return c.json(response);
+  });
+  app.post("/api/daemon/workspaces/:workspaceId/external-membership/check", async (c) => {
+    const workspaceId = c.req.param("workspaceId");
+    const denied = denyDaemonTokenWorkspace(c, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ external_id?: string }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const externalId = cleanString(body.external_id);
+    if (!externalId) return c.json({ error: "external_id is required" }, 400);
+
+    const user = store.getUserByExternalId(externalId);
+    const allowed = Boolean(user && store.findWorkspaceMemberForUser(user.id, workspaceId));
+    c.header("Cache-Control", "no-store");
+    return c.json({ allowed });
   });
   // Multiremi daemon-compatible endpoints.
   app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
@@ -852,6 +910,40 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const task = store.getTask(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status, completed_at: task.completedAt });
+  });
+}
+
+function resolveBotAgent(
+  store: RouterDeps["store"],
+  workspaceId: string,
+  requestedAgentId?: string,
+): { agent: NonNullable<ReturnType<RouterDeps["store"]["getAgent"]>> | null } | { error: string; status: 404 } {
+  const agentId = String(requestedAgentId ?? "").trim();
+  if (!agentId) return { agent: null };
+  const agent = store.getAgent(agentId);
+  if (!agent || agent.archivedAt || agent.workspaceId !== workspaceId) {
+    return { error: "bot agent not found in runtime workspace", status: 404 };
+  }
+  return { agent };
+}
+
+function daemonBotProjects(
+  store: RouterDeps["store"],
+  workspaceId: string,
+  daemonId: string,
+): Array<{ id: string; title: string; cwd: string }> {
+  if (!daemonId) return [];
+  return store.listProjects(workspaceId).flatMap((project) => {
+    if (project.archivedAt) return [];
+    const directory = store.listProjectResources(project.id).find((resource) => {
+      if (resource.workspaceId !== workspaceId || resource.resourceType !== "local_directory") return false;
+      const owner = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
+      const cwd = String(resource.resourceRef.localPath ?? resource.resourceRef.local_path ?? "").trim();
+      return owner === daemonId && Boolean(cwd);
+    });
+    if (!directory) return [];
+    const cwd = String(directory.resourceRef.localPath ?? directory.resourceRef.local_path).trim();
+    return [{ id: project.id, title: project.title, cwd }];
   });
 }
 

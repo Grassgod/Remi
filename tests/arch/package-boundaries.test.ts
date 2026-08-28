@@ -58,11 +58,9 @@ describe("packages/contracts boundaries", () => {
 // ── No package may depend back on the application core (src/remi, src/multiremi) ──
 const PACKAGES_ROOT = join(import.meta.dir, "../../packages");
 const BOUNDED_PACKAGES = [
-  "queue",
   "daemon",
   "shared",
   "acp",
-  "memory",
   "auth",
   "connectors",
   "contracts",
@@ -136,8 +134,6 @@ const WORKSPACE_ALIAS_PREFIXES = [
   "@shared/contracts/",
   "@shared/",
   "@acp/",
-  "@memory/",
-  "@queue/",
   "@connectors/",
   "@auth/",
   "@daemon/",
@@ -167,7 +163,7 @@ function aliasPrefixOf(spec: string): string | null {
  *   @connectors/          outbound notification adapters (Feishu)
  *
  * Notably absent and expected to stay absent: @remi/ (the other product core),
- * @memory/, @queue/, @auth/.
+ * @auth/.
  */
 const SERVER_ALLOWED_ALIASES = new Set([
   "@multiremi/",

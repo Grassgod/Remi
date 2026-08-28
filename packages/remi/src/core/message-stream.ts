@@ -29,15 +29,16 @@ export async function handleMessageStream(
 ): Promise<void> {
   const sessionKey = remi._resolveSessionKey(msg);
   await remi._scheduler.run(sessionKey, async () => {
-  // Create root trace span
-  const msgPreview = msg.text.slice(0, 50).replace(/\n/g, " ");
-  const rootSpan = remi.traceCollector.startTrace(`handle: ${msgPreview}`, {
-    "chat.id": msg.chatId,
-    "session.key": sessionKey,
-    "connector.name": msg.connectorName ?? "",
-    "message.text": msg.text.slice(0, 200),
-  });
-  const existingSessionId = sessDb.getSessionId(sessionKey);
+    const topicCwd = await remi._ensureTopicWorkspace(sessionKey, incomingTopicId(msg));
+    // Create root trace span
+    const msgPreview = msg.text.slice(0, 50).replace(/\n/g, " ");
+    const rootSpan = remi.traceCollector.startTrace(`handle: ${msgPreview}`, {
+      "chat.id": msg.chatId,
+      "session.key": sessionKey,
+      "connector.name": msg.connectorName ?? "",
+      "message.text": msg.text.slice(0, 200),
+    });
+    const existingSessionId = sessDb.getSessionId(sessionKey);
 
   // Phase 1: record "processing" immediately so we know this message exists
   let convId: number | null = null;
@@ -71,10 +72,8 @@ export async function handleMessageStream(
 
   try {
     const existingDisplayName = sessDb.getDisplayName(sessionKey);
-    const groupConfig = remi._getGroupConfig(msg.chatId);
     const sessRow = sessDb.getSession(sessionKey);
-    const providerName = groupConfig?.provider ?? sessRow?.provider ?? null;
-    const provider = remi._getProvider(providerName);
+    const provider = remi._getProvider();
     const setPermHandler = typeof (provider as any).setPermissionHandler === "function"
       ? (handler: any) => (provider as any).setPermissionHandler(handler, sessionKey)
       : undefined;
@@ -89,7 +88,7 @@ export async function handleMessageStream(
     const effectiveMode = agentType
       ? resolveAcpPermissionMode(agentType, sessRow?.mode)
       : sessRow?.mode ?? null;
-    await consumer(processStream(remi, msg, rootSpan.context(), convId, startMs, rlog), {
+    await consumer(processStream(remi, msg, rootSpan.context(), convId, startMs, rlog, topicCwd), {
       sessionId: existingSessionId,
       displayName: existingDisplayName,
       providerName: provider.name,
@@ -114,7 +113,15 @@ export async function handleMessageStream(
   });
 }
 
-export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("@shared/logger.js").Logger): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {
+export async function *processStream(
+  remi: Remi,
+  msg: IncomingMessage,
+  traceCtx?: TraceContext,
+  convId?: number | null,
+  startMs?: number,
+  rlog?: import("@shared/logger.js").Logger,
+  resolvedTopicCwd?: string | null,
+): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {
   const _log = rlog ?? log; // request-scoped logger (with traceId) or fallback to global
 
   let resultResponse: AgentResponse | null = null;
@@ -129,10 +136,12 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
   }
 
   const sessionKey = remi._resolveSessionKey(msg);
-  const groupConfig = remi._getGroupConfig(msg.chatId);
+  const topicCwd = resolvedTopicCwd === undefined
+    ? await remi._ensureTopicWorkspace(sessionKey, incomingTopicId(msg))
+    : resolvedTopicCwd;
   const sessRow = sessDb.getSession(sessionKey);
   const existingSessionId = sessRow?.session_id || undefined;
-  _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}`);
+  _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}`);
 
   // AbortController for /esc — allows immediate readline interruption
   const abortController = new AbortController();
@@ -142,22 +151,16 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
   const runtimeCtx: import("@daemon/agent-runtime/types.js").PersistentContext = {
     kind: "persistent",
     message: msg,
-    config: remi.config,
-    groupConfig,
-    memory: remi.memory,
+    agent: remi.agent,
     sessionRow: sessRow,
     sessionKey,
+    topicCwd,
   };
   const sessionConfig = remi._runtime.assemble(runtimeCtx);
 
   const cwd = sessionConfig.cwd;
 
-  // Provider selection: group config (DB) → session provider → default
-  const providerName =
-    groupConfig?.provider                              // group-level config (DB)
-    ?? sessRow?.provider                               // P2P user choice
-    ?? null;                                           // fall through to default
-  const provider = remi._getProvider(providerName);
+  const provider = remi._getProvider();
 
   if (typeof provider.sendStream !== "function") {
     throw new Error(`Provider "${provider.name}" does not support streaming`);
@@ -277,16 +280,12 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
     providerSpan?.end();
   }
 
-  // Update session + daily notes
+  // Update the persistent ACP session mapping.
   if (resultResponse) {
     if (resultResponse.sessionId) {
       const displayName = sessDb.upsertSession(sessionKey, resultResponse.sessionId);
       _log.debug(`session stored: key="${sessionKey}" → "${resultResponse.sessionId.slice(0, 12)}..." (${displayName})`);
     }
-    remi.memory.appendDaily(
-      `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
-    );
-
     // Record token metrics
     if (resultResponse.inputTokens || resultResponse.outputTokens) {
       remi.metrics.record({
@@ -309,9 +308,6 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
     // CLI JSONL (~/.claude/projects/) is the full trace; this table is the index.
     try {
       const spans: Array<Record<string, unknown>> = [];
-
-      // Memory assembly span (duration not available from Span interface)
-      spans.push({ op: "memory.assemble" });
 
       // Provider chat span
       spans.push({
@@ -351,3 +347,16 @@ export async function *processStream(remi: Remi, msg: IncomingMessage, traceCtx?
   return resultResponse;
 }
 
+function incomingTopicId(message: IncomingMessage): string | null {
+  if (message.connectorName !== "feishu") return null;
+  const rootId = stringMetadata(message.metadata?.rootId);
+  if (rootId) return rootId;
+  const chatType = stringMetadata(message.metadata?.chatType);
+  const messageId = stringMetadata(message.metadata?.messageId);
+  if (chatType === "group" && messageId) return messageId;
+  return stringMetadata(message.chatId);
+}
+
+function stringMetadata(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}

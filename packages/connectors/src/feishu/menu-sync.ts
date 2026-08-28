@@ -4,7 +4,12 @@
  * Supports both global default menus and per-user personalized menus (千人千面).
  */
 
-import type { BotMenuConfig, BotMenuItemConfig, BotMenuBehavior, BotMenuUserConfig } from "./config.js";
+import type {
+  BotMenuBehavior,
+  BotMenuItemConfig,
+  BotMenuPublishResult,
+  ResolvedBotMenuConfig,
+} from "@multiremi/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("menu-sync");
@@ -98,19 +103,27 @@ export class MenuSyncer {
     this._menuApi = `${getBaseUrl(creds.domain)}/bot/v3/bot_menu`;
   }
 
-  async syncAll(config: BotMenuConfig, triggerUserIds?: string[]): Promise<void> {
-    if (!config.default?.length && !config.users?.length) { log.info("no bot_menu config found, skipping sync"); return; }
-    const userMenuMap = new Map<string, BotMenuItemConfig[]>();
-    if (config.default?.length && triggerUserIds?.length) {
-      for (const uid of triggerUserIds) userMenuMap.set(uid, config.default);
+  async syncAll(config: ResolvedBotMenuConfig, options: { dryRun?: boolean } = {}): Promise<BotMenuPublishResult> {
+    const defaultPublished = Boolean(config.default?.length);
+    const users = config.users ?? [];
+    if (!defaultPublished && users.length === 0) {
+      log.info("no bot_menu config found, skipping sync");
+      return { dryRun: Boolean(options.dryRun), defaultPublished: false, userMenuCount: 0 };
     }
-    if (config.users) {
-      for (const user of config.users) userMenuMap.set(user.userId, user.items);
+    if (!options.dryRun && config.default?.length) {
+      await this._postMenu({ bot_menu: { bot_menu_items: config.default.map(menuItemToApi) } });
+      log.info(`synced default menu (${config.default.length} items)`);
     }
-    for (const [userId, items] of userMenuMap) {
-      await this._postMenu({ user_id: userId, bot_menu: { bot_menu_items: items.map(menuItemToApi) } });
-      log.info(`synced menu for ${userId} (${items.length} items)`);
+    if (!options.dryRun) {
+      for (const user of users) {
+        await this._postMenu(
+          { user_id: user.userId, bot_menu: { bot_menu_items: user.items.map(menuItemToApi) } },
+          user.userIdType,
+        );
+        log.info(`synced personalized menu (${user.items.length} items)`);
+      }
     }
+    return { dryRun: Boolean(options.dryRun), defaultPublished, userMenuCount: users.length };
   }
 
   async getMenu(userId?: string, userIdType = "open_id"): Promise<any> {

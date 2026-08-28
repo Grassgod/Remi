@@ -31,6 +31,7 @@ Commands:
                          --priority <p> --assignee <id|name|email> --assignee-type <t>
                          --project <id> --metadata k=v[,k=v] --limit <n> --offset <n>
   issue create           Create an issue (--title required; see issue options below)
+  issue bind-topic       Resume a failed local Feishu topic workspace migration
   issue update <id>      Update an issue (same fields as create; see issue options)
   issue assign <id>      Assign or unassign an issue
   issue status <id> <s>  Change issue status

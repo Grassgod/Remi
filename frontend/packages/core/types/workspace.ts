@@ -42,6 +42,56 @@ export interface UpdateWorkspacePromptSettingsRequest {
   expectedRevision: number;
 }
 
+export type BotMenuUserIdType = "open_id" | "union_id" | "user_id";
+
+export interface BotMenuBehavior {
+  type: "target" | "event_key" | "send_message";
+  url?: string;
+  eventKey?: string;
+  isPrimary?: boolean;
+}
+
+export interface BotMenuItem {
+  name: string;
+  i18nName?: Record<string, string>;
+  icon?: { token?: string; color?: string; fileKey?: string };
+  tag?: string;
+  behaviors?: BotMenuBehavior[];
+  children?: BotMenuItem[];
+}
+
+export type BotMenuTarget =
+  | { type: "member"; memberId: string }
+  | { type: "role"; role: MemberRole }
+  | { type: "external"; userId: string; userIdType: BotMenuUserIdType };
+
+export interface BotMenuAudience {
+  target: BotMenuTarget;
+  label?: string;
+  items: BotMenuItem[];
+}
+
+export interface BotMenuConfig {
+  default?: BotMenuItem[];
+  users?: BotMenuAudience[];
+}
+
+export interface BotMenuResponse {
+  workspace_id: string;
+  bot_menu: BotMenuConfig;
+}
+
+export interface BotMenuPublishResponse {
+  id: string;
+  workspace_id: string;
+  dry_run: boolean;
+  status: "pending" | "running" | "completed" | "failed" | "timeout";
+  result: { defaultPublished: boolean; userMenuCount: number; dryRun: boolean } | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Member {
   id: string;
   workspace_id: string;

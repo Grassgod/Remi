@@ -2620,11 +2620,29 @@ describe("Bun Multiremi daemon smoke", () => {
     });
     const gcStarted = deferred<void>();
     const releaseGc = deferred<void>();
+    const topicActions: string[] = [];
     Object.assign(daemon, {
       executeGcOnce: async () => {
         gcStarted.resolve();
         await releaseGc.promise;
         return { cleaned: 0, orphaned: 0, skipped: 0 };
+      },
+      topicWorkspaces: {
+        prepareMigration: async (cwd: string) => {
+          topicActions.push(`prepare:${cwd}`);
+          return { bound: true, migration_id: "mig_http" };
+        },
+        commitMigration: async (input: { issueKey: string }) => {
+          topicActions.push(`commit:${input.issueKey}`);
+          return {
+            migrated: true,
+            issue_id: "iss_http",
+            issue_key: input.issueKey,
+            path: join(workDir, "workspaces", input.issueKey),
+            session_key: "session-http",
+            topic_id: "om_http",
+          };
+        },
       },
     });
 
@@ -2647,6 +2665,29 @@ describe("Bun Multiremi daemon smoke", () => {
       else expect(health.workspace_cleanup_error).toEqual(expect.any(String));
       expect(typeof health.runtime_id).toBe("string");
       expect(typeof health.cli_version).toBe("string");
+
+      const topicCwd = join(workDir, "workspaces", "_topics", "om_http");
+      const prepare = await fetch(`http://127.0.0.1:${port}/topic/migrate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "prepare", cwd: topicCwd }),
+      });
+      expect(prepare.status).toBe(200);
+      expect(await prepare.json()).toMatchObject({ bound: true, migration_id: "mig_http" });
+      const commit = await fetch(`http://127.0.0.1:${port}/topic/migrate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "commit",
+          cwd: topicCwd,
+          migration_id: "mig_http",
+          issue_id: "iss_http",
+          issue_key: "MUL-204",
+        }),
+      });
+      expect(commit.status).toBe(200);
+      expect(await commit.json()).toMatchObject({ migrated: true, issue_key: "MUL-204" });
+      expect(topicActions).toEqual([`prepare:${topicCwd}`, "commit:MUL-204"]);
 
       const shutdown = await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST" });
       expect(shutdown.status).toBe(200);

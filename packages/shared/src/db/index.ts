@@ -1,5 +1,5 @@
 /**
- * SQLite singleton with sqlite-vec extension.
+ * SQLite singleton for Remi's local connector/session state.
  * DB file: ~/.remi/remi.db
  *
  * NOTE: macOS SQLite swap (setCustomSQLite) lives in ./sqlite-custom.ts
@@ -11,17 +11,165 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
-let sqliteVec: { load: (db: Database) => void } | null = null;
-try {
-  sqliteVec = require("sqlite-vec");
-} catch {
-  // sqlite-vec native binary not available — vector features disabled
-}
-
 const DB_PATH = join(homedir(), ".remi", "remi.db");
+const LEGACY_AGENT_CONFIG_MIGRATION_ID = "legacy-agent-config-purge-v1";
+const REMI_CONFIG_MIGRATION_ID = "remi-config-purge-v2";
+const LEGACY_AGENT_CONFIG_MIGRATION_DOC = "docs/migrations/remi-memory-to-multiremi.md";
 
 let _db: Database | null = null;
 let _dbPath: string = DB_PATH;
+
+function tableExists(db: Database, tableName: string): boolean {
+  return Boolean(db.query(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+  ).get(tableName));
+}
+
+function isInMemoryDb(path: string): boolean {
+  return path === ":memory:"
+    || path === ""
+    || path.startsWith("file::memory:")
+    || path.includes("mode=memory");
+}
+
+function backupPathForMigration(path: string, migrationId: string): string | null {
+  return isInMemoryDb(path) ? null : `${path}.pre-${migrationId}.bak`;
+}
+
+function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
+  const hasGroupConfigs = tableExists(db, "group_configs");
+  const hasEmbeddings = tableExists(db, "embeddings");
+  const hasProjects = tableExists(db, "projects");
+  const hasVecItems = tableExists(db, "vec_items");
+  const hasRemiConfig = tableExists(db, "remi_config");
+  const hasLegacyConfig = hasRemiConfig && Boolean(db.query(
+    "SELECT 1 FROM remi_config WHERE section IN ('provider', 'mcp') LIMIT 1",
+  ).get());
+  const vecCleanupRecorded = tableExists(db, "remi_migrations")
+    && Boolean(db.query(
+      "SELECT 1 FROM remi_migrations WHERE id = ? LIMIT 1",
+    ).get(LEGACY_AGENT_CONFIG_MIGRATION_ID));
+
+  if (
+    !hasGroupConfigs
+    && !hasEmbeddings
+    && !hasProjects
+    && !hasLegacyConfig
+    && (!hasVecItems || vecCleanupRecorded)
+  ) {
+    return;
+  }
+
+  const backupPath = backupPathForMigration(dbPath, LEGACY_AGENT_CONFIG_MIGRATION_ID);
+  if (backupPath) {
+    try {
+      db.run("VACUUM INTO ?", [backupPath]);
+    } catch (error) {
+      throw new Error(
+        `Legacy Remi migration aborted because backup could not be created at ${backupPath}`,
+        { cause: error },
+      );
+    }
+  }
+
+  let transactionStarted = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    transactionStarted = true;
+    if (hasGroupConfigs) db.exec("DROP TABLE group_configs");
+    if (hasEmbeddings) db.exec("DROP TABLE embeddings");
+    if (hasProjects) db.exec("DROP TABLE projects");
+    if (hasLegacyConfig) {
+      db.run("DELETE FROM remi_config WHERE section IN ('provider', 'mcp')");
+    }
+
+    if (hasVecItems && !vecCleanupRecorded) {
+      db.exec("SAVEPOINT drop_legacy_vec_items");
+      try {
+        db.exec("DROP TABLE vec_items");
+        db.exec("RELEASE drop_legacy_vec_items");
+      } catch (error) {
+        db.exec("ROLLBACK TO drop_legacy_vec_items");
+        db.exec("RELEASE drop_legacy_vec_items");
+        console.warn(
+          `[db] Could not drop legacy vec_items; complete the manual cleanup in ${LEGACY_AGENT_CONFIG_MIGRATION_DOC}.`,
+          error,
+        );
+      }
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS remi_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    db.run("INSERT OR IGNORE INTO remi_migrations (id) VALUES (?)", [LEGACY_AGENT_CONFIG_MIGRATION_ID]);
+    db.exec("COMMIT");
+    transactionStarted = false;
+  } catch (error) {
+    let rollbackError: unknown;
+    if (transactionStarted) {
+      try {
+        db.exec("ROLLBACK");
+      } catch (rollbackFailure) {
+        rollbackError = rollbackFailure;
+      }
+    }
+    const recovery = backupPath
+      ? `The database was rolled back; its pre-migration backup is at ${backupPath}.`
+      : "The in-memory database was rolled back; no backup file applies.";
+    const rollbackDetail = rollbackError ? ` Rollback also failed: ${String(rollbackError)}.` : "";
+    throw new Error(`Legacy Remi migration failed. ${recovery}${rollbackDetail}`, { cause: error });
+  }
+}
+
+function purgeRemiConfig(db: Database, dbPath: string): void {
+  if (!tableExists(db, "remi_config")) return;
+
+  const backupPath = backupPathForMigration(dbPath, REMI_CONFIG_MIGRATION_ID);
+  if (backupPath) {
+    try {
+      db.run("VACUUM INTO ?", [backupPath]);
+    } catch (error) {
+      throw new Error(
+        `Remi config migration aborted because backup could not be created at ${backupPath}`,
+        { cause: error },
+      );
+    }
+  }
+
+  let transactionStarted = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    transactionStarted = true;
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS remi_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    db.exec("DELETE FROM remi_config");
+    db.exec("DROP TABLE remi_config");
+    db.run("INSERT OR IGNORE INTO remi_migrations (id) VALUES (?)", [REMI_CONFIG_MIGRATION_ID]);
+    db.exec("COMMIT");
+    transactionStarted = false;
+  } catch (error) {
+    let rollbackError: unknown;
+    if (transactionStarted) {
+      try {
+        db.exec("ROLLBACK");
+      } catch (rollbackFailure) {
+        rollbackError = rollbackFailure;
+      }
+    }
+    const recovery = backupPath
+      ? `The database was rolled back; its pre-migration backup is at ${backupPath}.`
+      : "The in-memory database was rolled back; no backup file applies.";
+    const rollbackDetail = rollbackError ? ` Rollback also failed: ${String(rollbackError)}.` : "";
+    throw new Error(`Remi config migration failed. ${recovery}${rollbackDetail}`, { cause: error });
+  }
+}
 
 /**
  * Override DB file path (call before first getDb()). Used by tests for isolation.
@@ -35,7 +183,7 @@ export function setDbPath(path: string): void {
 }
 
 /**
- * Get or create the singleton SQLite database with sqlite-vec loaded.
+ * Get or create the singleton SQLite database.
  */
 export function getDb(): Database {
   if (_db) return _db;
@@ -47,30 +195,12 @@ export function getDb(): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
-  // Load sqlite-vec extension (graceful degradation if unsupported)
-  let vecEnabled = false;
-  if (sqliteVec) {
-    try {
-      sqliteVec.load(db);
-      vecEnabled = true;
-    } catch (err) {
-      console.warn(`[db] sqlite-vec load failed (vector search disabled): ${(err as Error).message}`);
-    }
-  }
-
   // Create tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS kv (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS embeddings (
-      id TEXT PRIMARY KEY,
-      content_hash TEXT NOT NULL,
-      metadata TEXT,
-      embedded_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS conversations (
@@ -106,40 +236,6 @@ export function getDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_conv_sender ON conversations(sender_id);
     CREATE INDEX IF NOT EXISTS idx_conv_status ON conversations(status) WHERE status != 'completed';
 
-    -- Projects (replaces toml-only storage)
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      chat_id TEXT,
-      repo_url TEXT,
-      cwd TEXT,
-      pipeline_config TEXT,
-      init_status TEXT DEFAULT 'pending',
-      init_steps TEXT,
-      deleted INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_projects_init_status ON projects(init_status);
-
-    -- Group configs (per-group settings, replaces toml bots/allowed_groups/monitor_groups)
-    CREATE TABLE IF NOT EXISTS group_configs (
-      chat_id TEXT PRIMARY KEY,
-      project_id TEXT DEFAULT 'global',
-      name TEXT DEFAULT '',
-      monitor INTEGER DEFAULT 0,
-      reply_mode TEXT DEFAULT 'thread',
-      system_prompt TEXT DEFAULT '',
-      allowed_tools TEXT DEFAULT '[]',
-      add_dirs TEXT DEFAULT '[]',
-      provider TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_gc_project ON group_configs(project_id);
-
     -- Session registry (replaces sessions.json)
     CREATE TABLE IF NOT EXISTS sessions (
       session_key   TEXT PRIMARY KEY,
@@ -152,25 +248,34 @@ export function getDb(): Database {
       last_active   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       status        TEXT NOT NULL DEFAULT 'active'
     );
-
-    -- Config store
-    CREATE TABLE IF NOT EXISTS remi_config (
-      section    TEXT NOT NULL,
-      key        TEXT NOT NULL DEFAULT '',
-      value      TEXT NOT NULL,
-      updated_at TEXT DEFAULT (datetime('now')),
-      PRIMARY KEY (section, key)
-    );
   `);
 
-  // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)
-  if (vecEnabled) {
-    const exists = db.query(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_items'"
-    ).get();
-    if (!exists) {
-      db.exec("CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[1024])");
-    }
+  const duplicateTopicCwd = db.query(`
+    SELECT cwd, COUNT(*) AS count
+    FROM sessions
+    WHERE instr(cwd, '/_topics/') > 0
+    GROUP BY cwd
+    HAVING COUNT(*) > 1
+    LIMIT 1
+  `).get() as { cwd: string; count: number } | null;
+  if (duplicateTopicCwd) {
+    db.close();
+    throw new Error(
+      `Cannot enforce topic workspace ownership: ${duplicateTopicCwd.count} sessions share ${duplicateTopicCwd.cwd}`,
+    );
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_topic_cwd
+    ON sessions(cwd)
+    WHERE instr(cwd, '/_topics/') > 0
+  `);
+
+  try {
+    purgeLegacyAgentConfig(db, _dbPath);
+    purgeRemiConfig(db, _dbPath);
+  } catch (error) {
+    db.close();
+    throw error;
   }
 
   // ── Migrations: add new columns to conversations if missing ──
@@ -202,27 +307,6 @@ export function getDb(): Database {
     db.exec("CREATE INDEX IF NOT EXISTS idx_conv_session_key ON conversations(session_key)");
   }
 
-  // group_configs migrations — add new columns
-  try {
-    const gcCols = db.query("PRAGMA table_info(group_configs)").all() as Array<{ name: string }>;
-    const gcColNames = new Set(gcCols.map((c) => c.name));
-    if (gcColNames.size > 0) {
-      if (!gcColNames.has("allowed_mcps")) db.exec("ALTER TABLE group_configs ADD COLUMN allowed_mcps TEXT DEFAULT '[]'");
-      if (!gcColNames.has("cwd")) db.exec("ALTER TABLE group_configs ADD COLUMN cwd TEXT");
-      if (!gcColNames.has("launch_command")) db.exec("ALTER TABLE group_configs ADD COLUMN launch_command TEXT");
-      if (!gcColNames.has("inject_chat_context")) db.exec("ALTER TABLE group_configs ADD COLUMN inject_chat_context INTEGER DEFAULT 0");
-    }
-  } catch {}
-
-  // Projects table migration — add deleted column
-  try {
-    const projCols = db.query("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
-    const projColNames = new Set(projCols.map((c) => c.name));
-    if (projColNames.size > 0 && !projColNames.has("deleted")) {
-      db.exec("ALTER TABLE projects ADD COLUMN deleted INTEGER DEFAULT 0");
-    }
-  } catch {}
-
   _db = db;
   return db;
 }
@@ -235,27 +319,6 @@ export function closeDb(): void {
     _db.close();
     _db = null;
   }
-}
-
-// ── KV helpers ──
-
-export function kvGet(key: string): string | null {
-  const db = getDb();
-  const row = db.query("SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | null;
-  return row?.value ?? null;
-}
-
-export function kvSet(key: string, value: string): void {
-  const db = getDb();
-  db.run(
-    "INSERT INTO kv (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-    [key, value]
-  );
-}
-
-export function kvDelete(key: string): void {
-  const db = getDb();
-  db.run("DELETE FROM kv WHERE key = ?", [key]);
 }
 
 // ── Conversations helpers ──

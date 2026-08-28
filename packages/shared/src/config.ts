@@ -1,39 +1,12 @@
-/**
- * Configuration types and loading via ConfigStore (SQLite).
- */
+/** Remi connector and plugin configuration assembled from defaults + env. */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const REMI_HOME = join(homedir(), ".remi");
+export const REMI_HOME = join(homedir(), ".remi");
 
-export const MEMORY_DIR = join(REMI_HOME, "memory");
 export const SESSIONS_FILE = join(REMI_HOME, "sessions.json");
 export const PID_FILE = join(REMI_HOME, "remi.pid");
-export const QUEUE_DIR = join(REMI_HOME, "queue");
-
-/** Per-agent ACP configuration. */
-export interface AcpAgentConfig {
-  /** ACP agent executable path. Auto-detected if omitted. */
-  executable?: string;
-  /** Model override passed to the agent. */
-  model?: string;
-  /** Request timeout in seconds (default: 300). */
-  timeout: number;
-  /** Tool allowlist passed to the agent. */
-  allowedTools: string[];
-  /** Optional API key forwarded to compatible ACP wrappers. */
-  apiKey?: string | null;
-  /** Optional API base URL forwarded to compatible ACP wrappers. */
-  baseUrl?: string | null;
-}
-
-export interface ProviderConfig {
-  /** Default agent to use: "claude" | "codex". */
-  default: "claude" | "codex";
-  claude: AcpAgentConfig;
-  codex: AcpAgentConfig;
-}
 
 export interface FeishuConfig {
   appId: string;
@@ -44,57 +17,11 @@ export interface FeishuConfig {
   domain: "feishu" | "lark" | "bytedance";
   connectionMode: "websocket";
   userAccessToken: string;
-  /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
-  triggerUserIds: string[];
-}
-
-/**
- * New unified cron job config — replaces fragmented [scheduler] + [[scheduled_skills]].
- * Stored as cronJobs section in ConfigStore.
- */
-export interface CronJobConfig {
-  id: string;
-  name?: string;
-  handler: string;
-  enabled?: boolean;
-  /** Cron expression (5/6-field). Mutually exclusive with `every` and `at`. */
-  cron?: string;
-  /** Timezone for cron expression. */
-  tz?: string;
-  /** Fixed interval (e.g. "5m", "300s"). Mutually exclusive with `cron` and `at`. */
-  every?: string | number;
-  /** One-shot ISO timestamp. Mutually exclusive with `cron` and `every`. */
-  at?: string;
-  /** Timeout in ms (default: 300000). */
-  timeoutMs?: number;
-  /** Delete job after successful run (useful for one-shots). */
-  deleteAfterRun?: boolean;
-  /** Arbitrary config passed to the handler function. */
-  handlerConfig?: Record<string, any>;
-}
-
-export interface ServiceConfig {
-  /** Display name (used as PM2 app name). */
-  name: string;
-  /** Main script/file to run. */
-  script: string;
-  /** Runtime interpreter: bun, python3, node, etc. */
-  interpreter: string;
-  /** Arguments passed after the script. */
-  args: string[];
-  /** Working directory. */
-  cwd: string;
-  /** Optional shell command to run before starting (e.g. build step). */
-  build: string;
-  /** Optional port number (for display/monitoring). */
-  port: number | null;
-  /** Whether this service is enabled (default: true). */
-  enabled: boolean;
 }
 
 /**
  * Plugin system settings.
- * Per-plugin config lives in [plugin.<id>] sub-tables (see RemiConfig.pluginConfigs).
+ * Per-plugin config is supplied through REMI_PLUGIN_CONFIGS_JSON.
  */
 export interface PluginsConfig {
   /** Directory scanned for external drop-in plugins. Default ~/.remi/plugins. */
@@ -105,147 +32,30 @@ export interface PluginsConfig {
   allowExternal: boolean;
 }
 
-// SSO inbound login (web Authorization Code / OIDC) is managed by
-// the SSO plugin's DB tables (sso_providers / sso_settings).
-// On first boot the SSO plugin seeds itself from a legacy [sso] section if found
-// (see src/plugins/sso/seed.ts), then ignores it on subsequent boots.
-//
-// Clusters are similarly DB-managed (clusters table).
-
-/**
- * Auth config — bootstrap-only. Determines who is auto-promoted to admin
- * on first login. After bootstrap, role changes happen via DB (admin UI later).
- */
-export interface AuthConfig {
-  adminEmails: string[];
-}
-
 export interface TokenSyncRuleConfig {
   name: string;
   source: string;
   target: string;
-  format: string;
+  format: "mirror" | "json_kv" | "bytedcli_token" | "raw" | "env";
   key?: string;
   extraKeys?: Record<string, string>;
 }
 
-// ── Bot Menu (千人千面菜单) ─────────────────────────────────
-
-export interface BotMenuBehavior {
-  type: "target" | "event_key" | "send_message";
-  /** URL for type=target — maps to target.common_url. */
-  url?: string;
-  /** Event key for type=event_key. */
-  eventKey?: string;
-  isPrimary?: boolean;
-}
-
-export interface BotMenuIcon {
-  /** Icon library token (e.g. "search_outlined"). */
-  token?: string;
-  /** Icon color (e.g. "blue"). */
-  color?: string;
-  /** Custom image key. */
-  fileKey?: string;
-}
-
-export interface BotMenuItemConfig {
-  name: string;
-  i18nName?: Record<string, string>;
-  icon?: BotMenuIcon;
-  tag?: string;
-  behaviors?: BotMenuBehavior[];
-  children?: BotMenuItemConfig[];
-}
-
-export interface BotMenuUserConfig {
-  userId: string;
-  userIdType?: "open_id" | "union_id" | "user_id";
-  /** Display label for Dashboard (not sent to API). */
-  label?: string;
-  items: BotMenuItemConfig[];
-}
-
-export interface BotMenuConfig {
-  /** Global default menu items (visible to all users). */
-  default?: BotMenuItemConfig[];
-  /** Per-user personalized menus (千人千面). */
-  users?: BotMenuUserConfig[];
-}
-
-export interface ProxyConfig {
-  /** HTTP/HTTPS proxy URL. Empty = no proxy. */
-  http: string;
-  /** Comma-separated list of hosts/CIDRs that bypass the proxy. */
-  noProxy: string;
-}
-
-export interface EmbeddingConfig {
-  provider: string;
-  apiKey: string;
-  model?: string;
-  dimensions?: number;
-}
-
 export interface GoogleConfig {
   apiKey: string;
-  model: string;
-}
-
-export interface McpServerEntry {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  agents?: string[];
-}
-
-export interface TracingConfig {
-  enabled: boolean;
-  logsDir: string;
-  tracesDir: string;
-  retentionDays: number;
 }
 
 export interface RemiConfig {
-  provider: ProviderConfig;
   feishu: FeishuConfig;
   /** Plugin system settings. */
   plugins: PluginsConfig;
-  /** Per-plugin config sub-tables keyed by plugin id (from [plugin.<id>]). */
+  /** Per-plugin config keyed by plugin id. */
   pluginConfigs: Record<string, Record<string, unknown>>;
-  /** Auth bootstrap (who is admin on first login). */
-  auth: AuthConfig;
   /** Token sync rules for distributing tokens to external tools. */
   tokenSync: TokenSyncRuleConfig[];
-  /** Unified cron jobs. */
-  cronJobs: CronJobConfig[];
-  /** Registered services managed by PM2. */
-  services: ServiceConfig[];
-  /** Bot menu config (千人千面菜单). */
-  botMenu: BotMenuConfig;
-  /** Proxy settings for outbound HTTP requests. */
-  proxy: ProxyConfig;
-  /** Embedding config for vector search (optional). */
-  embedding?: EmbeddingConfig;
   /** Google API config for Gemini image generation (optional). */
   google?: GoogleConfig;
-  /** MCP servers to inject into ACP sessions. */
-  mcp: McpServerEntry[];
-  tracing: TracingConfig;
   logLevel: string;
-}
-
-function defaultAgentConfig(): AcpAgentConfig {
-  return { timeout: 300, allowedTools: [], apiKey: null, baseUrl: null };
-}
-
-function defaultProviderConfig(): ProviderConfig {
-  return {
-    default: "claude",
-    claude: defaultAgentConfig(),
-    codex: defaultAgentConfig(),
-  };
 }
 
 function defaultFeishuConfig(): FeishuConfig {
@@ -258,39 +68,124 @@ function defaultFeishuConfig(): FeishuConfig {
     domain: "feishu",
     connectionMode: "websocket",
     userAccessToken: "",
-    triggerUserIds: [],
   };
 }
 
 export function defaultRemiConfig(): RemiConfig {
   return {
-    provider: defaultProviderConfig(),
     feishu: defaultFeishuConfig(),
     tokenSync: [],
-    cronJobs: [],
-    services: [],
-    botMenu: {},
-    proxy: { http: "", noProxy: "" },
     plugins: { dir: join(homedir(), ".remi", "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
-    auth: { adminEmails: [] },
-    mcp: [],
-    tracing: {
-      enabled: true,
-      logsDir: join(REMI_HOME, "logs"),
-      tracesDir: join(REMI_HOME, "traces"),
-      retentionDays: 60,
-    },
     logLevel: "INFO",
   };
 }
 
-/**
- * Load configuration from ConfigStore (SQLite).
- * Environment variable overrides are applied by ConfigStore.load().
- */
-export function loadConfig(): RemiConfig {
-  const { ConfigStore } = require("./db/config-store.js");
-  const { getDb } = require("./db/index.js");
-  return new ConfigStore(getDb()).load();
+type Environment = Record<string, string | undefined>;
+
+function parseInteger(name: string, value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) throw new Error(`${name} must be an integer`);
+  return parsed;
+}
+
+function parseBoolean(name: string, value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+function parseJson<T>(
+  name: string,
+  value: string | undefined,
+  fallback: T,
+  valid: (input: unknown) => boolean,
+): T {
+  if (!value) return fallback;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`${name} must contain valid JSON`, { cause: error });
+  }
+  if (!valid(parsed)) throw new Error(`${name} has an invalid JSON shape`);
+  return parsed as T;
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return Boolean(input) && typeof input === "object" && !Array.isArray(input);
+}
+
+function isTokenSyncRule(input: unknown): boolean {
+  if (!isRecord(input)) return false;
+  const formats = ["mirror", "json_kv", "bytedcli_token", "raw", "env"];
+  if (
+    typeof input.name !== "string"
+    || typeof input.source !== "string"
+    || typeof input.target !== "string"
+    || typeof input.format !== "string"
+    || !formats.includes(input.format)
+  ) return false;
+  if (input.key !== undefined && typeof input.key !== "string") return false;
+  if (input.extraKeys !== undefined) {
+    if (!isRecord(input.extraKeys)) return false;
+    if (!Object.values(input.extraKeys).every((value) => typeof value === "string")) return false;
+  }
+  return true;
+}
+
+/** Load configuration without reading or writing local state. */
+export function loadConfig(env: Environment = process.env): RemiConfig {
+  const defaults = defaultRemiConfig();
+  const domain = env.FEISHU_DOMAIN || defaults.feishu.domain;
+  if (domain !== "feishu" && domain !== "lark" && domain !== "bytedance") {
+    throw new Error("FEISHU_DOMAIN must be feishu, lark, or bytedance");
+  }
+
+  const tokenSync = parseJson<TokenSyncRuleConfig[]>(
+    "REMI_TOKEN_SYNC_RULES_JSON",
+    env.REMI_TOKEN_SYNC_RULES_JSON,
+    defaults.tokenSync,
+    (input) => Array.isArray(input) && input.every(isTokenSyncRule),
+  );
+  const enabledPlugins = parseJson<string[]>(
+    "REMI_PLUGINS_ENABLED_JSON",
+    env.REMI_PLUGINS_ENABLED_JSON,
+    defaults.plugins.enabled,
+    (input) => Array.isArray(input) && input.every((item) => typeof item === "string"),
+  );
+  const pluginConfigs = parseJson<Record<string, Record<string, unknown>>>(
+    "REMI_PLUGIN_CONFIGS_JSON",
+    env.REMI_PLUGIN_CONFIGS_JSON,
+    defaults.pluginConfigs,
+    (input) => isRecord(input) && Object.values(input).every(isRecord),
+  );
+
+  return {
+    feishu: {
+      ...defaults.feishu,
+      appId: env.FEISHU_APP_ID || defaults.feishu.appId,
+      appSecret: env.FEISHU_APP_SECRET || defaults.feishu.appSecret,
+      verificationToken: env.FEISHU_VERIFICATION_TOKEN || defaults.feishu.verificationToken,
+      encryptKey: env.FEISHU_ENCRYPT_KEY || defaults.feishu.encryptKey,
+      port: parseInteger("FEISHU_PORT", env.FEISHU_PORT, defaults.feishu.port),
+      domain,
+      userAccessToken: env.FEISHU_USER_ACCESS_TOKEN || defaults.feishu.userAccessToken,
+    },
+    tokenSync,
+    plugins: {
+      dir: env.REMI_PLUGINS_DIR || defaults.plugins.dir,
+      enabled: enabledPlugins,
+      allowExternal: parseBoolean(
+        "REMI_PLUGINS_ALLOW_EXTERNAL",
+        env.REMI_PLUGINS_ALLOW_EXTERNAL,
+        defaults.plugins.allowExternal,
+      ),
+    },
+    pluginConfigs,
+    ...(env.GOOGLE_API_KEY ? { google: { apiKey: env.GOOGLE_API_KEY } } : {}),
+    logLevel: env.REMI_LOG_LEVEL ?? defaults.logLevel,
+  };
 }

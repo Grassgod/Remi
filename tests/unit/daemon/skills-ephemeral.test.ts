@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { writeAgentSkillContext, writeTaskGcContext } from "@daemon/agent-runtime/skills/ephemeral.js";
+import { writeAgentSkillContext, writeTaskContext, writeTaskGcContext } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { ISSUE_SESSION_ARCHIVE_RECEIPT_FILE } from "@daemon/agent-runtime/workspace/session-archive.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
@@ -70,6 +70,36 @@ test("an agent without skills writes no skill root at all", () => {
   writeAgentSkillContext(workDir, { agent: { skills: [], provider: "codex" } } as unknown as AgentTask);
   expect(existsSync(join(workDir, ".agents"))).toBe(false);
   expect(existsSync(join(workDir, ".claude"))).toBe(false);
+});
+
+test("task context refresh preserves a Feishu topic binding dossier", () => {
+  const workDir = workspace();
+  const metadataDir = join(workDir, ".multiremi");
+  mkdirSync(metadataDir, { recursive: true });
+  const topicBinding = {
+    version: 1,
+    kind: "feishu_topic_issue",
+    topic_id: "om_1",
+    session_key: "chat:thread:om_1",
+  };
+  writeFileSync(join(metadataDir, "task.json"), JSON.stringify({ topic_binding: topicBinding }));
+
+  writeTaskContext(workDir, {
+    id: "tsk_1",
+    workspaceId: "ws_1",
+    agent: null,
+    issue: { id: "iss_1", key: "MUL-1", title: "Topic Issue" },
+    project: null,
+    projectContexts: [],
+    projectResources: [],
+    repos: [],
+    prompt: "Continue the topic",
+  } as unknown as AgentTask);
+
+  expect(JSON.parse(readFileSync(join(metadataDir, "task.json"), "utf8"))).toMatchObject({
+    task_id: "tsk_1",
+    topic_binding: topicBinding,
+  });
 });
 
 test("a new Issue task invalidates the previous Session archive receipt", () => {

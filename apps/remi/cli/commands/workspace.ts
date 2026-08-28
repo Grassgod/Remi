@@ -140,6 +140,39 @@ export function workspaceCommandSpecs(): CommandSpec[] {
     scopedWrite("workspace.relay.discovery", ["workspace", "relay", "discovery"], "Update relay discovery settings", "/relay-config/discovery", "PUT"),
     scopedWrite("workspace.relay.update", ["workspace", "relay", "update"], "Update a relay engine", "/relay-config/:engine", "PUT", [refPositional("engine")]),
     scopedWrite("workspace.relay.reveal", ["workspace", "relay", "reveal"], "Reveal a relay engine credential", "/relay-config/:engine/reveal", "POST", [refPositional("engine")]),
+    scopedRead("workspace.bot-menu.get", ["workspace", "bot-menu", "get"], "Read the workspace Feishu bot menu", "/bot-menu"),
+    scopedWrite(
+      "workspace.bot-menu.update",
+      ["workspace", "bot-menu", "update"],
+      "Replace the workspace Feishu bot menu",
+      "/bot-menu",
+      "PUT",
+    ),
+    scopedWrite(
+      "workspace.bot-menu.publish",
+      ["workspace", "bot-menu", "publish"],
+      "Validate or publish the workspace Feishu bot menu",
+      "/bot-menu/publish",
+      "POST",
+      [{ name: "live", type: "boolean", description: "Publish to Feishu instead of dry-run validation" }],
+      async (invocation) => ({ dry_run: booleanOption(invocation, "live") !== true }),
+    ),
+    readSpec(
+      "workspace.bot-menu.publish-status",
+      ["workspace", "bot-menu", "publish-status"],
+      "Read a Feishu bot menu publish request",
+      [refPositional("workspace"), refPositional("request")],
+      async (invocation) => {
+        const client = await clientFor(invocation);
+        const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+        const requestId = positional(invocation, 1, "request");
+        const response = await client.request({
+          method: "GET",
+          path: `/api/workspaces/${encodePath(String(workspace.id))}/bot-menu/publish/${encodePath(requestId)}`,
+        });
+        renderResource(invocation, response.data);
+      },
+    ),
     scopedRead("workspace.prompt.get", ["workspace", "prompt", "get"], "Read workspace prompt appendices", "/prompts"),
     scopedRead("workspace.prompt.template", ["workspace", "prompt", "template"], "Read the platform prompt template", "/prompt-template"),
     scopedWrite("workspace.prompt.update", ["workspace", "prompt", "update"], "Update workspace prompt appendices", "/prompts", "PUT", [
@@ -185,7 +218,7 @@ function groupSpec(): CommandSpec {
     path: ["workspace"],
     description: "Manage workspaces and workspace settings",
     parse: "passthrough",
-    run: async () => { throw new CliError("usage", "usage: remi workspace list|get|create|update|delete|leave|runtime-provision|env|ssh-mesh|relay ..."); },
+    run: async () => { throw new CliError("usage", "usage: remi workspace list|get|create|update|delete|leave|runtime-provision|env|ssh-mesh|relay|bot-menu ..."); },
   };
 }
 
