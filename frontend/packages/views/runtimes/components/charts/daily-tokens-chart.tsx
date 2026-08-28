@@ -18,13 +18,19 @@ import { StackedBarChart } from "./stacked-bar-chart";
 // two cache series are visually adjacent and tonally distinct from
 // input/output. Total-only history is kept visually separate because it
 // cannot be assigned to a billable token dimension.
-export function tokenStackConfig(totalOnlyLabel: string): ChartConfig {
+export function tokenStackConfig(labels: {
+  input: string;
+  output: string;
+  cacheRead: string;
+  cacheWrite: string;
+  totalOnly: string;
+}): ChartConfig {
   return {
-    input: { label: "Input", color: "var(--chart-1)" },
-    output: { label: "Output", color: "var(--chart-2)" },
-    cacheRead: { label: "Cache read", color: "var(--chart-4)" },
-    cacheWrite: { label: "Cache write", color: "var(--chart-3)" },
-    totalOnly: { label: totalOnlyLabel, color: "var(--chart-5)" },
+    input: { label: labels.input, color: "var(--chart-1)" },
+    output: { label: labels.output, color: "var(--chart-2)" },
+    cacheRead: { label: labels.cacheRead, color: "var(--chart-4)" },
+    cacheWrite: { label: labels.cacheWrite, color: "var(--chart-3)" },
+    totalOnly: { label: labels.totalOnly, color: "var(--chart-5)" },
   };
 }
 
@@ -46,21 +52,27 @@ export function getTokenSeries(data: readonly Pick<DailyTokenData, "totalOnly">[
     : TOKEN_SERIES;
 }
 
-const localeTotal = (total: number) => total.toLocaleString();
-
 export function DailyTokensChart({ data }: { data: DailyTokenData[] }) {
   const { t } = useT("runtimes");
   return (
     <StackedBarChart
       data={data}
-      config={tokenStackConfig(t(($) => $.usage.legend_total_only))}
+      config={
+        tokenStackConfig({
+          input: t(($) => $.usage.legend_input),
+          output: t(($) => $.usage.legend_output),
+          cacheRead: t(($) => $.usage.legend_cache_read),
+          cacheWrite: t(($) => $.usage.legend_cache_write),
+          totalOnly: t(($) => $.usage.legend_total_only),
+        })
+      }
       series={getTokenSeries(data)}
       stackId="tokens"
       yAxisWidth={50}
       yAxisTickFormatter={formatTokens}
       formatValue={formatTokens}
       totalLabel={t(($) => $.charts.tooltip_total)}
-      formatTotal={localeTotal}
+      formatTotal={formatTokens}
     />
   );
 }

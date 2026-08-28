@@ -3,8 +3,6 @@ import { useT } from "../../../i18n";
 import { getTokenSeries, tokenStackConfig } from "./daily-tokens-chart";
 import { StackedBarChart } from "./stacked-bar-chart";
 
-const localeTotal = (total: number) => total.toLocaleString();
-
 /**
  * Mirror of DailyTokensChart's four regular segments and conditional
  * total-only segment. The same series and colours keep the Weekly view
@@ -15,14 +13,22 @@ export function WeeklyTokensChart({ data }: { data: WeeklyTokenData[] }) {
   return (
     <StackedBarChart
       data={data}
-      config={tokenStackConfig(t(($) => $.usage.legend_total_only))}
+      config={
+        tokenStackConfig({
+          input: t(($) => $.usage.legend_input),
+          output: t(($) => $.usage.legend_output),
+          cacheRead: t(($) => $.usage.legend_cache_read),
+          cacheWrite: t(($) => $.usage.legend_cache_write),
+          totalOnly: t(($) => $.usage.legend_total_only),
+        })
+      }
       series={getTokenSeries(data)}
       stackId="tokens"
       yAxisWidth={50}
       yAxisTickFormatter={formatTokens}
       formatValue={formatTokens}
       totalLabel={t(($) => $.charts.tooltip_total)}
-      formatTotal={localeTotal}
+      formatTotal={formatTokens}
       tooltipLabel={(row) =>
         row.partial
           ? t(($) => $.usage.weekly_partial_label, {

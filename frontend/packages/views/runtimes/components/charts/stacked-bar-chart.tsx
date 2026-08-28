@@ -94,11 +94,8 @@ export function StackedBarChart<Row>({
                     }
                   : undefined
               }
-              formatter={(value, name) =>
-                typeof value === "number" && formatValue
-                  ? `${formatValue(value)} ${name}`
-                  : `${value} ${name}`
-              }
+              valueFormatter={formatValue}
+              hideZeroValues
               footer={
                 formatTotal
                   ? (payload) => {
