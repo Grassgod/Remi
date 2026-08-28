@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MUL-176 API 路由耗时与查询计划审计</title>
+<style>
+:root{--ink:#182026;--muted:#66717a;--line:#dce2e6;--soft:#f5f7f8;--red:#b42318;--redbg:#fff1ef;--amber:#946200;--amberbg:#fff8db;--green:#176b4d;--greenbg:#eaf8f1;--teal:#0f6b78;--white:#fff}*{box-sizing:border-box}body{margin:0;background:var(--white);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:0}header{border-bottom:1px solid var(--line);background:#11191d;color:#fff;padding:38px max(24px,calc((100vw - 1240px)/2)) 32px}header h1{font-size:30px;line-height:1.2;margin:0 0 10px;letter-spacing:0}header p{max-width:900px;color:#c7d0d5;margin:0}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.meta span{border:1px solid #425059;padding:5px 9px;border-radius:4px;color:#e9eef1}nav{position:sticky;top:0;z-index:3;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);padding:9px max(24px,calc((100vw - 1240px)/2));display:flex;gap:18px;overflow:auto}nav a{color:#394850;text-decoration:none;white-space:nowrap;font-size:13px}main{max-width:1240px;margin:auto;padding:24px}section{padding:22px 0 30px;border-bottom:1px solid var(--line)}h2{font-size:21px;margin:0 0 14px}h3{font-size:15px;margin:18px 0 8px}.lead{font-size:15px;color:#3f4c53;max-width:920px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0}.metric{border:1px solid var(--line);border-radius:6px;padding:14px;background:var(--soft)}.metric b{display:block;font-size:24px;line-height:1.2}.metric span{color:var(--muted);font-size:12px}.finding{display:grid;grid-template-columns:80px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}.finding:first-of-type{border-top:0}.sev{font-weight:700;color:var(--red)}.finding p{margin:0}.badge,.tag{display:inline-block;border-radius:4px;padding:2px 6px;font-size:12px;white-space:nowrap}.badge.ok{background:var(--greenbg);color:var(--green)}.badge.warn{background:var(--amberbg);color:var(--amber)}.badge.muted,.tag{background:#eef1f3;color:#4d5960}.tablewrap{overflow:auto;border:1px solid var(--line);border-radius:6px}table{width:100%;border-collapse:collapse;min-width:900px}th{position:sticky;top:0;background:#edf1f3;text-align:left;font-size:12px;color:#46535b;padding:9px;border-bottom:1px solid var(--line)}td{padding:9px;border-bottom:1px solid #e8ecee;vertical-align:top}tr:last-child td{border-bottom:0}.num{text-align:right;font-variant-numeric:tabular-nums}.strong{font-weight:700}.path{max-width:410px;overflow-wrap:anywhere}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.callout{border-left:4px solid var(--amber);background:var(--amberbg);padding:12px 14px;margin:12px 0}.good{border-left-color:var(--green);background:var(--greenbg)}details{border:1px solid var(--line);border-radius:6px;margin:10px 0}summary{cursor:pointer;padding:10px 12px;font-weight:600}details .inside{padding:0 12px 12px}.plan{background:#11191d;color:#dbe5e9;padding:10px;border-radius:4px;white-space:pre-wrap;overflow-wrap:anywhere}input{width:100%;max-width:420px;border:1px solid #aeb8be;border-radius:4px;padding:8px 10px;margin:0 0 10px}@media(max-width:760px){header{padding:26px 18px}header h1{font-size:24px}main{padding:16px}.metrics{grid-template-columns:1fr 1fr}.finding{grid-template-columns:1fr}nav{padding-left:16px}.tablewrap{margin-right:-16px;border-right:0;border-radius:6px 0 0 6px}}@media print{nav{display:none}details .inside{display:block}header{background:#fff;color:#111;padding:20px 0}header p,.meta span{color:#444}.meta span{border-color:#aaa}main{padding:0}.tablewrap{overflow:visible}table{font-size:10px}}
+</style>
+</head>
+<body>
+<header><h1>MUL-176 · API 路由耗时基线与索引/查询计划审计</h1><p>自上而下从 Hono 路由观察 SQL 放大、响应体积与执行计划。诊断资产，不含产品修复。</p><div class="meta"><span>Bun 1.3.14</span><span>SQLite :memory:</span><span>200 issues / 2,000 comments / 500 tasks / 50 agents</span><span>5 warmups + 30 samples</span><span>commit 2dfe21d056cf</span></div></header>
+<nav><a href="#summary">结论</a><a href="#slow">慢路由</a><a href="#sql">SQL Top</a><a href="#indexes">索引计划</a><a href="#unbounded">无界查询</a><a href="#repeats">重复取行</a><a href="#cross">方向 1 对照</a><a href="#coverage">38 Router</a><a href="#limits">边界</a></nav>
+<main>
+<section id="summary"><h2>结论摘要</h2><p class="lead">SQLite 实测显示，最严重的路径主要由查询次数、无界响应或路由内外部 I/O 放大，而不是单条 SQL 慢。现有 comment 外键索引均被使用，无法修复 4N hydration；真正缺索引的热点集中在 tasks、project issue 聚合和列表排序。</p>
+<div class="metrics"><div class="metric"><b>8,034</b><span>native issue detail SQL</span></div><div class="metric"><b>1.95 MB</b><span>native issue detail response</span></div><div class="metric"><b>243.0 ms</b><span>repository GET p95</span></div><div class="metric"><b>152</b><span>SQLite runtime indexes inventoried</span></div></div>
+<div class="finding"><div class="sev">P0</div><p><span class="badge ok">已验证</span> <b>native issue detail 是最大组合放大器。</b> 2,000 comments 下 <code>GET /api/multiremi/issues/:id</code> 为 8,034 SQL、p95 155.6 ms、响应 1.95 MB；路由把 tasks、全部 hydrated comments、activity 等一起组装（<code>routers/issues.ts:649</code>）。</p></div>
+<div class="finding"><div class="sev">P0</div><p><span class="badge ok">已验证</span> <b>timeline/comments 延续 4N。</b> 2,000 条评论分别为 8,011 / 8,004 SQL，p95 145.7 / 144.6 ms，响应 761.7 KB / 765.8 KB。热点三条语句为 comment 主键取行 4,000 次、attachments 2,000 次、reactions 2,000 次（<code>issues-repo.ts:1664/:1842/:2547</code>）。</p></div>
+<div class="finding"><div class="sev">P1</div><p><span class="badge ok">已验证·受控失败路径</span> <b>repository GET 执行远端 Git I/O。</b> 缺 <code>default_branch</code> 的种子仓库使 <code>GET /api/workspaces/:id/repos</code> 每次触发 <code>git ls-remote</code>；9 SQL 但 p95 243.0 ms（<code>routers/workspaces.ts:297</code>、<code>helpers/repositories.ts:145/:267</code>）。这不是数据库慢，且已填 default branch 的正常路径不会触发。</p></div>
+<div class="finding"><div class="sev">P1</div><p><span class="badge ok">已验证</span> <b>native issue list 新 N+1。</b> 200 issues 下逐 issue 调 <code>listTasksForIssue</code>，共 203 SQL、p95 14.8 ms（<code>routers/issues.ts:293</code>）。</p></div>
+<div class="finding"><div class="sev">P1</div><p><span class="badge ok">已验证</span> <b>task-runs 新 N+1。</b> 500 tasks 中 125 queued，路由逐 task 调 <code>getTaskQueueBlocker</code>，共 129 SQL、p95 42.9 ms，并返回 916.4 KB（<code>routers/issues.ts:744</code>、<code>tasks-repo.ts:145</code>）。</p></div>
+<div class="finding"><div class="sev">P1</div><p><span class="badge ok">已验证</span> <b>issue search 新 N+1。</b> 200 issues 触发 200 次 comment snippet 查询，总计 202 SQL；每条子查询命中现有 <code>(issue_id, created_at)</code> 索引，问题仍是逐 issue 调用（<code>issues-repo.ts:684/:733</code>）。</p></div>
+<div class="finding"><div class="sev">P1</div><p><span class="badge ok">已验证</span> <b>agents 两层 hydration。</b> native list 为 52 SQL；compat serializer 又逐 agent 调一次 <code>listAgentSkills</code>，compat list 达 150 SQL（<code>agents-skills-repo.ts:676/:693</code>、<code>wire/agents.ts:14/:42</code>）。</p></div>
+<div class="finding"><div class="sev">P2</div><p><span class="badge ok">已验证</span> <b>无界返回已成为独立成本。</b> <code>GET /api/multiremi/tasks</code> 仅 2 SQL，但 500 rows 已产生 634.0 KB 响应；issue lists 在 200 rows 时约 115–119 KB。</p></div>
+<div class="callout"><b>生产桥开销建模：</b>沿用 MUL-172 已验证的 207–378 µs/SQL 阻塞地板，native issue detail / timeline / comments 仅桥往返均约 1.66–3.04 s，native issue list 42.0–76.7 ms，issue search 41.8–76.4 ms，task-runs 26.7–48.8 ms；均不含真实 Postgres 查询和网络时间。此段是<span class="badge warn">建模推算</span>，不是生产实测。</div>
+</section>
+
+<section id="slow"><h2>最慢 Top 20</h2><p>按 SQLite p95 降序。耗时包含 <code>app.request()</code> 和响应体完整消费。</p><div class="tablewrap"><table><thead><tr><th>#</th><th>Router</th><th>Method</th><th>Status</th><th>Path</th><th class="num">SQL</th><th class="num">p50 ms</th><th class="num">p95 ms</th><th class="num">Response</th><th>主因</th></tr></thead><tbody><tr>
+    <td class="num">1</td>
+    <td><span class="tag">workspaces</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/workspaces/local/repos</code></td>
+    <td class="num strong">9</td>
+    <td class="num">186.519</td>
+    <td class="num">242.957</td>
+    <td class="num">580 B</td>
+    <td>remote git I/O on GET</td>
+  </tr><tr>
+    <td class="num">2</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/iss_snapshot</code></td>
+    <td class="num strong">8,034</td>
+    <td class="num">150.326</td>
+    <td class="num">155.617</td>
+    <td class="num">1.95 MB</td>
+    <td>N+1 + unbounded payload</td>
+  </tr><tr>
+    <td class="num">3</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/iss_snapshot/timeline</code></td>
+    <td class="num strong">8,011</td>
+    <td class="num">147.598</td>
+    <td class="num">152.692</td>
+    <td class="num">1.25 MB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">4</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/iss_snapshot/comments</code></td>
+    <td class="num strong">8,004</td>
+    <td class="num">146.885</td>
+    <td class="num">149.932</td>
+    <td class="num">1.32 MB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">5</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/timeline</code></td>
+    <td class="num strong">8,011</td>
+    <td class="num">139.526</td>
+    <td class="num">145.672</td>
+    <td class="num">761.7 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">6</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/comments</code></td>
+    <td class="num strong">8,004</td>
+    <td class="num">139.739</td>
+    <td class="num">144.640</td>
+    <td class="num">765.8 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">7</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/active-task</code></td>
+    <td class="num strong">129</td>
+    <td class="num">40.258</td>
+    <td class="num">45.399</td>
+    <td class="num">468.3 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">8</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/task-runs</code></td>
+    <td class="num strong">129</td>
+    <td class="num">41.034</td>
+    <td class="num">42.929</td>
+    <td class="num">916.4 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">9</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/sessions/ise_snapshot/tasks</code></td>
+    <td class="num strong">129</td>
+    <td class="num">40.542</td>
+    <td class="num">42.822</td>
+    <td class="num">912.0 KB</td>
+    <td>N+1 + JS filter</td>
+  </tr><tr>
+    <td class="num">10</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues</code></td>
+    <td class="num strong">203</td>
+    <td class="num">13.102</td>
+    <td class="num">14.808</td>
+    <td class="num">122.4 KB</td>
+    <td>N+1 task summary + unbounded</td>
+  </tr><tr>
+    <td class="num">11</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/search?q=snapshot</code></td>
+    <td class="num strong">202</td>
+    <td class="num">4.075</td>
+    <td class="num">7.784</td>
+    <td class="num">3.1 KB</td>
+    <td>query fan-out</td>
+  </tr><tr>
+    <td class="num">12</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/search?q=benchmark&amp;workspace_id=local</code></td>
+    <td class="num strong">202</td>
+    <td class="num">4.072</td>
+    <td class="num">6.693</td>
+    <td class="num">11.5 KB</td>
+    <td>N+1 + JS filter</td>
+  </tr><tr>
+    <td class="num">13</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/usage</code></td>
+    <td class="num strong">5</td>
+    <td class="num">4.241</td>
+    <td class="num">6.020</td>
+    <td class="num">140 B</td>
+    <td>baseline</td>
+  </tr><tr>
+    <td class="num">14</td>
+    <td><span class="tag">daemon</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/daemon/runtimes/rt_snapshot/tasks/pending</code></td>
+    <td class="num strong">9</td>
+    <td class="num">3.354</td>
+    <td class="num">5.423</td>
+    <td class="num">48.7 KB</td>
+    <td>baseline</td>
+  </tr><tr>
+    <td class="num">15</td>
+    <td><span class="tag">chat</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/chat/sessions/cht_snapshot/pending-task</code></td>
+    <td class="num strong">8</td>
+    <td class="num">2.719</td>
+    <td class="num">5.374</td>
+    <td class="num">88 B</td>
+    <td>baseline</td>
+  </tr><tr>
+    <td class="num">16</td>
+    <td><span class="tag">agent-task-snapshot</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/agent-task-snapshot</code></td>
+    <td class="num strong">2</td>
+    <td class="num">3.343</td>
+    <td class="num">5.268</td>
+    <td class="num">382.0 KB</td>
+    <td>baseline</td>
+  </tr><tr>
+    <td class="num">17</td>
+    <td><span class="tag">agent-task-snapshot</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/agent-task-snapshot</code></td>
+    <td class="num strong">2</td>
+    <td class="num">3.645</td>
+    <td class="num">5.162</td>
+    <td class="num">382.0 KB</td>
+    <td>baseline</td>
+  </tr><tr>
+    <td class="num">18</td>
+    <td><span class="tag">agents</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/agents</code></td>
+    <td class="num strong">150</td>
+    <td class="num">4.456</td>
+    <td class="num">5.138</td>
+    <td class="num">30.7 KB</td>
+    <td>double skills hydration N+1</td>
+  </tr><tr>
+    <td class="num">19</td>
+    <td><span class="tag">tasks</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/tasks</code></td>
+    <td class="num strong">2</td>
+    <td class="num">4.336</td>
+    <td class="num">4.742</td>
+    <td class="num">634.0 KB</td>
+    <td>unbounded + payload</td>
+  </tr><tr>
+    <td class="num">20</td>
+    <td><span class="tag">chat</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/chat/pending-tasks</code></td>
+    <td class="num strong">8</td>
+    <td class="num">2.761</td>
+    <td class="num">4.731</td>
+    <td class="num">93 B</td>
+    <td>baseline</td>
+  </tr></tbody></table></div></section>
+
+<section id="sql"><h2>SQL 条数 Top 20</h2><p>同一请求内 statement 实际执行次数；SQL 文本与参数同时记录。</p><div class="tablewrap"><table><thead><tr><th>#</th><th>Router</th><th>Method</th><th>Status</th><th>Path</th><th class="num">SQL</th><th class="num">p50 ms</th><th class="num">p95 ms</th><th class="num">Response</th><th>主因</th></tr></thead><tbody><tr>
+    <td class="num">1</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/iss_snapshot</code></td>
+    <td class="num strong">8,034</td>
+    <td class="num">150.326</td>
+    <td class="num">155.617</td>
+    <td class="num">1.95 MB</td>
+    <td>N+1 + unbounded payload</td>
+  </tr><tr>
+    <td class="num">2</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/iss_snapshot/timeline</code></td>
+    <td class="num strong">8,011</td>
+    <td class="num">147.598</td>
+    <td class="num">152.692</td>
+    <td class="num">1.25 MB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">3</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/timeline</code></td>
+    <td class="num strong">8,011</td>
+    <td class="num">139.526</td>
+    <td class="num">145.672</td>
+    <td class="num">761.7 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">4</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/iss_snapshot/comments</code></td>
+    <td class="num strong">8,004</td>
+    <td class="num">146.885</td>
+    <td class="num">149.932</td>
+    <td class="num">1.32 MB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">5</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/comments</code></td>
+    <td class="num strong">8,004</td>
+    <td class="num">139.739</td>
+    <td class="num">144.640</td>
+    <td class="num">765.8 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">6</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues</code></td>
+    <td class="num strong">203</td>
+    <td class="num">13.102</td>
+    <td class="num">14.808</td>
+    <td class="num">122.4 KB</td>
+    <td>N+1 task summary + unbounded</td>
+  </tr><tr>
+    <td class="num">7</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/issues/search?q=snapshot</code></td>
+    <td class="num strong">202</td>
+    <td class="num">4.075</td>
+    <td class="num">7.784</td>
+    <td class="num">3.1 KB</td>
+    <td>query fan-out</td>
+  </tr><tr>
+    <td class="num">8</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/search?q=benchmark&amp;workspace_id=local</code></td>
+    <td class="num strong">202</td>
+    <td class="num">4.072</td>
+    <td class="num">6.693</td>
+    <td class="num">11.5 KB</td>
+    <td>N+1 + JS filter</td>
+  </tr><tr>
+    <td class="num">9</td>
+    <td><span class="tag">agents</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/agents</code></td>
+    <td class="num strong">150</td>
+    <td class="num">4.456</td>
+    <td class="num">5.138</td>
+    <td class="num">30.7 KB</td>
+    <td>double skills hydration N+1</td>
+  </tr><tr>
+    <td class="num">10</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/active-task</code></td>
+    <td class="num strong">129</td>
+    <td class="num">40.258</td>
+    <td class="num">45.399</td>
+    <td class="num">468.3 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">11</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/task-runs</code></td>
+    <td class="num strong">129</td>
+    <td class="num">41.034</td>
+    <td class="num">42.929</td>
+    <td class="num">916.4 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+    <td class="num">12</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/sessions/ise_snapshot/tasks</code></td>
+    <td class="num strong">129</td>
+    <td class="num">40.542</td>
+    <td class="num">42.822</td>
+    <td class="num">912.0 KB</td>
+    <td>N+1 + JS filter</td>
+  </tr><tr>
+    <td class="num">13</td>
+    <td><span class="tag">workspaces</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/workspaces/local/repository-wikis/atlas</code></td>
+    <td class="num strong">55</td>
+    <td class="num">1.695</td>
+    <td class="num">1.817</td>
+    <td class="num">305 B</td>
+    <td>query fan-out</td>
+  </tr><tr>
+    <td class="num">14</td>
+    <td><span class="tag">agents</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/agents?workspaceId=local</code></td>
+    <td class="num strong">52</td>
+    <td class="num">1.667</td>
+    <td class="num">1.943</td>
+    <td class="num">33.1 KB</td>
+    <td>N+1</td>
+  </tr><tr>
+    <td class="num">15</td>
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot</code></td>
+    <td class="num strong">32</td>
+    <td class="num">2.987</td>
+    <td class="num">3.216</td>
+    <td class="num">940 B</td>
+    <td>repeated row</td>
+  </tr><tr>
+    <td class="num">16</td>
+    <td><span class="tag">daemon-retirement</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/daemons/dmn_snapshot/retirement-plan?workspace_id=local</code></td>
+    <td class="num strong">25</td>
+    <td class="num">1.510</td>
+    <td class="num">2.082</td>
+    <td class="num">30.9 KB</td>
+    <td>query fan-out</td>
+  </tr><tr>
+    <td class="num">17</td>
+    <td><span class="tag">comments</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/comments/cmt_33lzyf0rhr0t/attachments</code></td>
+    <td class="num strong">18</td>
+    <td class="num">0.367</td>
+    <td class="num">0.742</td>
+    <td class="num">357 B</td>
+    <td>query fan-out</td>
+  </tr><tr>
+    <td class="num">18</td>
+    <td><span class="tag">tasks</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/tasks/tsk_snapshot</code></td>
+    <td class="num strong">15</td>
+    <td class="num">0.862</td>
+    <td class="num">1.445</td>
+    <td class="num">5.9 KB</td>
+    <td>query fan-out</td>
+  </tr><tr>
+    <td class="num">19</td>
+    <td><span class="tag">tasks</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/tasks/tsk_snapshot/inspection</code></td>
+    <td class="num strong">14</td>
+    <td class="num">0.791</td>
+    <td class="num">1.560</td>
+    <td class="num">1.1 KB</td>
+    <td>query fan-out</td>
+  </tr><tr>
+    <td class="num">20</td>
+    <td><span class="tag">tasks</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/tasks/tsk_snapshot/inspection</code></td>
+    <td class="num strong">14</td>
+    <td class="num">0.890</td>
+    <td class="num">1.440</td>
+    <td class="num">1.1 KB</td>
+    <td>query fan-out</td>
+  </tr></tbody></table></div>
+<details><summary>/api/multiremi/issues/iss_snapshot · 8,034 SQL</summary><div class="inside"><pre class="plan">4000 × SELECT * FROM multiremi_issue_comments WHERE id = ?
+2000 × SELECT * FROM multiremi_attachments WHERE comment_id = ? ORDER BY created_at ASC
+2000 × SELECT * FROM multiremi_comment_reactions WHERE comment_id = ? ORDER BY created_at ASC
+9 × SELECT id FROM multiremi_issues WHERE id = ?
+9 × SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC
+8 × SELECT * FROM multiremi_issues WHERE id = ?
+1 × SELECT * FROM multiremi_attachments WHERE issue_id = ? AND comment_id IS NULL ORDER BY created_at ASC
+1 × SELECT * FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC</pre></div></details><details><summary>/api/issues/iss_snapshot/timeline · 8,011 SQL</summary><div class="inside"><pre class="plan">4000 × SELECT * FROM multiremi_issue_comments WHERE id = ?
+2000 × SELECT * FROM multiremi_attachments WHERE comment_id = ? ORDER BY created_at ASC
+2000 × SELECT * FROM multiremi_comment_reactions WHERE comment_id = ? ORDER BY created_at ASC
+3 × SELECT * FROM multiremi_issues WHERE id = ?
+3 × SELECT id FROM multiremi_issues WHERE id = ?
+3 × SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC
+1 × SELECT * FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC
+1 × SELECT * FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at ASC</pre></div></details><details><summary>/api/issues/iss_snapshot/comments · 8,004 SQL</summary><div class="inside"><pre class="plan">4000 × SELECT * FROM multiremi_issue_comments WHERE id = ?
+2000 × SELECT * FROM multiremi_attachments WHERE comment_id = ? ORDER BY created_at ASC
+2000 × SELECT * FROM multiremi_comment_reactions WHERE comment_id = ? ORDER BY created_at ASC
+1 × SELECT * FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at ASC
+1 × SELECT * FROM multiremi_issues WHERE id = ?
+1 × SELECT id FROM multiremi_issues WHERE id = ?
+1 × SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</pre></div></details><details><summary>/api/multiremi/issues · 203 SQL</summary><div class="inside"><pre class="plan">200 × SELECT * FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at DESC
+1 × SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? ORDER BY updated_at DESC
+1 × SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ?
+1 × SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY lower(l.name) ASC</pre></div></details><details><summary>/api/agents · 150 SQL</summary><div class="inside"><pre class="plan">98 × SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC
+49 × SELECT * FROM multiremi_agents WHERE id = ?
+1 × SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC
+1 × SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC
+1 × SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL</pre></div></details><details><summary>/api/issues/iss_snapshot/task-runs · 129 SQL</summary><div class="inside"><pre class="plan">125 × SELECT active.id AS task_id, active.agent_id, agent.name AS agent_name, active.issue_session_id, session.title AS issue_session_title, CASE WHEN queued.issue_session_id IS NOT NULL AND active.issue_session_id = queued.issue_session_id THEN 'session' WHEN queued.issue_id IS NOT NULL AND queued.issue_session_id IS NULL AND active.issue_id = queued.issue_id THEN 'legacy_issue' ELSE 'issue_workspace' END AS blocker_reason FROM multiremi_tasks queued JOIN multiremi_tasks active ON active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human') JOIN multiremi_agents agent ON agent.id = active.agent_id LEFT JOIN multiremi_issue_sessions session ON session.id = active.issue_session_id WHERE queued.id = ? AND queued.status = 'queued' AND ( (queued.issue_session_id IS NOT NULL AND active.issue_session_id = queued.issue_session_id) OR (queued.issue_id IS NOT NULL AND queued.issue_session_id IS NULL AND active.issue_id = queued.issue_id) OR ( queued.issue_id IS NOT NULL AND queued.holds_workspace = 1 AND active.issue_id = queued.issue_id AND active.holds_workspace = 1 ) ) ORDER BY active.dispatched_at ASC, active.created_at ASC LIMIT 1
+1 × SELECT * FROM multiremi_issues WHERE id = ?
+1 × SELECT * FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at DESC
+1 × SELECT id FROM multiremi_issues WHERE id = ?
+1 × SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</pre></div></details><details><summary>/api/issues/search?q=benchmark&amp;workspace_id=local · 202 SQL</summary><div class="inside"><pre class="plan">200 × SELECT body FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at DESC
+1 × SELECT * FROM multiremi_issues ORDER BY updated_at DESC
+1 × SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY lower(l.name) ASC</pre></div></details><details><summary>/api/workspaces/local/repos · 9 SQL</summary><div class="inside"><pre class="plan">3 × SELECT * FROM multiremi_scm_connections WHERE workspace_id = ? AND enabled = ? ORDER BY created_at ASC, id ASC
+2 × SELECT * FROM multiremi_scm_repository_bindings WHERE workspace_id = ? ORDER BY created_at ASC, repository_id ASC, id ASC
+2 × SELECT * FROM multiremi_workspaces WHERE id = ?
+1 × SELECT * FROM multiremi_scm_connections WHERE workspace_id = ? ORDER BY created_at ASC, id ASC
+1 × UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ? RETURNING id</pre></div></details></section>
+
+<section id="indexes"><h2>索引与查询计划</h2><div class="callout good"><b>已验证不是缺索引：</b>comments by issue/search snippet 使用 <code>idx_multiremi_issue_comments_issue(issue_id, created_at)</code>；attachments/reactions 使用各自 <code>comment_id</code> 索引。对 4N 路径继续加索引不会改变 SQL 数。</div>
+<h3>临时索引前后对照（SQLite）</h3><div class="tablewrap"><table><thead><tr><th>候选索引</th><th>受益查询</th><th>Before</th><th>After</th><th>结论</th></tr></thead><tbody><tr><td><code>multiremi_issues(workspace_id, archived_at, updated_at DESC)</code></td><td>issue list order</td><td><code>SEARCH multiremi_issues USING INDEX idx_multiremi_issues_archive (workspace_id=? AND archived_at=?) · USE TEMP B-TREE FOR ORDER BY</code></td><td><code>SEARCH multiremi_issues USING INDEX mul176_tmp_issues_workspace_archive_updated (workspace_id=? AND archived_at=?)</code></td><td><span class="badge ok">已验证 SQLite</span></td></tr><tr><td><code>multiremi_tasks(issue_id, created_at DESC)</code></td><td>tasks by issue order</td><td><code>SEARCH multiremi_tasks USING INDEX idx_multiremi_tasks_issue (issue_id=?) · USE TEMP B-TREE FOR ORDER BY</code></td><td><code>SEARCH multiremi_tasks USING INDEX mul176_tmp_tasks_issue_created (issue_id=?)</code></td><td><span class="badge ok">已验证 SQLite</span></td></tr><tr><td><code>multiremi_tasks(agent_id, created_at DESC)</code></td><td>tasks by agent order</td><td><code>SCAN multiremi_tasks · USE TEMP B-TREE FOR ORDER BY</code></td><td><code>SEARCH multiremi_tasks USING INDEX mul176_tmp_tasks_agent_created (agent_id=?)</code></td><td><span class="badge ok">已验证 SQLite</span></td></tr><tr><td><code>multiremi_autopilot_runs(task_id, created_at DESC)</code></td><td>autopilot runs by task order</td><td><code>SCAN multiremi_autopilot_runs · USE TEMP B-TREE FOR ORDER BY</code></td><td><code>SEARCH multiremi_autopilot_runs USING INDEX mul176_tmp_autopilot_runs_task_created (task_id=?) · USE TEMP B-TREE FOR ORDER BY</code></td><td><span class="badge ok">已验证 SQLite</span></td></tr><tr><td><code>multiremi_issues(project_id)</code></td><td>project issue join</td><td><code>SEARCH p USING INDEX idx_multiremi_projects_workspace (workspace_id=?) · SCAN i LEFT-JOIN · USE TEMP B-TREE FOR GROUP BY · USE TEMP B-TREE FOR ORDER BY</code></td><td><code>SEARCH p USING INDEX idx_multiremi_projects_workspace (workspace_id=?) · SEARCH i USING INDEX mul176_tmp_issues_project (project_id=?) LEFT-JOIN · USE TEMP B-TREE FOR GROUP BY · USE TEMP B-TREE FOR ORDER BY</code></td><td><span class="badge ok">已验证 SQLite</span></td></tr><tr><td><code>multiremi_access_tokens(workspace_id, created_at DESC) WHERE type != 'task'</code></td><td>access tokens by workspace order</td><td><code>SEARCH multiremi_access_tokens USING INDEX idx_multiremi_access_tokens_workspace (workspace_id=?) · USE TEMP B-TREE FOR ORDER BY</code></td><td><code>SEARCH multiremi_access_tokens USING INDEX mul176_tmp_tokens_workspace_created_non_task (workspace_id=?)</code></td><td><span class="badge ok">已验证 SQLite</span></td></tr></tbody></table></div>
+<h3>热点计划</h3><details><summary>issue list by workspace</summary><div class="inside"><code>SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? ORDER BY updated_at DESC</code><pre class="plan">SEARCH multiremi_issues USING INDEX idx_multiremi_issues_archive (workspace_id=? AND archived_at=?)
+USE TEMP B-TREE FOR ORDER BY</pre></div></details><details><summary>issue comments by issue</summary><div class="inside"><code>SELECT * FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at ASC</code><pre class="plan">SEARCH multiremi_issue_comments USING INDEX idx_multiremi_issue_comments_issue (issue_id=?)</pre></div></details><details><summary>comment search snippet</summary><div class="inside"><code>SELECT body FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at DESC</code><pre class="plan">SEARCH multiremi_issue_comments USING INDEX idx_multiremi_issue_comments_issue (issue_id=?)</pre></div></details><details><summary>tasks by issue</summary><div class="inside"><code>SELECT * FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at DESC</code><pre class="plan">SEARCH multiremi_tasks USING INDEX idx_multiremi_tasks_issue (issue_id=?)
+USE TEMP B-TREE FOR ORDER BY</pre></div></details><details><summary>tasks by agent</summary><div class="inside"><code>SELECT * FROM multiremi_tasks WHERE agent_id = ? ORDER BY created_at DESC</code><pre class="plan">SCAN multiremi_tasks
+USE TEMP B-TREE FOR ORDER BY</pre></div></details><details><summary>all tasks</summary><div class="inside"><code>SELECT * FROM multiremi_tasks ORDER BY created_at DESC</code><pre class="plan">SCAN multiremi_tasks
+USE TEMP B-TREE FOR ORDER BY</pre></div></details><details><summary>autopilot runs by task ids</summary><div class="inside"><code>SELECT task_id, id FROM multiremi_autopilot_runs WHERE task_id IN (?, ?, ?) ORDER BY created_at DESC</code><pre class="plan">SCAN multiremi_autopilot_runs
+USE TEMP B-TREE FOR ORDER BY</pre></div></details><details><summary>agent skills</summary><div class="inside"><code>SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC</code><pre class="plan">SEARCH aks USING INDEX idx_multiremi_agent_skills_agent (agent_id=?)
+SEARCH s USING INDEX sqlite_autoindex_multiremi_skills_1 (id=?)
+USE TEMP B-TREE FOR ORDER BY</pre></div></details><details><summary>queued task blocker</summary><div class="inside"><code>SELECT active.id AS task_id, active.agent_id FROM multiremi_tasks queued JOIN multiremi_tasks active ON active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human') WHERE queued.id = ? AND queued.status = 'queued' AND ( (queued.issue_session_id IS NOT NULL AND active.issue_session_id = queued.issue_session_id) OR (queued.issue_id IS NOT NULL AND queued.issue_session_id IS NULL AND active.issue_id = queued.issue_id) OR (queued.issue_id IS NOT NULL AND queued.holds_workspace = 1 AND active.issue_id = queued.issue_id AND active.holds_workspace = 1) ) ORDER BY active.dispatched_at ASC, active.created_at ASC LIMIT 1</code><pre class="plan">SEARCH queued USING INDEX sqlite_autoindex_multiremi_tasks_1 (id=?)
+MULTI-INDEX OR
+INDEX 1
+SEARCH active USING INDEX idx_multiremi_tasks_issue_session (issue_session_id=?)
+INDEX 2
+SEARCH active USING INDEX idx_multiremi_tasks_issue (issue_id=?)
+INDEX 3
+SEARCH active USING INDEX idx_multiremi_tasks_issue (issue_id=?)
+USE TEMP B-TREE FOR ORDER BY</pre></div></details><details><summary>projects with issue counts</summary><div class="inside"><code>SELECT p.id, COUNT(i.id) AS issue_count FROM multiremi_projects p LEFT JOIN multiremi_issues i ON i.project_id = p.id WHERE p.workspace_id = ? GROUP BY p.id ORDER BY p.updated_at DESC</code><pre class="plan">SEARCH p USING INDEX idx_multiremi_projects_workspace (workspace_id=?)
+SCAN i LEFT-JOIN
+USE TEMP B-TREE FOR GROUP BY
+USE TEMP B-TREE FOR ORDER BY</pre></div></details>
+<h3>现有索引清单</h3><p>内存库执行同一份 migration 后从 <code>sqlite_master</code> 枚举，共 152 个非自动索引。</p><input id="indexFilter" placeholder="筛选表名或索引名" oninput="filterIndexes(this.value)"><div class="tablewrap"><table id="indexTable"><thead><tr><th>Table</th><th>Index</th><th>DDL</th></tr></thead><tbody><tr><td><code>multiremi_access_tokens</code></td><td><code>idx_multiremi_access_tokens_hash</code></td><td><code>CREATE INDEX idx_multiremi_access_tokens_hash ON multiremi_access_tokens(token_hash)</code></td></tr><tr><td><code>multiremi_access_tokens</code></td><td><code>idx_multiremi_access_tokens_workspace</code></td><td><code>CREATE INDEX idx_multiremi_access_tokens_workspace ON multiremi_access_tokens(workspace_id, type)</code></td></tr><tr><td><code>multiremi_agent_plugin_bindings</code></td><td><code>idx_multiremi_agent_plugin_bindings_agent</code></td><td><code>CREATE INDEX idx_multiremi_agent_plugin_bindings_agent ON multiremi_agent_plugin_bindings(agent_id, enabled, updated_at)</code></td></tr><tr><td><code>multiremi_agent_plugin_bindings</code></td><td><code>idx_multiremi_agent_plugin_bindings_plugin</code></td><td><code>CREATE INDEX idx_multiremi_agent_plugin_bindings_plugin ON multiremi_agent_plugin_bindings(plugin_id, enabled, updated_at)</code></td></tr><tr><td><code>multiremi_agent_plugin_runtime_states</code></td><td><code>idx_multiremi_agent_plugin_runtime_desired</code></td><td><code>CREATE INDEX idx_multiremi_agent_plugin_runtime_desired ON multiremi_agent_plugin_runtime_states(runtime_id, desired, status, updated_at)</code></td></tr><tr><td><code>multiremi_agent_plugin_runtime_states</code></td><td><code>idx_multiremi_agent_plugin_runtime_plugin</code></td><td><code>CREATE INDEX idx_multiremi_agent_plugin_runtime_plugin ON multiremi_agent_plugin_runtime_states(plugin_id, plugin_version_id, desired, status)</code></td></tr><tr><td><code>multiremi_agent_plugin_versions</code></td><td><code>idx_multiremi_agent_plugin_versions_digest</code></td><td><code>CREATE INDEX idx_multiremi_agent_plugin_versions_digest ON multiremi_agent_plugin_versions(artifact_digest)</code></td></tr><tr><td><code>multiremi_agent_plugin_versions</code></td><td><code>idx_multiremi_agent_plugin_versions_plugin</code></td><td><code>CREATE INDEX idx_multiremi_agent_plugin_versions_plugin ON multiremi_agent_plugin_versions(plugin_id, created_at)</code></td></tr><tr><td><code>multiremi_agent_plugins</code></td><td><code>idx_multiremi_agent_plugins_workspace</code></td><td><code>CREATE INDEX idx_multiremi_agent_plugins_workspace ON multiremi_agent_plugins(workspace_id, provider, archived_at, updated_at)</code></td></tr><tr><td><code>multiremi_agent_skills</code></td><td><code>idx_multiremi_agent_skills_agent</code></td><td><code>CREATE INDEX idx_multiremi_agent_skills_agent ON multiremi_agent_skills(agent_id)</code></td></tr><tr><td><code>multiremi_agent_skills</code></td><td><code>idx_multiremi_agent_skills_skill</code></td><td><code>CREATE INDEX idx_multiremi_agent_skills_skill ON multiremi_agent_skills(skill_id)</code></td></tr><tr><td><code>multiremi_attachments</code></td><td><code>idx_multiremi_attachments_chat_message</code></td><td><code>CREATE INDEX idx_multiremi_attachments_chat_message ON multiremi_attachments(chat_message_id)</code></td></tr><tr><td><code>multiremi_attachments</code></td><td><code>idx_multiremi_attachments_chat_session</code></td><td><code>CREATE INDEX idx_multiremi_attachments_chat_session ON multiremi_attachments(chat_session_id)</code></td></tr><tr><td><code>multiremi_attachments</code></td><td><code>idx_multiremi_attachments_comment</code></td><td><code>CREATE INDEX idx_multiremi_attachments_comment ON multiremi_attachments(comment_id)</code></td></tr><tr><td><code>multiremi_attachments</code></td><td><code>idx_multiremi_attachments_issue</code></td><td><code>CREATE INDEX idx_multiremi_attachments_issue ON multiremi_attachments(issue_id)</code></td></tr><tr><td><code>multiremi_attachments</code></td><td><code>idx_multiremi_attachments_workspace</code></td><td><code>CREATE INDEX idx_multiremi_attachments_workspace ON multiremi_attachments(workspace_id)</code></td></tr><tr><td><code>multiremi_autopilot_runs</code></td><td><code>idx_multiremi_autopilot_runs_autopilot</code></td><td><code>CREATE INDEX idx_multiremi_autopilot_runs_autopilot ON multiremi_autopilot_runs(autopilot_id, created_at)</code></td></tr><tr><td><code>multiremi_autopilot_runs</code></td><td><code>idx_multiremi_autopilot_runs_repository</code></td><td><code>CREATE INDEX idx_multiremi_autopilot_runs_repository ON multiremi_autopilot_runs(repository_id, created_at) WHERE repository_id IS NOT NULL</code></td></tr><tr><td><code>multiremi_autopilot_runs</code></td><td><code>idx_multiremi_autopilot_runs_system_event</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_autopilot_runs_system_event ON multiremi_autopilot_runs(trigger_id, event_id) WHERE trigger_id IS NOT NULL AND event_id IS NOT NULL</code></td></tr><tr><td><code>multiremi_autopilot_triggers</code></td><td><code>idx_multiremi_autopilot_triggers_autopilot</code></td><td><code>CREATE INDEX idx_multiremi_autopilot_triggers_autopilot ON multiremi_autopilot_triggers(autopilot_id, enabled, kind)</code></td></tr><tr><td><code>multiremi_autopilot_triggers</code></td><td><code>idx_multiremi_autopilot_triggers_token</code></td><td><code>CREATE INDEX idx_multiremi_autopilot_triggers_token ON multiremi_autopilot_triggers(webhook_token)</code></td></tr><tr><td><code>multiremi_autopilots</code></td><td><code>idx_multiremi_autopilots_assignee</code></td><td><code>CREATE INDEX idx_multiremi_autopilots_assignee ON multiremi_autopilots(assignee_type, assignee_id)</code></td></tr><tr><td><code>multiremi_autopilots</code></td><td><code>idx_multiremi_autopilots_workspace</code></td><td><code>CREATE INDEX idx_multiremi_autopilots_workspace ON multiremi_autopilots(workspace_id)</code></td></tr><tr><td><code>multiremi_chat_messages</code></td><td><code>idx_multiremi_chat_messages_session</code></td><td><code>CREATE INDEX idx_multiremi_chat_messages_session ON multiremi_chat_messages(chat_session_id, created_at)</code></td></tr><tr><td><code>multiremi_chat_sessions</code></td><td><code>idx_multiremi_chat_sessions_agent</code></td><td><code>CREATE INDEX idx_multiremi_chat_sessions_agent ON multiremi_chat_sessions(agent_id)</code></td></tr><tr><td><code>multiremi_chat_sessions</code></td><td><code>idx_multiremi_chat_sessions_workspace</code></td><td><code>CREATE INDEX idx_multiremi_chat_sessions_workspace ON multiremi_chat_sessions(workspace_id, updated_at)</code></td></tr><tr><td><code>multiremi_cloud_runtime_nodes</code></td><td><code>idx_multiremi_cloud_runtime_nodes_owner</code></td><td><code>CREATE INDEX idx_multiremi_cloud_runtime_nodes_owner ON multiremi_cloud_runtime_nodes(owner_id, created_at)</code></td></tr><tr><td><code>multiremi_comment_reactions</code></td><td><code>idx_multiremi_comment_reactions_comment</code></td><td><code>CREATE INDEX idx_multiremi_comment_reactions_comment ON multiremi_comment_reactions(comment_id)</code></td></tr><tr><td><code>multiremi_daemon_retirements</code></td><td><code>idx_multiremi_daemon_retirements_daemon</code></td><td><code>CREATE INDEX idx_multiremi_daemon_retirements_daemon ON multiremi_daemon_retirements(daemon_id, retired_at)</code></td></tr><tr><td><code>multiremi_daemon_ssh_mesh_states</code></td><td><code>idx_multiremi_daemon_ssh_mesh_status</code></td><td><code>CREATE INDEX idx_multiremi_daemon_ssh_mesh_status ON multiremi_daemon_ssh_mesh_states(workspace_id, status, updated_at)</code></td></tr><tr><td><code>multiremi_feedback</code></td><td><code>idx_multiremi_feedback_user_created</code></td><td><code>CREATE INDEX idx_multiremi_feedback_user_created ON multiremi_feedback(user_id, created_at)</code></td></tr><tr><td><code>multiremi_feedback</code></td><td><code>idx_multiremi_feedback_workspace_created</code></td><td><code>CREATE INDEX idx_multiremi_feedback_workspace_created ON multiremi_feedback(workspace_id, created_at)</code></td></tr><tr><td><code>multiremi_feishu_message_outcomes</code></td><td><code>idx_multiremi_feishu_issue_proposals_message</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_feishu_issue_proposals_message ON multiremi_feishu_message_outcomes(message_id) WHERE outcome_kind = 'issue_proposed'</code></td></tr><tr><td><code>multiremi_feishu_message_outcomes</code></td><td><code>idx_multiremi_feishu_issue_proposals_status</code></td><td><code>CREATE INDEX idx_multiremi_feishu_issue_proposals_status ON multiremi_feishu_message_outcomes(workspace_id, outcome_kind, proposal_status, created_at)</code></td></tr><tr><td><code>multiremi_feishu_message_outcomes</code></td><td><code>idx_multiremi_feishu_message_outcomes_message</code></td><td><code>CREATE INDEX idx_multiremi_feishu_message_outcomes_message ON multiremi_feishu_message_outcomes(message_id, created_at, id)</code></td></tr><tr><td><code>multiremi_feishu_message_outcomes</code></td><td><code>idx_multiremi_feishu_message_outcomes_task</code></td><td><code>CREATE INDEX idx_multiremi_feishu_message_outcomes_task ON multiremi_feishu_message_outcomes(task_id, created_at) WHERE task_id IS NOT NULL</code></td></tr><tr><td><code>multiremi_feishu_messages</code></td><td><code>idx_multiremi_feishu_messages_chat</code></td><td><code>CREATE INDEX idx_multiremi_feishu_messages_chat ON multiremi_feishu_messages(workspace_id, chat_id, created_at, message_id)</code></td></tr><tr><td><code>multiremi_feishu_messages</code></td><td><code>idx_multiremi_feishu_messages_source</code></td><td><code>CREATE INDEX idx_multiremi_feishu_messages_source ON multiremi_feishu_messages(source_id, ingested_at, message_id)</code></td></tr><tr><td><code>multiremi_feishu_messages</code></td><td><code>idx_multiremi_feishu_messages_source_unprocessed</code></td><td><code>CREATE INDEX idx_multiremi_feishu_messages_source_unprocessed ON multiremi_feishu_messages(source_id, processed_at, last_retry_at, ingested_at, message_id)</code></td></tr><tr><td><code>multiremi_feishu_messages</code></td><td><code>idx_multiremi_feishu_messages_unprocessed</code></td><td><code>CREATE INDEX idx_multiremi_feishu_messages_unprocessed ON multiremi_feishu_messages(workspace_id, processed_at, created_at, message_id)</code></td></tr><tr><td><code>multiremi_feishu_sources</code></td><td><code>idx_multiremi_feishu_sources_endpoint_name</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_feishu_sources_endpoint_name ON multiremi_feishu_sources(workspace_id, endpoint_name)</code></td></tr><tr><td><code>multiremi_feishu_sources</code></td><td><code>idx_multiremi_feishu_sources_poll</code></td><td><code>CREATE INDEX idx_multiremi_feishu_sources_poll ON multiremi_feishu_sources(enabled, workspace_id, updated_at)</code></td></tr><tr><td><code>multiremi_feishu_sync_cursors</code></td><td><code>idx_multiremi_feishu_sync_cursors_lease</code></td><td><code>CREATE INDEX idx_multiremi_feishu_sync_cursors_lease ON multiremi_feishu_sync_cursors(lease_until, source_id, stream)</code></td></tr><tr><td><code>multiremi_inbox_items</code></td><td><code>idx_multiremi_inbox_member</code></td><td><code>CREATE INDEX idx_multiremi_inbox_member ON multiremi_inbox_items(member_id, archived, read, created_at)</code></td></tr><tr><td><code>multiremi_inbox_items</code></td><td><code>idx_multiremi_inbox_recipient</code></td><td><code>CREATE INDEX idx_multiremi_inbox_recipient ON multiremi_inbox_items(workspace_id, recipient_type, recipient_id, archived, read, created_at)</code></td></tr><tr><td><code>multiremi_issue_activity</code></td><td><code>idx_multiremi_issue_activity_issue</code></td><td><code>CREATE INDEX idx_multiremi_issue_activity_issue ON multiremi_issue_activity(issue_id, created_at)</code></td></tr><tr><td><code>multiremi_issue_comments</code></td><td><code>idx_multiremi_issue_comments_issue</code></td><td><code>CREATE INDEX idx_multiremi_issue_comments_issue ON multiremi_issue_comments(issue_id, created_at)</code></td></tr><tr><td><code>multiremi_issue_comments</code></td><td><code>idx_multiremi_issue_comments_parent</code></td><td><code>CREATE INDEX idx_multiremi_issue_comments_parent ON multiremi_issue_comments(parent_id, created_at)</code></td></tr><tr><td><code>multiremi_issue_comments</code></td><td><code>idx_multiremi_issue_comments_resolved</code></td><td><code>CREATE INDEX idx_multiremi_issue_comments_resolved ON multiremi_issue_comments(issue_id, resolved_at)</code></td></tr><tr><td><code>multiremi_issue_comments</code></td><td><code>idx_multiremi_issue_comments_session</code></td><td><code>CREATE INDEX idx_multiremi_issue_comments_session ON multiremi_issue_comments(issue_session_id, created_at)</code></td></tr><tr><td><code>multiremi_issue_dependencies</code></td><td><code>idx_multiremi_issue_dependencies_depends_on</code></td><td><code>CREATE INDEX idx_multiremi_issue_dependencies_depends_on ON multiremi_issue_dependencies(depends_on_issue_id, type)</code></td></tr><tr><td><code>multiremi_issue_dependencies</code></td><td><code>idx_multiremi_issue_dependencies_issue</code></td><td><code>CREATE INDEX idx_multiremi_issue_dependencies_issue ON multiremi_issue_dependencies(issue_id, type)</code></td></tr><tr><td><code>multiremi_issue_dependencies</code></td><td><code>idx_multiremi_issue_dependencies_workspace</code></td><td><code>CREATE INDEX idx_multiremi_issue_dependencies_workspace ON multiremi_issue_dependencies(workspace_id)</code></td></tr><tr><td><code>multiremi_issue_labels</code></td><td><code>idx_multiremi_issue_labels_workspace</code></td><td><code>CREATE INDEX idx_multiremi_issue_labels_workspace ON multiremi_issue_labels(workspace_id, name)</code></td></tr><tr><td><code>multiremi_issue_labels</code></td><td><code>idx_multiremi_issue_labels_workspace_name</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_issue_labels_workspace_name ON multiremi_issue_labels(workspace_id, lower(name))</code></td></tr><tr><td><code>multiremi_issue_reactions</code></td><td><code>idx_multiremi_issue_reactions_issue</code></td><td><code>CREATE INDEX idx_multiremi_issue_reactions_issue ON multiremi_issue_reactions(issue_id)</code></td></tr><tr><td><code>multiremi_issue_sessions</code></td><td><code>idx_multiremi_issue_sessions_default</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_issue_sessions_default ON multiremi_issue_sessions(issue_id) WHERE is_default = 1</code></td></tr><tr><td><code>multiremi_issue_sessions</code></td><td><code>idx_multiremi_issue_sessions_issue</code></td><td><code>CREATE INDEX idx_multiremi_issue_sessions_issue ON multiremi_issue_sessions(issue_id, status, updated_at)</code></td></tr><tr><td><code>multiremi_issue_sessions</code></td><td><code>idx_multiremi_issue_sessions_workspace</code></td><td><code>CREATE INDEX idx_multiremi_issue_sessions_workspace ON multiremi_issue_sessions(workspace_id, updated_at)</code></td></tr><tr><td><code>multiremi_issue_shares</code></td><td><code>idx_multiremi_issue_shares_issue</code></td><td><code>CREATE INDEX idx_multiremi_issue_shares_issue ON multiremi_issue_shares(issue_id, revoked_at, expires_at)</code></td></tr><tr><td><code>multiremi_issue_subscribers</code></td><td><code>idx_multiremi_issue_subscribers_issue</code></td><td><code>CREATE INDEX idx_multiremi_issue_subscribers_issue ON multiremi_issue_subscribers(issue_id)</code></td></tr><tr><td><code>multiremi_issue_subscribers</code></td><td><code>idx_multiremi_issue_subscribers_member</code></td><td><code>CREATE INDEX idx_multiremi_issue_subscribers_member ON multiremi_issue_subscribers(member_id)</code></td></tr><tr><td><code>multiremi_issue_subscribers</code></td><td><code>idx_multiremi_issue_subscribers_user</code></td><td><code>CREATE INDEX idx_multiremi_issue_subscribers_user ON multiremi_issue_subscribers(user_type, user_id)</code></td></tr><tr><td><code>multiremi_issue_to_labels</code></td><td><code>idx_multiremi_issue_to_labels_label</code></td><td><code>CREATE INDEX idx_multiremi_issue_to_labels_label ON multiremi_issue_to_labels(label_id)</code></td></tr><tr><td><code>multiremi_issue_workspaces</code></td><td><code>idx_multiremi_issue_workspaces_runtime</code></td><td><code>CREATE INDEX idx_multiremi_issue_workspaces_runtime ON multiremi_issue_workspaces(runtime_id, status, updated_at)</code></td></tr><tr><td><code>multiremi_issues</code></td><td><code>idx_multiremi_issues_archive</code></td><td><code>CREATE INDEX idx_multiremi_issues_archive ON multiremi_issues(workspace_id, archived_at, status)</code></td></tr><tr><td><code>multiremi_issues</code></td><td><code>idx_multiremi_issues_parent</code></td><td><code>CREATE INDEX idx_multiremi_issues_parent ON multiremi_issues(parent_issue_id, position, created_at)</code></td></tr><tr><td><code>multiremi_issues</code></td><td><code>idx_multiremi_issues_scheduled</code></td><td><code>CREATE INDEX idx_multiremi_issues_scheduled ON multiremi_issues(workspace_id, start_date, due_date)</code></td></tr><tr><td><code>multiremi_issues</code></td><td><code>idx_multiremi_issues_source</code></td><td><code>CREATE INDEX idx_multiremi_issues_source ON multiremi_issues(source_issue_id, created_at)</code></td></tr><tr><td><code>multiremi_notification_channels</code></td><td><code>idx_multiremi_notification_channels_member</code></td><td><code>CREATE INDEX idx_multiremi_notification_channels_member ON multiremi_notification_channels(workspace_id, member_id, enabled)</code></td></tr><tr><td><code>multiremi_notification_channels</code></td><td><code>idx_multiremi_notification_channels_workspace</code></td><td><code>CREATE INDEX idx_multiremi_notification_channels_workspace ON multiremi_notification_channels(workspace_id, enabled, updated_at)</code></td></tr><tr><td><code>multiremi_notification_deliveries</code></td><td><code>idx_multiremi_notification_deliveries_inbox</code></td><td><code>CREATE INDEX idx_multiremi_notification_deliveries_inbox ON multiremi_notification_deliveries(inbox_item_id)</code></td></tr><tr><td><code>multiremi_notification_deliveries</code></td><td><code>idx_multiremi_notification_deliveries_pending</code></td><td><code>CREATE INDEX idx_multiremi_notification_deliveries_pending ON multiremi_notification_deliveries(status, leased_until, created_at)</code></td></tr><tr><td><code>multiremi_notification_deliveries</code></td><td><code>idx_multiremi_notification_deliveries_workspace_status</code></td><td><code>CREATE INDEX idx_multiremi_notification_deliveries_workspace_status ON multiremi_notification_deliveries(workspace_id, status, created_at)</code></td></tr><tr><td><code>multiremi_organizer_actions</code></td><td><code>idx_multiremi_organizer_actions_supervisor</code></td><td><code>CREATE INDEX idx_multiremi_organizer_actions_supervisor ON multiremi_organizer_actions(supervisor_task_id, created_at)</code></td></tr><tr><td><code>multiremi_organizer_actions</code></td><td><code>idx_multiremi_organizer_actions_target</code></td><td><code>CREATE INDEX idx_multiremi_organizer_actions_target ON multiremi_organizer_actions(target_task_id, created_at)</code></td></tr><tr><td><code>multiremi_pinned_items</code></td><td><code>idx_multiremi_pinned_items_user_ws</code></td><td><code>CREATE INDEX idx_multiremi_pinned_items_user_ws ON multiremi_pinned_items(workspace_id, user_id, position, created_at)</code></td></tr><tr><td><code>multiremi_platform_operations</code></td><td><code>idx_multiremi_platform_operations_active</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_platform_operations_active ON multiremi_platform_operations(active_slot)</code></td></tr><tr><td><code>multiremi_platform_operations</code></td><td><code>idx_multiremi_platform_operations_created</code></td><td><code>CREATE INDEX idx_multiremi_platform_operations_created ON multiremi_platform_operations(created_at)</code></td></tr><tr><td><code>multiremi_project_doc_revisions</code></td><td><code>idx_multiremi_project_doc_revisions_doc</code></td><td><code>CREATE INDEX idx_multiremi_project_doc_revisions_doc ON multiremi_project_doc_revisions(doc_id, version)</code></td></tr><tr><td><code>multiremi_project_docs</code></td><td><code>idx_multiremi_project_docs_path</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_project_docs_path ON multiremi_project_docs(project_id, path)</code></td></tr><tr><td><code>multiremi_project_docs</code></td><td><code>idx_multiremi_project_docs_project</code></td><td><code>CREATE INDEX idx_multiremi_project_docs_project ON multiremi_project_docs(project_id, kind, pinned, updated_at)</code></td></tr><tr><td><code>multiremi_project_docs</code></td><td><code>idx_multiremi_project_docs_sync</code></td><td><code>CREATE INDEX idx_multiremi_project_docs_sync ON multiremi_project_docs(workspace_id, sync_status, updated_at)</code></td></tr><tr><td><code>multiremi_project_docs</code></td><td><code>idx_multiremi_project_docs_workspace</code></td><td><code>CREATE INDEX idx_multiremi_project_docs_workspace ON multiremi_project_docs(workspace_id)</code></td></tr><tr><td><code>multiremi_project_resources</code></td><td><code>idx_multiremi_project_resources_project</code></td><td><code>CREATE INDEX idx_multiremi_project_resources_project ON multiremi_project_resources(project_id, position)</code></td></tr><tr><td><code>multiremi_projects</code></td><td><code>idx_multiremi_projects_archive</code></td><td><code>CREATE INDEX idx_multiremi_projects_archive ON multiremi_projects(workspace_id, archived_at, updated_at)</code></td></tr><tr><td><code>multiremi_projects</code></td><td><code>idx_multiremi_projects_workspace</code></td><td><code>CREATE INDEX idx_multiremi_projects_workspace ON multiremi_projects(workspace_id)</code></td></tr><tr><td><code>multiremi_repository_wiki_doc_revisions</code></td><td><code>idx_multiremi_repository_wiki_revisions_doc</code></td><td><code>CREATE INDEX idx_multiremi_repository_wiki_revisions_doc ON multiremi_repository_wiki_doc_revisions(doc_id, version)</code></td></tr><tr><td><code>multiremi_repository_wiki_docs</code></td><td><code>idx_multiremi_repository_wiki_scope</code></td><td><code>CREATE INDEX idx_multiremi_repository_wiki_scope ON multiremi_repository_wiki_docs(workspace_id, repository_id, updated_at)</code></td></tr><tr><td><code>multiremi_runtime_command_requests</code></td><td><code>idx_multiremi_runtime_command_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_command_runtime ON multiremi_runtime_command_requests(runtime_id, status, created_at)</code></td></tr><tr><td><code>multiremi_runtime_directory_scan_requests</code></td><td><code>idx_multiremi_runtime_directory_scan_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_directory_scan_runtime ON multiremi_runtime_directory_scan_requests(runtime_id, status, created_at)</code></td></tr><tr><td><code>multiremi_runtime_local_skill_import_requests</code></td><td><code>idx_multiremi_runtime_local_skill_import_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_local_skill_import_runtime ON multiremi_runtime_local_skill_import_requests(runtime_id, status, created_at)</code></td></tr><tr><td><code>multiremi_runtime_local_skill_list_requests</code></td><td><code>idx_multiremi_runtime_local_skill_list_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_local_skill_list_runtime ON multiremi_runtime_local_skill_list_requests(runtime_id, status, created_at)</code></td></tr><tr><td><code>multiremi_runtime_model_list_requests</code></td><td><code>idx_multiremi_runtime_model_list_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_model_list_runtime ON multiremi_runtime_model_list_requests(runtime_id, status, created_at)</code></td></tr><tr><td><code>multiremi_runtime_models</code></td><td><code>idx_multiremi_runtime_models_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_models_runtime ON multiremi_runtime_models(runtime_id, is_default)</code></td></tr><tr><td><code>multiremi_runtime_provision_audit</code></td><td><code>idx_multiremi_runtime_provision_audit_provision</code></td><td><code>CREATE INDEX idx_multiremi_runtime_provision_audit_provision ON multiremi_runtime_provision_audit(provision_id, created_at)</code></td></tr><tr><td><code>multiremi_runtime_provision_states</code></td><td><code>idx_multiremi_runtime_provision_states_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_provision_states_runtime ON multiremi_runtime_provision_states(runtime_id, status)</code></td></tr><tr><td><code>multiremi_runtime_update_requests</code></td><td><code>idx_multiremi_runtime_update_runtime</code></td><td><code>CREATE INDEX idx_multiremi_runtime_update_runtime ON multiremi_runtime_update_requests(runtime_id, status, created_at)</code></td></tr><tr><td><code>multiremi_scm_change_requests</code></td><td><code>idx_multiremi_scm_change_requests_number</code></td><td><code>CREATE INDEX idx_multiremi_scm_change_requests_number ON multiremi_scm_change_requests(connection_id, repository_id, number)</code></td></tr><tr><td><code>multiremi_scm_change_requests</code></td><td><code>idx_multiremi_scm_change_requests_repository</code></td><td><code>CREATE INDEX idx_multiremi_scm_change_requests_repository ON multiremi_scm_change_requests(repository_id, provider_updated_at, updated_at)</code></td></tr><tr><td><code>multiremi_scm_change_requests</code></td><td><code>idx_multiremi_scm_change_requests_workspace</code></td><td><code>CREATE INDEX idx_multiremi_scm_change_requests_workspace ON multiremi_scm_change_requests(workspace_id, provider_updated_at, updated_at)</code></td></tr><tr><td><code>multiremi_scm_connections</code></td><td><code>idx_multiremi_scm_connections_default</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_scm_connections_default ON multiremi_scm_connections(workspace_id, provider, base_url) WHERE is_default = 1</code></td></tr><tr><td><code>multiremi_scm_connections</code></td><td><code>idx_multiremi_scm_connections_poll</code></td><td><code>CREATE INDEX idx_multiremi_scm_connections_poll ON multiremi_scm_connections(enabled, mode, updated_at)</code></td></tr><tr><td><code>multiremi_scm_entity_snapshots</code></td><td><code>idx_multiremi_scm_entity_snapshots_observed</code></td><td><code>CREATE INDEX idx_multiremi_scm_entity_snapshots_observed ON multiremi_scm_entity_snapshots(connection_id, repository_id, entity_type, observed_at)</code></td></tr><tr><td><code>multiremi_scm_event_deliveries</code></td><td><code>idx_multiremi_scm_event_deliveries_pending</code></td><td><code>CREATE INDEX idx_multiremi_scm_event_deliveries_pending ON multiremi_scm_event_deliveries(status, available_at, lease_until, created_at)</code></td></tr><tr><td><code>multiremi_scm_event_evidence</code></td><td><code>idx_multiremi_scm_event_evidence_event</code></td><td><code>CREATE INDEX idx_multiremi_scm_event_evidence_event ON multiremi_scm_event_evidence(event_id, observed_at)</code></td></tr><tr><td><code>multiremi_scm_events</code></td><td><code>idx_multiremi_scm_events_pending</code></td><td><code>CREATE INDEX idx_multiremi_scm_events_pending ON multiremi_scm_events(status, available_at, lease_until, observed_at)</code></td></tr><tr><td><code>multiremi_scm_events</code></td><td><code>idx_multiremi_scm_events_repository</code></td><td><code>CREATE INDEX idx_multiremi_scm_events_repository ON multiremi_scm_events(workspace_id, repository_id, observed_at, id)</code></td></tr><tr><td><code>multiremi_scm_issue_links</code></td><td><code>idx_multiremi_scm_issue_links_issue</code></td><td><code>CREATE INDEX idx_multiremi_scm_issue_links_issue ON multiremi_scm_issue_links(issue_id, active, updated_at)</code></td></tr><tr><td><code>multiremi_scm_repository_bindings</code></td><td><code>idx_multiremi_scm_repository_bindings_connection</code></td><td><code>CREATE INDEX idx_multiremi_scm_repository_bindings_connection ON multiremi_scm_repository_bindings(connection_id, enabled, repository_id)</code></td></tr><tr><td><code>multiremi_scm_repository_bindings</code></td><td><code>idx_multiremi_scm_repository_bindings_url</code></td><td><code>CREATE INDEX idx_multiremi_scm_repository_bindings_url ON multiremi_scm_repository_bindings(workspace_id, repository_url)</code></td></tr><tr><td><code>multiremi_scm_sync_cursors</code></td><td><code>idx_multiremi_scm_sync_cursors_lease</code></td><td><code>CREATE INDEX idx_multiremi_scm_sync_cursors_lease ON multiremi_scm_sync_cursors(lease_until, connection_id, repository_id, stream)</code></td></tr><tr><td><code>multiremi_session_agent_lanes</code></td><td><code>idx_multiremi_session_agent_lanes_agent</code></td><td><code>CREATE INDEX idx_multiremi_session_agent_lanes_agent ON multiremi_session_agent_lanes(agent_id, updated_at)</code></td></tr><tr><td><code>multiremi_session_agent_lanes</code></td><td><code>idx_multiremi_session_agent_lanes_runtime</code></td><td><code>CREATE INDEX idx_multiremi_session_agent_lanes_runtime ON multiremi_session_agent_lanes(runtime_id, status)</code></td></tr><tr><td><code>multiremi_session_archives</code></td><td><code>idx_multiremi_session_archives_issue</code></td><td><code>CREATE INDEX idx_multiremi_session_archives_issue ON multiremi_session_archives(issue_id, created_at)</code></td></tr><tr><td><code>multiremi_session_archives</code></td><td><code>idx_multiremi_session_archives_runtime</code></td><td><code>CREATE INDEX idx_multiremi_session_archives_runtime ON multiremi_session_archives(runtime_id, status, updated_at)</code></td></tr><tr><td><code>multiremi_session_archives</code></td><td><code>idx_multiremi_session_archives_workspace_status</code></td><td><code>CREATE INDEX idx_multiremi_session_archives_workspace_status ON multiremi_session_archives(workspace_id, status, updated_at)</code></td></tr><tr><td><code>multiremi_session_events</code></td><td><code>idx_multiremi_session_events_session</code></td><td><code>CREATE INDEX idx_multiremi_session_events_session ON multiremi_session_events(session_id, seq)</code></td></tr><tr><td><code>multiremi_session_events</code></td><td><code>idx_multiremi_session_events_task</code></td><td><code>CREATE INDEX idx_multiremi_session_events_task ON multiremi_session_events(task_id, seq)</code></td></tr><tr><td><code>multiremi_session_participants</code></td><td><code>idx_multiremi_session_participants_actor</code></td><td><code>CREATE INDEX idx_multiremi_session_participants_actor ON multiremi_session_participants(participant_type, participant_id, status)</code></td></tr><tr><td><code>multiremi_session_participants</code></td><td><code>idx_multiremi_session_participants_session</code></td><td><code>CREATE INDEX idx_multiremi_session_participants_session ON multiremi_session_participants(session_id, status, joined_at)</code></td></tr><tr><td><code>multiremi_session_results</code></td><td><code>idx_multiremi_session_results_issue</code></td><td><code>CREATE INDEX idx_multiremi_session_results_issue ON multiremi_session_results(issue_id, created_at)</code></td></tr><tr><td><code>multiremi_session_results</code></td><td><code>idx_multiremi_session_results_source</code></td><td><code>CREATE INDEX idx_multiremi_session_results_source ON multiremi_session_results(source_session_id, created_at)</code></td></tr><tr><td><code>multiremi_skill_files</code></td><td><code>idx_multiremi_skill_files_skill</code></td><td><code>CREATE INDEX idx_multiremi_skill_files_skill ON multiremi_skill_files(skill_id)</code></td></tr><tr><td><code>multiremi_skills</code></td><td><code>idx_multiremi_skills_workspace</code></td><td><code>CREATE INDEX idx_multiremi_skills_workspace ON multiremi_skills(workspace_id, archived_at)</code></td></tr><tr><td><code>multiremi_squad_members</code></td><td><code>idx_multiremi_squad_members_one_leader</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_squad_members_one_leader ON multiremi_squad_members(squad_id) WHERE role = 'leader'</code></td></tr><tr><td><code>multiremi_squad_members</code></td><td><code>idx_multiremi_squad_members_squad</code></td><td><code>CREATE INDEX idx_multiremi_squad_members_squad ON multiremi_squad_members(squad_id)</code></td></tr><tr><td><code>multiremi_squads</code></td><td><code>idx_multiremi_squads_workspace</code></td><td><code>CREATE INDEX idx_multiremi_squads_workspace ON multiremi_squads(workspace_id)</code></td></tr><tr><td><code>multiremi_system_events</code></td><td><code>idx_multiremi_system_events_pending</code></td><td><code>CREATE INDEX idx_multiremi_system_events_pending ON multiremi_system_events(status, available_at, lease_until, created_at)</code></td></tr><tr><td><code>multiremi_system_events</code></td><td><code>idx_multiremi_system_events_resource</code></td><td><code>CREATE INDEX idx_multiremi_system_events_resource ON multiremi_system_events(workspace_id, resource, event, resource_id, created_at)</code></td></tr><tr><td><code>multiremi_task_human_requests</code></td><td><code>idx_multiremi_human_requests_task</code></td><td><code>CREATE INDEX idx_multiremi_human_requests_task ON multiremi_task_human_requests(task_id, status)</code></td></tr><tr><td><code>multiremi_task_messages</code></td><td><code>idx_multiremi_messages_task</code></td><td><code>CREATE INDEX idx_multiremi_messages_task ON multiremi_task_messages(task_id, seq)</code></td></tr><tr><td><code>multiremi_task_messages</code></td><td><code>idx_multiremi_messages_task_seq_unique</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_messages_task_seq_unique ON multiremi_task_messages(task_id, seq)</code></td></tr><tr><td><code>multiremi_task_plugin_snapshots</code></td><td><code>idx_multiremi_task_plugin_snapshots_version</code></td><td><code>CREATE INDEX idx_multiremi_task_plugin_snapshots_version ON multiremi_task_plugin_snapshots(version_id, task_id)</code></td></tr><tr><td><code>multiremi_task_steer_messages</code></td><td><code>idx_multiremi_task_steer_task</code></td><td><code>CREATE INDEX idx_multiremi_task_steer_task ON multiremi_task_steer_messages(task_id, consumed_at)</code></td></tr><tr><td><code>multiremi_tasks</code></td><td><code>idx_multiremi_tasks_delegation</code></td><td><code>CREATE INDEX idx_multiremi_tasks_delegation ON multiremi_tasks(delegation_id, agent_id, status)</code></td></tr><tr><td><code>multiremi_tasks</code></td><td><code>idx_multiremi_tasks_issue</code></td><td><code>CREATE INDEX idx_multiremi_tasks_issue ON multiremi_tasks(issue_id)</code></td></tr><tr><td><code>multiremi_tasks</code></td><td><code>idx_multiremi_tasks_issue_session</code></td><td><code>CREATE INDEX idx_multiremi_tasks_issue_session ON multiremi_tasks(issue_session_id, created_at)</code></td></tr><tr><td><code>multiremi_tasks</code></td><td><code>idx_multiremi_tasks_runtime</code></td><td><code>CREATE INDEX idx_multiremi_tasks_runtime ON multiremi_tasks(runtime_id)</code></td></tr><tr><td><code>multiremi_tasks</code></td><td><code>idx_multiremi_tasks_status</code></td><td><code>CREATE INDEX idx_multiremi_tasks_status ON multiremi_tasks(status)</code></td></tr><tr><td><code>multiremi_tasks</code></td><td><code>idx_multiremi_tasks_trigger_comment</code></td><td><code>CREATE INDEX idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)</code></td></tr><tr><td><code>multiremi_tasks</code></td><td><code>idx_multiremi_tasks_workspace</code></td><td><code>CREATE INDEX idx_multiremi_tasks_workspace ON multiremi_tasks(workspace_id)</code></td></tr><tr><td><code>multiremi_users</code></td><td><code>idx_multiremi_users_external_id</code></td><td><code>CREATE INDEX idx_multiremi_users_external_id ON multiremi_users(external_id)</code></td></tr><tr><td><code>multiremi_webhook_deliveries</code></td><td><code>idx_multiremi_webhook_deliveries_autopilot</code></td><td><code>CREATE INDEX idx_multiremi_webhook_deliveries_autopilot ON multiremi_webhook_deliveries(autopilot_id, created_at)</code></td></tr><tr><td><code>multiremi_webhook_deliveries</code></td><td><code>idx_multiremi_webhook_deliveries_dedupe</code></td><td><code>CREATE UNIQUE INDEX idx_multiremi_webhook_deliveries_dedupe ON multiremi_webhook_deliveries(trigger_id, dedupe_key) WHERE dedupe_key IS NOT NULL AND status NOT IN ('rejected', 'failed')</code></td></tr><tr><td><code>multiremi_webhook_deliveries</code></td><td><code>idx_multiremi_webhook_deliveries_run</code></td><td><code>CREATE INDEX idx_multiremi_webhook_deliveries_run ON multiremi_webhook_deliveries(autopilot_run_id)</code></td></tr><tr><td><code>multiremi_workspace_invitations</code></td><td><code>idx_multiremi_workspace_invitations_invitee</code></td><td><code>CREATE INDEX idx_multiremi_workspace_invitations_invitee ON multiremi_workspace_invitations(invitee_email, invitee_user_id, status)</code></td></tr><tr><td><code>multiremi_workspace_invitations</code></td><td><code>idx_multiremi_workspace_invitations_workspace</code></td><td><code>CREATE INDEX idx_multiremi_workspace_invitations_workspace ON multiremi_workspace_invitations(workspace_id, status, created_at)</code></td></tr><tr><td><code>multiremi_workspace_members</code></td><td><code>idx_multiremi_workspace_members_user</code></td><td><code>CREATE INDEX idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)</code></td></tr><tr><td><code>multiremi_workspace_members</code></td><td><code>idx_multiremi_workspace_members_workspace</code></td><td><code>CREATE INDEX idx_multiremi_workspace_members_workspace ON multiremi_workspace_members(workspace_id)</code></td></tr><tr><td><code>multiremi_workspace_runtime_provisions</code></td><td><code>idx_multiremi_workspace_runtime_provisions_due</code></td><td><code>CREATE INDEX idx_multiremi_workspace_runtime_provisions_due ON multiremi_workspace_runtime_provisions(enabled, next_run_at)</code></td></tr><tr><td><code>multiremi_workspace_runtime_provisions</code></td><td><code>idx_multiremi_workspace_runtime_provisions_workspace</code></td><td><code>CREATE INDEX idx_multiremi_workspace_runtime_provisions_workspace ON multiremi_workspace_runtime_provisions(workspace_id, enabled, created_at)</code></td></tr></tbody></table></div></section>
+
+<section id="unbounded"><h2>无界查询清单</h2><p>代码审计确认的 API 可达或 API 调用链上的无上限读取。消息/事件类增长维度尤其随时间单调增加。</p><div class="tablewrap"><table><thead><tr><th>域</th><th>路由/调用</th><th>位置</th><th>行为</th><th>增长维度</th></tr></thead><tbody><tr><td>issues</td><td>GET /api/issues</td><td>issues-repo.ts:312</td><td>默认 limit=∞；SELECT workspace 全量后返回</td><td>workspace issues</td></tr><tr><td>issues</td><td>GET /api/multiremi/issues</td><td>routers/issues.ts:293</td><td>无默认 limit；逐 issue 读取 tasks 汇总</td><td>workspace issues × tasks per issue</td></tr><tr><td>issues</td><td>GET /api/multiremi/issues/:id</td><td>routers/issues.ts:649</td><td>组合返回全部 comments/tasks/activity/dependencies</td><td>comments + tasks + activity per issue</td></tr><tr><td>issues</td><td>GET /api/issues/grouped</td><td>issues-repo.ts:348</td><td>先 listIssues(limit:undefined)，再在 JS 分组/截取</td><td>workspace issues</td></tr><tr><td>issues</td><td>GET /api/issues/search</td><td>issues-repo.ts:684</td><td>加载全局 issues，再逐 issue 搜评论，最后 JS slice</td><td>global issues × issue comments</td></tr><tr><td>issues</td><td>GET /api/issues/:id/comments</td><td>issues-repo.ts:1664</td><td>先加载并 hydrate issue 全部 comments，再做 session/filter/page</td><td>comments per issue</td></tr><tr><td>issues</td><td>GET /api/issues/:id/timeline</td><td>issues-repo.ts:1842</td><td>全量 comments/activity；session 过滤在 JS</td><td>comments + activity per issue</td></tr><tr><td>issues</td><td>GET /api/issues/:id/task-runs</td><td>routers/issues.ts:744</td><td>返回 issue 全部 tasks；queued task 逐行查 blocker</td><td>tasks per issue</td></tr><tr><td>tasks</td><td>GET /api/multiremi/tasks</td><td>tasks-repo.ts:734</td><td>SELECT 全表，无 workspace/limit</td><td>global tasks</td></tr><tr><td>agents</td><td>GET /api/agents/:id/tasks</td><td>tasks-repo.ts:741</td><td>agent tasks 全量返回</td><td>tasks per agent</td></tr><tr><td>agents</td><td>workspace task snapshot</td><td>tasks-repo.ts:750</td><td>先 listTasks 全表，再 JS workspace/status 过滤</td><td>global tasks</td></tr><tr><td>tasks</td><td>GET task messages</td><td>tasks-repo.ts:1625</td><td>仅 sinceSeq，无 page size/上限</td><td>messages per task over time</td></tr><tr><td>agents</td><td>GET /api/*/agents</td><td>agents-skills-repo.ts:676</td><td>agents 全表；native route 再 JS workspace 过滤</td><td>global agents</td></tr><tr><td>skills</td><td>GET /api/*/skills</td><td>agents-skills-repo.ts:507</td><td>workspace skills 无上限</td><td>skills per workspace</td></tr><tr><td>chat</td><td>GET chat sessions</td><td>chat-repo.ts:122</td><td>workspace/user sessions 无 limit</td><td>chat sessions per user/workspace</td></tr><tr><td>chat</td><td>GET chat messages</td><td>chat-repo.ts:206</td><td>session messages 全量</td><td>messages per chat session</td></tr><tr><td>chat</td><td>pending chat tasks</td><td>chat-repo.ts:185</td><td>listTasks 全表后 JS filter</td><td>global tasks</td></tr><tr><td>projects</td><td>GET /api/*/projects</td><td>projects-repo.ts:161</td><td>workspace projects 全量 + issue counts</td><td>projects × issues per workspace</td></tr><tr><td>projects</td><td>GET /api/projects/search</td><td>projects-repo.ts:168</td><td>先 listProjects 全量，再 JS filter/slice</td><td>projects per workspace</td></tr><tr><td>projects</td><td>resources/docs</td><td>projects-repo.ts:384 / :548</td><td>project 子资源/文档无分页</td><td>resources/docs per project</td></tr><tr><td>workspaces</td><td>GET /api/workspaces</td><td>workspaces-repo.ts:422</td><td>workspaces 全表</td><td>workspaces visible to user</td></tr><tr><td>members</td><td>GET workspace members</td><td>workspaces-repo.ts:127</td><td>workspace members 全量</td><td>members per workspace</td></tr><tr><td>invitations</td><td>GET invitations</td><td>workspaces-repo.ts:882 / :904</td><td>workspace/current-user invitations 全量</td><td>invitations per workspace/user</td></tr><tr><td>tokens</td><td>GET access tokens</td><td>access-tokens-repo.ts:93</td><td>workspace non-task tokens 全量</td><td>tokens per workspace</td></tr><tr><td>agent-plugins</td><td>plugins/versions/bindings</td><td>agent-plugins-repo.ts:86 / :289 / :363</td><td>各层列表均无分页</td><td>plugins per workspace/version/binding</td></tr><tr><td>autopilots</td><td>GET autopilots/deliveries</td><td>autopilots-repo.ts:227 / :1392</td><td>workspace autopilots、delivery 列表无分页</td><td>autopilots/deliveries per workspace</td></tr><tr><td>labels/inbox</td><td>GET labels / inbox</td><td>issues-repo.ts:1942 / :2060</td><td>workspace labels/member inbox 全量</td><td>labels per workspace / inbox over time</td></tr><tr><td>sessions</td><td>sessions/participants/events/results</td><td>issue-sessions-repo.ts:121 / :199 / :250 / :384</td><td>产品 session 四层列表均无 page size</td><td>sessions per issue and events over time</td></tr><tr><td>archives</td><td>GET issue session archives</td><td>session-archives-repo.ts:90</td><td>issue archives 全量</td><td>archives per issue over time</td></tr><tr><td>runtimes</td><td>GET runtimes/models</td><td>runtimes-repo.ts:324 / :863</td><td>runtimes 全局列表、models per runtime 无分页</td><td>global runtimes / models per runtime</td></tr><tr><td>squads</td><td>GET squads</td><td>squads-repo.ts:78</td><td>workspace squads 全量</td><td>squads per workspace</td></tr><tr><td>pins</td><td>GET pins</td><td>projects-repo.ts:318</td><td>user/workspace pins 全量</td><td>pins per user/workspace</td></tr><tr><td>feishu</td><td>sources/chats/outcomes</td><td>feishu-ingest-repo.ts:179 / :525 / :542</td><td>sources/chats/outcomes 无分页；messages/proposals 已分页</td><td>Feishu sources/chats/outcomes</td></tr></tbody></table></div></section>
+
+<section id="repeats"><h2>单请求重复取同一行（≥3）</h2><p>按“规范化 SQL + 完整参数”精确分桶；不同 comment id 不会被误合并。</p><div class="tablewrap"><table><thead><tr><th>Route</th><th class="num">重复次数</th><th>SQL</th><th>参数</th></tr></thead><tbody><tr><td><code>/api/multiremi/attachments/att_snapshot</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issue_comments WHERE id = ?</code></td><td><code>[&quot;cmt_33lzyf0rhr0t&quot;]</code></td></tr><tr><td><code>/api/cli/context</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_workspaces WHERE id = ?</code></td><td><code>[&quot;local&quot;]</code></td></tr><tr><td><code>/api/multiremi/comments/cmt_33lzyf0rhr0t/reactions</code></td><td class="num strong">4</td><td><code>SELECT * FROM multiremi_issue_comments WHERE id = ?</code></td><td><code>[&quot;cmt_33lzyf0rhr0t&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot/timeline</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot/timeline</code></td><td class="num strong">3</td><td><code>SELECT id FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot/timeline</code></td><td class="num strong">3</td><td><code>SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot</code></td><td class="num strong">7</td><td><code>SELECT * FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot</code></td><td class="num strong">7</td><td><code>SELECT id FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot</code></td><td class="num strong">7</td><td><code>SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/attachments/att_snapshot</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issue_comments WHERE id = ?</code></td><td><code>[&quot;cmt_33lzyf0rhr0t&quot;]</code></td></tr><tr><td><code>/api/attachments/att_snapshot/content</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issue_comments WHERE id = ?</code></td><td><code>[&quot;cmt_33lzyf0rhr0t&quot;]</code></td></tr><tr><td><code>/api/attachments/att_snapshot/download</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issue_comments WHERE id = ?</code></td><td><code>[&quot;cmt_33lzyf0rhr0t&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot/dependencies</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot/dependencies</code></td><td class="num strong">3</td><td><code>SELECT id FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/issues/iss_snapshot/dependencies</code></td><td class="num strong">3</td><td><code>SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/agents/agt_snapshot/plugins</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_agents WHERE id = ? AND archived_at IS NULL</code></td><td><code>[&quot;agt_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/comments/cmt_33lzyf0rhr0t/attachments</code></td><td class="num strong">7</td><td><code>SELECT * FROM multiremi_issue_comments WHERE id = ?</code></td><td><code>[&quot;cmt_33lzyf0rhr0t&quot;]</code></td></tr><tr><td><code>/api/multiremi/comments/cmt_33lzyf0rhr0t/attachments</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_attachments WHERE comment_id = ? ORDER BY created_at ASC</code></td><td><code>[&quot;cmt_33lzyf0rhr0t&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot</code></td><td class="num strong">7</td><td><code>SELECT * FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot</code></td><td class="num strong">7</td><td><code>SELECT id FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot</code></td><td class="num strong">7</td><td><code>SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot/dependencies</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot/dependencies</code></td><td class="num strong">3</td><td><code>SELECT id FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot/dependencies</code></td><td class="num strong">3</td><td><code>SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot/timeline</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot/timeline</code></td><td class="num strong">3</td><td><code>SELECT id FROM multiremi_issues WHERE id = ?</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/multiremi/issues/iss_snapshot/timeline</code></td><td class="num strong">3</td><td><code>SELECT l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id = ? ORDER BY lower(l.name) ASC</code></td><td><code>[&quot;iss_snapshot&quot;]</code></td></tr><tr><td><code>/api/workspaces/local/repos</code></td><td class="num strong">3</td><td><code>SELECT * FROM multiremi_scm_connections WHERE workspace_id = ? AND enabled = ? ORDER BY created_at ASC, id ASC</code></td><td><code>[&quot;local&quot;,1]</code></td></tr></tbody></table></div></section>
+
+<section id="cross"><h2>与方向 1（MUL-175）对照</h2><div class="tablewrap"><table><thead><tr><th>路由层发现</th><th>方向 1 状态</th><th>对照结论</th></tr></thead><tbody>
+<tr><td>native detail + timeline/comments 4N</td><td>MUL-175 issue 已列的已验证样本</td><td><span class="badge muted">已对上</span> 2,000 comments 的 8,034 / 8,011 / 8,004 与每条 comment 4 SQL 一致；常数项来自路由额外 issue/tasks/labels/activity 查询。</td></tr>
+<tr><td>native issue list 200 次 task 查询</td><td>MUL-175 尚未发布清单</td><td><span class="badge muted">路由新增</span> 由 native response 在 <code>routers/issues.ts:293</code> 逐 issue 组装 task summary 触发。</td></tr>
+<tr><td>issue search 200+1+1 SQL</td><td>MUL-175 尚未发布清单</td><td><span class="badge muted">路由新增</span> 逐 issue 的 <code>searchIssueCommentSnippet</code> 是本审计新发现。</td></tr>
+<tr><td>3 个 task collection endpoint 各约 125 blocker queries</td><td>MUL-175 尚未发布清单</td><td><span class="badge muted">路由新增</span> task-runs / active-task / session tasks 都在 route map 中按 queued task 查 blocker。</td></tr>
+<tr><td>agents 49 次 hydration；compat 再加 98 次</td><td>MUL-175 尚未发布清单</td><td><span class="badge muted">路由新增</span> repo hydration 与 compat serializer 叠加后才显出 150 SQL。</td></tr>
+<tr><td>repository GET p95 243.0 ms / 9 SQL</td><td>repo SQL N+1 审计不会覆盖远端 Git I/O</td><td><span class="badge muted">路由独有</span> 缺 default branch 时 GET 内执行 <code>git ls-remote</code>；受控失败路径已验证。</td></tr>
+<tr><td>方向 1 找到但路由层看不出影响</td><td>没有已发布 Session result</td><td><span class="badge muted">未验证</span> 截至报告生成时无法诚实列举；需在 MUL-175 发布后补做最终差集。</td></tr>
+</tbody></table></div></section>
+
+<section id="coverage"><h2>路由覆盖</h2><p>每个 router 文件至少一个代表入口；同时机械枚举并扫测全部 275 个普通 GET endpoint，另保留带大种子条件的热点探针，共 276 probes。3 个 WebSocket upgrade 仅在黄金快照中记录状态，mutation 不做重复延迟压测。254 probes 返回 2xx，22 probes 因固定 fixture、权限或缺资源返回非 2xx；表内保留状态码，失败快路径只代表本地拒绝成本。</p><h3>38 Router 代表样本</h3><div class="tablewrap"><table><thead><tr><th>Router</th><th>Method</th><th>Status</th><th>Path</th><th class="num">SQL</th><th class="num">p50 ms</th><th class="num">p95 ms</th><th class="num">Response</th><th>分类</th></tr></thead><tbody><tr>
+
+    <td><span class="tag">agent-plugins</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/agent-plugins?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.090</td>
+    <td class="num">0.189</td>
+    <td class="num">24 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">agent-templates</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/agent-templates</code></td>
+    <td class="num strong">0</td>
+    <td class="num">0.081</td>
+    <td class="num">0.102</td>
+    <td class="num">12.7 KB</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">agents</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/agents?workspaceId=local</code></td>
+    <td class="num strong">52</td>
+    <td class="num">1.667</td>
+    <td class="num">1.943</td>
+    <td class="num">33.1 KB</td>
+    <td>N+1</td>
+  </tr><tr>
+
+    <td><span class="tag">attachments</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/attachments/att_snapshot</code></td>
+    <td class="num strong">9</td>
+    <td class="num">0.268</td>
+    <td class="num">0.341</td>
+    <td class="num">354 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">auth</span></td>
+    <td><code>GET</code></td>
+    <td class="num">503</td>
+    <td class="path"><code>/auth/lark/url?redirect_uri=https%3A%2F%2Fbenchmark.invalid%2Fcallback</code></td>
+    <td class="num strong">0</td>
+    <td class="num">0.021</td>
+    <td class="num">0.038</td>
+    <td class="num">40 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">autopilots</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/autopilots?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.072</td>
+    <td class="num">0.113</td>
+    <td class="num">1.3 KB</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">chat</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/chats?workspaceId=local</code></td>
+    <td class="num strong">5</td>
+    <td class="num">0.167</td>
+    <td class="num">0.214</td>
+    <td class="num">418 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">cli</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/cli/context</code></td>
+    <td class="num strong">7</td>
+    <td class="num">0.484</td>
+    <td class="num">0.599</td>
+    <td class="num">1.0 KB</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">cli-latest-version</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/cli/latest-version</code></td>
+    <td class="num strong">0</td>
+    <td class="num">0.020</td>
+    <td class="num">0.031</td>
+    <td class="num">16 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">cloud-billing</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/cloud-billing/balance</code></td>
+    <td class="num strong">0</td>
+    <td class="num">0.017</td>
+    <td class="num">0.029</td>
+    <td class="num">116 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">cloud-runtime</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/cloud-runtime</code></td>
+    <td class="num strong">0</td>
+    <td class="num">0.018</td>
+    <td class="num">0.034</td>
+    <td class="num">34 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">comments</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/comments/cmt_33lzyf0rhr0t/reactions</code></td>
+    <td class="num strong">10</td>
+    <td class="num">0.257</td>
+    <td class="num">0.298</td>
+    <td class="num">198 B</td>
+    <td>query fan-out</td>
+  </tr><tr>
+
+    <td><span class="tag">daemon</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/daemon/tasks/tsk_snapshot/status</code></td>
+    <td class="num strong">2</td>
+    <td class="num">0.090</td>
+    <td class="num">0.190</td>
+    <td class="num">22 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">daemon-retirement</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/daemons/dmn_snapshot/retirement-plan?workspace_id=local</code></td>
+    <td class="num strong">25</td>
+    <td class="num">1.510</td>
+    <td class="num">2.082</td>
+    <td class="num">30.9 KB</td>
+    <td>query fan-out</td>
+  </tr><tr>
+
+    <td><span class="tag">dashboard</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/dashboard/agent-runtime?workspace_id=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.230</td>
+    <td class="num">0.268</td>
+    <td class="num">79 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">feishu-ingest</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/workspaces/local/feishu/messages</code></td>
+    <td class="num strong">2</td>
+    <td class="num">0.085</td>
+    <td class="num">0.161</td>
+    <td class="num">64 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">inbox</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/inbox?member_id=mem_local_local</code></td>
+    <td class="num strong">5</td>
+    <td class="num">0.124</td>
+    <td class="num">0.190</td>
+    <td class="num">1.2 KB</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">invitations</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/workspaces/local/invitations</code></td>
+    <td class="num strong">5</td>
+    <td class="num">0.130</td>
+    <td class="num">0.386</td>
+    <td class="num">717 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">issue-shares</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/share</code></td>
+    <td class="num strong">5</td>
+    <td class="num">0.131</td>
+    <td class="num">0.176</td>
+    <td class="num">14 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">issues</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/timeline</code></td>
+    <td class="num strong">8,011</td>
+    <td class="num">139.526</td>
+    <td class="num">145.672</td>
+    <td class="num">761.7 KB</td>
+    <td>N+1 + unbounded</td>
+  </tr><tr>
+
+    <td><span class="tag">labels</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/labels?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.034</td>
+    <td class="num">0.059</td>
+    <td class="num">180 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">me</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/me</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.038</td>
+    <td class="num">0.087</td>
+    <td class="num">575 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">members</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/workspaces/local/members</code></td>
+    <td class="num strong">3</td>
+    <td class="num">0.085</td>
+    <td class="num">0.162</td>
+    <td class="num">511 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">notification-channels</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/notification-channels?workspaceId=local</code></td>
+    <td class="num strong">2</td>
+    <td class="num">0.061</td>
+    <td class="num">0.112</td>
+    <td class="num">25 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">notification-preferences</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/notification-preferences?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.029</td>
+    <td class="num">0.073</td>
+    <td class="num">73 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">pins</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/pins?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.030</td>
+    <td class="num">0.065</td>
+    <td class="num">21 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">platform</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/platform/status</code></td>
+    <td class="num strong">8</td>
+    <td class="num">0.192</td>
+    <td class="num">0.331</td>
+    <td class="num">520 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">projects</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/projects?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.095</td>
+    <td class="num">0.134</td>
+    <td class="num">418 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">remi-releases</span></td>
+    <td><code>GET</code></td>
+    <td class="num">404</td>
+    <td class="path"><code>/api/remi/releases/latest/version</code></td>
+    <td class="num strong">0</td>
+    <td class="num">0.017</td>
+    <td class="num">0.029</td>
+    <td class="num">48 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">runtimes</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/runtimes</code></td>
+    <td class="num strong">3</td>
+    <td class="num">0.452</td>
+    <td class="num">0.517</td>
+    <td class="num">764 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">scm</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/workspaces/local/scm/connections</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.049</td>
+    <td class="num">0.086</td>
+    <td class="num">28 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">session-archives</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/issues/iss_snapshot/session-archives</code></td>
+    <td class="num strong">6</td>
+    <td class="num">0.159</td>
+    <td class="num">0.227</td>
+    <td class="num">49 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">skills</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/skills?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.041</td>
+    <td class="num">0.083</td>
+    <td class="num">246 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">squads</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/squads?workspaceId=local</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.056</td>
+    <td class="num">0.095</td>
+    <td class="num">323 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">tasks</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/tasks</code></td>
+    <td class="num strong">2</td>
+    <td class="num">4.336</td>
+    <td class="num">4.742</td>
+    <td class="num">634.0 KB</td>
+    <td>unbounded + payload</td>
+  </tr><tr>
+
+    <td><span class="tag">tokens</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/multiremi/tokens?workspaceId=local</code></td>
+    <td class="num strong">2</td>
+    <td class="num">0.074</td>
+    <td class="num">0.127</td>
+    <td class="num">318 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">webhooks</span></td>
+    <td><code>POST</code></td>
+    <td class="num">202</td>
+    <td class="path"><code>/api/webhooks/stripe</code></td>
+    <td class="num strong">0</td>
+    <td class="num">0.013</td>
+    <td class="num">0.034</td>
+    <td class="num">51 B</td>
+    <td>baseline</td>
+  </tr><tr>
+
+    <td><span class="tag">workspaces</span></td>
+    <td><code>GET</code></td>
+    <td class="num">200</td>
+    <td class="path"><code>/api/workspaces</code></td>
+    <td class="num strong">1</td>
+    <td class="num">0.042</td>
+    <td class="num">0.060</td>
+    <td class="num">958 B</td>
+    <td>baseline</td>
+  </tr></tbody></table></div></section>
+
+<section id="limits"><h2>测量边界与可信度</h2><div class="finding"><div><span class="badge ok">已验证</span></div><p>SQLite <code>bun:sqlite</code> 内存库；Hono <code>app.request()</code>；固定规模种子；每探针 5 次预热、30 次顺序采样；响应体完整读取；SQL 在 statement execution 层计数。</p></div><div class="finding"><div><span class="badge ok">已验证</span></div><p>SQLite 与 Postgres 在代码层共用 <code>runMigrations(db)</code>：<code>MultiremiStore</code> 构造时统一调用（<code>store.ts:413/:513</code>），PG 的 <code>exec</code> 逐 statement 翻译执行（<code>postgres.ts:216/:230</code>）。因此 schema/index 的源码事实来源一致，不是两套 migration。</p></div><div class="finding"><div><span class="badge muted">未验证</span></div><p>本机未配置 <code>MULTIREMI_DATABASE_URL</code> 且无 <code>psql</code>，未读取生产 PG catalog，也未跑 <code>EXPLAIN (ANALYZE, BUFFERS)</code>。部署库是否漏迁移、PG planner 是否选同一索引均未验证；SQLite EQP 不作为 PG 执行计划结论。</p></div><div class="finding"><div><span class="badge muted">未验证</span></div><p>645 个注册 endpoint 中，本次逐探针测了全部 275 个普通 GET；3 个 WebSocket GET 仅做状态快照，367 个 mutation 没有重复执行来构造 p50/p95。254 probes 返回 2xx，22 probes 返回 4xx/503；后者仅保留状态和本地失败成本，不外推成功路径。</p></div><div class="finding"><div><span class="badge muted">未验证</span></div><p>没有并发、磁盘 SQLite、真实 HTTP socket/TLS、生产数据分布、数据库缓存冷热态、响应压缩、JSON 网络传输与浏览器解析测量。</p></div></section>
+</main>
+<script>function filterIndexes(q){q=q.toLowerCase();document.querySelectorAll('#indexTable tbody tr').forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?'':'none')}</script>
+</body></html>
