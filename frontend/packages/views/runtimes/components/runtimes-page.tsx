@@ -19,6 +19,7 @@ import {
   daemonInventoryOptions,
   runtimeListOptions,
   runtimeKeys,
+  shouldRefreshOnHeartbeat,
 } from "@multiremi/core/runtimes/queries";
 import { useUpdatableRuntimeIds } from "@multiremi/core/runtimes/hooks";
 import { useUpdateDaemonDisplayName } from "@multiremi/core/runtimes/mutations";
@@ -134,6 +135,7 @@ export function RuntimesPage({
   // appear later than remotes — `localDaemonId` is fetched async).
   const userSelectedRef = useRef(false);
   const appliedRequestedMachineRef = useRef<string | null>(null);
+  const lastHeartbeatRefreshAtRef = useRef<number | null>(null);
   const handleSelectMachine = useCallback((id: string) => {
     userSelectedRef.current = true;
     setSelectedMachineId(id);
@@ -161,6 +163,21 @@ export function RuntimesPage({
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
   }, [qc, wsId]);
   useWSEvent("daemon:register", handleDaemonEvent);
+
+  const handleHeartbeatEvent = useCallback(() => {
+    const heartbeatAt = Date.now();
+    if (
+      !shouldRefreshOnHeartbeat(
+        lastHeartbeatRefreshAtRef.current,
+        heartbeatAt,
+      )
+    ) {
+      return;
+    }
+    lastHeartbeatRefreshAtRef.current = heartbeatAt;
+    qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+  }, [qc, wsId]);
+  useWSEvent("daemon:heartbeat", handleHeartbeatEvent);
 
   const handleMachineRetired = useCallback(() => {
     userSelectedRef.current = false;
