@@ -36,7 +36,11 @@ vi.mock("@multiremi/core/workspace/hooks", () => ({
 }));
 vi.mock("../../issues/components", () => ({ StatusIcon: () => null, PriorityIcon: () => null }));
 
-import { AutopilotRunReport, autopilotRunOutput } from "./autopilot-run-report";
+import {
+  AutopilotRunReport,
+  autopilotOutcomeSupportingText,
+  autopilotRunOutput,
+} from "./autopilot-run-report";
 
 function runItem(
   id = "inbox-1",
@@ -82,6 +86,7 @@ function runItem(
       },
       outcome: {
         kind: action === "retry" ? "failed" : action === "review" ? "changes" : "unknown",
+        headline: action === "retry" ? "Provider capacity was unavailable." : "Repository report completed.",
         text: action === "retry" ? "503 No available accounts." : "Published the repository report.",
         links: action === "review"
           ? [{ kind: "pull_request", url: "https://github.com/Grassgod/Remi/pull/80", number: 80 }]
@@ -202,5 +207,31 @@ describe("autopilotRunOutput", () => {
   it("prefers structured output and falls back to failure_reason", () => {
     expect(autopilotRunOutput({ result: { output: "Done" }, failure_reason: "Failed" })).toBe("Done");
     expect(autopilotRunOutput({ result: null, failure_reason: "Failed" })).toBe("Failed");
+  });
+});
+
+describe("autopilotOutcomeSupportingText", () => {
+  it("removes sentences already shown as the headline or a risk", () => {
+    expect(autopilotOutcomeSupportingText({
+      kind: "unknown",
+      headline: "Result: repository checkout failed.",
+      text: "Result: repository checkout failed. Permission denied. Retry after credentials recover.",
+      links: [],
+      counts: null,
+      risks: ["Permission denied."],
+      action: { kind: "investigate", text: "Permission denied." },
+    })).toBe("Retry after credentials recover.");
+  });
+
+  it("returns null when the summary only repeats the headline and risks", () => {
+    expect(autopilotOutcomeSupportingText({
+      kind: "unknown",
+      headline: "Result: repository checkout failed.",
+      text: "Result: repository checkout failed. Permission denied.",
+      links: [],
+      counts: null,
+      risks: ["Permission denied."],
+      action: { kind: "investigate", text: "Permission denied." },
+    })).toBeNull();
   });
 });

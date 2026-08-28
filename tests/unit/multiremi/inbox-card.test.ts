@@ -5,6 +5,12 @@ import {
   escapeMarkdown,
   humanizeEventType,
 } from "@multiremi/notifications/inbox-card.js";
+import { summarizeAutopilotOutcome } from "@multiremi/store/autopilot-run-notification.js";
+
+const CHECKOUT_FAILURE_FIXTURE = await Bun.file(new URL(
+  "../../fixtures/multiremi/autopilot-no-change-checkout-failure.txt",
+  import.meta.url,
+)).text();
 
 function item(overrides: Partial<MultiremiInboxItem> = {}): MultiremiInboxItem {
   return {
@@ -58,6 +64,7 @@ describe("autopilot inbox notification cards", () => {
           },
           outcome: {
             kind: "changes",
+            headline: null,
             text: "Published the release.",
             links: [{
               kind: "pull_request",
@@ -88,6 +95,33 @@ describe("autopilot inbox notification cards", () => {
         default_url: "https://remi.example.com/acme/inbox?item=inbox-1",
       }],
     });
+  });
+
+  it("renders the real checkout failure headline without repeating it in the action line", () => {
+    const outcome = summarizeAutopilotOutcome(CHECKOUT_FAILURE_FIXTURE);
+    const card = buildInboxNotificationCard({
+      item: item({
+        details: {
+          autopilot_id: "autopilot-1",
+          triggered_at: "2026-08-28T05:28:37.614Z",
+          trigger: "scm_event",
+          trigger_object: {
+            event_type: "change.merged",
+            repository_name: "dy-code-context",
+            change_number: 133,
+          },
+          outcome,
+        },
+      }),
+      workspace,
+      publicUrl: "https://remi.example.com",
+    });
+
+    const content = cardContent(card);
+    expect(content.split("\n")).toHaveLength(3);
+    expect(content).toContain("**结论**  结果：no-op（因目标仓库无法检出，未做任何 Wiki 变更）。");
+    expect(content).toContain("**处理**  需要排查");
+    expect(content).not.toContain("**处理**  需要排查：");
   });
 
   it("keeps legacy cards on the body fallback without corrupting URLs or punctuation", () => {

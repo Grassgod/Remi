@@ -471,6 +471,7 @@ describe("InboxPage", () => {
         run_id: "run-1",
         outcome: {
           kind: "no_change",
+          headline: null,
           text: null,
           links: [],
           counts: null,
@@ -508,6 +509,7 @@ describe("InboxPage", () => {
       },
       outcome: {
         kind: "no_change",
+        headline: null,
         text: null,
         links: [],
         counts: null,

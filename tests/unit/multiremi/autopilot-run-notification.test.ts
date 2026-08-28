@@ -37,6 +37,7 @@ describe("autopilot run notifications", () => {
   ])("recognizes no-change outcomes: %s", (value) => {
     expect(summarizeAutopilotOutcome(value)).toEqual({
       kind: "no_change",
+      headline: value,
       text: null,
       links: [],
       counts: null,
@@ -49,13 +50,48 @@ describe("autopilot run notifications", () => {
     const outcome = summarizeAutopilotOutcome(CHECKOUT_FAILURE_FIXTURE);
 
     expect(outcome.kind).toBe("unknown");
+    expect(outcome.headline).toBe("结果：no-op（因目标仓库无法检出，未做任何 Wiki 变更）。");
     expect(outcome.text).not.toBeNull();
     expect(outcome.risks.length).toBeGreaterThan(0);
-    expect(outcome.risks[0]).toContain("无法检出");
+    expect(outcome.risks).not.toContain(outcome.headline);
     expect(outcome.action).toEqual({
       kind: "investigate",
-      text: outcome.risks[0],
+      text: "结果：no-op（因目标仓库无法检出，未做任何 Wiki 变更）。",
     });
+  });
+
+  it("falls back to the first summary sentence when no conclusion marker exists", () => {
+    const outcome = summarizeAutopilotOutcome("Published the repository report. No blockers remain.");
+
+    expect(outcome.headline).toBe("Published the repository report.");
+    expect(outcome.text).toBe("Published the repository report. No blockers remain.");
+  });
+
+  it("keeps an overlong headline only through a complete short sentence", () => {
+    const outcome = summarizeAutopilotOutcome(
+      `Summary: Validation completed. ${"Additional implementation context ".repeat(5).trim()}.`,
+    );
+    const unbroken = summarizeAutopilotOutcome(`Result: ${"x".repeat(80)}`);
+
+    expect(outcome.headline).toBe("Summary: Validation completed.");
+    expect(Array.from(outcome.headline!).length).toBeLessThanOrEqual(60);
+    expect(unbroken.headline).toBeNull();
+  });
+
+  it("leaves the headline empty when no useful summary exists", () => {
+    expect(summarizeAutopilotOutcome("Let me check\nNext, inspect the repository").headline).toBeNull();
+  });
+
+  it("deduplicates repeated risks after removing the headline", () => {
+    const outcome = summarizeAutopilotOutcome([
+      "Result: Permission denied.",
+      "Result: Permission denied.",
+      "Result: Permission denied.",
+    ].join(" "));
+
+    expect(outcome.headline).toBe("Result: Permission denied.");
+    expect(outcome.risks).toEqual([]);
+    expect(outcome.action.kind).toBe("investigate");
   });
 
   it("extracts pull request and merge request links with counts", () => {
@@ -112,6 +148,7 @@ describe("autopilot run notifications", () => {
 
     expect(outcome).toEqual({
       kind: "unknown",
+      headline: "Published the repository wiki update successfully.",
       text: "Published the repository wiki update successfully.",
       links: [],
       counts: null,
@@ -133,6 +170,7 @@ describe("autopilot run notifications", () => {
   it("returns unknown for empty or narration-only input", () => {
     expect(summarizeAutopilotOutcome("  ")).toEqual({
       kind: "unknown",
+      headline: null,
       text: null,
       links: [],
       counts: null,
@@ -176,6 +214,7 @@ describe("autopilot run notifications", () => {
       `Permission denied while reading ${"a very long repository path ".repeat(10).trim()}.`,
       "The validation failed before completion.",
       "Manual review is required.",
+      "The follow-up check failed.",
     ].join(" "));
 
     expect(outcome.risks).toHaveLength(3);

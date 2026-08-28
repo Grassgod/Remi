@@ -216,6 +216,7 @@ describe("inbox display helpers", () => {
       details: {
         outcome: {
           kind: "unknown",
+          headline: "Run completed with a warning.",
           text: "Run completed with a warning.",
           links: [],
           counts: null,
@@ -250,11 +251,12 @@ describe("inbox display helpers", () => {
     });
 
     expect(getAutopilotRunOutcome(current)).toMatchObject({
+      headline: "Run completed with a warning.",
       risks: ["Repository checkout failed."],
       action: { kind: "investigate", text: "Repository checkout failed." },
     });
-    expect(getAutopilotRunOutcome(legacy)).toMatchObject({ risks: [], action: null });
-    expect(getAutopilotRunOutcome(malformed)).toMatchObject({ risks: [], action: null });
+    expect(getAutopilotRunOutcome(legacy)).toMatchObject({ headline: null, risks: [], action: null });
+    expect(getAutopilotRunOutcome(malformed)).toMatchObject({ headline: null, risks: [], action: null });
   });
 
   it("splits duration boundaries into localized display units", () => {

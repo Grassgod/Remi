@@ -78,6 +78,9 @@ export function getAutopilotRunOutcome(item: InboxItem): AutopilotRunOutcome | n
   if (!["no_change", "changes", "failed", "unknown"].includes(value.kind)) return null;
   if (!Array.isArray(value.links)) return null;
   if (value.text !== null && typeof value.text !== "string") return null;
+  const headline = typeof value.headline === "string" && value.headline.trim()
+    ? value.headline.trim()
+    : null;
   const links = value.links.flatMap((link) => {
     if (!isRecord(link)) return [];
     if (link.kind !== "pull_request" && link.kind !== "merge_request") return [];
@@ -109,6 +112,7 @@ export function getAutopilotRunOutcome(item: InboxItem): AutopilotRunOutcome | n
     : null;
   return {
     kind: value.kind as AutopilotRunOutcome["kind"],
+    headline,
     text: value.text,
     links,
     counts,

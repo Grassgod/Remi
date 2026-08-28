@@ -155,6 +155,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       },
       outcome: {
         kind: "unknown",
+        headline: "Published 12 project updates.",
         text: "Published 12 project updates. No blockers.",
         links: [],
         counts: null,
@@ -181,6 +182,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       trigger_object: null,
       outcome: {
         kind: "failed",
+        headline: "Dependency service unavailable.",
         text: "Dependency service unavailable.",
         links: [],
         counts: null,

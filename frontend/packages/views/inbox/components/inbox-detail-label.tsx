@@ -95,7 +95,9 @@ export function useAutopilotOutcomePresentation(item: InboxItem) {
   if (!outcome) return null;
 
   let summary: string;
-  if (outcome.kind === "no_change") {
+  if (outcome.headline) {
+    summary = outcome.headline;
+  } else if (outcome.kind === "no_change") {
     summary = t(($) => $.autopilot.no_change);
   } else if (outcome.kind === "failed" || item.type === "autopilot_run_failed") {
     summary = outcome.text

@@ -49,6 +49,7 @@ function run(id: string, branch: string, seconds: number, createdAt: string): In
       },
       outcome: {
         kind: "no_change",
+        headline: null,
         text: null,
         links: [],
         counts: null,

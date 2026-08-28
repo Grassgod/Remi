@@ -56,6 +56,7 @@ export interface AutopilotRunOutcomeAction {
 
 export interface AutopilotRunOutcome {
   kind: "no_change" | "changes" | "failed" | "unknown";
+  headline: string | null;
   text: string | null;
   links: AutopilotRunOutcomeLink[];
   counts: Record<string, number> | null;

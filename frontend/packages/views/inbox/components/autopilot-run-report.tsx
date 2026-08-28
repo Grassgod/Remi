@@ -6,7 +6,7 @@ import { autopilotRunOptions } from "@multiremi/core/autopilots/queries";
 import { getAutopilotRunHref } from "@multiremi/core/autopilots";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
-import type { AutopilotRun, InboxItem } from "@multiremi/core/types";
+import type { AutopilotRun, AutopilotRunOutcome, InboxItem } from "@multiremi/core/types";
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -52,6 +52,31 @@ export function autopilotRunOutput(
     if (typeof result.error === "string" && result.error.trim()) return result.error;
   }
   return run.failure_reason?.trim() || null;
+}
+
+export function autopilotOutcomeSupportingText(outcome: AutopilotRunOutcome): string | null {
+  if (!outcome.text) return null;
+  const references = [outcome.headline, ...outcome.risks]
+    .map(comparableOutcomeText)
+    .filter(Boolean);
+  const remaining = outcome.text
+    .split(/(?<=[.!?。！？])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter((sentence) => {
+      const key = comparableOutcomeText(sentence);
+      return key && !references.some((reference) =>
+        key === reference || key.includes(reference) || reference.includes(key)
+      );
+    });
+  return remaining.length > 0 ? remaining.join(" ") : null;
+}
+
+function comparableOutcomeText(value: string | null): string {
+  return (value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, "");
 }
 
 function isMissingRunError(value: unknown): boolean {
@@ -276,6 +301,7 @@ export function AutopilotRunReport({
   if (!presentation) return null;
 
   const { outcome } = presentation;
+  const supportingText = autopilotOutcomeSupportingText(outcome);
   const action = outcome.action;
   const ActionIcon = action?.kind === "retry"
     ? RefreshCw
@@ -307,6 +333,9 @@ export function AutopilotRunReport({
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-muted-foreground">{t(($) => $.autopilot.report.result)}</p>
           <p className="mt-1 text-sm font-medium leading-6">{presentation.summary}</p>
+          {supportingText && (
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">{supportingText}</p>
+          )}
           {outcome.links.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-2">
               {outcome.links.map((link) => (

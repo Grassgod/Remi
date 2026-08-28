@@ -66,6 +66,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
         duration_seconds: 12,
         outcome: {
           kind: "no_change",
+          headline: null,
           text: null,
           links: [],
           counts: null,
@@ -86,6 +87,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
         duration_seconds: 9,
         outcome: {
           kind: "changes",
+          headline: null,
           text: "Updated the docs.",
           links: [
             { kind: "pull_request", url: "https://github.com/Grassgod/Remi/pull/80", number: 80 },
@@ -112,6 +114,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
       details: {
         outcome: {
           kind: "failed",
+          headline: null,
           text: "Dependency service unavailable.",
           links: [],
           counts: null,
@@ -131,6 +134,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
       details: {
         outcome: {
           kind: "changes",
+          headline: null,
           text: "Published.",
           links: [{ kind: "pull_request", url: "https://github.com/Grassgod/Remi/pull/80", number: 80 }],
           counts: { changes: 1 },
@@ -144,6 +148,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
       details: {
         outcome: {
           kind: "no_change",
+          headline: null,
           text: null,
           links: [],
           counts: null,
@@ -166,6 +171,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
       details: {
         outcome: {
           kind: "unknown",
+          headline: null,
           text: summary,
           links: [],
           counts: null,
@@ -180,6 +186,26 @@ describe("InboxDetailLabel autopilot outcomes", () => {
       .toHaveLength(1);
   });
 
+  it("uses a structured headline without adding a localized completion prefix", () => {
+    const headline = "结果：仓库检出失败，未更新 Wiki。";
+    renderLabel(autopilotItem({
+      details: {
+        outcome: {
+          kind: "unknown",
+          headline,
+          text: `${headline} 建议恢复凭据后重试。`,
+          links: [],
+          counts: null,
+          risks: [],
+          action: { kind: "investigate", text: headline },
+        },
+      },
+    }), "zh-Hans");
+
+    expect(screen.getByText(headline)).toBeInTheDocument();
+    expect(screen.queryByText(`本次运行已完成：${headline}`)).not.toBeInTheDocument();
+  });
+
   it.each([
     [59, "Took 59s"],
     [60, "Took 1m"],
@@ -191,6 +217,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
         duration_seconds: durationSeconds,
         outcome: {
           kind: "no_change",
+          headline: null,
           text: null,
           links: [],
           counts: null,

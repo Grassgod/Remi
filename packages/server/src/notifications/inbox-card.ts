@@ -189,6 +189,7 @@ function structuredAutopilotCard(item: MultiremiInboxItem): StructuredAutopilotC
   const kind = cleanString(outcome.kind);
   if (!kind || !["no_change", "changes", "failed", "unknown"].includes(kind)) return null;
 
+  const headline = cleanString(outcome.headline);
   const text = cleanString(outcome.text);
   const links = Array.isArray(outcome.links)
     ? outcome.links.flatMap((value) => {
@@ -212,7 +213,8 @@ function structuredAutopilotCard(item: MultiremiInboxItem): StructuredAutopilotC
   });
 
   let plainConclusion: string;
-  if (kind === "no_change") plainConclusion = "本次无变更";
+  if (headline) plainConclusion = headline;
+  else if (kind === "no_change") plainConclusion = "本次无变更";
   else if (kind === "failed") plainConclusion = text ? `运行失败：${text}` : "运行失败";
   else if (kind === "changes") plainConclusion = changeCount > 0 ? `产生 ${changeCount} 个改动` : "运行已产生变更";
   else plainConclusion = text ? `运行完成：${text}` : "运行已完成";
@@ -242,10 +244,6 @@ function structuredAutopilotCard(item: MultiremiInboxItem): StructuredAutopilotC
 
   const actionValue = detailsRecord(outcome.action);
   const actionKind = cleanString(actionValue.kind);
-  const risks = Array.isArray(outcome.risks)
-    ? outcome.risks.filter((risk): risk is string => typeof risk === "string" && Boolean(risk.trim()))
-    : [];
-  const actionText = cleanString(actionValue.text) ?? risks[0] ?? null;
   const actionPrefix = actionKind === "review"
     ? "请审阅变更"
     : actionKind === "retry"
@@ -255,7 +253,7 @@ function structuredAutopilotCard(item: MultiremiInboxItem): StructuredAutopilotC
         : actionKind === "none"
           ? "无需处理"
           : "请查看运行详情";
-  const action = escapeMarkdown(truncateSummary(actionText ? `${actionPrefix}：${actionText}` : actionPrefix));
+  const action = escapeMarkdown(actionPrefix);
 
   return { conclusion, plainConclusion, trigger, action };
 }

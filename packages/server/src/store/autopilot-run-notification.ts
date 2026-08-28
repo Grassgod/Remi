@@ -17,6 +17,7 @@ export interface AutopilotOutcomeAction {
 
 export interface AutopilotOutcome {
   kind: AutopilotOutcomeKind;
+  headline: string | null;
   text: string | null;
   links: AutopilotOutcomeLink[];
   counts: Record<string, number> | null;
@@ -30,6 +31,9 @@ const COMPLETE_SENTENCE_END_PATTERN = /[.!?。！？](?:["'”’）)\]}]+)?$/u;
 const LINK_PATTERN = /https?:\/\/(?:www\.)?(github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)|code\.byted\.org\/[^\s]+?\/merge_requests\/(\d+))(?=$|[\s`)\]}>.,!?，。！？])/giu;
 const RISK_SIGNAL_PATTERN = /(?:未能完成|无法检出|检出失败|失败|拒绝|建议(?:重新)?运行|建议重跑|需要人工|\bfailed\b|\bunable to\b|\bpermission denied\b|\bpublickey\b|\b503\b|\bno available accounts\b|\btime(?:d\s+out|out)\b|\brate limit(?:ed|s)?\b)/iu;
 const TRANSIENT_FAILURE_PATTERN = /(?:\b503\b|\bno available accounts\b|\btime(?:d\s+out|out)\b|\brate limit(?:ed|s)?\b|\bpublickey\b)/iu;
+const EXPLICIT_HEADLINE_PATTERN = /^(?:\s*#{1,6}\s*)?(?:\*\*)?\s*(?:结果|结论|result|summary)\s*(?:\*\*)?\s*[:：]\s*\S/iu;
+const HEADLINE_SENTENCE_END_PATTERN = /[.!?。！？]/u;
+const HEADLINE_MAX_LENGTH = 60;
 
 export function summarizeAutopilotOutcome(
   value: string | null | undefined,
@@ -40,20 +44,23 @@ export function summarizeAutopilotOutcome(
   const sentences = usefulSentences(normalized);
   const text = summarizeCompleteSentences(sentences);
   const counts = outcomeCounts(links);
-  const risks = extractRisks(sentences);
+  const extractedRisks = extractRisks(sentences);
+  const headline = extractHeadline(normalized, text);
   const kind: AutopilotOutcomeKind = options.failed
     ? "failed"
     : links.length > 0
       ? "changes"
       : NO_CHANGE_PATTERN.test(normalized)
         && !RISK_SIGNAL_PATTERN.test(normalized)
-        && risks.length === 0
+        && extractedRisks.length === 0
         ? "no_change"
         : "unknown";
-  const action = deriveAction(kind, links, risks, sentences[0] ?? null);
+  const action = deriveAction(kind, links, extractedRisks.slice(0, 3), sentences[0] ?? null);
+  const risks = deduplicateRisks(extractedRisks, headline);
 
   return {
     kind,
+    headline,
     text: kind === "no_change" ? null : text,
     links,
     counts,
@@ -180,9 +187,52 @@ function extractRisks(sentences: string[]): string[] {
     if (seen.has(risk)) continue;
     seen.add(risk);
     risks.push(risk);
-    if (risks.length === 3) break;
   }
   return risks;
+}
+
+function extractHeadline(value: string, summary: string | null): string | null {
+  for (const line of value.split("\n")) {
+    if (!EXPLICIT_HEADLINE_PATTERN.test(line)) continue;
+    const headline = cleanSentence(line);
+    if (headline) return completeHeadline(headline);
+  }
+
+  if (!summary) return null;
+  const firstSentence = splitParagraphIntoSentences(summary)[0] ?? summary;
+  return completeHeadline(firstSentence);
+}
+
+function completeHeadline(value: string): string | null {
+  const characters = Array.from(value.trim());
+  if (characters.length <= HEADLINE_MAX_LENGTH) return characters.join("");
+
+  for (let index = 0; index < HEADLINE_MAX_LENGTH; index += 1) {
+    if (!HEADLINE_SENTENCE_END_PATTERN.test(characters[index] ?? "")) continue;
+    let end = index + 1;
+    while (end < HEADLINE_MAX_LENGTH && /["'”’）)\]}]/u.test(characters[end] ?? "")) end += 1;
+    if (end < characters.length && !/\s/u.test(characters[end] ?? "")) continue;
+    return characters.slice(0, end).join("").trim();
+  }
+  return null;
+}
+
+function deduplicateRisks(risks: string[], headline: string | null): string[] {
+  const headlineKey = comparableText(headline);
+  const seen = new Set<string>();
+  return risks.filter((risk) => {
+    const key = comparableText(risk);
+    if (!key || seen.has(key) || (headlineKey && headlineKey.includes(key))) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 3);
+}
+
+function comparableText(value: string | null): string {
+  return (value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}\s]+/gu, "");
 }
 
 function deriveAction(
