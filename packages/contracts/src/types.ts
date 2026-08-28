@@ -1636,6 +1636,11 @@ export interface MultiremiIssueWorkspace {
   runtimeId: string | null;
   runtimeName: string | null;
   runtimeStatus: MultiremiRuntimeStatus | null;
+  runtimeProvider: string | null;
+  runtimeMode: string | null;
+  runtimeDeviceInfo: string | null;
+  runtimeDaemonId: string | null;
+  runtimeMachineName: string | null;
   rootPath: string;
   branchName: string;
   status: MultiremiIssueWorkspaceStatus;

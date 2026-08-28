@@ -16,11 +16,13 @@ import { parseStrictResponse, parseWithFallback } from "../schema";
 import {
   ChildIssuesResponseSchema,
   EMPTY_ISSUE_RETITLE_RESPONSE,
+  EMPTY_ISSUE_WORKSPACE_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   GroupedIssuesResponseSchema,
   IssueSchema,
   IssueRetitleResponseSchema,
+  IssueWorkspaceResponseSchema,
   ListIssuesResponseSchema,
 } from "../schemas/issues";
 
@@ -115,7 +117,13 @@ export class IssuesEndpoints {
   }
 
   async getIssueWorkspace(id: string): Promise<{ workspace: IssueWorkspace | null }> {
-    return this.http.fetch(`/api/issues/${id}/workspace`);
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}/workspace`);
+    return parseWithFallback(
+      raw,
+      IssueWorkspaceResponseSchema,
+      EMPTY_ISSUE_WORKSPACE_RESPONSE,
+      { endpoint: "GET /api/issues/:id/workspace" },
+    );
   }
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {

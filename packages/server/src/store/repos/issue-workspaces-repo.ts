@@ -16,9 +16,14 @@ export class IssueWorkspacesRepo {
 
   get(issueId: string): MultiremiIssueWorkspace | null {
     const row = this.ctx.db.query(
-      `SELECT iw.*, r.name AS runtime_name, r.status AS runtime_status
+      `SELECT iw.*, r.name AS runtime_name, r.status AS runtime_status,
+              r.provider AS runtime_provider, r.runtime_mode AS runtime_mode,
+              r.device_info AS runtime_device_info, r.daemon_id AS runtime_daemon_id,
+              p.display_name AS runtime_machine_name
        FROM multiremi_issue_workspaces iw
        LEFT JOIN multiremi_runtimes r ON r.id = iw.runtime_id
+       LEFT JOIN multiremi_daemon_profiles p
+         ON p.workspace_id = iw.workspace_id AND p.daemon_id = r.daemon_id
        WHERE iw.issue_id = ?`,
     ).get(issueId) as Row | null;
     return row ? toIssueWorkspace(row) : null;
@@ -198,6 +203,11 @@ function toIssueWorkspace(row: Row): MultiremiIssueWorkspace {
     runtimeId: nullableString(row.runtime_id),
     runtimeName: nullableString(row.runtime_name),
     runtimeStatus: row.runtime_status === "online" || row.runtime_status === "offline" ? row.runtime_status : null,
+    runtimeProvider: nullableString(row.runtime_provider),
+    runtimeMode: nullableString(row.runtime_mode),
+    runtimeDeviceInfo: nullableString(row.runtime_device_info),
+    runtimeDaemonId: nullableString(row.runtime_daemon_id),
+    runtimeMachineName: nullableString(row.runtime_machine_name),
     rootPath: String(row.root_path),
     branchName: String(row.branch_name),
     status: String(row.status) as MultiremiIssueWorkspace["status"],

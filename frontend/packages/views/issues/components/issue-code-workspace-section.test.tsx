@@ -57,6 +57,9 @@ describe("IssueCodeWorkspaceSection", () => {
 
     expect(await screen.findByText("~/.remi/multiremi/workspaces/MUL-31")).toBeInTheDocument();
     expect(screen.getByText("./1passport")).toBeInTheDocument();
+    expect(screen.getByText("build-host")).toBeInTheDocument();
+    expect(screen.getByText("claude")).toBeInTheDocument();
+    expect(screen.getByTitle("build-host · claude")).toBeInTheDocument();
     expect(screen.getByTitle(WORKSPACE.root_path)).toBeInTheDocument();
     expect(screen.getByTitle(WORKSPACE.repos[0]!.worktree_path)).toBeInTheDocument();
   });
@@ -88,5 +91,84 @@ describe("IssueCodeWorkspaceSection", () => {
     expect(await screen.findByText("Read-only project snapshot")).toBeInTheDocument();
     expect(screen.getByText("./projects/Remi/repos/1passport")).toBeInTheDocument();
     expect(screen.queryByText("Branch")).not.toBeInTheDocument();
+  });
+
+  it("prefers the daemon profile name and shows the provider as secondary information", async () => {
+    mockApiObj.getIssueWorkspace.mockResolvedValue({
+      workspace: {
+        ...WORKSPACE,
+        runtime_name: "claude",
+        runtime_status: "offline",
+        runtime_provider: "claude",
+        runtime_mode: "local",
+        runtime_device_info: "device-host · macOS (arm64)",
+        runtime_daemon_id: "daemon-profile",
+        runtime_machine_name: "MacBook-Pro",
+      },
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <I18nProvider resources={TEST_RESOURCES} locale="en">
+          <IssueCodeWorkspaceSection issueId="issue-profile" />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("MacBook-Pro")).toBeInTheDocument();
+    expect(screen.getByText("claude")).toBeInTheDocument();
+    expect(screen.getByTitle("MacBook-Pro · claude")).toHaveClass("text-destructive");
+    expect(screen.queryByText("device-host")).not.toBeInTheDocument();
+  });
+
+  it("uses the first device-info segment when no daemon profile name is available", async () => {
+    mockApiObj.getIssueWorkspace.mockResolvedValue({
+      workspace: {
+        ...WORKSPACE,
+        runtime_name: "codex",
+        runtime_provider: "codex",
+        runtime_mode: "local",
+        runtime_device_info: "Build Host · Linux (x86_64) · codex-cli 1.0.0",
+        runtime_daemon_id: "daemon-device",
+        runtime_machine_name: null,
+      },
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <I18nProvider resources={TEST_RESOURCES} locale="en">
+          <IssueCodeWorkspaceSection issueId="issue-device" />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Build Host")).toBeInTheDocument();
+    expect(screen.getByTitle("Build Host · codex")).toBeInTheDocument();
+  });
+
+  it("falls back to the localized unknown label when all Runtime identity fields are missing", async () => {
+    mockApiObj.getIssueWorkspace.mockResolvedValue({
+      workspace: {
+        ...WORKSPACE,
+        runtime_id: null,
+        runtime_name: null,
+        runtime_provider: null,
+        runtime_mode: null,
+        runtime_device_info: null,
+        runtime_daemon_id: null,
+        runtime_machine_name: null,
+      },
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <I18nProvider resources={TEST_RESOURCES} locale="en">
+          <IssueCodeWorkspaceSection issueId="issue-unknown" />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Unknown")).toBeInTheDocument();
+    expect(screen.getByTitle("Unknown")).toBeInTheDocument();
   });
 });

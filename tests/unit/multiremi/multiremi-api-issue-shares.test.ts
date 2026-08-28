@@ -82,6 +82,23 @@ describe("Multiremi API - issue sharing", () => {
       projectId: project.id,
       createdBy: "local",
     });
+    const runtime = store.registerRuntime({
+      id: "rt_shared_workspace",
+      name: "claude",
+      provider: "claude",
+      workspaceId: "local",
+      daemonId: "daemon-shared-workspace",
+      runtimeMode: "local",
+      deviceInfo: "share-host · macOS (arm64)",
+    });
+    store.updateDaemonDisplayName("local", "daemon-shared-workspace", "Shared Mac", "local");
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
     const otherIssue = store.createIssue({
       title: "Unrelated confidential issue",
       workspaceId: "local",
@@ -181,6 +198,15 @@ describe("Multiremi API - issue sharing", () => {
     ))).toBe(true);
     expect(JSON.stringify(bundle.sessions)).toContain("A visible task message");
     expect(bundle.session_results[0].body).toBe("A visible published result");
+    expect(bundle.issue_workspace).toMatchObject({
+      runtime_id: runtime.id,
+      runtime_name: "claude",
+      runtime_provider: "claude",
+      runtime_mode: "local",
+      runtime_device_info: "share-host · macOS (arm64)",
+      runtime_daemon_id: "daemon-shared-workspace",
+      runtime_machine_name: "Shared Mac",
+    });
     expect(bundle.issue.attachments[0].url).toContain(`/api/shares/${encodeURIComponent(share.token)}/attachments/${attachment.id}/content`);
     expect(JSON.stringify(bundle)).not.toContain(otherIssue.title);
     expect(JSON.stringify(bundle)).not.toContain("viewer@feishu.local");
