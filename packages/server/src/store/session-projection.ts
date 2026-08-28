@@ -60,25 +60,26 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
   if (!Number.isFinite(tokenBudget) || tokenBudget <= 0) {
     throw new Error("Session projection tokenBudget must be a positive number");
   }
+  const headerJson = JSON.stringify(header);
+  const prepared = prepareProjectionEvents(projected, input);
   const eventBodyMaxChars = projectionEventBodyMaxChars();
   const full = assembleProjection(
-    header,
-    projected,
-    input,
-    new Set(projected.map((_, index) => index)),
-    eventBodyMaxChars,
+    headerJson,
+    prepared,
+    new Set(prepared.map((_, index) => index)),
+    null,
   );
   if (full.estimatedTokens <= tokenBudget) {
     return projectionResult(input, mode, fromSeq, toSeq, full);
   }
 
   const pinned = new Set<number>();
-  projected.forEach((event, index) => {
+  prepared.forEach(({ event }, index) => {
     if (event.kind === "result_published") pinned.add(index);
   });
-  if (projected.length > 0) pinned.add(projected.length - 1);
+  if (prepared.length > 0) pinned.add(prepared.length - 1);
 
-  const recentCandidates = projected
+  const recentCandidates = prepared
     .map((_, index) => index)
     .filter((index) => !pinned.has(index));
   let recentCount = recentCandidates.length;
@@ -88,7 +89,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
     const selected = new Set(pinned);
     const recent = recentCount > 0 ? recentCandidates.slice(-recentCount) : [];
     for (const index of recent) selected.add(index);
-    assembled = assembleProjection(header, projected, input, selected, eventBodyMaxChars);
+    assembled = assembleProjection(headerJson, prepared, selected, null);
   }
 
   if (assembled.estimatedTokens > tokenBudget) {
@@ -97,7 +98,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
     let fitting: AssembledProjection | null = null;
     while (lower <= upper) {
       const bodyLimit = Math.floor((lower + upper) / 2);
-      const candidate = assembleProjection(header, projected, input, pinned, bodyLimit);
+      const candidate = assembleProjection(headerJson, prepared, pinned, bodyLimit);
       if (candidate.estimatedTokens <= tokenBudget) {
         fitting = candidate;
         lower = bodyLimit + 1;
@@ -105,13 +106,52 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
         upper = bodyLimit - 1;
       }
     }
-    assembled = fitting ?? assembleProjection(header, projected, input, pinned, 0);
+    assembled = fitting ?? assembleProjection(headerJson, prepared, pinned, 0);
   }
 
   if (assembled.estimatedTokens > tokenBudget) {
-    throw new Error(
-      `Session projection minimum envelope exceeds token budget (${assembled.estimatedTokens} > ${tokenBudget})`,
+    const lastIndex = prepared.length > 0 ? prepared.length - 1 : null;
+    const published = prepared
+      .map(({ event }, index) => ({ event, index }))
+      .filter(({ event, index }) => event.kind === "result_published" && index !== lastIndex)
+      .map(({ index }) => index);
+    let lower = 0;
+    let upper = published.length;
+    let fitting: AssembledProjection | null = null;
+    while (lower <= upper) {
+      const publishedCount = Math.floor((lower + upper) / 2);
+      const selected = new Set<number>();
+      if (lastIndex !== null) selected.add(lastIndex);
+      if (publishedCount > 0) {
+        for (const index of published.slice(-publishedCount)) selected.add(index);
+      }
+      const candidate = assembleProjection(headerJson, prepared, selected, 0);
+      if (candidate.estimatedTokens <= tokenBudget) {
+        fitting = candidate;
+        lower = publishedCount + 1;
+      } else {
+        upper = publishedCount - 1;
+      }
+    }
+    assembled = fitting ?? assembleProjection(
+      headerJson,
+      prepared,
+      lastIndex === null ? new Set() : new Set([lastIndex]),
+      0,
     );
+  }
+
+  if (assembled.estimatedTokens > tokenBudget && prepared.length > 0) {
+    assembled = assembleProjection(headerJson, prepared, new Set(), 0);
+  }
+
+  if (assembled.estimatedTokens > tokenBudget) {
+    assembled = {
+      jsonl: headerJson,
+      truncated: prepared.length > 0,
+      omittedEvents: prepared.length,
+      estimatedTokens: estimateProjectionTokens(headerJson),
+    };
   }
 
   return projectionResult(input, mode, fromSeq, toSeq, assembled);
@@ -124,21 +164,56 @@ interface AssembledProjection {
   estimatedTokens: number;
 }
 
-function assembleProjection(
-  header: Record<string, unknown>,
+interface PreparedProjectionEvent {
+  event: MultiremiSessionEvent;
+  perspective: "assistant_history" | "external_agent" | "user" | "operator";
+  authorName: string | null;
+  metadata: unknown;
+  fullJson: string;
+  fullJsonLength: number;
+}
+
+function prepareProjectionEvents(
   events: MultiremiSessionEvent[],
   input: BuildSessionProjectionInput,
+): PreparedProjectionEvent[] {
+  const authorNames = new Map<string, string | null>();
+  return events.map((event) => {
+    const authorKey = JSON.stringify([event.authorType, event.authorId]);
+    let authorName = authorNames.get(authorKey);
+    if (!authorNames.has(authorKey)) {
+      authorName = input.resolveAuthorName?.(event.authorType, event.authorId) ?? null;
+      authorNames.set(authorKey, authorName);
+    }
+    const metadata = stableJsonValue(event.metadata);
+    const perspective = eventPerspective(event, input.targetAgentId);
+    const fullLine = eventLine(event, perspective, authorName ?? null, metadata, event.body, 0);
+    const fullJson = JSON.stringify(fullLine);
+    return {
+      event,
+      perspective,
+      authorName: authorName ?? null,
+      metadata,
+      fullJson,
+      fullJsonLength: fullJson.length,
+    };
+  });
+}
+
+function assembleProjection(
+  headerJson: string,
+  events: PreparedProjectionEvent[],
   selected: Set<number>,
-  bodyLimit: number,
+  bodyLimit: number | null,
 ): AssembledProjection {
-  const lines: unknown[] = [header];
+  const lines: string[] = [headerJson];
   let omittedEvents = 0;
   let bodyTruncated = false;
   let index = 0;
   while (index < events.length) {
     if (selected.has(index)) {
-      const rendered = renderEvent(events[index]!, input, bodyLimit);
-      lines.push(rendered.line);
+      const rendered = renderPreparedEvent(events[index]!, bodyLimit);
+      lines.push(rendered.json);
       bodyTruncated ||= rendered.bodyTruncated;
       index += 1;
       continue;
@@ -146,22 +221,28 @@ function assembleProjection(
 
     const start = index;
     let omittedChars = 0;
+    let omittedPublishedResults = 0;
     while (index < events.length && !selected.has(index)) {
-      omittedChars += JSON.stringify(renderEvent(events[index]!, input, Number.MAX_SAFE_INTEGER).line).length;
+      omittedChars += events[index]!.fullJsonLength;
+      if (events[index]!.event.kind === "result_published") omittedPublishedResults += 1;
       index += 1;
     }
     const omitted = events.slice(start, index);
     omittedEvents += omitted.length;
-    lines.push({
+    const elision: Record<string, unknown> = {
       type: "session_elision",
       omitted_events: omitted.length,
-      from_seq: omitted[0]!.seq,
-      to_seq: omitted.at(-1)!.seq,
+      from_seq: omitted[0]!.event.seq,
+      to_seq: omitted.at(-1)!.event.seq,
       omitted_chars: omittedChars,
-      note: ELISION_NOTE,
-    });
+    };
+    if (omittedPublishedResults > 0) {
+      elision.omitted_published_results = omittedPublishedResults;
+    }
+    elision.note = ELISION_NOTE;
+    lines.push(JSON.stringify(elision));
   }
-  const jsonl = lines.map((line) => JSON.stringify(line)).join("\n");
+  const jsonl = lines.join("\n");
   return {
     jsonl,
     truncated: bodyTruncated || omittedEvents > 0,
@@ -170,32 +251,53 @@ function assembleProjection(
   };
 }
 
-function renderEvent(
+function renderPreparedEvent(
+  prepared: PreparedProjectionEvent,
+  bodyLimit: number | null,
+): { json: string; bodyTruncated: boolean } {
+  if (bodyLimit === null || prepared.event.body.length <= bodyLimit) {
+    return { json: prepared.fullJson, bodyTruncated: false };
+  }
+  const body = prepared.event.body.slice(0, Math.max(0, bodyLimit));
+  const omittedChars = prepared.event.body.length - body.length;
+  const line = eventLine(
+    prepared.event,
+    prepared.perspective,
+    prepared.authorName,
+    prepared.metadata,
+    body,
+    omittedChars,
+  );
+  return { json: JSON.stringify(line), bodyTruncated: true };
+}
+
+function eventLine(
   event: MultiremiSessionEvent,
-  input: BuildSessionProjectionInput,
-  bodyLimit: number,
-): { line: Record<string, unknown>; bodyTruncated: boolean } {
-  const body = event.body.slice(0, Math.max(0, bodyLimit));
-  const bodyTruncated = body.length < event.body.length;
+  perspective: "assistant_history" | "external_agent" | "user" | "operator",
+  authorName: string | null,
+  metadata: unknown,
+  body: string,
+  bodyOmittedChars: number,
+): Record<string, unknown> {
   const line: Record<string, unknown> = {
     type: "session_event",
     seq: event.seq,
     kind: event.kind,
-    perspective: eventPerspective(event, input.targetAgentId),
+    perspective,
     author_type: event.authorType,
     author_id: event.authorId,
-    author_name: input.resolveAuthorName?.(event.authorType, event.authorId) ?? null,
+    author_name: authorName,
     body,
   };
-  if (bodyTruncated) {
+  if (bodyOmittedChars > 0) {
     line.body_truncated = true;
-    line.body_omitted_chars = event.body.length - body.length;
+    line.body_omitted_chars = bodyOmittedChars;
   }
   line.task_id = event.taskId;
   line.source_comment_id = event.sourceCommentId;
-  line.metadata = stableJsonValue(event.metadata);
+  line.metadata = metadata;
   line.created_at = event.createdAt;
-  return { line, bodyTruncated };
+  return line;
 }
 
 function projectionResult(
