@@ -78,8 +78,54 @@ describe("api route golden snapshot", () => {
 
     // a degenerate $HOME must not rewrite every separator in the document
     expect(scrubString("/root/a /b", { ...identity, homedir: "/" })).toBe("/root/a /b");
+    expect(scrubString("/root/a /b", { ...identity, homedir: "//" })).toBe("/root/a /b");
     // a trailing separator must not move the boundary past it
     expect(scrubString("/root/.remi", { ...identity, homedir: "/root/" })).toBe("<home>/.remi");
+  });
+
+  // A path segment can hold almost any byte, so the boundary set is an allowlist
+  // of delimiters rather than a denylist of "path characters" — an ASCII-only
+  // denylist clipped non-Latin segments exactly the way the original bug clipped
+  // "root-cause-tracing".
+  it("treats any non-delimiter as continuing a path segment", () => {
+    const identity = { hostname: "unknown", username: "unknown", homedir: "/root" };
+    const scrub = (value: string) => scrubString(value, identity);
+
+    expect(scrub("/root中文/secret")).toBe("/root中文/secret");
+    expect(scrub("目录/root/secret")).toBe("目录/root/secret");
+    expect(scrub("/rootСервер/x")).toBe("/rootСервер/x");
+    expect(scrub("/root%20suffix")).toBe("/root%20suffix");
+    expect(scrub("/root@host")).toBe("/root@host");
+    expect(scrub("/root+1")).toBe("/root+1");
+    // …while every real delimiter still closes the token
+    expect(scrub("目录 /root/secret")).toBe("目录 <home>/secret");
+    expect(scrub('"/root"')).toBe('"<home>"');
+    expect(scrub("(/root)")).toBe("(<home>)");
+    expect(scrub("[/root]")).toBe("[<home>]");
+    expect(scrub("cwd=/root, home=/root;")).toBe("cwd=<home>, home=<home>;");
+  });
+
+  // Rules must be longest-needle-first, not declaration-ordered: on a box whose
+  // $TMPDIR is /tmp, a $HOME of /tmp/alice is nested under it, and the shorter
+  // rule winning would leave the machine-specific username behind.
+  it("applies the longest matching path prefix", () => {
+    const identity = { hostname: "unknown", username: "unknown", homedir: "/tmp/alice" };
+
+    expect(scrubString("/tmp/alice/private", identity)).toBe("<home>/private");
+    expect(scrubString("/tmp/other/private", identity)).toBe("<tmp>/other/private");
+    expect(scrubString("/tmp/alice", identity)).toBe("<home>");
+  });
+
+  // `C:\` trims to `C:`, which is a drive letter rather than a path; replacing it
+  // would corrupt any literal containing "C:". A needle must survive trimming as
+  // an actual path — at least one separator with a segment after it.
+  it("ignores degenerate roots that are not paths", () => {
+    const identity = { hostname: "unknown", username: "unknown" };
+
+    expect(scrubString("label C: value", { ...identity, homedir: "C:\\" })).toBe("label C: value");
+    expect(scrubString("C:\\Users\\bob\\file", { ...identity, homedir: "C:\\Users\\bob" })).toBe("<home>\\file");
+    expect(scrubString("see . here", { ...identity, homedir: "." })).toBe("see . here");
+    expect(scrubString("a b", { ...identity, homedir: "" })).toBe("a b");
   });
 
   // The golden is captured on one machine and byte-compared on another, so it

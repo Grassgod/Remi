@@ -204,8 +204,15 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Characters that can continue a path segment, so cannot be a token boundary. */
-const PATH_TOKEN_CHARS = "A-Za-z0-9._-";
+/**
+ * The ONLY characters that can delimit a path token. This is deliberately an
+ * allowlist: anything else — letters in any script, digits, `-` `.` `_` `%`,
+ * `@`, `+` — continues the segment, so a prefix followed by one of them is not
+ * a whole token. A denylist of "path characters" cannot be written correctly
+ * (a filename may contain almost any byte), and getting it wrong reintroduces
+ * the very bug this guards against.
+ */
+const PATH_BOUNDARY = "\\s/\\\\'\"`=:,;|()\\[\\]{}<>";
 
 interface PathRule {
   needle: string;
@@ -225,40 +232,51 @@ interface PathRule {
  * and pointed the reader at the regenerate command, which would commit the
  * corrupted golden. Short `$TMPDIR` values have the same failure mode.
  *
- * Left boundary: start of string, or a character that cannot continue a path
- * segment. `/` qualifies, so `file:///root/x` still scrubs while
- * `https://host/root/x` does not — a URL authority always ends in a segment
- * character, so the `/` opening its path is not a boundary.
- * Right boundary: end of string, or likewise a non-segment character. `/root/x`
- * and `'/root'` scrub; `/root-cause` and `/root.bak` do not.
+ * Both neighbours must be a delimiter or a string edge. `/root/x`, `'/root'`,
+ * `PATH=/root:/usr/bin` and `file:///root/x` scrub; `/root-cause`, `/root.bak`,
+ * `/root中文` and `https://host/root/x` do not — a URL authority always ends in
+ * a segment character, so the `/` opening its path is never a boundary.
+ *
+ * Over-scrubbing breaks the gate outright, while under-scrubbing only matters
+ * if a machine path actually reaches a response body, so ambiguity resolves
+ * toward leaving the string alone.
  */
 function pathRule(needle: string, token: string): PathRule {
   // `$HOME=/root/` would otherwise put the boundary after the separator.
   const trimmed = needle.replace(/[/\\]+$/, "");
-  // A bare `/` (or `C:\`) as $HOME would rewrite every separator in the file.
-  const pattern =
-    trimmed.length < 2
-      ? null
-      : new RegExp(`(?<![${PATH_TOKEN_CHARS}])${escapeRegExp(trimmed)}(?![${PATH_TOKEN_CHARS}])`, "g");
+  // Must still be an absolute path with at least one segment. `/` and `//` trim
+  // to "" and would rewrite every separator in the document; a Windows drive
+  // root `C:\` trims to `C:`, which is not a path at all and would rewrite
+  // literals like "label C: value".
+  const usable = trimmed.length >= 2 && /[/\\]/.test(trimmed);
+  const pattern = usable
+    ? new RegExp(`(?<![^${PATH_BOUNDARY}])${escapeRegExp(trimmed)}(?![^${PATH_BOUNDARY}])`, "g")
+    : null;
   return { needle: trimmed, token, pattern };
 }
 
-/**
- * Ordered longest-match-first: an entry nested under an earlier one (the upload
- * dir under the snapshot tmp dir, `$TMPDIR` under both, `$HOME` under the repo
- * root) only ever sees what the earlier entries left behind.
- */
 const FIXED_PATH_RULES: PathRule[] = [
   pathRule(UPLOAD_DIR, "<uploads>"),
   pathRule(SNAPSHOT_TMP, "<tmp>"),
   pathRule(REPO_ROOT, "<repo>"),
   pathRule(tmpdir(), "<tmp>"),
 ];
-const DEFAULT_PATH_RULES: PathRule[] = [...FIXED_PATH_RULES, pathRule(homedir(), "<home>")];
+
+/**
+ * Longest needle first, so a prefix never steals a match from the longer path
+ * nested under it. Declaration order is not enough: with `$HOME=/tmp/alice` on
+ * a box whose `$TMPDIR` is `/tmp`, the shorter rule would win and leave the
+ * machine-specific "alice" behind as "<tmp>/alice".
+ */
+function orderRules(rules: PathRule[]): PathRule[] {
+  return [...rules].sort((left, right) => right.needle.length - left.needle.length);
+}
+
+const DEFAULT_PATH_RULES = orderRules([...FIXED_PATH_RULES, pathRule(homedir(), "<home>")]);
 
 function pathRules(identity: SnapshotMachineIdentity): PathRule[] {
   if (identity.homedir === undefined) return DEFAULT_PATH_RULES;
-  return [...FIXED_PATH_RULES, pathRule(identity.homedir, "<home>")];
+  return orderRules([...FIXED_PATH_RULES, pathRule(identity.homedir, "<home>")]);
 }
 
 function scrubPathIdentity(
