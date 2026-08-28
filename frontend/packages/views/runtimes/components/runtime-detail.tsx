@@ -42,7 +42,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { AppLink, useNavigation } from "../../navigation";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
-import { formatLastSeen, isSelfHealingRuntime } from "../utils";
+import { formatLastSeen } from "../utils";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
@@ -234,6 +234,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
               />
               <DiagnosticsCard
                 runtime={runtime}
+                health={health}
                 cliVersion={cliVersion}
                 agentVersion={agentVersion}
                 acpVersion={acpVersion}
@@ -528,6 +529,7 @@ function ServingAgentsCard({
 
 function DiagnosticsCard({
   runtime,
+  health,
   cliVersion,
   agentVersion,
   acpVersion,
@@ -535,6 +537,7 @@ function DiagnosticsCard({
   onDelete,
 }: {
   runtime: AgentRuntime;
+  health: ReturnType<typeof deriveRuntimeHealth>;
   cliVersion: string | null;
   agentVersion: string | null;
   acpVersion: string | null;
@@ -544,7 +547,7 @@ function DiagnosticsCard({
   const { t } = useT("runtimes");
   const paths = useWorkspacePaths();
   const isLocal = runtime.runtime_mode === "local";
-  const selfHealing = isSelfHealingRuntime(runtime);
+  const selfHealing = isLocal && health === "online";
   // canDelete here doubles as the "can edit runtime" predicate — it already
   // means "workspace owner/admin OR runtime owner", which is the same gate
   // the server enforces for the visibility PATCH.
@@ -588,7 +591,7 @@ function DiagnosticsCard({
               runtimeId={runtime.id}
               agentVersion={agentVersion}
               acpVersion={acpVersion}
-              isOnline={runtime.status === "online"}
+              isOnline={health === "online"}
             />
           </div>
         )}

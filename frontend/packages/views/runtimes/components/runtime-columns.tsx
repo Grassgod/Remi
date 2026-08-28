@@ -212,6 +212,7 @@ export function createRuntimeColumns({
             runtime={row.original.runtime}
             wsId={wsId}
             canDelete={row.original.canDelete}
+            now={now}
           />
         </div>
       ),
@@ -526,10 +527,12 @@ function RowMenu({
   runtime,
   wsId,
   canDelete,
+  now,
 }: {
   runtime: AgentRuntime;
   wsId: string;
   canDelete: boolean;
+  now: number;
 }) {
   const { t } = useT("runtimes");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -538,7 +541,7 @@ function RowMenu({
   // the kebab entirely so the column doesn't render an empty popover. The
   // self-healing case (local + online) is the runtime-detail parity fix —
   // see isSelfHealingRuntime for the rationale.
-  const selfHealing = isSelfHealingRuntime(runtime);
+  const selfHealing = isSelfHealingRuntime(runtime, now);
 
   if (!canDelete || selfHealing) {
     return <span aria-hidden />;

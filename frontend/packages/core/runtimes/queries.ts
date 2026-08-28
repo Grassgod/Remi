@@ -4,6 +4,16 @@ import type { SshMeshOverview } from "./types";
 
 export const SSH_MESH_ACTIVE_REFRESH_MS = 1_500;
 export const SSH_MESH_IDLE_REFRESH_MS = 60_000;
+export const RUNTIME_LIST_REFRESH_MS = 30_000;
+export const RUNTIME_HEARTBEAT_REFRESH_MIN_INTERVAL_MS = 15_000;
+
+export function shouldRefreshOnHeartbeat(
+  lastRefreshAt: number | null,
+  now: number,
+  minIntervalMs = RUNTIME_HEARTBEAT_REFRESH_MIN_INTERVAL_MS,
+): boolean {
+  return lastRefreshAt === null || now - lastRefreshAt >= minIntervalMs;
+}
 
 export function getSshMeshRefreshInterval(
   overview: SshMeshOverview | undefined,
@@ -106,6 +116,9 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
   return queryOptions({
     queryKey: owner === "me" ? runtimeKeys.listMine(wsId) : runtimeKeys.list(wsId),
     queryFn: () => api.listRuntimes({ workspace_id: wsId, owner }),
+    staleTime: 10_000,
+    refetchInterval: RUNTIME_LIST_REFRESH_MS,
+    refetchIntervalInBackground: false,
   });
 }
 

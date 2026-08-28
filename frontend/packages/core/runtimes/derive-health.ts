@@ -4,24 +4,39 @@
 // transient" from "long gone — needs attention" with no schema change.
 
 import type { AgentRuntime } from "../types";
+import {
+  isRuntimeHeartbeatFresh,
+  RUNTIME_HEARTBEAT_STALE_MS,
+} from "@multiremi/contracts/runtime-health";
 import type { RuntimeHealth } from "./types";
 
-const FIVE_MINUTES_MS = 5 * 60 * 1000;
 // The runtime sweeper GCs runtimes that have been offline for 7 days. We
 // flag the last 24 hours of that window so users can rescue a runtime
 // before it disappears silently.
 const ABOUT_TO_GC_THRESHOLD_MS = 6 * 24 * 3600 * 1000; // 6 days
 
 export function deriveRuntimeHealth(runtime: AgentRuntime, now: number): RuntimeHealth {
-  if (runtime.status === "online") return "online";
+  const parsedLastSeen = runtime.last_seen_at
+    ? Date.parse(runtime.last_seen_at)
+    : Number.NaN;
+  const lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
 
-  // No last_seen timestamp ever recorded — treat as long-offline. This is
-  // an unusual case (the back-end always sets last_seen_at on register),
-  // but defending against it keeps the UI from crashing on legacy rows.
-  const lastSeen = runtime.last_seen_at ? new Date(runtime.last_seen_at).getTime() : 0;
+  if (
+    runtime.status === "online" &&
+    isRuntimeHeartbeatFresh(runtime.last_seen_at, now)
+  ) {
+    return "online";
+  }
+
+  // A missing or malformed heartbeat cannot establish how long the runtime
+  // has been gone, so report the neutral offline state.
+  if (lastSeen === null) return "offline";
+
   const offlineFor = now - lastSeen;
 
-  if (offlineFor < FIVE_MINUTES_MS) return "recently_lost";
+  // This state normally represents an explicit shutdown: the server already
+  // marked the runtime offline even though its last heartbeat is still fresh.
+  if (offlineFor < RUNTIME_HEARTBEAT_STALE_MS) return "recently_lost";
   if (offlineFor > ABOUT_TO_GC_THRESHOLD_MS) return "about_to_gc";
   return "offline";
 }

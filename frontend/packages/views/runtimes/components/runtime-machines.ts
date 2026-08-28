@@ -445,11 +445,11 @@ export function selectMachineUpdateRuntime(
   );
 }
 
-function shortDaemonId(daemonId: string): string {
+export function shortDaemonId(daemonId: string): string {
   return daemonId.length > 12 ? `${daemonId.slice(0, 8)}...` : daemonId;
 }
 
-function capitalize(value: string): string {
+export function capitalize(value: string): string {
   if (!value) return "Runtime";
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }

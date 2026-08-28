@@ -84,6 +84,11 @@ export interface IssueWorkspace {
   runtime_id: string | null;
   runtime_name: string | null;
   runtime_status: "online" | "offline" | null;
+  runtime_provider?: string | null;
+  runtime_mode?: "local" | "cloud" | null;
+  runtime_device_info?: string | null;
+  runtime_daemon_id?: string | null;
+  runtime_machine_name?: string | null;
   root_path: string;
   branch_name: string;
   status: IssueWorkspaceStatus;
