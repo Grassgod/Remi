@@ -8,7 +8,7 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useScmSettings } from "@multiremi/core/scm";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspacePaths } from "@multiremi/core/paths";
@@ -16,7 +16,7 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useRecentContextStore } from "@multiremi/core/chat";
 import {
-  issueListOptions,
+  findCachedIssue,
   issueDetailOptions,
   issueUsageOptions,
 } from "@multiremi/core/issues/queries";
@@ -95,7 +95,7 @@ export function IssueDetail({
     members.find((m) => m.user_id === user?.id)?.role ?? null;
   const canModerateComments =
     currentUserRole === "owner" || currentUserRole === "admin";
-  const { data: allIssues = [] } = useQuery(issueListOptions(wsId));
+  const queryClient = useQueryClient();
   const { getActorName } = useActorName();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: layoutId,
@@ -137,7 +137,7 @@ export function IssueDetail({
   const { data: issue = null, isLoading: issueLoading } = useQuery({
     ...issueDetailOptions(wsId, id),
     initialData: () => {
-      const cached = allIssues.find((i) => i.id === id);
+      const cached = findCachedIssue(queryClient, wsId, id);
       return cached?.description != null ? cached : undefined;
     },
   });
@@ -191,7 +191,8 @@ export function IssueDetail({
   const { data: parentIssue = null } = useQuery({
     ...issueDetailOptions(wsId, parentIssueId ?? ""),
     enabled: !!parentIssueId,
-    initialData: () => allIssues.find((i) => i.id === parentIssueId),
+    initialData: () =>
+      parentIssueId ? findCachedIssue(queryClient, wsId, parentIssueId) : undefined,
   });
 
   // Project segment in the breadcrumb. The issue's project_id is the source of

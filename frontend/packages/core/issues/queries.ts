@@ -261,6 +261,45 @@ export function issueListOptions(wsId: string, sort?: IssueSortParam) {
   });
 }
 
+/**
+ * Look up one issue in whatever list pages are ALREADY cached, without
+ * subscribing to a query or triggering a fetch.
+ *
+ * Use this — never `useQuery(issueListOptions(wsId))` — when all you need is a
+ * lookup (seeding `initialData`, resolving a title). `issueListOptions` fans
+ * out to one request per board status, and because callers that only want a
+ * lookup have no reason to pass a sort, their `listSorted(wsId, {})` key can
+ * never hit the entry the list page wrote under `listSorted(wsId, sort)`. That
+ * guaranteed miss cost ~2s per issue open on the detail page (MUL-172): six
+ * status requests saturated the server before the timeline request was even
+ * sent, in exchange for a seed that mostly could not fire anyway.
+ *
+ * Scans every sort variant of both the workspace list and "my issues", so the
+ * seed hits regardless of which page the user arrived from.
+ */
+export function findCachedIssue(
+  queryClient: QueryClient,
+  wsId: string,
+  id: string,
+): Issue | undefined {
+  const prefixes = [issueKeys.list(wsId), issueKeys.myAll(wsId)];
+  for (const queryKey of prefixes) {
+    for (const [, data] of queryClient.getQueriesData<ListIssuesCache>({ queryKey })) {
+      // `myAll` also covers the assignee-group queries, which cache a
+      // GroupedIssuesResponse rather than a bucketed list — skip those.
+      if (!data?.byStatus) continue;
+      // Walk the buckets directly rather than via `flattenIssueBuckets`:
+      // IssueChip calls this once per render per mention, so avoid building a
+      // throwaway array of every cached issue on each of them.
+      for (const status of PAGINATED_STATUSES) {
+        const hit = data.byStatus[status]?.issues.find((issue) => issue.id === id);
+        if (hit) return hit;
+      }
+    }
+  }
+  return undefined;
+}
+
 export function archivedIssueCountOptions(wsId: string) {
   return queryOptions({
     queryKey: issueKeys.archivedCount(wsId),

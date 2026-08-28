@@ -2220,4 +2220,44 @@ describe("IssueDetail (shared)", () => {
       );
     });
   });
+
+  // MUL-172. Opening one issue used to subscribe to the workspace issue list,
+  // which fans out to one request per board status. The seed it bought was a
+  // `.find()` over that list, and a lookup-only caller has no sort to pass, so
+  // its cache key could never match the entry the list page wrote under
+  // `listSorted(wsId, sort)` — the fan-out was guaranteed to miss and re-fetch.
+  // On production those six requests saturated the single-threaded DB bridge
+  // before the timeline request was even sent.
+  //
+  // This asserts the request count directly, which is the metric the browser
+  // A/B round is trying to measure. It does not depend on a proxy, a token, or
+  // production being reachable.
+  describe("issue list fan-out (MUL-172 regression)", () => {
+    it("opens an issue without issuing a single list request", async () => {
+      renderIssueDetail();
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+      });
+
+      expect(mockApiObj.listIssues).not.toHaveBeenCalled();
+    });
+
+    it("still issues no list request when the issue has a parent to resolve", async () => {
+      // The parent card seeds itself from cache. A miss must fall through to
+      // the single-issue endpoint, never to the whole list.
+      mockApiObj.getIssue.mockResolvedValue({
+        ...mockIssue,
+        parent_issue_id: "issue-parent",
+      });
+
+      renderIssueDetail();
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+      });
+
+      expect(mockApiObj.listIssues).not.toHaveBeenCalled();
+    });
+  });
 });
