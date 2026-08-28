@@ -79,10 +79,11 @@ daemon runtime's workspace. Set `MULTIREMI_BOT_AGENT_ID` to select it. Startup f
 missing, cross-workspace, archived, unknown, or has no cwd; Remi does not fall back to local
 provider settings or the home directory.
 
-Local `remi_config` currently retains connector, authentication, plugin, menu, proxy, tracing, and
-log settings. `remi login` manages connector/auth setup. The provider/model/executable, agent
-instructions, cwd, tools, custom env/args, MCP configuration, thinking level, and concurrency all
-come from the agent row.
+Connector, plugin, token-sync, and log settings are assembled from defaults plus environment
+variables; see [`docs/deploy/66-8-remi-environment.md`](docs/deploy/66-8-remi-environment.md) for
+the complete contract. `remi login` performs user authentication only and stores OAuth tokens in
+`~/.remi/auth/tokens.json`. The provider/model/executable, agent instructions, cwd, tools, custom
+env/args, MCP configuration, thinking level, and concurrency all come from the agent row.
 
 ## Development
 

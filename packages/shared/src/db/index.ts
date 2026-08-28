@@ -13,6 +13,7 @@ import { join, dirname } from "node:path";
 
 const DB_PATH = join(homedir(), ".remi", "remi.db");
 const LEGACY_AGENT_CONFIG_MIGRATION_ID = "legacy-agent-config-purge-v1";
+const REMI_CONFIG_MIGRATION_ID = "remi-config-purge-v2";
 const LEGACY_AGENT_CONFIG_MIGRATION_DOC = "docs/migrations/remi-memory-to-multiremi.md";
 
 let _db: Database | null = null;
@@ -31,8 +32,8 @@ function isInMemoryDb(path: string): boolean {
     || path.includes("mode=memory");
 }
 
-function backupPathForMigration(path: string): string | null {
-  return isInMemoryDb(path) ? null : `${path}.pre-${LEGACY_AGENT_CONFIG_MIGRATION_ID}.bak`;
+function backupPathForMigration(path: string, migrationId: string): string | null {
+  return isInMemoryDb(path) ? null : `${path}.pre-${migrationId}.bak`;
 }
 
 function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
@@ -40,7 +41,8 @@ function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
   const hasEmbeddings = tableExists(db, "embeddings");
   const hasProjects = tableExists(db, "projects");
   const hasVecItems = tableExists(db, "vec_items");
-  const hasLegacyConfig = Boolean(db.query(
+  const hasRemiConfig = tableExists(db, "remi_config");
+  const hasLegacyConfig = hasRemiConfig && Boolean(db.query(
     "SELECT 1 FROM remi_config WHERE section IN ('provider', 'mcp') LIMIT 1",
   ).get());
   const vecCleanupRecorded = tableExists(db, "remi_migrations")
@@ -58,7 +60,7 @@ function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
     return;
   }
 
-  const backupPath = backupPathForMigration(dbPath);
+  const backupPath = backupPathForMigration(dbPath, LEGACY_AGENT_CONFIG_MIGRATION_ID);
   if (backupPath) {
     try {
       db.run("VACUUM INTO ?", [backupPath]);
@@ -119,6 +121,53 @@ function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
       : "The in-memory database was rolled back; no backup file applies.";
     const rollbackDetail = rollbackError ? ` Rollback also failed: ${String(rollbackError)}.` : "";
     throw new Error(`Legacy Remi migration failed. ${recovery}${rollbackDetail}`, { cause: error });
+  }
+}
+
+function purgeRemiConfig(db: Database, dbPath: string): void {
+  if (!tableExists(db, "remi_config")) return;
+
+  const backupPath = backupPathForMigration(dbPath, REMI_CONFIG_MIGRATION_ID);
+  if (backupPath) {
+    try {
+      db.run("VACUUM INTO ?", [backupPath]);
+    } catch (error) {
+      throw new Error(
+        `Remi config migration aborted because backup could not be created at ${backupPath}`,
+        { cause: error },
+      );
+    }
+  }
+
+  let transactionStarted = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    transactionStarted = true;
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS remi_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    db.exec("DELETE FROM remi_config");
+    db.exec("DROP TABLE remi_config");
+    db.run("INSERT OR IGNORE INTO remi_migrations (id) VALUES (?)", [REMI_CONFIG_MIGRATION_ID]);
+    db.exec("COMMIT");
+    transactionStarted = false;
+  } catch (error) {
+    let rollbackError: unknown;
+    if (transactionStarted) {
+      try {
+        db.exec("ROLLBACK");
+      } catch (rollbackFailure) {
+        rollbackError = rollbackFailure;
+      }
+    }
+    const recovery = backupPath
+      ? `The database was rolled back; its pre-migration backup is at ${backupPath}.`
+      : "The in-memory database was rolled back; no backup file applies.";
+    const rollbackDetail = rollbackError ? ` Rollback also failed: ${String(rollbackError)}.` : "";
+    throw new Error(`Remi config migration failed. ${recovery}${rollbackDetail}`, { cause: error });
   }
 }
 
@@ -199,19 +248,11 @@ export function getDb(): Database {
       last_active   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       status        TEXT NOT NULL DEFAULT 'active'
     );
-
-    -- Config store
-    CREATE TABLE IF NOT EXISTS remi_config (
-      section    TEXT NOT NULL,
-      key        TEXT NOT NULL DEFAULT '',
-      value      TEXT NOT NULL,
-      updated_at TEXT DEFAULT (datetime('now')),
-      PRIMARY KEY (section, key)
-    );
   `);
 
   try {
     purgeLegacyAgentConfig(db, _dbPath);
+    purgeRemiConfig(db, _dbPath);
   } catch (error) {
     db.close();
     throw error;

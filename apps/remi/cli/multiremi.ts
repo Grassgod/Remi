@@ -409,21 +409,25 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     { basePort: daemonPortFromOptions(options) },
   );
   let daemons: MultiremiDaemon[] = [];
-  let feishu: Awaited<ReturnType<typeof bootFeishuChannel>> = null;
+  let feishu: Awaited<ReturnType<typeof bootFeishuChannel>> | null = null;
   let stopAll = (): void => {};
   let signalsRegistered = false;
   let ownerWatch: ReturnType<typeof setInterval> | null = null;
   let ownershipFailure: unknown = null;
   let restartRequested = false;
   try {
-    const shouldStartFeishu = !Boolean(options.once) && feishuConfigured();
+    const botAgentId = String(process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim();
+    const hasFeishuEnvironment = !Boolean(options.once) && feishuConfigured();
+    const shouldStartFeishu = !Boolean(options.once) && (hasFeishuEnvironment || Boolean(botAgentId));
+    if (shouldStartFeishu && !hasFeishuEnvironment) {
+      throw new Error("Feishu channel cannot start; missing env: FEISHU_APP_ID, FEISHU_APP_SECRET");
+    }
     const feishuWorkspaceId = shouldStartFeishu
       ? configuredWorkerWorkspaceId(options, loadMultiremiConfig())
       : undefined;
     if (shouldStartFeishu && !feishuWorkspaceId) {
       throw new Error("Feishu requires an explicitly configured Multiremi workspace");
     }
-    const botAgentId = String(process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim();
     if (shouldStartFeishu && !botAgentId) {
       throw new Error("MULTIREMI_BOT_AGENT_ID is required when the Feishu channel is configured");
     }
@@ -514,7 +518,6 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
             senderOpenId,
           ),
         );
-        if (!feishu) throw new Error("Feishu configuration disappeared during daemon startup");
         daemons[0]!.setBotMenuPublisher(feishu.publishBotMenu);
         running.push(feishu.start);
       }

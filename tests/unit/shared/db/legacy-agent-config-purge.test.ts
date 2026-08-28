@@ -7,6 +7,7 @@ import { closeDb, getDb, setDbPath } from "@shared/db/index.js";
 
 const roots: string[] = [];
 const backupSuffix = ".pre-legacy-agent-config-purge-v1.bak";
+const configBackupSuffix = ".pre-remi-config-purge-v2.bak";
 
 function createLegacyDb(path: string): void {
   const legacy = new Database(path);
@@ -59,14 +60,10 @@ test("opening an existing Remi DB backs it up and removes all legacy state", () 
 
   setDbPath(path);
   const tables = getDb().query(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_configs', 'embeddings', 'projects', 'vec_items')",
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('group_configs', 'embeddings', 'projects', 'vec_items', 'remi_config')",
   ).all();
 
   expect(tables).toEqual([]);
-  const sections = getDb()
-    .query("SELECT section FROM remi_config ORDER BY section")
-    .all() as Array<{ section: string }>;
-  expect(sections).toEqual([{ section: "feishu" }]);
 
   const backupPath = `${path}${backupSuffix}`;
   expect(existsSync(backupPath)).toBe(true);
@@ -83,6 +80,12 @@ test("opening an existing Remi DB backs it up and removes all legacy state", () 
     { section: "provider" },
   ]);
   backup.close();
+
+  const configBackup = new Database(`${path}${configBackupSuffix}`, { readonly: true });
+  expect(configBackup.query("SELECT section FROM remi_config ORDER BY section").all()).toEqual([
+    { section: "feishu" },
+  ]);
+  configBackup.close();
 });
 
 test("a real mid-migration SQL failure rolls back every destructive change", () => {
@@ -136,7 +139,8 @@ test("reopening a migrated DB does not create or attempt a second backup", () =>
   setDbPath(path);
   getDb();
 
-  expect(readdirSync(root).filter((name) => name.includes(".pre-"))).toEqual([
+  expect(readdirSync(root).filter((name) => name.includes(".pre-")).sort()).toEqual([
     `remi.db${backupSuffix}`,
-  ]);
+    `remi.db${configBackupSuffix}`,
+  ].sort());
 });

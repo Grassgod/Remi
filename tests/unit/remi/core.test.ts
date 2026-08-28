@@ -137,16 +137,8 @@ function makeConfig(tmpDir: string): RemiConfig {
       userAccessToken: "",
     },
     tokenSync: [],
-    proxy: { http: "", noProxy: "" },
     plugins: { dir: join(tmpDir, "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
-    auth: { adminEmails: [] },
-    tracing: {
-      enabled: false,
-      logsDir: join(tmpDir, "logs"),
-      tracesDir: join(tmpDir, "traces"),
-      retentionDays: 7,
-    },
     logLevel: "INFO",
   };
 }

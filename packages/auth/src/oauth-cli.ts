@@ -85,7 +85,7 @@ export async function runAuth(): Promise<void> {
   const { appId, appSecret, domain } = config.feishu;
 
   if (!appId || !appSecret) {
-    console.error("❌ 缺少 FEISHU_APP_ID 或 FEISHU_APP_SECRET，请运行 remi login 或设置环境变量。");
+    console.error("❌ 缺少 FEISHU_APP_ID 或 FEISHU_APP_SECRET，请先设置环境变量。");
     process.exit(1);
   }
 
@@ -150,4 +150,3 @@ export async function runAuth(): Promise<void> {
     console.log("\n   Token 过期后需重新运行: bun run src/main.ts auth\n");
   }
 }
-

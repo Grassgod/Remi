@@ -172,8 +172,8 @@ export interface Connector {
    `StreamMeta`, so you can render tool calls and thinking live instead of waiting for the final
    text. `start()` receives both handlers.
 4. Register it in `Remi.boot()` (`packages/remi/src/core.ts`) alongside the Feishu wiring, and add
-   its config section to `RemiConfig` in `packages/shared/src/config.ts` (plus the `SECTIONS` list
-   in `packages/shared/src/db/config-store.ts`, since config is stored in SQLite).
+   its config section and environment parser to `packages/shared/src/config.ts`. Document every
+   new variable and its missing/invalid behavior under `docs/deploy/`.
 5. Add a test under `tests/unit/connectors/` that drives the connector with a fake transport.
 
 `packages/connectors/src/feishu/` is the reference implementation — cards, streaming, mentions,

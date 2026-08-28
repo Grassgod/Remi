@@ -1,11 +1,8 @@
 /**
- * `remi login` — Interactive 5-step setup wizard.
+ * `remi login` — Interactive authentication setup wizard.
  *
  * 1. Claude Code login
- * 2. Feishu Bot auto-creation (Device Flow)
- * 3. Feishu permission check
- * 4. Feishu User OAuth (Device Authorization Flow)
- * 5. Gemini API Key (optional)
+ * 2. Feishu User OAuth (Device Authorization Flow)
  */
 
 import { execSync } from "node:child_process";
@@ -14,11 +11,11 @@ import { homedir } from "node:os";
 import { VERSION } from "@shared/version.js";
 import { TokenPersistence, type PersistedTokens } from "@auth/persistence.js";
 import type { TokenEntry } from "@auth/types.js";
-import { createBot, authorizeUser, DEFAULT_SCOPES } from "./feishu-bot-creator.js";
-import { ensureConfigFile, setConfigValue, getConfigValue, getConfigPath } from "./config-writer.js";
+import { loadConfig } from "@shared/config.js";
+import { authorizeUser, DEFAULT_SCOPES } from "./feishu-bot-creator.js";
 import * as ui from "./ui.js";
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 2;
 const AUTH_DIR = join(homedir(), ".remi", "auth");
 
 // ── Step 1: Claude Code Login ────────────────────────────────
@@ -57,97 +54,15 @@ async function stepClaudeLogin(): Promise<boolean> {
   return true;
 }
 
-// ── Step 2: Feishu Bot Auto-Creation ─────────────────────────
-
-async function stepFeishuBotCreation(): Promise<boolean> {
-  ui.step(2, TOTAL_STEPS, "Feishu Bot Creation");
-
-  ensureConfigFile();
-
-  // Check if already configured
-  const existingAppId = getConfigValue("feishu", "appId");
-  if (existingAppId && existingAppId.length > 0) {
-    ui.pass(`Feishu Bot already configured (app_id: ${existingAppId.slice(0, 10)}...)`);
-    const answer = await ui.prompt("  Reconfigure? (y/N):");
-    if (answer.toLowerCase() !== "y") return true;
-  }
-
-  // Detect brand from config
-  const domain = getConfigValue("feishu", "domain") ?? "feishu";
-  const brand = domain === "lark" ? "lark" as const : "feishu" as const;
-
-  console.log("\n  Creating a new Feishu Bot via Device Flow...");
-  console.log("  A QR code will appear. Scan it with Feishu to approve.\n");
-
-  try {
-    const creds = await createBot(brand, {
-      onQrUrl: (url, userCode) => {
-        console.log(`\n  📱 Scan QR or open this URL in Feishu:`);
-        console.log(`     ${url}\n`);
-        console.log(`  User code: ${userCode}\n`);
-        console.log("  Waiting for approval...");
-      },
-      onPolling: (attempt) => {
-        if (attempt % 10 === 0) {
-          process.stdout.write(".");
-        }
-      },
-    });
-
-    setConfigValue("feishu", "appId", creds.appId);
-    setConfigValue("feishu", "appSecret", creds.appSecret);
-
-    console.log("");
-    ui.pass(`Bot created! app_id: ${creds.appId}`);
-    return true;
-  } catch (e) {
-    ui.fail(`Bot creation failed: ${(e as Error).message}`);
-    console.log("\n  You can manually create a bot at: https://open.feishu.cn/app");
-    console.log("  Then run: remi login\n");
-
-    const answer = await ui.prompt("  Enter app_id manually (or press Enter to skip):");
-    if (answer) {
-      setConfigValue("feishu", "appId", answer);
-      const secret = await ui.prompt("  Enter app_secret:");
-      if (secret) {
-        setConfigValue("feishu", "appSecret", secret);
-        ui.pass("Feishu credentials saved.");
-        return true;
-      }
-    }
-    ui.warn("Feishu Bot setup skipped.");
-    return true;
-  }
-}
-
-// ── Step 3: Feishu Permission Check ──────────────────────────
-
-async function stepFeishuPermissionCheck(): Promise<boolean> {
-  ui.step(3, TOTAL_STEPS, "Feishu Permission Check");
-
-  const appId = getConfigValue("feishu", "appId");
-  if (!appId) {
-    ui.warn("No app_id configured — skipping permission check.");
-    return true;
-  }
-
-  // Feishu bots created via Device Flow get scopes automatically.
-  // For manually created bots, permissions need to be set in the dev console.
-  ui.info("Bot created via Device Flow has default scopes auto-applied.");
-  ui.info(`Scopes include: docs, sheets, calendar, tasks, chat, wiki, etc. (~${DEFAULT_SCOPES.length} scopes)`);
-  ui.pass("Permission check passed (Device Flow auto-scoped).");
-  return true;
-}
-
-// ── Step 4: Feishu User OAuth ────────────────────────────────
+// ── Step 2: Feishu User OAuth ────────────────────────────────
 
 async function stepFeishuUserOAuth(): Promise<boolean> {
-  ui.step(4, TOTAL_STEPS, "Feishu User OAuth");
+  ui.step(2, TOTAL_STEPS, "Feishu User OAuth");
 
-  const appId = getConfigValue("feishu", "appId");
-  const appSecret = getConfigValue("feishu", "appSecret");
+  const { feishu } = loadConfig();
+  const { appId, appSecret } = feishu;
   if (!appId || !appSecret) {
-    ui.warn("No Feishu credentials — skipping User OAuth.");
+    ui.warn("FEISHU_APP_ID and FEISHU_APP_SECRET are required for User OAuth — skipping.");
     return true;
   }
 
@@ -162,7 +77,7 @@ async function stepFeishuUserOAuth(): Promise<boolean> {
     if (answer.toLowerCase() !== "y") return true;
   }
 
-  const domain = getConfigValue("feishu", "domain") ?? "feishu";
+  const domain = feishu.domain;
   const brand = domain === "lark" ? "lark" as const : "feishu" as const;
 
   console.log("\n  Starting Feishu User OAuth (Device Flow)...");
@@ -209,28 +124,6 @@ async function stepFeishuUserOAuth(): Promise<boolean> {
   }
 }
 
-// ── Step 5: Gemini API Key (optional) ────────────────────────
-
-async function stepGeminiApiKey(): Promise<boolean> {
-  ui.step(5, TOTAL_STEPS, "Gemini API Key (optional — image generation)");
-
-  const existing = getConfigValue("google", "apiKey");
-  if (existing && existing.length > 0) {
-    ui.pass("Gemini API key already configured.");
-    return true;
-  }
-
-  const key = await ui.prompt("  Enter Gemini API key (press Enter to skip):");
-  if (key) {
-    setConfigValue("google", "apiKey", key);
-    ui.pass("Gemini API key saved.");
-  } else {
-    ui.warn("Skipped. Image generation will be disabled.");
-    ui.info("You can add it later via: remi login");
-  }
-  return true;
-}
-
 // ── Main ─────────────────────────────────────────────────────
 
 export async function runLogin(_args: string[]): Promise<void> {
@@ -239,10 +132,7 @@ export async function runLogin(_args: string[]): Promise<void> {
 
   const steps = [
     stepClaudeLogin,
-    stepFeishuBotCreation,
-    stepFeishuPermissionCheck,
     stepFeishuUserOAuth,
-    stepGeminiApiKey,
   ];
 
   for (const step of steps) {
@@ -256,8 +146,8 @@ export async function runLogin(_args: string[]): Promise<void> {
   console.log("");
   ui.line();
   console.log("🎉 Setup complete!\n");
-  console.log("  Config saved to: " + getConfigPath());
   console.log("  Next steps:");
+  console.log("    Configure connector settings through the service EnvironmentFile");
   console.log("    remi doctor          — Verify everything is configured");
   console.log("    remi daemon start    — Start Remi services");
   console.log("");

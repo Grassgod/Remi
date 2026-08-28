@@ -3,7 +3,7 @@
  *
  * Checks three dimensions:
  * 1. Runtime: Bun and Claude CLI installed and version OK
- * 2. Config: DB has required fields
+ * 2. Config: environment has required fields
  * 3. Auth: Claude logged in, Feishu tokens valid, optional API keys
  */
 
@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "@shared/version.js";
+import { loadConfig } from "@shared/config.js";
 import * as ui from "./ui.js";
 
 interface CheckResult {
@@ -53,39 +54,31 @@ function checkClaudeCLI(): CheckResult {
 
 // ── Config Checks ────────────────────────────────────────────
 
-function checkConfigStore(): CheckResult {
+function checkEnvironmentConfig(): CheckResult {
   try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    if (store.isEmpty()) {
-      return { status: "fail", message: "Config DB is empty — run: remi login" };
-    }
-    return { status: "pass", message: "Config DB has data" };
+    loadConfig();
+    return { status: "pass", message: "Environment configuration parsed" };
   } catch (e) {
-    return { status: "fail", message: `Config DB error: ${(e as Error).message}` };
+    return { status: "fail", message: `Environment configuration error: ${(e as Error).message}` };
   }
 }
 
 function checkFeishuConfig(): CheckResult {
   try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const feishu = store.getSection("feishu") as Record<string, unknown> | undefined;
+    const { feishu } = loadConfig();
 
-    const hasAppId = feishu?.appId && String(feishu.appId).length > 0;
-    const hasAppSecret = feishu?.appSecret && String(feishu.appSecret).length > 0;
+    const hasAppId = feishu.appId.length > 0;
+    const hasAppSecret = feishu.appSecret.length > 0;
 
     if (!hasAppId || !hasAppSecret) {
       const missing = [];
-      if (!hasAppId) missing.push("appId");
-      if (!hasAppSecret) missing.push("appSecret");
-      return { status: "fail", message: `Feishu config incomplete — missing: ${missing.join(", ")}` };
+      if (!hasAppId) missing.push("FEISHU_APP_ID");
+      if (!hasAppSecret) missing.push("FEISHU_APP_SECRET");
+      return { status: "fail", message: `Feishu env incomplete — missing: ${missing.join(", ")}` };
     }
-    return { status: "pass", message: "Feishu appId + appSecret configured" };
-  } catch {
-    return { status: "fail", message: "Cannot check Feishu config — DB not available" };
+    return { status: "pass", message: "FEISHU_APP_ID + FEISHU_APP_SECRET configured" };
+  } catch (e) {
+    return { status: "fail", message: `Cannot parse Feishu env: ${(e as Error).message}` };
   }
 }
 
@@ -144,10 +137,7 @@ function checkFeishuTokens(): CheckResult {
 
 function checkGeminiKey(): CheckResult {
   try {
-    const { ConfigStore } = require("@shared/db/config-store.js");
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const google = store.getSection("google") as Record<string, unknown> | undefined;
+    const { google } = loadConfig();
     if (google?.apiKey) {
       return { status: "pass", message: "Gemini API key configured" };
     }
@@ -194,7 +184,7 @@ export async function runDoctor(_args: string[]): Promise<void> {
 
   // Config
   ui.header("Config");
-  render(check(checkConfigStore));
+  render(check(checkEnvironmentConfig));
   render(check(checkFeishuConfig));
 
   // Auth

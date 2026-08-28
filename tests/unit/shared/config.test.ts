@@ -1,86 +1,67 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { defaultRemiConfig } from "@shared/config.js";
-import { ConfigStore } from "@shared/db/config-store.js";
+import { describe, expect, it } from "bun:test";
+import { defaultRemiConfig, loadConfig } from "@shared/config.js";
 
-function makeTmpDir(): string {
-  const dir = join(tmpdir(), `remi-test-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-describe("Config", () => {
-  let tmpDir: string;
-  const savedEnv: Record<string, string | undefined> = {};
-  const envKeys = ["FEISHU_PORT", "REMI_LOG_LEVEL"];
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir();
-    for (const key of envKeys) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
-    }
-    const { setDbPath } = require("@shared/db/index.js");
-    setDbPath(join(tmpDir, "test.db"));
+describe("loadConfig", () => {
+  it("returns defaults in a clean environment without touching local state", () => {
+    expect(loadConfig({})).toEqual(defaultRemiConfig());
   });
 
-  afterEach(() => {
-    const { closeDb } = require("@shared/db/index.js");
-    closeDb();
-    rmSync(tmpDir, { recursive: true, force: true });
-    for (const key of envKeys) {
-      if (savedEnv[key] !== undefined) {
-        process.env[key] = savedEnv[key];
-      } else {
-        delete process.env[key];
-      }
-    }
-  });
+  it("preserves every legacy environment override", () => {
+    const config = loadConfig({
+      FEISHU_APP_ID: "app-id",
+      FEISHU_APP_SECRET: "app-secret",
+      FEISHU_VERIFICATION_TOKEN: "verification-token",
+      FEISHU_ENCRYPT_KEY: "encrypt-key",
+      FEISHU_PORT: "9010",
+      FEISHU_DOMAIN: "lark",
+      FEISHU_USER_ACCESS_TOKEN: "user-token",
+      GOOGLE_API_KEY: "google-key",
+      REMI_LOG_LEVEL: "DEBUG",
+    });
 
-  it("loads defaults from empty DB", () => {
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const config = store.load();
-    expect(config.feishu.port).toBe(9000);
-    expect(config.logLevel).toBe("INFO");
-  });
-
-  it("respects env overrides", () => {
-    process.env.FEISHU_PORT = "9010";
-    process.env.REMI_LOG_LEVEL = "DEBUG";
-
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const config = store.load();
-    expect(config.feishu.port).toBe(9010);
+    expect(config.feishu).toEqual({
+      appId: "app-id",
+      appSecret: "app-secret",
+      verificationToken: "verification-token",
+      encryptKey: "encrypt-key",
+      port: 9010,
+      domain: "lark",
+      connectionMode: "websocket",
+      userAccessToken: "user-token",
+    });
+    expect(config.google).toEqual({ apiKey: "google-key" });
     expect(config.logLevel).toBe("DEBUG");
   });
 
-  it("round-trips through save/load", () => {
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const original = defaultRemiConfig();
-    original.feishu.appId = "test-app";
-    original.feishu.port = 8080;
+  it("loads active token sync and plugin settings from structured env", () => {
+    const config = loadConfig({
+      REMI_TOKEN_SYNC_RULES_JSON: JSON.stringify([
+        { name: "claude", source: "feishu/user", target: "/tmp/claude-token", format: "raw" },
+      ]),
+      REMI_PLUGINS_DIR: "/opt/remi/plugins",
+      REMI_PLUGINS_ENABLED_JSON: JSON.stringify(["sso"]),
+      REMI_PLUGINS_ALLOW_EXTERNAL: "false",
+      REMI_PLUGIN_CONFIGS_JSON: JSON.stringify({ sso: { enabled: true } }),
+    });
 
-    store.save(original);
-    const loaded = store.load();
-    expect(loaded.feishu.appId).toBe("test-app");
-    expect(loaded.feishu.port).toBe(8080);
+    expect(config.tokenSync).toHaveLength(1);
+    expect(config.plugins).toEqual({
+      dir: "/opt/remi/plugins",
+      enabled: ["sso"],
+      allowExternal: false,
+    });
+    expect(config.pluginConfigs).toEqual({ sso: { enabled: true } });
   });
 
-  it("env overrides DB values", () => {
-    process.env.REMI_LOG_LEVEL = "DEBUG";
-
-    const { getDb } = require("@shared/db/index.js");
-    const store = new ConfigStore(getDb());
-    const original = defaultRemiConfig();
-    original.logLevel = "WARN";
-    store.save(original);
-
-    const config = store.load();
-    expect(config.logLevel).toBe("DEBUG");
+  it("reports malformed structured env explicitly", () => {
+    expect(() => loadConfig({ REMI_PLUGIN_CONFIGS_JSON: "not-json" })).toThrow(
+      "REMI_PLUGIN_CONFIGS_JSON must contain valid JSON",
+    );
+    expect(() => loadConfig({ REMI_PLUGINS_ALLOW_EXTERNAL: "maybe" })).toThrow(
+      "REMI_PLUGINS_ALLOW_EXTERNAL must be true or false",
+    );
+    expect(() => loadConfig({ REMI_TOKEN_SYNC_RULES_JSON: '[{"format":"unknown"}]' })).toThrow(
+      "REMI_TOKEN_SYNC_RULES_JSON has an invalid JSON shape",
+    );
   });
 });
