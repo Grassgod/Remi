@@ -14,7 +14,11 @@ describe("Bun Multiremi project docs API", () => {
     const app = createMultiremiApp({ store });
     const project = store.createProject({ title: "Docs API" });
     const wiki = store.createProjectDoc(project.id, { kind: "wiki", title: "Build guide", body: "run bun test" });
-    store.createProjectDoc(project.id, { kind: "memory", title: "The CI box is arm64" });
+    store.createProjectDoc(project.id, {
+      kind: "memory",
+      title: "The CI box is arm64",
+      body: "Use the arm64 build runner.",
+    });
 
     const listed = await app.request(`/api/projects/${project.id}/docs`);
     expect(listed.status).toBe(200);
@@ -26,7 +30,9 @@ describe("Bun Multiremi project docs API", () => {
     expect((await wikiOnly.json()).docs.map((doc: any) => doc.slug).sort()).toEqual(["_schema", "build-guide"]);
 
     const searched = await app.request(`/api/projects/${project.id}/docs?q=arm64`);
-    expect((await searched.json()).docs.map((doc: any) => doc.title)).toEqual(["The CI box is arm64"]);
+    expect((await searched.json()).docs).toEqual([
+      expect.objectContaining({ title: "The CI box is arm64", body: "Use the arm64 build runner." }),
+    ]);
 
     const recalled = await app.request(`/api/projects/${project.id}/knowledge/recall?q=arm64&kind=memory`);
     const recallHit = (await recalled.json()).hits[0];

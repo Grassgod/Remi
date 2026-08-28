@@ -29,14 +29,26 @@ class FakeOpenViking implements OpenVikingClientContract {
   failHealth = false;
   findTargets: Array<string | string[]> = [];
   readCalls: string[] = [];
+  failReadUris = new Set<string>();
+  readDelayMs = 0;
+  activeReads = 0;
+  maxActiveReads = 0;
 
   async health(): Promise<void> { if (this.failHealth) throw new Error("unavailable"); }
   async ensureDirectory(uri: string): Promise<void> { this.directories.add(uri); }
   async read(uri: string): Promise<string> {
     this.readCalls.push(uri);
-    const value = this.files.get(uri);
-    if (value === undefined) throw new Error(`not found: ${uri}`);
-    return value;
+    this.activeReads++;
+    this.maxActiveReads = Math.max(this.maxActiveReads, this.activeReads);
+    try {
+      if (this.readDelayMs > 0) await Bun.sleep(this.readDelayMs);
+      if (this.failReadUris.has(uri)) throw new Error(`planned unreadable content: ${uri}`);
+      const value = this.files.get(uri);
+      if (value === undefined) throw new Error(`not found: ${uri}`);
+      return value;
+    } finally {
+      this.activeReads--;
+    }
   }
   async exists(uri: string): Promise<boolean> { return this.files.has(uri); }
   async create(uri: string, _rootUri: string, content: string): Promise<void> {
@@ -199,6 +211,31 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     await service.deleteProjectDoc(project.id, moved.slug, { expectedVersion: moved.version });
     expect(store.getProjectDoc(moved.id)).toBeNull();
     expect([...client.files.keys()].some((uri) => uri.endsWith("/release-runbook.md"))).toBe(false);
+  });
+
+  it("hydrates only limited search hits with bounded failure-isolated concurrency", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Bounded search" });
+    const docs = [];
+    for (let index = 0; index < 6; index++) {
+      docs.push(await service.createProjectDoc(project.id, {
+        kind: "memory",
+        title: `Search result ${index}`,
+        body: `bounded hydration body ${index}`,
+      }));
+    }
+
+    client.readCalls.length = 0;
+    client.readDelayMs = 10;
+    client.failReadUris.add(docs[1]!.contentUri!);
+    const results = await service.searchProjectDocs(project.id, "bounded hydration", { limit: 4 });
+
+    expect(results.map((doc) => doc.id)).toEqual([docs[0]!.id, docs[2]!.id, docs[3]!.id]);
+    expect(results.every((doc) => doc.body.includes("bounded hydration body"))).toBe(true);
+    expect(client.readCalls).toHaveLength(4);
+    expect(client.maxActiveReads).toBe(4);
   });
 
   it("finishes idempotent deletion after ambiguous remote and snapshot failures", async () => {

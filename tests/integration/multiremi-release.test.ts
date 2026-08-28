@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertMultiremiBinaryVersion,
+  copyMultiremiSqliteVecExtension,
   createMultiremiArchive,
   MULTIREMI_ARCHIVE_ENTRIES,
   MULTIREMI_RELEASE_TARGETS,
+  multiremiArchiveEntries,
   multiremiArchiveName,
   multiremiAssetVersion,
   normalizeMultiremiTagVersion,
@@ -33,19 +35,33 @@ describe("Multiremi release artifacts", () => {
     try {
       const targetDir = join(root, "linux-x64");
       mkdirSync(targetDir, { recursive: true });
-      for (const entry of MULTIREMI_ARCHIVE_ENTRIES) {
+      const target = { os: "linux", arch: "x64" };
+      for (const entry of multiremiArchiveEntries(target)) {
         const path = join(targetDir, entry);
         writeFileSync(path, `#!/bin/sh\necho ${entry}\n`);
         chmodSync(path, 0o755);
       }
 
       const archive = join(root, "multiremi-0.2.0-test-linux-x64.tar.gz");
-      createMultiremiArchive(targetDir, archive, "pipe");
+      createMultiremiArchive(targetDir, archive, target, "pipe");
 
       const contents = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" })
         .trim()
         .split("\n");
-      expect(contents).toEqual([...MULTIREMI_ARCHIVE_ENTRIES]);
+      expect(contents).toEqual([...MULTIREMI_ARCHIVE_ENTRIES, "vec0.so"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails the build when a target sqlite-vec extension is missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-native-check-"));
+    try {
+      expect(() => copyMultiremiSqliteVecExtension(
+        { os: "linux", arch: "arm64" },
+        root,
+        () => { throw new Error("module not found"); },
+      )).toThrow("missing sqlite-vec native extension for linux-arm64");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -9,19 +9,71 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
-let sqliteVec: { load: (db: Database) => void } | null = null;
+type SqliteVecModule = { load: (db: Database) => void };
+
+let sqliteVec: SqliteVecModule | null = null;
+let sqliteVecImportError: unknown = null;
 try {
   sqliteVec = require("sqlite-vec");
-} catch {
-  // sqlite-vec native binary not available — vector features disabled
+} catch (error) {
+  sqliteVecImportError = error;
 }
 
 const DB_PATH = join(homedir(), ".remi", "remi.db");
 
 let _db: Database | null = null;
 let _dbPath: string = DB_PATH;
+
+export interface LoadSqliteVecOptions {
+  execPath?: string;
+  platform?: NodeJS.Platform;
+  fallback?: SqliteVecModule | null;
+  fallbackError?: unknown;
+  warn?: (message: string) => void;
+}
+
+export function packagedSqliteVecPath(
+  execPath = process.execPath,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const extension = platform === "darwin" ? "dylib" : platform === "win32" ? "dll" : "so";
+  return resolve(dirname(execPath), `vec0.${extension}`);
+}
+
+export function loadSqliteVecExtension(db: Database, options: LoadSqliteVecOptions = {}): boolean {
+  const extensionPath = packagedSqliteVecPath(options.execPath, options.platform);
+  const errors: string[] = [];
+  if (existsSync(extensionPath)) {
+    try {
+      db.loadExtension(extensionPath);
+      return true;
+    } catch (error) {
+      errors.push(`packaged extension: ${errorMessage(error)}`);
+    }
+  } else {
+    errors.push(`packaged extension not found at ${extensionPath}`);
+  }
+
+  const fallback = Object.prototype.hasOwnProperty.call(options, "fallback") ? options.fallback : sqliteVec;
+  const fallbackError = Object.prototype.hasOwnProperty.call(options, "fallbackError")
+    ? options.fallbackError
+    : sqliteVecImportError;
+  if (fallback) {
+    try {
+      fallback.load(db);
+      return true;
+    } catch (error) {
+      errors.push(`package fallback: ${errorMessage(error)}`);
+    }
+  } else if (fallbackError) {
+    errors.push(`package fallback: ${errorMessage(fallbackError)}`);
+  }
+
+  (options.warn ?? console.warn)(`[db] sqlite-vec unavailable (vector search disabled): ${errors.join("; ")}`);
+  return false;
+}
 
 /**
  * Override DB file path (call before first getDb()). Used by tests for isolation.
@@ -47,16 +99,8 @@ export function getDb(): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
-  // Load sqlite-vec extension (graceful degradation if unsupported)
-  let vecEnabled = false;
-  if (sqliteVec) {
-    try {
-      sqliteVec.load(db);
-      vecEnabled = true;
-    } catch (err) {
-      console.warn(`[db] sqlite-vec load failed (vector search disabled): ${(err as Error).message}`);
-    }
-  }
+  // Vector features degrade independently when the native extension is absent.
+  const vecEnabled = loadSqliteVecExtension(db);
 
   // Create tables
   db.exec(`
@@ -235,6 +279,10 @@ export function closeDb(): void {
     _db.close();
     _db = null;
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // ── KV helpers ──

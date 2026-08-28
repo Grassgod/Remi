@@ -2,10 +2,21 @@
  * Tests for SQLite + sqlite-vec infrastructure.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as sqliteVec from "sqlite-vec";
-import { getDb, closeDb, kvGet, kvSet, kvDelete } from "@shared/db/index";
+import {
+  getDb,
+  closeDb,
+  kvGet,
+  kvSet,
+  kvDelete,
+  loadSqliteVecExtension,
+  packagedSqliteVecPath,
+} from "@shared/db/index";
 import { VectorStore } from "@shared/db/vector-store";
 import type { EmbeddingConfig } from "@shared/db/embedding";
 
@@ -52,6 +63,44 @@ describe("SQLite + sqlite-vec basics", () => {
     expect(results[0].distance).toBe(0);
     console.log("KNN results:", results);
     db.close();
+  });
+
+  test("loads a release extension from the executable directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "remi-packaged-vec-"));
+    const db = new Database(":memory:");
+    try {
+      const execPath = join(root, "remi");
+      cpSync(sqliteVec.getLoadablePath(), packagedSqliteVecPath(execPath));
+      expect(loadSqliteVecExtension(db, {
+        execPath,
+        fallback: null,
+      })).toBe(true);
+      expect((db.query("SELECT vec_version() AS version").get() as { version: string }).version).toBeTruthy();
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps ordinary SQLite usable when sqlite-vec is unavailable", () => {
+    const db = new Database(":memory:");
+    const warnings: string[] = [];
+    try {
+      expect(loadSqliteVecExtension(db, {
+        execPath: "/missing/remi",
+        platform: "linux",
+        fallback: null,
+        fallbackError: new Error("native package missing"),
+        warn: (message) => warnings.push(message),
+      })).toBe(false);
+      db.exec("CREATE TABLE fallback_works (id INTEGER PRIMARY KEY)");
+      expect(db.query("SELECT name FROM sqlite_master WHERE name = 'fallback_works'").get()).toBeTruthy();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("vector search disabled");
+      expect(warnings[0]).toContain("native package missing");
+    } finally {
+      db.close();
+    }
   });
 });
 
