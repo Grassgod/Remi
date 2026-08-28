@@ -4,6 +4,8 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
+import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   AddSessionParticipantInput,
   CreateIssueSessionInput,
@@ -20,6 +22,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+const log = createLogger("multiremi-store");
 type AppendSessionEventInput = {
   authorType: string;
   authorId?: string | null;
@@ -300,22 +303,47 @@ export class IssueSessionsRepo {
         [task.issueSessionId],
       );
       const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+      const agent = this.ctx.agents().getAgent(task.agentId);
       const events = this.listSessionEvents(task.issueSessionId);
+      const tokenBudget = resolveProjectionTokenBudget({
+        provider: agent?.provider,
+        model: agent?.model,
+        degradeLevel: task.projectionDegradeLevel,
+      });
       const projection = buildSessionProjection({
         sessionId: task.issueSessionId,
         targetAgentId: task.agentId,
         events,
         cursorSeq: lane.cursorSeq,
         providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
+        tokenBudget,
         currentTaskId: task.id,
         resolveAuthorName: (type, id) => this.sessionAuthorName(type, id),
       });
       this.ctx.db.run(
         `UPDATE multiremi_tasks
-         SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?, updated_at = ?
+         SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?,
+             projection_truncated = ?, projection_omitted_events = ?, projection_estimated_tokens = ?,
+             updated_at = ?
          WHERE id = ?`,
-        [projection.fromSeq, projection.toSeq, projection.mode, nowIso(), taskId],
+        [
+          projection.fromSeq,
+          projection.toSeq,
+          projection.mode,
+          projection.truncated ? 1 : 0,
+          projection.omittedEvents,
+          projection.estimatedTokens,
+          nowIso(),
+          taskId,
+        ],
       );
+      if (projection.truncated) {
+        log.warn(
+          `session projection truncated for task ${taskId}: omitted=${projection.omittedEvents} `
+          + `estimated_tokens=${projection.estimatedTokens} budget=${tokenBudget} `
+          + `degrade_level=${task.projectionDegradeLevel}`,
+        );
+      }
       return projection;
     })();
   }

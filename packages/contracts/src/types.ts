@@ -1331,6 +1331,14 @@ export interface MultiremiTask {
   projection_to_seq?: number | null;
   projectionMode: MultiremiSessionProjectionMode | null;
   projection_mode?: MultiremiSessionProjectionMode | null;
+  projectionDegradeLevel: number;
+  projection_degrade_level?: number;
+  projectionTruncated: boolean;
+  projection_truncated?: boolean;
+  projectionOmittedEvents: number;
+  projection_omitted_events?: number;
+  projectionEstimatedTokens: number;
+  projection_estimated_tokens?: number;
   result: string | null;
   error: string | null;
   failureReason: string | null;
@@ -1496,6 +1504,9 @@ export interface CreateTaskInput {
   sessionId?: string | null;
   attempt?: number | null;
   maxAttempts?: number | null;
+  /** Server-internal retry level used to shrink Session projection budgets. */
+  projectionDegradeLevel?: number | null;
+  projection_degrade_level?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
   /** Server-derived capability snapshot. Public task creation must not trust
@@ -2197,6 +2208,11 @@ export interface MultiremiSessionProjection {
   to_seq?: number;
   /** Deterministic newline-delimited JSON projection for the ACP user turn. */
   jsonl: string;
+  truncated: boolean;
+  omittedEvents: number;
+  omitted_events?: number;
+  estimatedTokens: number;
+  estimated_tokens?: number;
 }
 
 export interface CreateIssueSessionInput {

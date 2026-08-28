@@ -1079,15 +1079,39 @@ export class IssuesRepo {
     return "";
   }
 
-  private createSystemIssueComment(issueId: string, body: string, data: Record<string, unknown>): MultiremiIssueComment {
+  createTaskFailureSystemComment(
+    issueId: string,
+    issueSessionId: string | null,
+    taskId: string,
+    body: string,
+  ): MultiremiIssueComment {
+    return this.createSystemIssueComment(issueId, body, {
+      type: "task_failure",
+      taskId,
+      task_id: taskId,
+    }, taskId, issueSessionId);
+  }
+
+  private createSystemIssueComment(
+    issueId: string,
+    body: string,
+    data: Record<string, unknown>,
+    taskId: string | null = null,
+    issueSessionId: string | null = null,
+  ): MultiremiIssueComment {
     const id = createId("cmt");
     const now = nowIso();
-    const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issueId);
+    const issueSession = issueSessionId
+      ? this.ctx.issueSessions().getIssueSession(issueSessionId)
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(issueId);
+    if (!issueSession || issueSession.issueId !== issueId) {
+      throw new Error(`Issue session not found for system comment: ${issueSessionId}`);
+    }
     this.ctx.db.run(
       `INSERT INTO multiremi_issue_comments (
-         id, issue_id, issue_session_id, author_type, author_id, parent_id, body, type, created_at, updated_at
-       ) VALUES (?, ?, ?, 'system', ?, NULL, ?, 'system', ?, ?)`,
-      [id, issueId, issueSession.id, SYSTEM_AUTHOR_ID, body, now, now],
+         id, issue_id, issue_session_id, author_type, author_id, task_id, parent_id, body, type, created_at, updated_at
+       ) VALUES (?, ?, ?, 'system', ?, ?, NULL, ?, 'system', ?, ?)`,
+      [id, issueId, issueSession.id, SYSTEM_AUTHOR_ID, taskId, body, now, now],
     );
     this.ctx.issueSessions().appendSessionEvent(issueSession.id, {
       authorType: "system",

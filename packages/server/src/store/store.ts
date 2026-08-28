@@ -2679,6 +2679,15 @@ runMigrations(this.db);
     return this.issues.createIssueComment(issueId, input);
   }
 
+  createTaskFailureSystemComment(
+    issueId: string,
+    issueSessionId: string | null,
+    taskId: string,
+    body: string,
+  ): MultiremiIssueComment {
+    return this.issues.createTaskFailureSystemComment(issueId, issueSessionId, taskId, body);
+  }
+
   updateIssueComment(id: string, input: UpdateIssueCommentInput): MultiremiIssueComment {
     return this.issues.updateIssueComment(id, input);
   }
