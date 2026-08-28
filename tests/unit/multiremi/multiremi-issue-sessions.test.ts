@@ -392,6 +392,87 @@ describe("Issue sessions and per-agent projection lanes", () => {
     });
   });
 
+  it("keeps the warm lane when a task is cancelled so the next turn stays delta", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_cancel_lane",
+      name: "Cancel lane runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({ name: "Cancelled agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Cancel keeps lane", workspaceId: "local" });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+
+    const first = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Warm the lane" });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.buildTaskSessionProjection(first.id);
+    store.completeTask(first.id, { output: "Warm result", sessionId: "acp_cancel_lane" });
+    const warm = store.getSessionAgentLane(session.id, agent.id)!;
+    expect(warm.providerSessionId).toBe("acp_cancel_lane");
+    expect(warm.cursorSeq).toBeGreaterThan(0);
+
+    // Events the cancelled task will project but the provider may never consume.
+    store.appendSessionEvent(session.id, { authorType: "member", authorId: null, kind: "message", body: "mid-flight one" });
+    store.appendSessionEvent(session.id, { authorType: "member", authorId: null, kind: "message", body: "mid-flight two" });
+
+    const cancelled = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Gets stopped" });
+    expect(store.claimTask(runtime.id)?.id).toBe(cancelled.id);
+    store.startTask(cancelled.id);
+    expect(store.buildTaskSessionProjection(cancelled.id)?.mode).toBe("delta");
+    expect(store.cancelTask(cancelled.id).status).toBe("cancelled");
+
+    // Cancelling stops the turn, it does not invalidate the provider transcript:
+    // provider session kept, generation unchanged, cursor NOT advanced past the
+    // events the cancelled task had projected.
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      providerSessionId: "acp_cancel_lane",
+      cursorSeq: warm.cursorSeq,
+      generation: warm.generation,
+    });
+
+    const next = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Carries on" });
+    expect(next.sessionId).toBe("acp_cancel_lane");
+    const projection = store.buildTaskSessionProjection(next.id)!;
+    expect(projection.mode).toBe("delta");
+    expect(projection.fromSeq).toBe(warm.cursorSeq);
+    expect(projection.jsonl).toContain("mid-flight one");
+    expect(projection.jsonl).toContain("mid-flight two");
+  });
+
+  it("still resets the lane when a task fails without a retry", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_failed_lane",
+      name: "Failed lane runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({ name: "Failing agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Failure resets lane", workspaceId: "local" });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+
+    const first = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Warm the lane" });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "Warm result", sessionId: "acp_failed_lane" });
+    expect(store.getSessionAgentLane(session.id, agent.id)?.providerSessionId).toBe("acp_failed_lane");
+
+    const doomed = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Fails terminally" });
+    expect(store.claimTask(runtime.id)?.id).toBe(doomed.id);
+    store.startTask(doomed.id);
+    // "boom" classifies outside AUTO_RETRY_FAILURE_REASONS, so this is terminal.
+    store.failTask(doomed.id, { error: "boom" });
+    expect(store.getTask(doomed.id)?.status).toBe("failed");
+    expect(store.claimTask(runtime.id)).toBeNull();
+
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      providerSessionId: null,
+      cursorSeq: 0,
+    });
+  });
+
   it("drops a lane when its agent switches provider instead of resuming foreign ACP state", () => {
     const store = createStore();
     const runtime = store.registerRuntime({

@@ -2368,8 +2368,18 @@ export class TasksRepo {
         const terminalEvent = workspaceLockHeld
           ? this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, event)
           : this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, event);
+        // Cancelling stops the current turn; it does not corrupt the provider transcript
+        // the lane points at, so keep the lane exactly as-is (chat sessions already behave
+        // this way — see promoteSession above). Deliberately neither promote nor reset:
+        // promoting would advance cursor_seq to projectionToSeq, and a task cancelled
+        // before the provider ever consumed its prompt would silently drop those events.
+        // Replaying a few events twice is cheap; losing them is not. Config/runtime drift
+        // is still caught by laneResumable() at claim time, and a genuinely unresumable
+        // transcript surfaces next run as stale_session / api_invalid_request — both
+        // resume-unsafe, which resets the lane then and falls back to a bounded bootstrap.
         if (status === "completed") this.promoteSessionAgentLane(task);
-        else if (!retry) this.resetSessionAgentLane(task.issueSessionId, task.agentId);
+        else if (!retry && status !== "cancelled")
+          this.resetSessionAgentLane(task.issueSessionId, task.agentId);
         if (!retry && !replacementPlanned) {
           const wakeup = workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
