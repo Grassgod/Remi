@@ -19,6 +19,7 @@ BIN_DIR="${MULTIREMI_BIN_DIR:-/usr/local/bin}"
 
 info() { printf "==> %s\n" "$*"; }
 ok() { printf "OK: %s\n" "$*"; }
+warn() { printf "WARNING: %s\n" "$*" >&2; }
 fail() { printf "ERROR: %s\n" "$*" >&2; exit 1; }
 
 detect_platform() {
@@ -75,13 +76,16 @@ install_binary() {
   curl -fsSL "$url" -o "$tmp/remi.tar.gz"
   tar -xzf "$tmp/remi.tar.gz" -C "$tmp"
   chmod +x "$tmp/remi"
-  [ -f "$tmp/$SQLITE_VEC_FILE" ] || fail "Release archive is missing $SQLITE_VEC_FILE."
   if [ -f "$tmp/remi-claude-agent-acp" ]; then
     chmod +x "$tmp/remi-claude-agent-acp"
   fi
 
   install_file "$tmp/remi" "remi"
-  install_file "$tmp/$SQLITE_VEC_FILE" "$SQLITE_VEC_FILE"
+  if [ -f "$tmp/$SQLITE_VEC_FILE" ]; then
+    install_file "$tmp/$SQLITE_VEC_FILE" "$SQLITE_VEC_FILE"
+  else
+    warn "Release archive is missing $SQLITE_VEC_FILE; SQLite storage will run without vector search, and other CLI functionality remains available."
+  fi
   if [ -f "$tmp/remi-claude-agent-acp" ]; then
     install_file "$tmp/remi-claude-agent-acp" "remi-claude-agent-acp"
   fi
