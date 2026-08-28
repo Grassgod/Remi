@@ -333,6 +333,9 @@ export function daemonTaskClaimResponse(
           from_seq: projection.fromSeq,
           to_seq: projection.toSeq,
           jsonl: projection.jsonl,
+          truncated: projection.truncated,
+          omitted_events: projection.omittedEvents,
+          estimated_tokens: projection.estimatedTokens,
         };
       }
       if (task.issueSessionGeneration == null) {

@@ -109,6 +109,11 @@ export interface AgentTaskSessionProjection {
   toSeq?: number;
   to_seq?: number;
   jsonl: string;
+  truncated?: boolean;
+  omittedEvents?: number;
+  omitted_events?: number;
+  estimatedTokens?: number;
+  estimated_tokens?: number;
 }
 
 export interface AgentTaskIssueSessionResult {

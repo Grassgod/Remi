@@ -1770,6 +1770,10 @@ export function runMigrations(db: SqlDatabase): void {
       projection_from_seq INTEGER,
       projection_to_seq INTEGER,
       projection_mode TEXT,
+      projection_degrade_level INTEGER NOT NULL DEFAULT 0,
+      projection_truncated INTEGER NOT NULL DEFAULT 0,
+      projection_omitted_events INTEGER NOT NULL DEFAULT 0,
+      projection_estimated_tokens INTEGER NOT NULL DEFAULT 0,
       result TEXT,
       error TEXT,
       failure_reason TEXT,
@@ -2191,6 +2195,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_degrade_level INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_truncated INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_omitted_events INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_estimated_tokens INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "status TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "meta TEXT");

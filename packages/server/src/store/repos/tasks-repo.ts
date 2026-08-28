@@ -67,6 +67,7 @@ const AUTO_RETRY_FAILURE_REASONS = new Set([
   "timeout",
   "codex_semantic_inactivity",
   "agent_error.stale_session",
+  "agent_error.context_overflow",
   "project_knowledge_unavailable",
   "repo_sync_failed",
 ]);
@@ -76,6 +77,7 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
   "api_invalid_request",
   "codex_semantic_inactivity",
   "agent_error.stale_session",
+  "agent_error.context_overflow",
 ]);
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
@@ -378,15 +380,22 @@ export class TasksRepo {
     const issueSessionGeneration = issueSession
       ? normalizePositiveInt(requestedIssueSessionGeneration, issueLane?.generation ?? 1)
       : null;
+    const projectionDegradeLevel = Math.max(
+      0,
+      Math.floor(Number(input.projectionDegradeLevel ?? input.projection_degrade_level) || 0),
+    );
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
         id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
-        assignment_event_id, assignment_source_event_id,
+        assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )`,
       [
         id,
         taskKind,
@@ -416,6 +425,7 @@ export class TasksRepo {
         delegatedByAgentId,
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
         cleanOptionalString(input.assignmentSourceEventId ?? input.assignment_source_event_id),
+        projectionDegradeLevel,
         cleanOptionalString(input.provider),
         toJson(inheritedPluginSnapshot ?? []),
         inheritedExecutionFingerprint,
@@ -1990,6 +2000,9 @@ export class TasksRepo {
       resetProviderSession: !resumeSafe,
       attempt: parent.attempt + 1,
       maxAttempts: parent.maxAttempts,
+      projectionDegradeLevel: parent.failureReason === "agent_error.context_overflow"
+        ? parent.projectionDegradeLevel + 1
+        : 0,
       parentTaskId: parent.id,
       delegationId: parent.delegationId,
       delegatedByAgentId: parent.delegatedByAgentId,
@@ -2921,6 +2934,14 @@ function toTask(row: Row): MultiremiTask {
     projection_to_seq: row.projection_to_seq == null ? null : Number(row.projection_to_seq),
     projectionMode: nullableString(row.projection_mode) as MultiremiTask["projectionMode"],
     projection_mode: nullableString(row.projection_mode) as MultiremiTask["projectionMode"],
+    projectionDegradeLevel: Number(row.projection_degrade_level ?? 0),
+    projection_degrade_level: Number(row.projection_degrade_level ?? 0),
+    projectionTruncated: Boolean(Number(row.projection_truncated ?? 0)),
+    projection_truncated: Boolean(Number(row.projection_truncated ?? 0)),
+    projectionOmittedEvents: Number(row.projection_omitted_events ?? 0),
+    projection_omitted_events: Number(row.projection_omitted_events ?? 0),
+    projectionEstimatedTokens: Number(row.projection_estimated_tokens ?? 0),
+    projection_estimated_tokens: Number(row.projection_estimated_tokens ?? 0),
     result: taskResult.output,
     error: nullableString(row.error),
     failureReason: nullableString(row.failure_reason),
