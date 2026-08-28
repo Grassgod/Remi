@@ -8,17 +8,28 @@ export interface AutopilotOutcomeLink {
   number?: number;
 }
 
+export type AutopilotOutcomeActionKind = "none" | "review" | "retry" | "investigate";
+
+export interface AutopilotOutcomeAction {
+  kind: AutopilotOutcomeActionKind;
+  text: string | null;
+}
+
 export interface AutopilotOutcome {
   kind: AutopilotOutcomeKind;
   text: string | null;
   links: AutopilotOutcomeLink[];
   counts: Record<string, number> | null;
+  risks: string[];
+  action: AutopilotOutcomeAction;
 }
 
 const NO_CHANGE_PATTERN = /(?:\bno changes?\b|\balready up[ -]to[ -]date\b|\bnothing to update\b|\bworking copy remains clean\b|无变更|没有变化|无需更新)/iu;
 const PROCESS_NARRATION_PATTERN = /^(?:let me\b|now\s+let(?:'|’)s\b|i(?:'|’)ll\b|checking\b|good\s*[,，]|next\s*[,，])/iu;
 const COMPLETE_SENTENCE_END_PATTERN = /[.!?。！？](?:["'”’）)\]}]+)?$/u;
 const LINK_PATTERN = /https?:\/\/(?:www\.)?(github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)|code\.byted\.org\/[^\s]+?\/merge_requests\/(\d+))(?=$|[\s`)\]}>.,!?，。！？])/giu;
+const RISK_SIGNAL_PATTERN = /(?:未能完成|无法检出|检出失败|失败|拒绝|建议(?:重新)?运行|建议重跑|需要人工|\bfailed\b|\bunable to\b|\bpermission denied\b|\bpublickey\b|\b503\b|\bno available accounts\b|\btime(?:d\s+out|out)\b|\brate limit(?:ed|s)?\b)/iu;
+const TRANSIENT_FAILURE_PATTERN = /(?:\b503\b|\bno available accounts\b|\btime(?:d\s+out|out)\b|\brate limit(?:ed|s)?\b|\bpublickey\b)/iu;
 
 export function summarizeAutopilotOutcome(
   value: string | null | undefined,
@@ -26,15 +37,29 @@ export function summarizeAutopilotOutcome(
 ): AutopilotOutcome {
   const normalized = value?.replace(/\r\n?/g, "\n").trim() ?? "";
   const links = extractOutcomeLinks(normalized);
-  const text = summarizeCompleteSentences(normalized);
+  const sentences = usefulSentences(normalized);
+  const text = summarizeCompleteSentences(sentences);
   const counts = outcomeCounts(links);
+  const risks = extractRisks(sentences);
+  const kind: AutopilotOutcomeKind = options.failed
+    ? "failed"
+    : links.length > 0
+      ? "changes"
+      : NO_CHANGE_PATTERN.test(normalized)
+        && !RISK_SIGNAL_PATTERN.test(normalized)
+        && risks.length === 0
+        ? "no_change"
+        : "unknown";
+  const action = deriveAction(kind, links, risks, sentences[0] ?? null);
 
-  if (options.failed) return { kind: "failed", text, links, counts };
-  if (links.length > 0) return { kind: "changes", text, links, counts };
-  if (NO_CHANGE_PATTERN.test(normalized)) {
-    return { kind: "no_change", text: null, links: [], counts: null };
-  }
-  return { kind: "unknown", text, links: [], counts: null };
+  return {
+    kind,
+    text: kind === "no_change" ? null : text,
+    links,
+    counts,
+    risks,
+    action,
+  };
 }
 
 export function autopilotTriggerObjectLabel(
@@ -61,17 +86,34 @@ export function autopilotOutcomeBody(
   outcome: AutopilotOutcome,
   durationSeconds: number,
 ): string {
+  const duration = formatAutopilotDuration(durationSeconds);
   const prefix = outcome.kind === "failed"
-    ? `Failed after ${durationSeconds}s`
-    : `Completed in ${durationSeconds}s`;
-  if (outcome.kind === "no_change") return `${prefix} | No changes.`;
-  if (outcome.kind === "unknown") return `${prefix} | ${outcome.text ?? "Run completed."}`;
-  if (outcome.kind === "failed") return `${prefix} | ${outcome.text ?? "Run failed."}`;
+    ? `Failed after ${duration}`
+    : `Completed in ${duration}`;
+  let summary: string;
+  if (outcome.kind === "no_change") summary = "No changes.";
+  else if (outcome.kind === "unknown") summary = outcome.text ?? "Run completed.";
+  else if (outcome.kind === "failed") summary = outcome.text ?? "Run failed.";
+  else {
+    summary = outcome.links.length > 0
+      ? `Created ${outcome.links.length} change${outcome.links.length === 1 ? "" : "s"}: ${outcome.links.map((link) => link.url).join(", ")}.`
+      : outcome.text ?? "Run completed.";
+  }
 
-  const linkSummary = outcome.links.length > 0
-    ? `Created ${outcome.links.length} change${outcome.links.length === 1 ? "" : "s"}: ${outcome.links.map((link) => link.url).join(", ")}.`
-    : null;
-  return `${prefix} | ${linkSummary ?? outcome.text ?? "Run completed."}`;
+  const action = outcome.action.kind === "none" ? null : actionHint(outcome.action);
+  return [prefix, summary, action].filter(Boolean).join(" | ");
+}
+
+export function formatAutopilotDuration(value: number): string {
+  const seconds = Math.max(0, Math.floor(value));
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h ${remainingMinutes}m`;
 }
 
 function extractOutcomeLinks(value: string): AutopilotOutcomeLink[] {
@@ -103,14 +145,16 @@ function outcomeCounts(links: AutopilotOutcomeLink[]): Record<string, number> | 
   };
 }
 
-function summarizeCompleteSentences(value: string): string | null {
-  const sentences = value
-    .split(/\n\s*\n+/u)
+function usefulSentences(value: string): string[] {
+  return value
+    .split(/\n\s*\n+|\n(?=\s*(?:[-*+]\s+|\d+[.)]\s+))/u)
     .flatMap(splitParagraphIntoSentences)
     .map(cleanSentence)
     .filter((sentence): sentence is string => Boolean(sentence))
     .filter((sentence) => !PROCESS_NARRATION_PATTERN.test(sentence));
+}
 
+function summarizeCompleteSentences(sentences: string[]): string | null {
   const selected: string[] = [];
   let length = 0;
   for (let index = sentences.length - 1; index >= 0; index -= 1) {
@@ -125,6 +169,37 @@ function summarizeCompleteSentences(value: string): string | null {
     length = nextLength;
   }
   return selected.length > 0 ? selected.join(" ") : null;
+}
+
+function extractRisks(sentences: string[]): string[] {
+  const risks: string[] = [];
+  const seen = new Set<string>();
+  for (const sentence of sentences) {
+    if (!RISK_SIGNAL_PATTERN.test(sentence)) continue;
+    const risk = truncateSentenceEnd(sentence, 160);
+    if (seen.has(risk)) continue;
+    seen.add(risk);
+    risks.push(risk);
+    if (risks.length === 3) break;
+  }
+  return risks;
+}
+
+function deriveAction(
+  kind: AutopilotOutcomeKind,
+  links: AutopilotOutcomeLink[],
+  risks: string[],
+  failureFirstSentence: string | null,
+): AutopilotOutcomeAction {
+  if (kind === "failed") {
+    return {
+      kind: TRANSIENT_FAILURE_PATTERN.test(risks.join(" ")) ? "retry" : "investigate",
+      text: risks[0] ?? failureFirstSentence,
+    };
+  }
+  if (risks.length > 0) return { kind: "investigate", text: risks[0]! };
+  if (links.length > 0) return { kind: "review", text: null };
+  return { kind: "none", text: null };
 }
 
 function splitParagraphIntoSentences(paragraph: string): string[] {
@@ -149,11 +224,24 @@ function truncateSentenceEnd(sentence: string, maxLength: number): string {
 
 function cleanSentence(value: string): string | null {
   const sentence = value
+    .replace(/^\s*#{1,6}\s*/u, "")
     .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/u, "")
+    .replace(/\*\*([^*]+)\*\*/gu, "$1")
     .replace(/\s+/g, " ")
     .trim();
   if (!sentence) return null;
-  return COMPLETE_SENTENCE_END_PATTERN.test(sentence) ? sentence : `${sentence}.`;
+  if (/^.{1,40}[：:]$/u.test(sentence)) return null;
+  if (COMPLETE_SENTENCE_END_PATTERN.test(sentence)) return sentence;
+  return /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(sentence)
+    ? `${sentence}。`
+    : `${sentence}.`;
+}
+
+function actionHint(action: AutopilotOutcomeAction): string {
+  const detail = action.text ? ` ${action.text}` : "";
+  if (action.kind === "review") return "Action: Review the linked change.";
+  if (action.kind === "retry") return `Action: Retry this run.${detail}`;
+  return `Action: Investigate this run.${detail}`;
 }
 
 function isoTime(value: string): string | null {

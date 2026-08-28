@@ -101,6 +101,7 @@ export type {
 } from "./repository";
 export type {
   AutopilotRunOutcome,
+  AutopilotRunOutcomeAction,
   AutopilotRunOutcomeLink,
   AutopilotRunTriggerObject,
   InboxItem,

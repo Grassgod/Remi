@@ -49,11 +49,18 @@ export interface AutopilotRunOutcomeLink {
   number?: number;
 }
 
+export interface AutopilotRunOutcomeAction {
+  kind: "none" | "review" | "retry" | "investigate";
+  text: string | null;
+}
+
 export interface AutopilotRunOutcome {
   kind: "no_change" | "changes" | "failed" | "unknown";
   text: string | null;
   links: AutopilotRunOutcomeLink[];
   counts: Record<string, number> | null;
+  risks: string[];
+  action: AutopilotRunOutcomeAction | null;
 }
 
 export interface InboxItemDetails extends Record<string, unknown> {

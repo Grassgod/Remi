@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "@multiremi/core/types";
 import {
+  autopilotDurationParts,
   getAutopilotRunOutcome,
   getInboxDisplayTitle,
   getQuickCreateFailureDetail,
@@ -207,5 +208,59 @@ describe("inbox display helpers", () => {
     });
 
     expect(getAutopilotRunOutcome(malformed)).toBeNull();
+  });
+
+  it("normalizes optional action and risks fields across API versions", () => {
+    const current = item({
+      type: "autopilot_run_completed",
+      details: {
+        outcome: {
+          kind: "unknown",
+          text: "Run completed with a warning.",
+          links: [],
+          counts: null,
+          risks: ["Repository checkout failed."],
+          action: { kind: "investigate", text: "Repository checkout failed." },
+        },
+      },
+    });
+    const legacy = item({
+      type: "autopilot_run_completed",
+      details: {
+        outcome: {
+          kind: "unknown",
+          text: "Run completed.",
+          links: [],
+          counts: null,
+        },
+      } as unknown as InboxItem["details"],
+    });
+    const malformed = item({
+      type: "autopilot_run_completed",
+      details: {
+        outcome: {
+          kind: "unknown",
+          text: "Run completed.",
+          links: [],
+          counts: null,
+          risks: ["valid", 42],
+          action: { kind: "later", text: false },
+        },
+      } as unknown as InboxItem["details"],
+    });
+
+    expect(getAutopilotRunOutcome(current)).toMatchObject({
+      risks: ["Repository checkout failed."],
+      action: { kind: "investigate", text: "Repository checkout failed." },
+    });
+    expect(getAutopilotRunOutcome(legacy)).toMatchObject({ risks: [], action: null });
+    expect(getAutopilotRunOutcome(malformed)).toMatchObject({ risks: [], action: null });
+  });
+
+  it("splits duration boundaries into localized display units", () => {
+    expect(autopilotDurationParts(59)).toEqual({ unit: "seconds", seconds: 59 });
+    expect(autopilotDurationParts(60)).toEqual({ unit: "minutes", minutes: 1 });
+    expect(autopilotDurationParts(3515)).toEqual({ unit: "minutes", minutes: 58 });
+    expect(autopilotDurationParts(7200)).toEqual({ unit: "hours", hours: 2, minutes: 0 });
   });
 });

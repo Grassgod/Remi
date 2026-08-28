@@ -95,11 +95,44 @@ export function getAutopilotRunOutcome(item: InboxItem): AutopilotRunOutcome | n
       ),
     )
     : null;
+  const risks = Array.isArray(value.risks)
+    && value.risks.every((risk) => typeof risk === "string")
+    ? [...value.risks]
+    : [];
+  const action = isRecord(value.action)
+    && ["none", "review", "retry", "investigate"].includes(String(value.action.kind))
+    && (value.action.text === null || typeof value.action.text === "string")
+    ? {
+      kind: value.action.kind as NonNullable<AutopilotRunOutcome["action"]>["kind"],
+      text: value.action.text,
+    }
+    : null;
   return {
     kind: value.kind as AutopilotRunOutcome["kind"],
     text: value.text,
     links,
     counts,
+    risks,
+    action,
+  };
+}
+
+export type AutopilotDurationParts =
+  | { unit: "seconds"; seconds: number }
+  | { unit: "minutes"; minutes: number }
+  | { unit: "hours"; hours: number; minutes: number };
+
+export function autopilotDurationParts(value: number): AutopilotDurationParts {
+  const seconds = Math.max(0, Math.floor(value));
+  if (seconds < 60) return { unit: "seconds", seconds };
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return { unit: "minutes", minutes };
+
+  return {
+    unit: "hours",
+    hours: Math.floor(minutes / 60),
+    minutes: minutes % 60,
   };
 }
 

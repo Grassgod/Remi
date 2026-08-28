@@ -120,7 +120,9 @@
     "failed": "실행 실패",
     "failed_with_summary": "실패: {{summary}}",
     "changes_other": "변경 {{count}}건",
-    "duration": "소요 시간 {{seconds}}초",
+    "duration_seconds": "소요 시간 {{seconds}}초",
+    "duration_minutes": "소요 시간 {{minutes}}분",
+    "duration_hours": "소요 시간 {{hours}}시간 {{minutes}}분",
     "pull_request": "PR #{{number}}",
     "merge_request": "MR #{{number}}"
   },

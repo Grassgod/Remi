@@ -148,6 +148,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         text: "Published 12 project updates. No blockers.",
         links: [],
         counts: null,
+        risks: [],
+        action: { kind: "none", text: null },
       },
     });
 
@@ -171,6 +173,11 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         text: "Dependency service unavailable.",
         links: [],
         counts: null,
+        risks: [],
+        action: {
+          kind: "investigate",
+          text: "Dependency service unavailable.",
+        },
       },
     });
 

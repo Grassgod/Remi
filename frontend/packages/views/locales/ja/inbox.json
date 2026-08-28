@@ -120,7 +120,9 @@
     "failed": "実行に失敗しました",
     "failed_with_summary": "失敗: {{summary}}",
     "changes_other": "{{count}} 件の変更",
-    "duration": "所要時間 {{seconds}}秒",
+    "duration_seconds": "所要時間 {{seconds}}秒",
+    "duration_minutes": "所要時間 {{minutes}}分",
+    "duration_hours": "所要時間 {{hours}}時間 {{minutes}}分",
     "pull_request": "PR #{{number}}",
     "merge_request": "MR #{{number}}"
   },

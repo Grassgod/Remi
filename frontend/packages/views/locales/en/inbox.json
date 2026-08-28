@@ -122,7 +122,9 @@
     "failed_with_summary": "Failed: {{summary}}",
     "changes_one": "{{count}} change",
     "changes_other": "{{count}} changes",
-    "duration": "Took {{seconds}}s",
+    "duration_seconds": "Took {{seconds}}s",
+    "duration_minutes": "Took {{minutes}}m",
+    "duration_hours": "Took {{hours}}h {{minutes}}m",
     "pull_request": "PR #{{number}}",
     "merge_request": "MR #{{number}}"
   },

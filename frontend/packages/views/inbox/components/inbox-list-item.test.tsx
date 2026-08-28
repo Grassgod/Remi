@@ -47,7 +47,14 @@ function run(id: string, branch: string, seconds: number, createdAt: string): In
         occurred_at: createdAt,
         wiki_build: false,
       },
-      outcome: { kind: "no_change", text: null, links: [], counts: null },
+      outcome: {
+        kind: "no_change",
+        text: null,
+        links: [],
+        counts: null,
+        risks: [],
+        action: { kind: "none", text: null },
+      },
     },
   };
 }

@@ -60,7 +60,14 @@ describe("InboxDetailLabel autopilot outcomes", () => {
     renderLabel(autopilotItem({
       details: {
         duration_seconds: 12,
-        outcome: { kind: "no_change", text: null, links: [], counts: null },
+        outcome: {
+          kind: "no_change",
+          text: null,
+          links: [],
+          counts: null,
+          risks: [],
+          action: { kind: "none", text: null },
+        },
       },
     }), "zh-Hans");
 
@@ -81,6 +88,8 @@ describe("InboxDetailLabel autopilot outcomes", () => {
             { kind: "merge_request", url: "https://code.byted.org/acme/docs/merge_requests/12", number: 12 },
           ],
           counts: { changes: 2 },
+          risks: [],
+          action: { kind: "review", text: null },
         },
       },
     }));
@@ -105,6 +114,8 @@ describe("InboxDetailLabel autopilot outcomes", () => {
           text: "Dependency service unavailable.",
           links: [],
           counts: null,
+          risks: ["Dependency service unavailable."],
+          action: { kind: "investigate", text: "Dependency service unavailable." },
         },
       },
     }), "zh-Hans");
@@ -117,13 +128,43 @@ describe("InboxDetailLabel autopilot outcomes", () => {
     renderLabel(autopilotItem({
       body: "Completed in 8s | fallback",
       details: {
-        outcome: { kind: "unknown", text: summary, links: [], counts: null },
+        outcome: {
+          kind: "unknown",
+          text: summary,
+          links: [],
+          counts: null,
+          risks: [],
+          action: { kind: "none", text: null },
+        },
       },
     }), "zh-Hans");
 
     expect(screen.getByText(`本次运行已完成：${summary}`)).toBeInTheDocument();
     expect(screen.getAllByText(new RegExp(summary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u")))
       .toHaveLength(1);
+  });
+
+  it.each([
+    [59, "Took 59s"],
+    [60, "Took 1m"],
+    [3515, "Took 58m"],
+    [7200, "Took 2h 0m"],
+  ])("formats a %i-second duration as %s", (durationSeconds, expected) => {
+    renderLabel(autopilotItem({
+      details: {
+        duration_seconds: durationSeconds,
+        outcome: {
+          kind: "no_change",
+          text: null,
+          links: [],
+          counts: null,
+          risks: [],
+          action: { kind: "none", text: null },
+        },
+      },
+    }));
+
+    expect(screen.getByText(new RegExp(expected))).toBeInTheDocument();
   });
 });
 

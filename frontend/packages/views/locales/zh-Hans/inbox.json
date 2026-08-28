@@ -120,7 +120,9 @@
     "failed": "本次运行失败",
     "failed_with_summary": "失败：{{summary}}",
     "changes_other": "{{count}} 个改动",
-    "duration": "耗时 {{seconds}} 秒",
+    "duration_seconds": "耗时 {{seconds}} 秒",
+    "duration_minutes": "耗时 {{minutes}} 分钟",
+    "duration_hours": "耗时 {{hours}} 小时 {{minutes}} 分",
     "pull_request": "PR #{{number}}",
     "merge_request": "MR #{{number}}"
   },

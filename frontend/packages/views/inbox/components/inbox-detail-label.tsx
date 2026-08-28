@@ -7,6 +7,7 @@ import { feishuInboxContext, feishuInboxOrigin } from "@multiremi/core/feishu/in
 import { StatusIcon, PriorityIcon } from "../../issues/components";
 import type { InboxItem, InboxItemType, IssueStatus, IssuePriority } from "@multiremi/core/types";
 import {
+  autopilotDurationParts,
   getAutopilotRunOutcome,
   getInboxDisplayTitle,
   getQuickCreateFailureDetail,
@@ -158,7 +159,7 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
         return <span>{typeLabels[item.type]}</span>;
       }
       const duration = typeof details.duration_seconds === "number"
-        ? t(($) => $.autopilot.duration, { seconds: details.duration_seconds })
+        ? formatAutopilotDuration(details.duration_seconds, t)
         : null;
       let summary: string;
       if (outcome.kind === "no_change") {
@@ -245,4 +246,21 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
     default:
       return <span>{typeLabels[item.type] ?? item.type}</span>;
   }
+}
+
+function formatAutopilotDuration(
+  seconds: number,
+  t: ReturnType<typeof useT<"inbox">>["t"],
+): string {
+  const duration = autopilotDurationParts(seconds);
+  if (duration.unit === "seconds") {
+    return t(($) => $.autopilot.duration_seconds, { seconds: duration.seconds });
+  }
+  if (duration.unit === "minutes") {
+    return t(($) => $.autopilot.duration_minutes, { minutes: duration.minutes });
+  }
+  return t(($) => $.autopilot.duration_hours, {
+    hours: duration.hours,
+    minutes: duration.minutes,
+  });
 }
