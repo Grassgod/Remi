@@ -40,6 +40,8 @@ export interface AcpProviderOptions {
   agentType?: string;
   /** ACP executable path (auto-detected from agentType if omitted). */
   executable?: string;
+  /** Arguments placed after the ACP executable. */
+  args?: string[];
   /** Optional API key forwarded to compatible ACP wrappers. */
   apiKey?: string;
   /** Optional API base URL forwarded to compatible ACP wrappers. */
@@ -732,6 +734,7 @@ export class AcpProvider implements Provider {
         this._options.executable,
         this._adapter.defaultExecutable(),
       ),
+      args: this._options.args,
       agentType: this._adapter.agentType,
       cwd,
       env,

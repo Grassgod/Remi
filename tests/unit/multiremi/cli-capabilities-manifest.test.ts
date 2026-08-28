@@ -50,6 +50,17 @@ describe("CLI capabilities manifest", () => {
     for (const id of taskOperable) expect(manifest.commands[id]?.auth, id).toEqual(["human", "task"]);
   });
 
+  it("keeps Feishu bot menu mutations and publish status human-only", () => {
+    expect(manifest.commands["workspace.bot-menu.get"]?.auth).toEqual(["human", "task"]);
+    for (const command of [
+      "workspace.bot-menu.update",
+      "workspace.bot-menu.publish",
+      "workspace.bot-menu.publish-status",
+    ]) {
+      expect(manifest.commands[command]?.auth).toEqual(["human"]);
+    }
+  });
+
   it("generates discoverable help for every visible Registry command and its direct children", () => {
     const inventory = cliCommandInventory();
     for (const entry of inventory.filter((candidate) => !candidate.hidden)) {
@@ -93,10 +104,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 569,
-      exempt: 76,
+      mapped: 573,
+      exempt: 78,
       missing: 0,
-      total: 645,
+      total: 651,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { InboxItem, InboxItemType, InboxSeverity } from "../types";
 import {
   countAttentionUnreadInboxItems,
+  countUnreadInboxItems,
   deduplicateInboxItems,
   filterInboxItemsBySource,
   groupInboxItemsByDate,
   inboxItemSelectionKey,
   inboxItemSelectionKind,
+  inboxDisplayEntryIds,
 } from "./grouping";
 
 function item(
@@ -53,6 +55,58 @@ describe("inbox grouping", () => {
         ["this_week", "week"],
         ["earlier", "earlier"],
       ]);
+  });
+
+  it("merges successful runs for one autopilot within a date group", () => {
+    const now = new Date(2026, 7, 26, 12, 0, 0);
+    const details = { autopilot_id: "autopilot-1", autopilot_title: "Atlas" };
+    const groups = groupInboxItemsByDate([
+      item("earlier", "autopilot_run_completed", new Date(2026, 7, 26, 9).toISOString(), { details }),
+      item("latest", "autopilot_run_completed", new Date(2026, 7, 26, 10).toISOString(), { details }),
+    ], now);
+
+    expect(groups[0]?.entries).toHaveLength(1);
+    expect(groups[0]?.entries[0]?.item.id).toBe("latest");
+    expect(inboxDisplayEntryIds(groups[0]!.entries[0]!)).toEqual(["latest", "earlier"]);
+    expect(countUnreadInboxItems(groups[0]!.items, now)).toBe(1);
+  });
+
+  it("never merges failed runs", () => {
+    const now = new Date(2026, 7, 26, 12, 0, 0);
+    const details = { autopilot_id: "autopilot-1" };
+    const groups = groupInboxItemsByDate([
+      item("failed-2", "autopilot_run_failed", new Date(2026, 7, 26, 10).toISOString(), { details }),
+      item("failed-1", "autopilot_run_failed", new Date(2026, 7, 26, 9).toISOString(), { details }),
+    ], now);
+
+    expect(groups[0]?.entries.map((entry) => inboxDisplayEntryIds(entry))).toEqual([
+      ["failed-2"],
+      ["failed-1"],
+    ]);
+  });
+
+  it("does not merge successful runs across date groups", () => {
+    const now = new Date(2026, 7, 26, 12, 0, 0);
+    const details = { autopilot_id: "autopilot-1" };
+    const groups = groupInboxItemsByDate([
+      item("today", "autopilot_run_completed", new Date(2026, 7, 26, 10).toISOString(), { details }),
+      item("yesterday", "autopilot_run_completed", new Date(2026, 7, 25, 10).toISOString(), { details }),
+    ], now);
+
+    expect(groups.map((group) => group.entries.map((entry) => inboxDisplayEntryIds(entry))))
+      .toEqual([[['today']], [['yesterday']]]);
+  });
+
+  it("exposes every covered row id for collapsed-row operations", () => {
+    const now = new Date(2026, 7, 26, 12, 0, 0);
+    const details = { autopilot_id: "autopilot-1" };
+    const entry = groupInboxItemsByDate([
+      item("read", "autopilot_run_completed", new Date(2026, 7, 26, 10).toISOString(), { details, read: true }),
+      item("unread", "autopilot_run_completed", new Date(2026, 7, 26, 9).toISOString(), { details }),
+    ], now)[0]!.entries[0]!;
+
+    expect(inboxDisplayEntryIds(entry)).toEqual(["read", "unread"]);
+    expect(countUnreadInboxItems(entry.items, now)).toBe(1);
   });
 
   it("filters the ledger by automation, mentions, and assignments", () => {

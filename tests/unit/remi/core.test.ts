@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RemiConfig } from "@shared/config.js";
 import { SESSIONS_FILE } from "@shared/config.js";
+import type { MultiremiAgent } from "@multiremi/contracts/types.js";
 import type { IncomingMessage } from "@connectors/base.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
-import { Remi } from "@remi/core.js";
+import { Remi as RemiCore } from "@remi/core.js";
 import * as sessDb from "@shared/db/sessions.js";
 
 function makeTmpDir(): string {
@@ -19,7 +20,9 @@ function makeTmpDir(): string {
 class MockProvider implements Provider {
   lastMessage: string | null = null;
   lastContext: string | null = null;
+  lastSystemPrompt: string | null = null;
   closed = false;
+  cleared: string[] = [];
 
   constructor(private _responseText: string = "Mock response", private _name: string = "acp:claude") {}
 
@@ -38,6 +41,7 @@ class MockProvider implements Provider {
   ): Promise<AgentResponse> {
     this.lastMessage = message;
     this.lastContext = options?.context ?? null;
+    this.lastSystemPrompt = options?.systemPrompt ?? null;
     return createAgentResponse({
       text: this._responseText,
       sessionId: "sess-mock",
@@ -56,6 +60,7 @@ class MockProvider implements Provider {
   ): AsyncGenerator<ProviderEvent> {
     this.lastMessage = message;
     this.lastContext = options?.context ?? null;
+    this.lastSystemPrompt = options?.systemPrompt ?? null;
     this._lastResponse = createAgentResponse({ text: this._responseText, sessionId: "sess-mock" });
     yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: this._responseText }] };
   }
@@ -68,6 +73,10 @@ class MockProvider implements Provider {
 
   async close(): Promise<void> {
     this.closed = true;
+  }
+
+  async clearSession(chatId?: string): Promise<void> {
+    this.cleared.push(chatId ?? "");
   }
 }
 
@@ -96,13 +105,27 @@ class MockFailProvider implements Provider {
   }
 }
 
+class ConcurrencyProvider extends MockProvider {
+  active = 0;
+  maxActive = 0;
+
+  override async *sendStream(
+    message: string,
+    options?: { systemPrompt?: string | null; context?: string | null; chatId?: string | null },
+  ): AsyncGenerator<ProviderEvent> {
+    this.active++;
+    this.maxActive = Math.max(this.maxActive, this.active);
+    try {
+      await Bun.sleep(20);
+      yield* super.sendStream(message, options);
+    } finally {
+      this.active--;
+    }
+  }
+}
+
 function makeConfig(tmpDir: string): RemiConfig {
   return {
-    provider: {
-      default: "claude",
-      claude: { timeout: 300, allowedTools: [] },
-      codex: { timeout: 300, allowedTools: [] },
-    },
     feishu: {
       appId: "",
       appSecret: "",
@@ -112,26 +135,54 @@ function makeConfig(tmpDir: string): RemiConfig {
       domain: "feishu",
       connectionMode: "websocket",
       userAccessToken: "",
-      triggerUserIds: [],
     },
     tokenSync: [],
-    cronJobs: [],
-    services: [],
-    botMenu: {},
-    mcp: [],
-    proxy: { http: "", noProxy: "" },
     plugins: { dir: join(tmpDir, "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
-    auth: { adminEmails: [] },
-    tracing: {
-      enabled: false,
-      logsDir: join(tmpDir, "logs"),
-      tracesDir: join(tmpDir, "traces"),
-      retentionDays: 7,
-    },
     logLevel: "INFO",
   };
 }
+
+function makeAgent(tmpDir: string, overrides: Partial<MultiremiAgent> = {}): MultiremiAgent {
+  return {
+    id: "agt_bot",
+    name: "Remi bot",
+    description: "",
+    avatarUrl: null,
+    provider: "claude",
+    workspaceId: "local",
+    ownerId: "owner",
+    visibility: "workspace",
+    role: "normal",
+    runtimeId: null,
+    instructions: "Follow the configured bot instructions.",
+    skills: [],
+    maxConcurrentTasks: 4,
+    cwd: tmpDir,
+    executable: null,
+    model: null,
+    allowedTools: [],
+    customEnv: {},
+    customArgs: [],
+    mcpConfig: null,
+    thinkingLevel: null,
+    issueCreationRequiresProposal: false,
+    supervisor: false,
+    archivedAt: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const Remi = class extends RemiCore {
+  constructor(
+    remiConfig: RemiConfig,
+    botProjects: ConstructorParameters<typeof RemiCore>[2] = null,
+  ) {
+    super(remiConfig, makeAgent(tmpDir), botProjects);
+  }
+};
 
 let tmpDir: string;
 let config: RemiConfig;
@@ -183,25 +234,10 @@ describe("RemiCore", () => {
     expect(row!.display_name).toContain("·"); // has genus separator
   });
 
-  it("appends daily note", async () => {
-    const remi = new Remi(config);
-    remi.addProvider(new MockProvider());
-    const msg: IncomingMessage = {
-      text: "Hello",
-      chatId: "test-1",
-      sender: "user",
-      connectorName: "cli",
-    };
-    await remi.handleMessage(msg);
-    const daily = remi.memory.readDaily();
-    expect(daily).toContain("Hello");
-  });
-
-  it("injects memory context", async () => {
+  it("uses agent instructions and Multiremi memory guidance without local memory context", async () => {
     const remi = new Remi(config);
     const provider = new MockProvider();
     remi.addProvider(provider);
-    remi.memory.writeMemory("User prefers uv");
     const msg: IncomingMessage = {
       text: "Hello",
       chatId: "test-1",
@@ -210,8 +246,9 @@ describe("RemiCore", () => {
       metadata: { cwd: undefined },
     };
     await remi.handleMessage(msg);
-    expect(provider.lastContext).not.toBeNull();
-    expect(provider.lastContext).toContain("uv");
+    expect(provider.lastContext).toBeNull();
+    expect(provider.lastSystemPrompt).toContain("Follow the configured bot instructions.");
+    expect(provider.lastSystemPrompt).toContain("remi memory search");
   });
 
   it("serializes lane messages", async () => {
@@ -231,6 +268,19 @@ describe("RemiCore", () => {
     };
     // Both should complete without errors
     await Promise.all([remi.handleMessage(msg1), remi.handleMessage(msg2)]);
+  });
+
+  it("applies the agent max concurrency across different lanes", async () => {
+    const remi = new RemiCore(config, makeAgent(tmpDir, { maxConcurrentTasks: 1 }));
+    const provider = new ConcurrencyProvider();
+    remi.addProvider(provider);
+
+    await Promise.all([
+      remi.handleMessage({ text: "First", chatId: "chat-a", sender: "user", connectorName: "cli" }),
+      remi.handleMessage({ text: "Second", chatId: "chat-b", sender: "user", connectorName: "cli" }),
+    ]);
+
+    expect(provider.maxActive).toBe(1);
   });
 
   it("throws when no providers", async () => {
@@ -281,6 +331,32 @@ describe("RemiCore", () => {
     // Both sessions exist independently
     expect(sessDb.getSessionId("chat-1")).not.toBeNull();
     expect(sessDb.getSessionId("chat-1:thread:msg-root-1")).not.toBeNull();
+  });
+
+  it("binds the first Feishu thread message to its topic workspace before provider execution", async () => {
+    const calls: Array<{ sessionKey: string; topicId: string }> = [];
+    const topicCwd = join(tmpDir, "workspaces", "_topics", "root-topic");
+    mkdirSync(topicCwd, { recursive: true });
+    const remi = new RemiCore(config, makeAgent(tmpDir), null, async (sessionKey, topicId) => {
+      calls.push({ sessionKey, topicId });
+      sessDb.ensureTopicSessionBinding(sessionKey, topicCwd);
+      return topicCwd;
+    });
+    remi.addProvider(new MockProvider());
+
+    await remi.handleMessage({
+      text: "Start topic",
+      chatId: "chat-topic",
+      sender: "user",
+      connectorName: "feishu",
+      metadata: { messageId: "msg-topic", rootId: "root-topic", chatType: "group" },
+    });
+
+    expect(calls).toEqual([{ sessionKey: "chat-topic:thread:root-topic", topicId: "root-topic" }]);
+    expect(sessDb.getSession("chat-topic:thread:root-topic")).toMatchObject({
+      cwd: topicCwd,
+      session_id: "sess-mock",
+    });
   });
 
   it("non-thread messages use main session", async () => {
@@ -461,6 +537,78 @@ describe("RemiCore", () => {
     expect(sessDb.getDisplayName("chat-clear")).toBe(nameBefore);
   });
 
+  it("/p lists only the server-projected Multiremi projects", async () => {
+    const projectDir = join(tmpDir, "project-one");
+    mkdirSync(projectDir);
+    const remi = new Remi(config, [{ id: "prj_one", title: "One", cwd: projectDir }]);
+    remi.addProvider(new MockProvider());
+
+    const response = await remi.handleMessage({
+      text: "/p",
+      chatId: "chat-project-list",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("prj_one  One");
+    expect(response.text).toContain(projectDir);
+  });
+
+  it("/p switches the persistent session cwd by Multiremi project id", async () => {
+    const projectDir = join(tmpDir, "project-switch");
+    mkdirSync(projectDir);
+    const provider = new MockProvider();
+    const remi = new Remi(config, [{ id: "prj_switch", title: "Switch", cwd: projectDir }]);
+    remi.addProvider(provider);
+    await remi.handleMessage({
+      text: "hello",
+      chatId: "chat-project-switch",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    const response = await remi.handleMessage({
+      text: "/p prj_switch",
+      chatId: "chat-project-switch",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("Switch (prj_switch)");
+    expect(sessDb.getSession("chat-project-switch")?.cwd).toBe(projectDir);
+    expect(sessDb.getSessionId("chat-project-switch")).toBeNull();
+    expect(provider.cleared).toContain("chat-project-switch");
+  });
+
+  it("/p rejects paths and projects outside the server projection", async () => {
+    const remi = new Remi(config, []);
+    remi.addProvider(new MockProvider());
+
+    const response = await remi.handleMessage({
+      text: `/p ${tmpDir}`,
+      chatId: "chat-project-reject",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("不存在，或未绑定到当前运行节点");
+    expect(sessDb.getSession("chat-project-reject")?.cwd ?? null).toBeNull();
+  });
+
+  it("/p fails visibly before the daemon project catalog is available", async () => {
+    const remi = new Remi(config);
+    remi.addProvider(new MockProvider());
+
+    const response = await remi.handleMessage({
+      text: "/p",
+      chatId: "chat-project-unavailable",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("项目目录暂不可用");
+  });
+
   // ── Session display name uniqueness ────────────────────
 
   it("generates unique display names with genus", async () => {
@@ -524,7 +672,7 @@ describe("RemiCore auto-recovery", () => {
     return [];
   }
 
-  async function collectStream(remi: Remi, msg: IncomingMessage): Promise<string[]> {
+  async function collectStream(remi: RemiCore, msg: IncomingMessage): Promise<string[]> {
     const texts: string[] = [];
     await remi.handleMessageStream(msg, async (stream) => {
       for await (const e of stream) texts.push(...textsOf(e));

@@ -10,9 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 bun install                                # Install dependencies (single root bun workspace)
 bun test                                   # Run all backend tests (bun:test; bunfig root = tests/)
-bun test tests/unit/memory/memory.test.ts  # Run single test file
+bun test tests/unit/daemon/agent-runtime-send-options.test.ts  # Run single test file
 bunx tsc --noEmit                          # Backend typecheck
-bun run apps/remi/main.ts serve            # Feishu-connector daemon (connectors + queue + admin UI)
+bun run apps/remi/main.ts start             # Multiremi daemon + configured Feishu channel
 cd frontend && bun run test                # Frontend Vitest suites (see TESTING.md)
 ```
 
@@ -32,9 +32,9 @@ Connector → IncomingMessage → Remi → AcpProvider (ACP session) → Provide
 
 **Message flow** (`core.ts` `_process()` → `core/message-stream.ts` `processStream()`):
 1. Resolve session key (chatId → sessionId, persisted in `~/.remi/remi.db`)
-2. Assemble runtime config (cwd, provider, group policy) and run an ACP `AgentSession`
-3. Append the interaction to the daily journal + record token metrics
-4. Return AgentResponse
+2. Resolve the `MULTIREMI_BOT_AGENT_ID` row through daemon registration/heartbeat
+3. Assemble cwd, provider, prompt, tools, env, args, MCP, and thinking from that agent row
+4. Run an ACP `AgentSession`, record token metrics, and return `AgentResponse`
 
 **Key interfaces**:
 - `Provider` (`packages/contracts/src/provider-types.ts`): `send()`, `healthCheck()`, `name`
@@ -46,22 +46,19 @@ Registered as `acp:claude` / `acp:codex`. Uses your Claude Code / Codex subscrip
 
 **Connectors**: `FeishuConnector` (Feishu/Lark — cards, streaming, threads, menus).
 
-**Memory**: markdown files under `~/.remi/memory/` (`MEMORY.md`, `daily/`, entity files).
-`MemoryStore` (`packages/memory/src/store.ts`) writes through `.versions/` backups, pruned to the
-newest 10 per file on each write. The MCP server (`packages/memory/src/mcp-server.ts`) exposes
-`recall` / `remember` / `backlinks` for on-demand search.
+**Memory**: Multiremi project memory is authoritative. Agents use the canonical `remi memory`
+commands (`recall`, `remember`, `get`, `update`, `forget`, `backlinks`) over the Multiremi API.
+Legacy files under `~/.remi/memory/` are migration input only: runtime code neither reads nor
+deletes them. See `docs/migrations/remi-memory-to-multiremi.md`.
 
-**Schedulers** (two, unrelated):
-- `remi:cron` BunQueue (`packages/queue`) — `builtin:heartbeat` (provider health, auth token
-  refresh, usage quota), `builtin:pulse`, `skill:gen|push|run`.
-- `MultiremiScheduler` (`packages/daemon/src/scheduler.ts`) — autopilot cron triggers + failure monitor.
+**Scheduler**: `MultiremiScheduler` (`packages/daemon/src/scheduler.ts`) owns autopilot cron
+triggers and failure monitoring. Remi has no separate local queue.
 
-Neither prunes `~/.remi/memory`: `.versions/` retention happens on each backup write, and
-`MemoryStore.cleanupOldDailies()` / `cleanupOldVersions()` have no production caller.
-
-**Config**: `RemiConfig` lives in SQLite (`remi_config` table in `~/.remi/remi.db`), loaded by
-`loadConfig()` with env-var overrides (`REMI_*`, `FEISHU_*`). `remi login` writes it. There is no
-`remi.toml` anymore.
+**Config**: ACP execution has one source of truth: the `multiremi_agents` row selected by
+`MULTIREMI_BOT_AGENT_ID`. Its `instructions`, provider/model/executable, cwd, tools, custom env,
+custom args, MCP config, thinking level, and concurrency limit feed the persistent Remi lane.
+`RemiConfig` remains temporarily for connector/auth/plugin/menu/tracing settings in
+`~/.remi/remi.db`; it is not an execution-config fallback. There is no `remi.toml`.
 
 ## Debugging Principles
 
@@ -78,4 +75,4 @@ Neither prunes `~/.remi/memory`: `.versions/` retention happens on each backup w
 - `LaneScheduler` (`packages/daemon/src/orchestrator.ts`) serializes each session key via a
   per-lane `AsyncLock`, so concurrent messages in one chat never interleave
 - Bun runtime, `bun:test` for testing
-- `node:fs` sync APIs for memory store (file I/O), `Bun.spawn()` for subprocesses
+- `Bun.spawn()` for subprocesses; keep sync file I/O out of async hot paths

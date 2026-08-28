@@ -5,7 +5,7 @@
  * and ACP adapter routing into a clean API surface.
  */
 
-import type { FeishuChannelConfig, GroupPolicy } from "./config.js";
+import type { FeishuChannelConfig, FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
 import { createLogger } from "@shared/logger.js";
 import { createFeishuClient } from "./client.js";
 import { startWebSocketListener, setGroupPolicy, flushDedupCacheSync, type FeishuWSHandle, type ParsedFeishuMessage } from "./receive.js";
@@ -56,6 +56,7 @@ export class FeishuChannel {
   private _activeSessions = new Map<string, FeishuStreamingSession>();
   private _abortHandler: ((sessionKey: string) => Promise<void>) | null = null;
   private _tokenProvider: TokenProvider | null = null;
+  private _senderAuthorizer: FeishuSenderAuthorizer | null = null;
 
   constructor(config: FeishuChannelConfig) {
     this._config = config;
@@ -81,19 +82,29 @@ export class FeishuChannel {
     return this;
   }
 
+  /** Inject the Multiremi workspace membership gate. */
+  setSenderAuthorizer(authorizer: FeishuSenderAuthorizer): this {
+    this._senderAuthorizer = authorizer;
+    return this;
+  }
+
   /** Start WebSocket listener. Returns a promise that never resolves (runs forever). */
   connect(): Promise<void> {
     if (!this._config.appId || !this._config.appSecret) {
       throw new Error("FeishuChannel: appId and appSecret are required");
     }
+    if (!this._senderAuthorizer) {
+      throw new Error("FeishuChannel: workspace membership authorizer is required");
+    }
 
     this._wsHandle = startWebSocketListener(
-      this._config as FeishuChannelConfig & { triggerUserIds?: string[] },
+      this._config,
       async (msg) => {
         for (const handler of this._messageHandlers) {
           await handler(msg).catch((err) => log.error(`message handler error: ${String(err)}`));
         }
       },
+      this._senderAuthorizer,
     );
 
     return new Promise<void>(() => {

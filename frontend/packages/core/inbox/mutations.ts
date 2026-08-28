@@ -50,6 +50,31 @@ export function useArchiveInbox() {
   });
 }
 
+export function useArchiveInboxItems() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (ids: string[]) => Promise.all(ids.map((id) => api.archiveInbox(id))),
+    onMutate: async (ids) => {
+      await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
+      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
+      const selected = new Set(ids);
+      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
+        old?.map((item) => selected.has(item.id)
+          ? { ...item, archived: true, read: true }
+          : item),
+      );
+      return { prev };
+    },
+    onError: (_err, _ids, ctx) => {
+      if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+    },
+  });
+}
+
 export function useMarkAllInboxRead() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

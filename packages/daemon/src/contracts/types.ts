@@ -45,6 +45,7 @@ export interface AgentTaskAgent {
   executable: string | null;
   allowedTools: string[];
   customEnv: Record<string, string>;
+  customArgs?: string[];
 
   // Ephemeral per-task MCP servers (mcp/ephemeral.ts). Standard .mcp.json shape
   // (`{ mcpServers: {...} }`); parsed defensively. Optional + unknown so the

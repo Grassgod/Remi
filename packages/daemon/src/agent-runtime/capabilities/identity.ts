@@ -1,23 +1,20 @@
-import type { RemiConfig } from "@shared/config.js";
 import type { CapabilityBlock, PersistentContext, EphemeralContext } from "../types.js";
 
 export const identityBlock: CapabilityBlock = {
   name: "identity",
 
   persistent(ctx: PersistentContext) {
-    const { message, groupConfig, sessionRow } = ctx;
-    // Same resolution order Remi uses to pick the provider instance
-    // (group config → the session's P2P choice → default), so the model we
-    // assemble belongs to the agent that will actually run the turn.
-    const agentType = groupConfig?.provider ?? sessionRow?.provider ?? ctx.config.provider.default;
+    const { message, sessionRow, agent } = ctx;
     return {
-      agentType,
-      model: agentModel(ctx.config, agentType),
+      agentType: agent.provider,
+      executable: agent.executable ?? undefined,
+      customArgs: agent.customArgs,
+      model: agent.model,
+      effort: agent.thinkingLevel || null,
       chatId: ctx.sessionKey,
       sessionId: sessionRow?.session_id || undefined,
       media: message.media,
-      allowedTools: groupConfig?.allowedTools?.length ? groupConfig.allowedTools : undefined,
-      addDirs: groupConfig?.addDirs?.length ? groupConfig.addDirs : undefined,
+      allowedTools: agent.allowedTools.length ? agent.allowedTools : undefined,
       traceId: (message.metadata?.messageId as string) ?? undefined,
     };
   },
@@ -28,6 +25,7 @@ export const identityBlock: CapabilityBlock = {
     return {
       agentType: agent?.provider ?? "claude",
       executable: agent?.executable ?? undefined,
+      customArgs: agent?.customArgs ?? [],
       model: agent?.model ?? null,
       // "" is the stored "follow the CLI default" value — never send it.
       effort: agent?.thinkingLevel || null,
@@ -38,10 +36,3 @@ export const identityBlock: CapabilityBlock = {
     };
   },
 };
-
-/** Model configured for an agent type in remi.toml (mirrors Remi._buildProvider). */
-function agentModel(config: RemiConfig, agentType: string): string | null {
-  const type = agentType.startsWith("acp:") ? agentType.slice("acp:".length) : agentType;
-  const agentCfg = type === "codex" ? config.provider.codex : config.provider.claude;
-  return agentCfg?.model ?? null;
-}

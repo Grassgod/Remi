@@ -5,38 +5,32 @@
  * 1. Receive messages from any connector (IncomingMessage)
  * 2. Lane Queue — serialize per chatId to prevent race conditions
  * 3. Session management — chatId → sessionId mapping
- * 4. Memory injection — assemble context before calling provider
- * 5. Provider routing — select provider + fallback
+ * 4. Assemble the Multiremi agent row into an ACP session
+ * 5. Run the configured provider
  * 6. Response dispatch — return AgentResponse via originating connector
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { homedir } from "node:os";
-import { spawn } from "node:child_process";
 import type { RemiConfig } from "@shared/config.js";
-import { MEMORY_DIR, SESSIONS_FILE } from "@shared/config.js";
-import { GroupConfigStore } from "./group/store.js";
-import type { GroupConfig } from "./group/model.js";
+import { REMI_HOME, SESSIONS_FILE } from "@shared/config.js";
+import type { MultiremiAgent, MultiremiDaemonBotProject } from "@multiremi/contracts/types.js";
 import type { Connector, IncomingMessage } from "@connectors/base.js";
 import { LaneScheduler, resolveSessionKey } from "@daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
 import { AcpProvider } from "@acp/index.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
-import { FeishuConnector } from "@connectors/feishu/index.js";
-import { flushDedupCacheSync, MenuSyncer } from "@connectors/feishu/sdk.js";
+import { buildAgentMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
+import { FeishuConnector, type FeishuSenderAuthorizer } from "@connectors/feishu/index.js";
 
 import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
 import type { TokenSyncRule } from "@auth/token-sync.js";
 import { PluginRegistry } from "@daemon/agent-runtime/plugins/registry.js";
-import { MemoryStore } from "@memory/store.js";
-import { RemiQueueManager } from "@queue/index.js";
 import { MetricsCollector } from "@shared/metrics/collector.js";
-import { getDb } from "@shared/db/index.js";
 import * as sessDb from "@shared/db/sessions.js";
 import { createLogger, flushLogs } from "@shared/logger.js";
 import { TraceCollector } from "@shared/tracing.js";
-import { writeEcosystem, runBuildsSync, getEcosystemPath } from "@daemon/pm2.js";
 
 import { handleMessageStream, processStream } from "./core/message-stream.js";
 
@@ -44,15 +38,11 @@ const log = createLogger("core");
 
 // AsyncLock + resolveSessionKey extracted to daemon/orchestrator.ts in D6.
 
-// System prompt now lives in ~/.remi/soul.md (symlinked to ~/.claude/CLAUDE.md)
-// Claude CLI loads it automatically — no need to inject via --append-system-prompt
-
 export class Remi {
   config: RemiConfig;
-  memory: MemoryStore;
+  readonly agent: MultiremiAgent;
   metrics: MetricsCollector;
   traceCollector: TraceCollector;
-  queue: RemiQueueManager;
   authStore: AuthStore | null = null;
   _configManager: any = null; // ConfigManager instance
   _providers = new Map<string, Provider>();
@@ -60,25 +50,27 @@ export class Remi {
   // Per-lane (per session-key) serialization. Unbounded by default, matching the
   // monolith's historical behavior; the shared LaneScheduler also caps total
   // concurrency, which is what the multiremi daemon uses via its SQL queue.
-  readonly _scheduler = new LaneScheduler();
+  readonly _scheduler: LaneScheduler;
   readonly _activeAborts = new Map<string, AbortController>();
   readonly _runtime = new AgentRuntime();
-  _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
+  private _botProjects: Map<string, MultiremiDaemonBotProject> | null;
+  private readonly _ensureTopicWorkspaceCallback: ((sessionKey: string, topicId: string) => Promise<string | null>) | null;
 
-  constructor(config: RemiConfig) {
+  constructor(
+    config: RemiConfig,
+    agent: MultiremiAgent,
+    botProjects: MultiremiDaemonBotProject[] | null = null,
+    ensureTopicWorkspace: ((sessionKey: string, topicId: string) => Promise<string | null>) | null = null,
+  ) {
     this.config = config;
-    // Initialize VectorStore if embedding config is available
-    let vectorStore: InstanceType<typeof import("@shared/db/vector-store.js").VectorStore> | null = null;
-    if (config.embedding?.apiKey) {
-      try {
-        const { VectorStore } = require("@shared/db/vector-store.js");
-        vectorStore = new VectorStore(config.embedding);
-      } catch { /* vector search unavailable */ }
-    }
-    this.memory = new MemoryStore(MEMORY_DIR, vectorStore);
-    this.metrics = new MetricsCollector(dirname(MEMORY_DIR));
+    this.agent = agent;
+    this._botProjects = botProjects ? new Map(botProjects.map((project) => [project.id, project])) : null;
+    this._ensureTopicWorkspaceCallback = ensureTopicWorkspace;
+    if (!agent.cwd?.trim()) throw new Error(`Bot agent ${agent.id} has no cwd configured`);
+    if (agent.archivedAt) throw new Error(`Bot agent ${agent.id} is archived`);
+    this._scheduler = new LaneScheduler({ maxConcurrency: agent.maxConcurrentTasks });
+    this.metrics = new MetricsCollector(REMI_HOME);
     this.traceCollector = new TraceCollector();
-    this.queue = new RemiQueueManager();
     this._migrateSessionsJson();
   }
 
@@ -89,7 +81,7 @@ export class Remi {
   }
 
   _getProvider(name?: string | null): Provider {
-    const n = name ?? `acp:${this.config.provider.default}`;
+    const n = name ?? `acp:${this.agent.provider}`;
     let provider = this._providers.get(n);
     if (!provider) {
       // "acp" → match first "acp:*" variant
@@ -114,19 +106,21 @@ export class Remi {
     this._connectors.push(connector);
   }
 
-  /** Look up a registered connector by name. */
-  getConnector(name: string): Connector | undefined {
-    return this._connectors.find((c) => c.name === name);
+  setBotProjects(projects: MultiremiDaemonBotProject[]): void {
+    this._botProjects = new Map(projects.map((project) => [project.id, project]));
   }
 
-  /** Get the Feishu connector (for mission pipeline streaming). */
-  getFeishuConnector(): import("@connectors/feishu/index.js").FeishuConnector | null {
-    return (this._connectors.find((c) => c.name === "feishu") as any) ?? null;
+  _listBotProjects(): MultiremiDaemonBotProject[] | null {
+    return this._botProjects ? [...this._botProjects.values()] : null;
   }
 
-  /** Register a callback that fires when /restart is invoked. */
-  onRestart(cb: (info: { chatId: string; connectorName?: string }) => void): void {
-    this._onRestart = cb;
+  _getBotProject(id: string): MultiremiDaemonBotProject | null {
+    return this._botProjects?.get(id) ?? null;
+  }
+
+  async _ensureTopicWorkspace(sessionKey: string, topicId: string | null): Promise<string | null> {
+    if (!topicId || !this._ensureTopicWorkspaceCallback) return null;
+    return this._ensureTopicWorkspaceCallback(sessionKey, topicId);
   }
 
   /** Abort active processing for a session (called by /esc). */
@@ -148,18 +142,6 @@ export class Remi {
    */
   _resolveSessionKey(msg: IncomingMessage): string {
     return resolveSessionKey(msg);
-  }
-
-  // ── Group config resolution ──────────────────────────────
-
-  /** Look up group config from DB by chatId. Returns all routing info in one query. */
-  _getGroupConfig(chatId: string): GroupConfig | null {
-    try {
-      const store = new GroupConfigStore();
-      return store.getByChatId(chatId);
-    } catch {
-      return null;
-    }
   }
 
   // ── Message handling (the core loop) ─────────────────────
@@ -213,8 +195,18 @@ export class Remi {
    * Build a fully-wired Remi instance from config.
    * Replaces the old RemiDaemon._buildRemi() — all component assembly in one place.
    */
-  static boot(config: RemiConfig): Remi {
-    const remi = new Remi(config);
+  static boot(
+    config: RemiConfig,
+    agent: MultiremiAgent,
+    botProjects: MultiremiDaemonBotProject[],
+    options: {
+      authorizeFeishuSender?: FeishuSenderAuthorizer;
+      daemonPort?: number;
+      workspacesRoot?: string;
+      ensureTopicWorkspace?: (sessionKey: string, topicId: string) => Promise<string | null>;
+    } = {},
+  ): Remi {
+    const remi = new Remi(config, agent, botProjects, options.ensureTopicWorkspace ?? null);
 
     // 1. AuthStore (1Passport) with token sync rules
     const syncRules: TokenSyncRule[] | undefined =
@@ -244,29 +236,24 @@ export class Remi {
       log.warn("Plugin core dispatch failed:", e);
     }
 
-    // 2. Providers — register primary + both ACP agents
-    const provider = Remi._buildProvider(config);
+    // 2. Provider — one Multiremi agent row is the sole execution config.
+    const provider = Remi._buildProvider(agent, {
+      ...(options.daemonPort ? { MULTIREMI_DAEMON_PORT: String(options.daemonPort) } : {}),
+      ...(options.workspacesRoot ? { MULTIREMI_WORKSPACES_ROOT: options.workspacesRoot } : {}),
+    });
     remi.addProvider(provider);
-
-    // Auto-register the other ACP agent so /switch claude ↔ /switch codex works
-    const otherType = config.provider.default === "claude" ? "codex" : "claude";
-    if (!remi._providers.has(`acp:${otherType}`)) {
-      try {
-        remi.addProvider(Remi._buildProvider(config, otherType));
-      } catch (e) {
-        log.warn(`Failed to build acp:${otherType} provider:`, e);
-      }
-    }
 
     // 3. Feishu connector
     if (hasFeishuCreds) {
+      if (!options.authorizeFeishuSender) {
+        throw new Error("Feishu workspace membership authorizer is required");
+      }
       const feishuConfig = { ...config.feishu };
-      // Inject the group-policy lookup so the connector (L1) never imports the
-      // remi-product GroupConfigStore (L3) itself.
-      const gcStore = new GroupConfigStore();
-      const feishu = new FeishuConnector(feishuConfig, {
-        getByChatId: (chatId) => gcStore.getByChatId(chatId),
-      });
+      const feishu = new FeishuConnector(
+        feishuConfig,
+        { getByChatId: () => ({ monitor: false }) },
+        options.authorizeFeishuSender,
+      );
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
       // Wire /esc abort: (1) signal abort to unblock readline, (2) kill CLI process
       feishu.setAbortHandler(async (chatId: string) => {
@@ -278,16 +265,6 @@ export class Remi {
       });
       remi.addConnector(feishu);
       log.info("Registered Feishu connector (with 1Passport)");
-
-      // Bot menu sync (fire-and-forget on startup)
-      const menuSyncer = new MenuSyncer({
-        appId: config.feishu.appId,
-        appSecret: config.feishu.appSecret,
-        domain: config.feishu.domain,
-      });
-      menuSyncer.syncAll(config.botMenu, config.feishu.triggerUserIds).catch((err) => {
-        log.warn(`Bot menu sync failed: ${err.message}`);
-      });
     }
 
     // 4. ConfigManager — symlinks
@@ -296,105 +273,25 @@ export class Remi {
     configManager.ensureAllProjects();
     configManager.ensureGlobals();
 
-    // 5. Restart handler
-    remi.onRestart((info) => remi._handleRestart(info));
-
     return remi;
   }
 
-  private static _buildProvider(config: RemiConfig, agentType?: string) {
-    const rawType = agentType ?? config.provider.default;
+  private static _buildProvider(agent: MultiremiAgent, runtimeEnv: Record<string, string> = {}) {
+    const rawType = agent.provider;
     const type = rawType.startsWith("acp:") ? rawType.slice("acp:".length) : rawType;
     if (type !== "claude" && type !== "codex") {
       throw new Error(`Unknown ACP provider: ${rawType}`);
     }
-    const agentCfg = config.provider[type] ?? config.provider.claude;
     return new AcpProvider({
       agentType: type,
-      model: agentCfg.model,
-      timeout: agentCfg.timeout,
-      allowedTools: agentCfg.allowedTools,
-      cwd: homedir(),
-      executable: agentCfg.executable,
-      // ACP wire shape: `args`/`env` are required and `env` is an
-      // EnvVariable[] — a Record env makes the agent drop the server silently.
-      getMcpServers: () => config.mcp
-        .filter((e) => !e.agents || e.agents.includes(type))
-        .map((e) => ({
-          name: e.name,
-          command: e.command,
-          args: e.args ?? [],
-          env: Object.entries(e.env ?? {}).map(([name, value]) => ({ name, value })),
-        })),
+      model: agent.model,
+      allowedTools: agent.allowedTools,
+      cwd: agent.cwd!,
+      executable: agent.executable ?? undefined,
+      args: agent.customArgs,
+      env: { ...agent.customEnv, ...runtimeEnv },
+      getMcpServers: () => buildAgentMcpServers(agent.mcpConfig),
     });
-  }
-
-  // ── Restart / notify ──────────────────────────────────────
-
-  private static get _restartNotifyPath(): string {
-    return join(homedir(), ".remi", "restart-notify.json");
-  }
-
-  private _handleRestart(info: { chatId: string; connectorName?: string }): void {
-    log.info("Restart requested — rebuilding services and triggering PM2 restart...");
-
-    // Save notify info so post-restart we can notify the user
-    const dir = join(homedir(), ".remi");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(Remi._restartNotifyPath, JSON.stringify(info));
-
-    flushDedupCacheSync();
-    runBuildsSync(this.config);
-    writeEcosystem(this.config);
-
-    const child = spawn("pm2", ["restart", getEcosystemPath(), "--update-env"], {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
-  }
-
-  /** After startup, check if we need to notify someone that restart succeeded. */
-  async sendRestartNotify(): Promise<void> {
-    const filePath = Remi._restartNotifyPath;
-    if (!existsSync(filePath)) return;
-
-    let info: { chatId: string; connectorName?: string };
-    try {
-      const raw = readFileSync(filePath, "utf-8");
-      info = JSON.parse(raw);
-      unlinkSync(filePath);
-      log.info(`Restart notify: connector=${info.connectorName}, chatId=${info.chatId}`);
-    } catch (e) {
-      log.warn("Restart notify: failed to read file:", e);
-      if (existsSync(filePath)) unlinkSync(filePath);
-      return;
-    }
-
-    const connector = this._connectors.find(
-      (c) => c.name === (info.connectorName ?? ""),
-    );
-    if (!connector) {
-      log.warn(
-        `Restart notify: connector "${info.connectorName}" not found (available: ${this._connectors.map((c) => c.name).join(", ")})`,
-      );
-      return;
-    }
-
-    const maxRetries = 3;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await connector.reply(info.chatId, { text: "Remi 重启成功，已上线。" });
-        log.info(`Restart notification sent to ${info.connectorName}:${info.chatId}`);
-        return;
-      } catch (e) {
-        log.warn(`Restart notify attempt ${attempt}/${maxRetries} failed: ${String(e)}`);
-        if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, 3000));
-        }
-      }
-    }
-    log.error("Restart notification failed after all retries.");
   }
 
   // ── Lifecycle ─────────────────────────────────────────────

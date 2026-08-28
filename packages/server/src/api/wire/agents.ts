@@ -100,3 +100,20 @@ export function daemonClaimAgentResponse(agent: MultiremiAgent): Record<string, 
     max_concurrent_tasks: agent.maxConcurrentTasks,
   };
 }
+
+export function daemonBotAgentResponse(agent: MultiremiAgent): Record<string, unknown> {
+  return {
+    ...daemonClaimAgentResponse(agent),
+    description: agent.description,
+    avatar_url: agent.avatarUrl,
+    workspace_id: agent.workspaceId,
+    owner_id: agent.ownerId,
+    visibility: agent.visibility,
+    runtime_id: agent.runtimeId,
+    issue_creation_requires_proposal: agent.issueCreationRequiresProposal,
+    supervisor: agent.supervisor === true,
+    archived_at: agent.archivedAt,
+    created_at: agent.createdAt,
+    updated_at: agent.updatedAt,
+  };
+}

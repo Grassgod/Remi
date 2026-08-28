@@ -4,6 +4,8 @@
 > 当前布局已迁到 `packages/*` + `apps/*`,以 `README.md` 的 Project Structure 与 `CLAUDE.md` 为准;
 > 文中的 `apps/console/`、`imaging/`、`scripts/check-layers.ts` 都未存活(分层守卫落地为
 > `tests/arch/package-boundaries.test.ts`)。
+> `packages/memory` 与 `packages/queue` 也已分别在 MUL-69 W2/W1 退役；下文目录树仅用于
+> 还原 2026-06 的设计语境，不代表当前可用包。当前 agent 配置来自 `multiremi_agents`。
 
 > 核心理念：**像搭积木**——每个模块是松耦合的独立块,逐层向上,上层复用底层能力。
 > 目录树 = 架构图的投影。拿着图,每个框直接指到一个目录。

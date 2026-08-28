@@ -4,8 +4,8 @@
  * Creates a streaming card, appends permission forms one by one,
  * waits for you to actually click, then shows what was received.
  *
- * NOTE: pm2 remi should be stopped first to avoid WebSocket conflict.
- * Usage: pm2 stop remi && bun run tests/manual/test-permission-callback.ts
+ * NOTE: the running Remi Feishu channel should be stopped first to avoid a WebSocket conflict.
+ * Usage: stop the Remi service, then run this script directly with Bun.
  */
 
 import { createFeishuClient } from "@connectors/feishu/client.js";
@@ -35,7 +35,7 @@ async function main() {
     appSecret: config.appSecret,
     verificationToken: config.verificationToken,
     encryptKey: config.encryptKey,
-  }, async () => {});
+  }, async () => {}, async () => false);
   console.log("WebSocket connected\n");
 
   const session = new FeishuStreamingSession(client, creds);

@@ -1,6 +1,5 @@
 /**
- * ConfigManager — symlink-based config management (CLAUDE.md → soul.md,
- * projects/).
+ * ConfigManager — symlink-based Claude project/skills management.
  */
 
 import {
@@ -15,7 +14,7 @@ import {
   unlinkSync,
   cpSync,
 } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { createLogger } from "../logger.js";
 
@@ -45,9 +44,21 @@ export interface MappingStatus {
   target: string;
   type: "dir" | "file";
   status: LinkStatus;
-  category: "soul" | "global" | "project";
+  category: "global" | "project";
   projectAlias: string | null;
   parentHash: string | null;
+}
+
+export function removeLegacySoulSymlink(source: string, legacySoul: string): boolean {
+  try {
+    if (!lstatSync(source).isSymbolicLink()) return false;
+    const target = resolve(dirname(source), readlinkSync(source));
+    if (target !== resolve(legacySoul)) return false;
+    unlinkSync(source);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ── ConfigManager ──────────────────────────────────────────────
@@ -146,12 +157,12 @@ export class ConfigManager {
     return [this.ensureProjectsRoot()];
   }
 
-  ensureForCwd(_cwd: string): void {
-    this.ensureProjectsRoot();
-  }
-
   ensureGlobals(): void {
-    this.ensureOne(join(CLAUDE_HOME, "CLAUDE.md"), join(REMI_HOME, "soul.md"), "file");
+    const legacySoul = join(REMI_HOME, "soul.md");
+    const claudeInstructions = join(CLAUDE_HOME, "CLAUDE.md");
+    if (removeLegacySoulSymlink(claudeInstructions, legacySoul)) {
+      log.info(`removed legacy ${claudeInstructions} → ${legacySoul} mapping`);
+    }
 
     const remiSkills = join(REMI_HOME, "skills");
     if (existsSync(remiSkills)) {
@@ -258,14 +269,6 @@ export class ConfigManager {
 
   private _collectKnownMappings(): Array<Omit<MappingStatus, "status">> {
     return [
-      {
-        source: join(CLAUDE_HOME, "CLAUDE.md"),
-        target: join(REMI_HOME, "soul.md"),
-        type: "file",
-        category: "soul",
-        projectAlias: null,
-        parentHash: null,
-      },
       {
         source: CLAUDE_PROJECTS,
         target: REMI_PROJECTS,

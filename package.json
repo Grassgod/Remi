@@ -2,7 +2,7 @@
   "name": "remi",
   "version": "0.2.53",
   "packageManager": "bun@1.3.14",
-  "description": "Remi - Personal AI assistant with persistent memory, multi-connector messaging (CLI, Lark/Feishu), and Claude Code integration.",
+  "description": "Remi - Multiremi agent runtime with multi-connector messaging and ACP provider integration.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/user/remi",
@@ -17,7 +17,7 @@
     "ai-assistant",
     "personal-ai",
     "claude",
-    "memory-system",
+    "multiremi",
     "feishu",
     "lark",
     "bun"
@@ -32,8 +32,6 @@
     "remi": "./apps/remi/main.ts"
   },
   "scripts": {
-    "start": "bun run apps/remi/main.ts serve",
-    "serve": "bun run apps/remi/main.ts serve",
     "platform-updater": "bun run apps/platform-updater/main.ts",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
     "lock:clean": "bun run scripts/clean-lockfile.ts",
@@ -53,14 +51,12 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
-    "bunqueue": "^2.6.26",
     "croner": "^10.0.1",
     "gray-matter": "^4.0.3",
     "hono": "^4.12.21",
     "isomorphic-git": "1.41.4",
     "sharp": "^0.34.5",
-    "smol-toml": "^1.6.0",
-    "sqlite-vec": "^0.1.7-alpha.2"
+    "smol-toml": "^1.6.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

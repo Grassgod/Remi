@@ -456,7 +456,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
-    const issues = parentIds.flatMap((parentId) => store.listChildIssues(parentId));
+    const issues = parentIds
+      .flatMap((parentId) => store.listChildIssues(parentId))
+      .map((child) => issueCompatibilityResponse(child));
     return c.json({ issues, total: issues.length });
   });
   app.get("/api/multiremi/issues/children", (c) => {
@@ -863,7 +865,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const children = store.listChildIssues(issue.id);
-    return c.json({ issues: children, total: children.length });
+    return c.json({
+      issues: children.map((child) => issueCompatibilityResponse(child)),
+      total: children.length,
+    });
   });
   app.get("/api/multiremi/issues/:id/dependencies", (c) => {
     const issue = issueFromParam(store, c);

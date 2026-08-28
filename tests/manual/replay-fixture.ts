@@ -27,7 +27,7 @@ const args = process.argv.slice(2);
 if (args.length === 0 || args[0] === "--help") {
   console.log(`Usage: bun run tests/manual/replay-fixture.ts <fixture-name> [--speed <multiplier>] [--chat <chat_id>]`);
   console.log(`  --speed: 0.5, 1 (default), 2, 5, instant`);
-  console.log(`  --chat: target chat_id (default: from trigger_user_ids in config)`);
+  console.log(`  --chat: target chat_id (default: FEISHU_TEST_CHAT_ID)`);
   console.log(`  --agent: claude | codex (default: inferred from the fixture name)`);
   process.exit(0);
 }

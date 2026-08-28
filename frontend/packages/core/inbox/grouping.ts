@@ -16,6 +16,14 @@ export type InboxDateGroup = "today" | "yesterday" | "this_week" | "earlier";
 
 export interface InboxItemGroup {
   key: InboxDateGroup;
+  /** All rows in the date bucket, used by date-level operations. */
+  items: InboxItem[];
+  /** Display rows after successful autopilot runs are collapsed. */
+  entries: InboxDisplayEntry[];
+}
+
+export interface InboxDisplayEntry {
+  item: InboxItem;
   items: InboxItem[];
 }
 
@@ -106,8 +114,27 @@ export function groupInboxItemsByDate(items: InboxItem[], now = new Date()): Inb
   }
 
   return (["today", "yesterday", "this_week", "earlier"] as const)
-    .map((key) => ({ key, items: grouped[key] }))
+    .map((key) => ({
+      key,
+      items: grouped[key],
+      entries: mergeAutopilotRuns(grouped[key]),
+    }))
     .filter((group) => group.items.length > 0);
+}
+
+export function inboxDisplayEntryIds(entry: InboxDisplayEntry): string[] {
+  return entry.items.map((item) => item.id);
+}
+
+export function isInboxDisplayEntryRead(entry: InboxDisplayEntry): boolean {
+  return entry.items.every((item) => item.read);
+}
+
+export function countUnreadInboxItems(items: InboxItem[], now = new Date()): number {
+  return groupInboxItemsByDate(deduplicateInboxItems(items), now)
+    .flatMap((group) => group.entries)
+    .filter((entry) => !isInboxDisplayEntryRead(entry))
+    .length;
 }
 
 export function countAttentionUnreadInboxItems(items: InboxItem[]): number {
@@ -119,4 +146,30 @@ export function countAttentionUnreadInboxItems(items: InboxItem[]): number {
 
 function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function mergeAutopilotRuns(items: InboxItem[]): InboxDisplayEntry[] {
+  const entries: InboxDisplayEntry[] = [];
+  const successfulRuns = new Map<string, InboxDisplayEntry>();
+  const newestFirst = [...items].sort(
+    (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+  );
+  for (const item of newestFirst) {
+    const autopilotId = item.type === "autopilot_run_completed"
+      ? item.details?.autopilot_id
+      : null;
+    if (!autopilotId) {
+      entries.push({ item, items: [item] });
+      continue;
+    }
+    const existing = successfulRuns.get(autopilotId);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+    const entry = { item, items: [item] };
+    successfulRuns.set(autopilotId, entry);
+    entries.push(entry);
+  }
+  return entries;
 }

@@ -17,12 +17,21 @@ export const workspaceKeys = {
     ["workspaces", wsId, "squads", squadId, "members-status"] as const,
   skills: (wsId: string) => ["workspaces", wsId, "skills"] as const,
   assigneeFrequency: (wsId: string) => ["workspaces", wsId, "assignee-frequency"] as const,
+  botMenu: (wsId: string) => ["workspaces", wsId, "bot-menu"] as const,
 };
 
 export function workspaceListOptions() {
   return queryOptions({
     queryKey: workspaceKeys.list(),
     queryFn: () => api.listWorkspaces(),
+  });
+}
+
+export function botMenuOptions(wsId: string) {
+  return queryOptions({
+    queryKey: workspaceKeys.botMenu(wsId),
+    queryFn: () => api.getBotMenu(wsId),
+    enabled: !!wsId,
   });
 }
 
