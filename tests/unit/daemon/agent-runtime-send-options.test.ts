@@ -58,6 +58,7 @@ function persistentContext(overrides: { model?: string; provider?: string; sessi
       workspaceId: "local",
       ownerId: "owner",
       visibility: "workspace",
+      role: "normal",
       runtimeId: null,
       instructions: "agent row rules",
       skills: [],

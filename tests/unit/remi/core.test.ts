@@ -157,6 +157,7 @@ function makeAgent(tmpDir: string, overrides: Partial<MultiremiAgent> = {}): Mul
     workspaceId: "local",
     ownerId: "owner",
     visibility: "workspace",
+    role: "normal",
     runtimeId: null,
     instructions: "Follow the configured bot instructions.",
     skills: [],
