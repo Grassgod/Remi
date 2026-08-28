@@ -60,6 +60,7 @@ export function encodeProjectKnowledgeDocument(doc: MultiremiProjectDoc): string
     project_id: doc.projectId,
     kind: doc.kind,
     slug: doc.slug,
+    path: doc.path,
     title: doc.title,
     summary: doc.summary,
     tags: doc.tags,

@@ -202,6 +202,10 @@
     "title": "エージェントを編集",
     "description": "エージェントの基本情報、エンジン、モデル、公開範囲、同時実行数、指示を更新します。",
     "instructions_placeholder": "クリックして指示を表示・編集",
+    "role_label": "権限ロール",
+    "role_normal": "ノーマル",
+    "role_maintainer": "メンテナー",
+    "role_supervisor": "スーパーバイザー",
     "save": "変更を保存",
     "saving": "保存中...",
     "cancel": "キャンセル"

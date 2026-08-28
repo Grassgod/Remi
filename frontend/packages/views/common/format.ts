@@ -95,18 +95,37 @@ export function formatElapsedSince(
   return formatElapsedMs(nowMs - start, opts);
 }
 
+/** Compact-notation tiers, largest first. */
+const TOKEN_TIERS = [
+  { unit: 1_000_000_000_000, suffix: "T" },
+  { unit: 1_000_000_000, suffix: "B" },
+  { unit: 1_000_000, suffix: "M" },
+  { unit: 1_000, suffix: "K" },
+] as const;
+
 /**
- * Compact token count: `1.5K` / `2M` / `842`. Near-integer readings drop the
- * decimal ("2K", not "2.0K") because the extra digit is noise at that scale.
+ * Compact token count: `1.5K` / `2M` / `1.4B` / `1T` / `842`.
+ *
+ * The tier is chosen from the *rounded* reading, not the raw magnitude, so a
+ * value that rounds up past its tier promotes instead of overflowing it —
+ * 999,999,999 reads "1B", never "1000.0M". Rounding is also what decides the
+ * decimal: a reading that lands on an integer from either side drops it ("2B",
+ * not "2.0B"), because the extra digit is noise at that scale.
  */
 export function formatTokens(n: number): string {
-  if (n >= 1_000_000) {
-    const m = n / 1_000_000;
-    return m % 1 < 0.05 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
-  }
-  if (n >= 1_000) {
-    const k = n / 1_000;
-    return k % 1 < 0.05 ? `${Math.round(k)}K` : `${k.toFixed(1)}K`;
+  for (let i = 0; i < TOKEN_TIERS.length; i++) {
+    const tier = TOKEN_TIERS[i]!;
+    if (n < tier.unit) continue;
+    const reading = Math.round((n / tier.unit) * 10) / 10;
+    // Overflowed this tier — re-read it one tier up, where it fits.
+    if (reading >= 1000 && i > 0) {
+      const up = TOKEN_TIERS[i - 1]!;
+      const promoted = Math.round((n / up.unit) * 10) / 10;
+      return `${promoted}${up.suffix}`;
+    }
+    return Number.isInteger(reading)
+      ? `${reading}${tier.suffix}`
+      : `${reading.toFixed(1)}${tier.suffix}`;
   }
   return n.toLocaleString();
 }

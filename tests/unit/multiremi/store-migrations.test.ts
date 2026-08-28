@@ -103,7 +103,7 @@ describe("store migrations", () => {
     ]));
     expect(columnNames(database, "multiremi_agent_plugin_bindings")).not.toContain("task_kind");
     expect(columnNames(database, "multiremi_project_docs")).toEqual(expect.arrayContaining([
-      "storage_backend", "content_uri", "content_sha256", "sync_status", "sync_error", "snapshot_oid",
+      "path", "storage_backend", "content_uri", "content_sha256", "sync_status", "sync_error", "snapshot_oid",
     ]));
     expect(columnNames(database, "multiremi_project_doc_revisions")).toEqual(expect.arrayContaining([
       "content_uri", "content_sha256", "snapshot_oid",
@@ -134,6 +134,54 @@ describe("store migrations", () => {
       "auto_update_last_checked_at",
       "auto_update_last_result",
     ]));
+  });
+
+  it("backfills Project Wiki paths from stable slugs on legacy databases", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_project_docs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        kind TEXT NOT NULL DEFAULT 'wiki',
+        slug TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT,
+        body TEXT NOT NULL DEFAULT '',
+        tags TEXT NOT NULL DEFAULT '[]',
+        pinned INTEGER NOT NULL DEFAULT 0,
+        refs TEXT NOT NULL DEFAULT '[]',
+        source_task_id TEXT,
+        source_issue_id TEXT,
+        author_type TEXT,
+        author_id TEXT,
+        updated_by_type TEXT,
+        updated_by_id TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        storage_backend TEXT NOT NULL DEFAULT 'sql',
+        content_uri TEXT,
+        content_sha256 TEXT,
+        sync_status TEXT NOT NULL DEFAULT 'sql',
+        sync_error TEXT,
+        snapshot_oid TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id, slug)
+      );
+      INSERT INTO multiremi_project_docs (
+        id, project_id, slug, title, created_at, updated_at
+      ) VALUES (
+        'pdoc_legacy', 'prj_legacy', 'build-guide', 'Build guide',
+        '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      );
+    `);
+
+    migrate(database);
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_project_docs")).toContain("path");
+    expect(database.query("SELECT slug, path FROM multiremi_project_docs WHERE id = 'pdoc_legacy'").get())
+      .toEqual({ slug: "build-guide", path: "build-guide.md" });
   });
 
   it("backfills daemon display names idempotently without overwriting customized profiles", () => {
@@ -567,6 +615,47 @@ describe("store migrations", () => {
     migrate(database);
     expect(database.query(
       "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260826_agent_issue_proposal_policy'",
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("backfills agent roles and stable Atlas Autopilot identities from legacy rows", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_agents DROP COLUMN role;
+      ALTER TABLE multiremi_autopilots DROP COLUMN managed_kind;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260827_agent_roles';
+      INSERT INTO multiremi_agents (id, name, provider, supervisor, created_at, updated_at)
+      VALUES
+        ('agt_atlas_legacy', 'Atlas · LLM Wiki', 'claude', 0, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('agt_supervisor_legacy', 'Organizer', 'codex', 1, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('agt_normal_legacy', 'Worker', 'codex', 0, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z');
+      INSERT INTO multiremi_autopilots (
+        id, title, workspace_id, assignee_type, assignee_id, status, execution_mode,
+        session_policy, workspace_policy, trigger_kind, created_by_type, created_by_id,
+        created_at, updated_at
+      ) VALUES
+        ('aut_atlas_project', 'Atlas · Project Knowledge', 'local', 'agent', 'agt_atlas_legacy',
+          'active', 'trigger_issue', 'new', 'reuse_issue', 'manual', 'member', 'local',
+          '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'),
+        ('aut_atlas_repo', 'Atlas · Repository Wiki', 'local', 'agent', 'agt_atlas_legacy',
+          'active', 'run_only', 'new', 'reuse_issue', 'manual', 'member', 'local',
+          '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    expect(database.query("SELECT id, role FROM multiremi_agents ORDER BY id").all()).toEqual([
+      { id: "agt_atlas_legacy", role: "maintainer" },
+      { id: "agt_normal_legacy", role: "normal" },
+      { id: "agt_supervisor_legacy", role: "supervisor" },
+    ]);
+    expect(database.query("SELECT id, managed_kind FROM multiremi_autopilots ORDER BY id").all()).toEqual([
+      { id: "aut_atlas_project", managed_kind: "atlas_project_knowledge" },
+      { id: "aut_atlas_repo", managed_kind: "atlas_repository_wiki" },
+    ]);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = '20260827_agent_roles'",
     ).get()).toEqual({ count: 1 });
   });
 

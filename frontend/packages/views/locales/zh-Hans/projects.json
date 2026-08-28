@@ -176,6 +176,8 @@
     "memory_no_results": "没有符合筛选条件的记忆。",
     "memory_clear_filters": "清除筛选",
     "pages_label": "Wiki 页面",
+    "pages_search": "筛选页面...",
+    "pages_no_match": "没有匹配的 Wiki 页面。",
     "repository_facts": "仓库事实",
     "pages_empty": "暂无页面",
     "pinned_badge": "已置顶",

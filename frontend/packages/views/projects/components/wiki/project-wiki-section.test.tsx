@@ -117,6 +117,7 @@ function doc(partial: Partial<ProjectDoc> & { id: string }): ProjectDoc {
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...partial,
+    path: partial.path ?? `${partial.id}.md`,
   };
 }
 
@@ -704,5 +705,14 @@ describe("ProjectWikiSection", () => {
     const label = screen.getByTitle(longTitle);
     expect(label.tagName).toBe("SPAN");
     expect(label).toHaveClass("truncate");
+  });
+
+  it("forces the mobile Wiki drawer to the specified 280px width", () => {
+    state.docs = [doc({ id: "d1", slug: "runbook", title: "Runbook" })];
+    renderSection();
+
+    fireEvent.click(screen.getByRole("button", { name: "Wiki" }));
+
+    expect(document.querySelector('[data-slot="sheet-content"]')).toHaveClass("!w-[280px]");
   });
 });

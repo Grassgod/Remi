@@ -1,13 +1,37 @@
 // @vitest-environment jsdom
 
-import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
+const rechartsState = vi.hoisted(() => ({
+  tooltipLabel: "5/11",
+  tooltipPayload: [] as Array<Record<string, unknown>>,
+}));
+
+interface TestTranslations {
+  charts: { tooltip_total: string };
+  usage: {
+    legend_input: string;
+    legend_output: string;
+    legend_cache_read: string;
+    legend_cache_write: string;
+    legend_total_only: string;
+    weekly_partial_label: string;
+  };
+}
+
 // recharts needs real layout to render an SVG, which jsdom has none of.
-// Stub the primitives down to inspectable markers: the value of this
-// component is which props reach which primitive, and that survives.
+// Stub its layout primitives but render the real shared tooltip content.
 vi.mock("recharts", () => ({
+  ResponsiveContainer: ({ children }: { children: ReactNode }) => (
+    <div data-testid="responsive-container">{children}</div>
+  ),
   BarChart: ({ children }: { children: ReactNode }) => (
     <div data-testid="bar-chart">{children}</div>
   ),
@@ -57,47 +81,37 @@ vi.mock("recharts", () => ({
     />
   ),
   CartesianGrid: () => <div data-testid="grid" />,
-}));
-
-vi.mock("@multiremi/ui/components/ui/chart", () => ({
-  ChartContainer: ({ children }: { children: ReactNode }) => (
-    <div data-testid="chart-container">{children}</div>
-  ),
-  ChartTooltip: ({ content }: { content: ReactNode }) => (
-    <div data-testid="tooltip">{content}</div>
-  ),
-  ChartTooltipContent: (props: Record<string, unknown>) => {
-    const formatter = props.formatter as
-      | ((v: unknown, n: string) => unknown)
-      | undefined;
-    const footer = props.footer as
-      | ((p: { value: number }[]) => ReactNode)
-      | undefined;
-    const labelFormatter = props.labelFormatter as
-      | ((l: unknown, p: { payload: unknown }[]) => ReactNode)
-      | undefined;
-    return (
-      <div data-testid="tooltip-content" data-label-key={String(props.labelKey)}>
-        <span data-testid="formatted">{String(formatter?.(12, "Input"))}</span>
-        <span data-testid="formatted-nonnumeric">
-          {String(formatter?.("n/a", "Input"))}
-        </span>
-        <span data-testid="footer">
-          {footer ? footer([{ value: 2 }, { value: 3 }]) : "no-footer"}
-        </span>
-        <span data-testid="label">
-          {labelFormatter
-            ? labelFormatter("x", [{ payload: { partial: true } }])
-            : "no-label-formatter"}
-        </span>
-      </div>
-    );
+  Tooltip: ({ content }: { content: ReactNode }) => {
+    const renderedContent = isValidElement(content)
+      ? cloneElement(content as ReactElement<Record<string, unknown>>, {
+          active: true,
+          label: rechartsState.tooltipLabel,
+          payload: rechartsState.tooltipPayload,
+        })
+      : content;
+    return <div data-testid="tooltip">{renderedContent}</div>;
   },
+  Legend: () => null,
 }));
 
 vi.mock("../../../i18n", () => ({
-  useT: () => ({ t: () => "Total only" }),
+  useT: () => ({
+    t: (selector: (translations: TestTranslations) => string) =>
+      selector(translations),
+  }),
 }));
+
+const translations: TestTranslations = {
+  charts: { tooltip_total: "Total" },
+  usage: {
+    legend_input: "Input",
+    legend_output: "Output",
+    legend_cache_read: "Cache read",
+    legend_cache_write: "Cache write",
+    legend_total_only: "Total only",
+    weekly_partial_label: "In progress",
+  },
+};
 
 import { StackedBarChart } from "./stacked-bar-chart";
 import { DailyTokensChart } from "./daily-tokens-chart";
@@ -122,6 +136,16 @@ const ROWS: Row[] = [
   { label: "5/11", partial: true, weekStart: "2026-05-11", input: 3, output: 4 },
 ];
 
+function tooltipEntry(name: string, value: unknown) {
+  return {
+    name,
+    dataKey: name,
+    value,
+    color: `var(--color-${name})`,
+    payload: ROWS[1],
+  };
+}
+
 const DAILY_TOKENS: DailyTokenData = {
   date: "2026-08-26",
   label: "8/26",
@@ -145,6 +169,14 @@ const WEEKLY_TOKENS: WeeklyTokenData = {
   cacheWrite: 4,
   totalOnly: 0,
 };
+
+beforeEach(() => {
+  rechartsState.tooltipLabel = "5/11";
+  rechartsState.tooltipPayload = [
+    tooltipEntry("input", 12),
+    tooltipEntry("output", 3),
+  ];
+});
 
 afterEach(() => cleanup());
 
@@ -248,8 +280,32 @@ describe("StackedBarChart", () => {
     expect(axis.dataset.tick).toBe("$1500");
   });
 
-  it("formats numeric tooltip values and passes anything else through", () => {
-    const { getByTestId } = render(
+  it("renders config labels instead of data keys and hides zero-value rows", () => {
+    rechartsState.tooltipPayload = [
+      tooltipEntry("input", 12),
+      tooltipEntry("output", 0),
+    ];
+
+    const { getByText, queryByText } = render(
+      <StackedBarChart
+        data={ROWS}
+        config={CONFIG}
+        series={["input", "output"]}
+        yAxisWidth={40}
+        formatValue={(v) => `$${v.toFixed(2)}`}
+      />
+    );
+
+    expect(getByText("Input")).toBeTruthy();
+    expect(getByText("$12.00")).toBeTruthy();
+    expect(queryByText("input")).toBeNull();
+    expect(queryByText("Output")).toBeNull();
+  });
+
+  it("passes nonnumeric tooltip values through", () => {
+    rechartsState.tooltipPayload = [tooltipEntry("input", "n/a")];
+
+    const { getByText } = render(
       <StackedBarChart
         data={ROWS}
         config={CONFIG}
@@ -259,12 +315,36 @@ describe("StackedBarChart", () => {
       />
     );
 
-    expect(getByTestId("formatted").textContent).toBe("$12.00 Input");
-    expect(getByTestId("formatted-nonnumeric").textContent).toBe("n/a Input");
+    expect(getByText("n/a")).toBeTruthy();
+  });
+
+  it("falls back to all tooltip rows when every value is zero", () => {
+    rechartsState.tooltipPayload = [
+      tooltipEntry("input", 0),
+      tooltipEntry("output", 0),
+    ];
+
+    const { getAllByText, getByText } = render(
+      <StackedBarChart
+        data={ROWS}
+        config={CONFIG}
+        series={["input", "output"]}
+        yAxisWidth={40}
+      />
+    );
+
+    expect(getByText("Input")).toBeTruthy();
+    expect(getByText("Output")).toBeTruthy();
+    expect(getAllByText("0")).toHaveLength(2);
   });
 
   it("totals the stack in the tooltip footer, and omits it when unasked", () => {
-    const { getByTestId, rerender } = render(
+    rechartsState.tooltipPayload = [
+      tooltipEntry("input", 2),
+      tooltipEntry("output", 3),
+    ];
+
+    const { getByText, queryByText, rerender } = render(
       <StackedBarChart
         data={ROWS}
         config={CONFIG}
@@ -274,7 +354,7 @@ describe("StackedBarChart", () => {
         formatTotal={(t) => `$${t.toFixed(2)}`}
       />
     );
-    expect(getByTestId("footer").textContent).toBe("Total$5.00");
+    expect(getByText("Total").parentElement?.textContent).toBe("Total$5.00");
 
     rerender(
       <StackedBarChart
@@ -284,11 +364,11 @@ describe("StackedBarChart", () => {
         yAxisWidth={40}
       />
     );
-    expect(getByTestId("footer").textContent).toBe("no-footer");
+    expect(queryByText("Total")).toBeNull();
   });
 
   it("relabels the tooltip header from the row when a weekly chart asks", () => {
-    const { getByTestId } = render(
+    const { getByText } = render(
       <StackedBarChart
         data={ROWS}
         config={CONFIG}
@@ -298,12 +378,11 @@ describe("StackedBarChart", () => {
       />
     );
 
-    expect(getByTestId("tooltip-content").dataset.labelKey).toBe("rangeLabel");
-    expect(getByTestId("label").textContent).toBe("in progress");
+    expect(getByText("in progress")).toBeTruthy();
   });
 
   it("leaves the tooltip header alone for daily charts", () => {
-    const { getByTestId } = render(
+    const { getByText, queryByText } = render(
       <StackedBarChart
         data={ROWS}
         config={CONFIG}
@@ -312,12 +391,33 @@ describe("StackedBarChart", () => {
       />
     );
 
-    expect(getByTestId("tooltip-content").dataset.labelKey).toBe("undefined");
-    expect(getByTestId("label").textContent).toBe("no-label-formatter");
+    expect(getByText("5/11")).toBeTruthy();
+    expect(queryByText("in progress")).toBeNull();
   });
 });
 
 describe("token charts", () => {
+  it.each([
+    ["daily", <DailyTokensChart key="daily-total" data={[DAILY_TOKENS]} />],
+    ["weekly", <WeeklyTokensChart key="weekly-total" data={[WEEKLY_TOKENS]} />],
+  ])(
+    "uses localized series labels and a compact tooltip total in the %s chart",
+    (_name, chart) => {
+      rechartsState.tooltipPayload = [
+        tooltipEntry("input", 259_600),
+        tooltipEntry("output", 4_000_000),
+        tooltipEntry("cacheRead", 630_300_000),
+        tooltipEntry("cacheWrite", 24_345_453),
+      ];
+
+      const { getByText, queryByText } = render(chart);
+
+      expect(getByText("Cache read")).toBeTruthy();
+      expect(queryByText("cacheRead")).toBeNull();
+      expect(getByText("658.9M")).toBeTruthy();
+    }
+  );
+
   it.each([
     ["daily", <DailyTokensChart key="daily-zero" data={[DAILY_TOKENS]} />],
     ["weekly", <WeeklyTokensChart key="weekly-zero" data={[WEEKLY_TOKENS]} />],

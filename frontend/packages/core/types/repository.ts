@@ -122,6 +122,8 @@ export interface AtlasWikiSetupStatus {
   repository_trigger_id: string | null;
   project_autopilot_id: string | null;
   project_trigger_id: string | null;
+  librarian_autopilot_id: string | null;
+  librarian_trigger_id: string | null;
   scm_warning?: string | null;
 }
 

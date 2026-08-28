@@ -41,6 +41,8 @@ vi.mock("@tanstack/react-query", () => ({
             repository_trigger_id: "trigger-repo",
             project_autopilot_id: "auto-project",
             project_trigger_id: "trigger-project",
+            librarian_autopilot_id: "auto-librarian",
+            librarian_trigger_id: "trigger-librarian",
           },
           isPending: false,
           isError: false,
@@ -173,6 +175,7 @@ function doc(partial: Partial<WorkspaceDoc> & { id: string }): WorkspaceDoc {
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...partial,
+    path: partial.path ?? `${partial.id}.md`,
   };
 }
 

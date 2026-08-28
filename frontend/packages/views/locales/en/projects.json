@@ -176,6 +176,8 @@
     "memory_no_results": "No memory matches these filters.",
     "memory_clear_filters": "Clear filters",
     "pages_label": "Wiki pages",
+    "pages_search": "Filter pages...",
+    "pages_no_match": "No Wiki pages match your filter.",
     "repository_facts": "Repository facts",
     "pages_empty": "No pages yet",
     "pinned_badge": "Pinned",

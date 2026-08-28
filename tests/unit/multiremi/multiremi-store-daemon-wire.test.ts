@@ -492,6 +492,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       id: "agt_claim_context",
       name: "Atlas · LLM Wiki",
       provider: "claude",
+      role: "maintainer",
       runtimeId: runtime.id,
     });
     const project = store.createProject({
@@ -512,6 +513,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       assigneeId: agent.id,
       executionMode: "run_only",
     });
+    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
     const run = store.runAutopilot(autopilot.id, {
       source: "scm_event",
       payload: { atlas_repository_id: "repo_claim_context", atlas_mode: "incremental_update" },

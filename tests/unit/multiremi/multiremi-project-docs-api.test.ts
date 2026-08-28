@@ -45,6 +45,7 @@ describe("Bun Multiremi project docs API", () => {
       workspace_id: "local",
       kind: "wiki",
       slug: "build-guide",
+      path: "build-guide.md",
       title: "Build guide",
       body: "run bun test",
       tags: [],
@@ -125,6 +126,7 @@ describe("Bun Multiremi project docs API", () => {
       body: JSON.stringify({
         kind: "wiki",
         title: "Deploy runbook",
+        path: "operations/deploy-runbook.md",
         summary: "How production ships",
         body: "See [[build-guide]].",
         tags: ["ops", "runbook"],
@@ -141,6 +143,7 @@ describe("Bun Multiremi project docs API", () => {
     expect(createdBody.doc).toMatchObject({
       kind: "wiki",
       slug: "deploy-runbook",
+      path: "operations/deploy-runbook.md",
       title: "Deploy runbook",
       summary: "How production ships",
       tags: ["ops", "runbook"],
@@ -160,6 +163,34 @@ describe("Bun Multiremi project docs API", () => {
       { type: "issue", value: "MUL-12" },
       { type: "url", value: "https://example.test/deploy" },
     ]);
+  });
+
+  it("rejects unsafe and duplicate project Wiki paths", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const project = store.createProject({ title: "Path validation" });
+
+    const unsafe = await app.request(`/api/projects/${project.id}/docs`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ kind: "wiki", title: "Unsafe", path: "../unsafe.md" }),
+    });
+    expect(unsafe.status).toBe(400);
+    expect(await unsafe.json()).toEqual({ error: "invalid project wiki path" });
+
+    const first = await app.request(`/api/projects/${project.id}/docs`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ kind: "wiki", title: "First", path: "guides/page.md" }),
+    });
+    expect(first.status).toBe(201);
+    const duplicate = await app.request(`/api/projects/${project.id}/docs`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ kind: "wiki", title: "Second", path: "guides/page.md" }),
+    });
+    expect(duplicate.status).toBe(409);
+    expect(await duplicate.json()).toEqual({ error: "a doc with this path already exists" });
   });
 
   it("stamps agent provenance and backfills the issue behind the task", async () => {

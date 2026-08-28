@@ -14,6 +14,7 @@ import {
   uniqueRefMatch,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { isAgentRole, normalizeStoredAgentRole } from "@multiremi/store/agent-role.js";
 import type {
   CreateAgentInput,
   CreateSkillInput,
@@ -37,6 +38,8 @@ export class AgentsSkillsRepo {
     const ownerId = cleanOptionalString(input.ownerId ?? input.owner_id) ?? "local";
     const visibility = normalizeAgentVisibility(input.visibility);
     const runtimeId = cleanOptionalString(input.runtimeId ?? input.runtime_id);
+    const role = input.role ?? "normal";
+    if (!isAgentRole(role)) throw new Error("Invalid agent role");
     return this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId);
@@ -44,8 +47,8 @@ export class AgentsSkillsRepo {
         `INSERT INTO multiremi_agents (
           id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, cwd, executable, model,
           max_concurrent_tasks, allowed_tools, custom_env, custom_args, mcp_config, thinking_level,
-          issue_creation_requires_proposal, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          issue_creation_requires_proposal, role, supervisor, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           workspaceId,
@@ -68,6 +71,8 @@ export class AgentsSkillsRepo {
           (input.mcpConfig ?? input.mcp_config) == null ? null : toJson(input.mcpConfig ?? input.mcp_config),
           input.thinkingLevel ?? input.thinking_level ?? null,
           Boolean(input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal) ? 1 : 0,
+          role,
+          role === "supervisor" ? 1 : 0,
           now,
           now,
         ],
@@ -100,14 +105,22 @@ export class AgentsSkillsRepo {
     return transaction();
   }
 
+  setAgentRole(id: string, role: MultiremiAgent["role"]): MultiremiAgent {
+    const current = this.getAgent(id);
+    if (!current) throw new Error(`Agent not found: ${id}`);
+    if (!isAgentRole(role)) throw new Error("Invalid agent role");
+    this.ctx.db.run(
+      "UPDATE multiremi_agents SET role = ?, supervisor = ?, updated_at = ? WHERE id = ?",
+      [role, role === "supervisor" ? 1 : 0, nowIso(), id],
+    );
+    return this.getAgent(id)!;
+  }
+
   setAgentSupervisor(id: string, supervisor: boolean): MultiremiAgent {
     const current = this.getAgent(id);
     if (!current) throw new Error(`Agent not found: ${id}`);
-    this.ctx.db.run(
-      "UPDATE multiremi_agents SET supervisor = ?, updated_at = ? WHERE id = ?",
-      [supervisor ? 1 : 0, nowIso(), id],
-    );
-    return this.getAgent(id)!;
+    const role = supervisor ? "supervisor" : current.role === "supervisor" ? "normal" : current.role;
+    return this.setAgentRole(id, role);
   }
 
   private updateAgentWithinPluginLock(id: string, input: UpdateAgentInput): MultiremiAgent {
@@ -133,6 +146,8 @@ export class AgentsSkillsRepo {
     if (input.provider !== undefined && input.provider !== current.provider) {
       this.ctx.agentPlugins().assertAgentPluginProviderCompatible(id, input.provider);
     }
+    const role = input.role ?? current.role;
+    if (!isAgentRole(role)) throw new Error("Invalid agent role");
     this.ctx.db.run(
       `UPDATE multiremi_agents SET
         workspace_id = ?,
@@ -155,6 +170,8 @@ export class AgentsSkillsRepo {
         mcp_config = ?,
         thinking_level = ?,
         issue_creation_requires_proposal = ?,
+        role = ?,
+        supervisor = ?,
         updated_at = ?
        WHERE id = ?`,
       [
@@ -194,6 +211,8 @@ export class AgentsSkillsRepo {
         hasAnyField(input, "issueCreationRequiresProposal", "issue_creation_requires_proposal")
           ? Boolean(input.issueCreationRequiresProposal ?? input.issue_creation_requires_proposal) ? 1 : 0
           : current.issueCreationRequiresProposal ? 1 : 0,
+        role,
+        role === "supervisor" ? 1 : 0,
         now,
         id,
       ],
@@ -765,6 +784,7 @@ function safeIdSegment(value: string): string {
 }
 
 export function toAgent(row: Row): MultiremiAgent {
+  const role = normalizeStoredAgentRole(row.role, Number(row.supervisor ?? 0) === 1);
   const workspaceId = String(row.workspace_id ?? "local");
   const ownerId = String(row.owner_id ?? "local");
   return {
@@ -795,7 +815,8 @@ export function toAgent(row: Row): MultiremiAgent {
     thinkingLevel: nullableString(row.thinking_level),
     issueCreationRequiresProposal: Boolean(Number(row.issue_creation_requires_proposal ?? 0)),
     issue_creation_requires_proposal: Boolean(Number(row.issue_creation_requires_proposal ?? 0)),
-    supervisor: Number(row.supervisor ?? 0) === 1,
+    role,
+    supervisor: role === "supervisor",
     archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

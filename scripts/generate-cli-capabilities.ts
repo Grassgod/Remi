@@ -392,6 +392,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/(?:multiremi\/)?tasks\/:id\/human-requests\/:requestId\/respond$/, "task.request.respond"],
     [/^GET \/api\/(?:multiremi\/)?agents\/:id$/, "agent.get"],
     [/^(?:PUT|PATCH) \/api\/(?:multiremi\/)?agents\/:id$/, "agent.update"],
+    [/^PUT \/api\/agents\/:id\/role$/, "agent.role.set"],
     [/^PUT \/api\/agents\/:id\/supervisor$/, "agent.supervisor.set"],
     [/^DELETE \/api\/multiremi\/agents\/:id$/, "agent.archive"],
     [/^POST \/api\/agents\/:id\/archive$/, "agent.archive"],

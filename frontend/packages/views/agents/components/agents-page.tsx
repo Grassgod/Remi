@@ -559,6 +559,7 @@ export function AgentsPage() {
       {editingAgent && (
         <EditAgentDialog
           agent={editingAgent}
+          canManageRole={!currentUser || isWorkspaceAdmin}
           onClose={() => setEditingAgent(null)}
           onSave={handleEditSave}
         />

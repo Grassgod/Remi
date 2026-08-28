@@ -106,6 +106,8 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain("`./.multiremi/sessions/`");
     expect(artifact.prompt).toContain("`remi wiki status`");
     expect(artifact.prompt).toContain("`remi wiki push`");
+    expect(artifact.prompt).toContain("`overview.md`");
+    expect(artifact.prompt).toContain("no deeper than five levels");
   });
 
   it("does not claim repositories are mounted for a discussion Session", () => {

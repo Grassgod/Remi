@@ -4,6 +4,8 @@ export type AgentRuntimeMode = "local" | "cloud";
 
 export type AgentVisibility = "workspace" | "private";
 
+export type AgentRole = "normal" | "maintainer" | "supervisor";
+
 // Runtime visibility is a separate axis from agent visibility — different
 // vocabulary because it gates a different action. "private" (default) means
 // only the runtime owner and workspace admins can bind agents to it;
@@ -268,6 +270,8 @@ export interface Agent {
    * (MUL-2339).
    */
   thinking_level?: string;
+  /** Permission ceiling. Missing on legacy backends and treated as normal. */
+  role?: AgentRole;
   owner_id: string | null;
   skills: AgentSkillSummary[];
   created_at: string;
@@ -435,6 +439,7 @@ export interface UpdateAgentRequest {
    *     runtime-advertised capabilities, rejected with 400 if unsupported
    */
   thinking_level?: string;
+  role?: AgentRole;
 }
 
 /**

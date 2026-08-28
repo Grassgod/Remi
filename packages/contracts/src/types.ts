@@ -59,6 +59,8 @@ export interface MultiremiAgentTemplate extends MultiremiAgentTemplateSummary {
   instructions: string;
 }
 
+export type MultiremiAgentRole = "normal" | "maintainer" | "supervisor";
+
 export interface MultiremiAgent {
   id: string;
   name: string;
@@ -87,6 +89,7 @@ export interface MultiremiAgent {
   thinkingLevel: string | null;
   issueCreationRequiresProposal: boolean;
   issue_creation_requires_proposal?: boolean;
+  role: MultiremiAgentRole;
   supervisor?: boolean;
   archivedAt: string | null;
   createdAt: string;
@@ -127,6 +130,7 @@ export interface CreateAgentInput {
   thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
+  role?: MultiremiAgentRole;
 }
 
 export interface UpdateAgentInput {
@@ -161,6 +165,7 @@ export interface UpdateAgentInput {
   thinking_level?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
+  role?: MultiremiAgentRole;
 }
 
 export interface CreateAgentFromTemplateInput {
@@ -188,6 +193,7 @@ export interface CreateAgentFromTemplateInput {
   owner_id?: string | null;
   issueCreationRequiresProposal?: boolean;
   issue_creation_requires_proposal?: boolean;
+  role?: MultiremiAgentRole;
 }
 
 export interface CreateAgentFromTemplateResult {
@@ -2490,6 +2496,8 @@ export interface MultiremiProjectDoc {
   workspaceId: string;
   kind: MultiremiProjectDocKind;
   slug: string;
+  /** Workspace-relative Markdown path. Slug remains the stable document identity. */
+  path: string;
   title: string;
   summary: string | null;
   body: string;
@@ -2638,6 +2646,7 @@ export interface MultiremiWorkspaceProjectDoc extends MultiremiProjectDoc {
 export interface MultiremiProjectDocIndexEntry {
   id: string;
   slug: string;
+  path: string;
   title: string;
   summary: string | null;
   /** memory entries carry a body (trimmed to 500 chars); wiki entries are null. */
@@ -2731,6 +2740,7 @@ export interface CreateProjectDocInput {
   id?: string;
   kind?: string | null;
   slug?: string | null;
+  path?: string | null;
   title?: string;
   summary?: string | null;
   body?: string | null;
@@ -2749,6 +2759,7 @@ export interface CreateProjectDocInput {
 
 export interface UpdateProjectDocInput {
   slug?: string | null;
+  path?: string | null;
   title?: string;
   summary?: string | null;
   body?: string | null;
@@ -3114,6 +3125,8 @@ export interface MultiremiAutopilot {
   workspaceId: string;
   workspace_id?: string;
   title: string;
+  managedKind: "atlas_project_knowledge" | "atlas_repository_wiki" | null;
+  managed_kind?: "atlas_project_knowledge" | "atlas_repository_wiki" | null;
   description: string | null;
   projectId: string | null;
   project_id?: string | null;

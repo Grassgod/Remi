@@ -931,7 +931,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("dedupes repository Wiki build runs by active build and pinned-revision key", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const runtime = store.registerRuntime({ name: "wiki-runtime", provider: "claude" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
@@ -939,6 +939,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       executionMode: "run_only",
       description: "Update the repository wiki",
     });
+    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
     const manualInput = {
       source: "api" as const,
       repositoryId: "repo_x",
@@ -1045,7 +1046,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("rejects forged or inconsistent repository Wiki build scope at the store boundary", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
     const userOwned = store.createAutopilot({
       title: "Atlas · Repository Wiki",
@@ -1057,6 +1058,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       assigneeId: atlas.id,
       executionMode: "run_only",
     });
+    store.setAutopilotManagedKind(serverOwned.id, "atlas_repository_wiki");
 
     expect(() => store.runAutopilot(userOwned.id, {
       repository_id: "repo_private",
@@ -1087,13 +1089,14 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         default_branch: "main",
       }],
     });
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
+    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const autopilot = store.createAutopilot({
       title: "Atlas · Repository Wiki",
       assigneeId: agent.id,
       executionMode: "run_only",
       description: "Update the repository wiki",
     });
+    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
 
     const mergedRun = store.runAutopilot(autopilot.id, {
       source: "scm_event",

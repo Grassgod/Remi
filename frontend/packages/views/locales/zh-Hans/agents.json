@@ -202,6 +202,10 @@
     "title": "编辑智能体",
     "description": "修改智能体的基本信息、引擎、模型、可见范围、并发数和指令。",
     "instructions_placeholder": "点击查看或编辑指令",
+    "role_label": "权限角色",
+    "role_normal": "普通",
+    "role_maintainer": "维护者",
+    "role_supervisor": "主管",
     "save": "保存修改",
     "saving": "保存中...",
     "cancel": "取消"
