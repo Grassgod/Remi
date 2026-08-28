@@ -21,6 +21,13 @@ import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
 import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
+import {
+  autopilotOutcomeBody,
+  autopilotTriggerObjectLabel,
+  summarizeAutopilotOutcome,
+} from "@multiremi/store/autopilot-run-notification.js";
+import { normalizeWorkspaceRepositories } from "@multiremi/api/helpers/repositories.js";
+import { autopilotRunTriggerSummary } from "@multiremi/api/wire/autopilots.js";
 import { createLogger } from "@shared/logger.js";
 import type {
   CreateOrganizerActionInput,
@@ -67,6 +74,7 @@ const AUTO_RETRY_FAILURE_REASONS = new Set([
   "timeout",
   "codex_semantic_inactivity",
   "agent_error.stale_session",
+  "agent_error.context_overflow",
   "project_knowledge_unavailable",
   "repo_sync_failed",
 ]);
@@ -76,6 +84,7 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
   "api_invalid_request",
   "codex_semantic_inactivity",
   "agent_error.stale_session",
+  "agent_error.context_overflow",
 ]);
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
@@ -378,15 +387,22 @@ export class TasksRepo {
     const issueSessionGeneration = issueSession
       ? normalizePositiveInt(requestedIssueSessionGeneration, issueLane?.generation ?? 1)
       : null;
+    const projectionDegradeLevel = Math.max(
+      0,
+      Math.floor(Number(input.projectionDegradeLevel ?? input.projection_degrade_level) || 0),
+    );
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
         id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, issue_session_generation, holds_workspace, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
-        assignment_event_id, assignment_source_event_id,
+        assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )`,
       [
         id,
         taskKind,
@@ -416,6 +432,7 @@ export class TasksRepo {
         delegatedByAgentId,
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
         cleanOptionalString(input.assignmentSourceEventId ?? input.assignment_source_event_id),
+        projectionDegradeLevel,
         cleanOptionalString(input.provider),
         toJson(inheritedPluginSnapshot ?? []),
         inheritedExecutionFingerprint,
@@ -1757,6 +1774,13 @@ export class TasksRepo {
       const followUps = this.afterTaskTerminal(failed, "failed", input.error, true);
       return { task: failed, followUps };
     })();
+    if (
+      !terminal.followUps.retry
+      && terminal.task.issueId
+      && terminal.task.failureReason === "agent_error.context_overflow"
+    ) {
+      this.postContextOverflowSystemComment(terminal.task);
+    }
     if (terminal.followUps.retry) this.ctx.notifyTaskEnqueued(terminal.followUps.retry);
     if (terminal.followUps.delegationReturn) this.ctx.notifyTaskEnqueued(terminal.followUps.delegationReturn);
     const task = terminal.task;
@@ -1990,6 +2014,9 @@ export class TasksRepo {
       resetProviderSession: !resumeSafe,
       attempt: parent.attempt + 1,
       maxAttempts: parent.maxAttempts,
+      projectionDegradeLevel: parent.failureReason === "agent_error.context_overflow"
+        ? parent.projectionDegradeLevel + 1
+        : 0,
       parentTaskId: parent.id,
       delegationId: parent.delegationId,
       delegatedByAgentId: parent.delegatedByAgentId,
@@ -2348,8 +2375,18 @@ export class TasksRepo {
         const terminalEvent = workspaceLockHeld
           ? this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, event)
           : this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, event);
+        // Cancelling stops the current turn; it does not corrupt the provider transcript
+        // the lane points at, so keep the lane exactly as-is (chat sessions already behave
+        // this way — see promoteSession above). Deliberately neither promote nor reset:
+        // promoting would advance cursor_seq to projectionToSeq, and a task cancelled
+        // before the provider ever consumed its prompt would silently drop those events.
+        // Replaying a few events twice is cheap; losing them is not. Config/runtime drift
+        // is still caught by laneResumable() at claim time, and a genuinely unresumable
+        // transcript surfaces next run as stale_session / api_invalid_request — both
+        // resume-unsafe, which resets the lane then and falls back to a bounded bootstrap.
         if (status === "completed") this.promoteSessionAgentLane(task);
-        else if (!retry) this.resetSessionAgentLane(task.issueSessionId, task.agentId);
+        else if (!retry && status !== "cancelled")
+          this.resetSessionAgentLane(task.issueSessionId, task.agentId);
         if (!retry && !replacementPlanned) {
           const wakeup = workspaceLockHeld
             ? this.ensureDelegationWakeupWithinWorkspaceLock(task, {
@@ -2403,18 +2440,30 @@ export class TasksRepo {
         else this.ctx.analytics().recordAutopilotRunFailedAnalytics(autopilot, run, failureReason);
         const durationSeconds = autopilotRunDurationSeconds(run.triggeredAt, run.completedAt);
         const trigger = run.source;
+        const repositories = normalizeWorkspaceRepositories(
+          this.ctx.workspaces().getWorkspace(autopilot.workspaceId)?.repos ?? [],
+        );
+        const repositoryNames = new Map(repositories.map((repository) => [repository.id, repository.name]));
+        const triggerObject = autopilotRunTriggerSummary(
+          run,
+          (repositoryId) => repositoryNames.get(repositoryId) ?? null,
+        );
+        const triggerObjectLabel = autopilotTriggerObjectLabel(triggerObject, trigger, run.triggeredAt);
+        const title = triggerObjectLabel
+          ? `${autopilot.title} · ${triggerObjectLabel}`
+          : autopilot.title;
         const recipients = this.ctx.resolveAutopilotNotificationRecipients(autopilot);
         for (const recipientId of recipients) {
           if (runStatus === "completed") {
-            const summary = summarizeAutopilotOutcome(task.result) ?? "No result summary.";
+            const outcome = summarizeAutopilotOutcome(task.result);
             this.ctx.createInboxItem({
               workspaceId: autopilot.workspaceId,
               issueId: run.issueId,
               memberId: recipientId,
               type: "autopilot_run_completed",
               severity: "info",
-              title: `${autopilot.title} completed`,
-              body: `Completed in ${durationSeconds}s | Trigger: ${trigger} | ${summary}`,
+              title,
+              body: autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
               actorId: null,
               details: {
@@ -2423,21 +2472,25 @@ export class TasksRepo {
                 run_id: run.id,
                 task_id: task.id,
                 trigger,
+                triggered_at: run.triggeredAt,
                 duration_seconds: durationSeconds,
                 issue_id: run.issueId,
+                issue_session_id: run.issueSessionId,
+                trigger_object: triggerObject,
+                outcome,
               },
               emitEvent: true,
             });
           } else {
-            const reason = summarizeAutopilotOutcome(failureReason) ?? "Unknown failure.";
+            const outcome = summarizeAutopilotOutcome(failureReason, { failed: true });
             this.ctx.createInboxItem({
               workspaceId: autopilot.workspaceId,
               issueId: run.issueId,
               memberId: recipientId,
               type: "autopilot_run_failed",
               severity: "attention",
-              title: `${autopilot.title} failed`,
-              body: `Failed after ${durationSeconds}s | Trigger: ${trigger} | ${reason}`,
+              title,
+              body: autopilotOutcomeBody(outcome, durationSeconds),
               actorType: "system",
               actorId: null,
               details: {
@@ -2446,8 +2499,12 @@ export class TasksRepo {
                 run_id: run.id,
                 task_id: task.id,
                 trigger,
+                triggered_at: run.triggeredAt,
                 duration_seconds: durationSeconds,
                 issue_id: run.issueId,
+                issue_session_id: run.issueSessionId,
+                trigger_object: triggerObject,
+                outcome,
               },
               emitEvent: true,
             });
@@ -2591,6 +2648,18 @@ export class TasksRepo {
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.
       log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private postContextOverflowSystemComment(task: MultiremiTask): void {
+    if (!task.issueId) return;
+    const body = "The agent could not complete this task because its context still exceeded the provider limit "
+      + `at attempt ${task.attempt} of ${task.maxAttempts}. Automatic retries use progressively smaller Session `
+      + "projections. Start a new Session, or publish and condense a checkpoint before retrying.";
+    try {
+      this.ctx.issues().createTaskFailureSystemComment(task.issueId, task.issueSessionId, task.id, body);
+    } catch (err) {
+      log.warn(`context overflow system comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -2759,12 +2828,6 @@ function autopilotRunDurationSeconds(triggeredAt: string, completedAt: string | 
   return Math.max(0, Math.round((end - start) / 1000));
 }
 
-function summarizeAutopilotOutcome(value: string | null | undefined): string | null {
-  const summary = value?.replace(/\s+/g, " ").trim();
-  if (!summary) return null;
-  return summary.length > 240 ? `${summary.slice(0, 237)}...` : summary;
-}
-
 function parseJsonValue(value: string): unknown | undefined {
   try {
     return JSON.parse(value);
@@ -2921,6 +2984,14 @@ function toTask(row: Row): MultiremiTask {
     projection_to_seq: row.projection_to_seq == null ? null : Number(row.projection_to_seq),
     projectionMode: nullableString(row.projection_mode) as MultiremiTask["projectionMode"],
     projection_mode: nullableString(row.projection_mode) as MultiremiTask["projectionMode"],
+    projectionDegradeLevel: Number(row.projection_degrade_level ?? 0),
+    projection_degrade_level: Number(row.projection_degrade_level ?? 0),
+    projectionTruncated: Boolean(Number(row.projection_truncated ?? 0)),
+    projection_truncated: Boolean(Number(row.projection_truncated ?? 0)),
+    projectionOmittedEvents: Number(row.projection_omitted_events ?? 0),
+    projection_omitted_events: Number(row.projection_omitted_events ?? 0),
+    projectionEstimatedTokens: Number(row.projection_estimated_tokens ?? 0),
+    projection_estimated_tokens: Number(row.projection_estimated_tokens ?? 0),
     result: taskResult.output,
     error: nullableString(row.error),
     failureReason: nullableString(row.failure_reason),

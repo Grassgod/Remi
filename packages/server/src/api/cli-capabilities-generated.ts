@@ -322,6 +322,55 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.bot-menu.get": {
+      "command": "remi workspace bot-menu get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.bot-menu.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.bot-menu.update": {
+      "command": "remi workspace bot-menu update",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.bot-menu.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.bot-menu.publish": {
+      "command": "remi workspace bot-menu publish",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.bot-menu.publish",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.bot-menu.publish-status": {
+      "command": "remi workspace bot-menu publish-status",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.bot-menu.publish-status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.prompt.get": {
       "command": "remi workspace prompt get",
       "auth": [
@@ -1375,6 +1424,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "issue.create",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.bind-topic": {
+      "command": "remi issue bind-topic",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.bind-topic",
       "output": [
         "table",
         "json",

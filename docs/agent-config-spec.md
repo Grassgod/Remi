@@ -22,7 +22,7 @@
 | 平台公共底座 | daemon ephemeral prompt（`packages/daemon/src/agent-runtime/prompts/ephemeral.ts`） | 平台在 bootstrap 时自动拼装：workspace/issue/env/身份/权限等区块 | 由平台代码维护，云友配置者不用管 | —— |
 | **云友个性** | `multiremi_agents.instructions`（UI「指令」框） | bootstrap 时作为 `## Agent Instructions` 区块注入 | 身份、职责边界、个性化工作方式（见 §2 骨架） | 平台已注入的内容（Issue 流程、workspace 说明）；仓库规则；大段可复用操作手册（应做成 Skill） |
 | 仓库规则 | 各仓库 `AGENTS.md` / `CLAUDE.md` | 编码 CLI 按 cwd 自动读取 | 仓库级开发约定 | 云友人设 |
-| 飞书 Remi 人格 | `~/.remi/soul.md`（模板 `soul.md.example`） | symlink 到 `~/.claude/CLAUDE.md`，Claude CLI 自动加载 | 飞书聊天 Remi 的人格与 MCP 工具约定 | 与 Multiremi 云友无关，不要混用 |
+| 飞书 Remi 人格 | `multiremi_agents.instructions` | daemon 注册/心跳解析 `MULTIREMI_BOT_AGENT_ID` 后注入 persistent runtime | 飞书聊天 Remi 的身份、职责与工具约定 | 不另建 `soul.md` 或本地 group 配置；同一 agent row 是唯一来源 |
 | 可复用操作知识 | Skill（`SKILL.md`） | 物化到 workdir + bootstrap prompt 注入 | 有触发条件的操作手册（见 §4） | 人设、一次性任务说明 |
 
 ## 2. 提示词（instructions）规范
@@ -112,7 +112,7 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 ## 7. 已知问题（本规范不强做，留待后续单）
 
 - 服务端对 `instructions`、`avatar_url` 零校验（长度/URL 白名单），是仅有的两个无校验用户可写字段。
-- `packages/remi/src/admin/data/skills.ts:24` 的 pipeline scope 路径按 `__dirname` 相对解析，指向不存在的目录，admin UI 的 Pipeline scope 永不可见。
+- 旧 Remi admin 与本地 `soul.md` 装配已在 MUL-69 删除；后续文档不得再把它们列为活配置入口。
 - `multiremi_agents.skills` JSON 列与 `multiremi_agent_skills` 连接表双轨存储，写路径互不同步，靠读时 merge 掩盖。
 - skill 正文全量内联进 bootstrap prompt（非按需加载），长 skill 有 token 成本。
 - `docs/MULTIREMI_PARITY_MATRIX.md` 与 `docs/ARCHITECTURE.md` 存在对 pipeline/skills 现状的过时描述。

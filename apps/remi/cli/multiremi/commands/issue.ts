@@ -82,6 +82,12 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     await issueCreate(options);
     return;
   }
+  if (action === "bind-topic") {
+    const issueRef = positional[1]?.trim();
+    if (!issueRef) throw new Error("usage: multiremi issue bind-topic <issue-id-or-key>");
+    await issueBindTopic(issueRef, options);
+    return;
+  }
   if (action === "update") {
     const issueId = positional[1]?.trim();
     if (!issueId) throw new Error("usage: multiremi issue update <issue-id> [--title <title>] [--description <text>] [--status <status>] [--priority <priority>] [--assignee <id|name|email> --assignee-type <type>] [--project <id>] [--parent <id>] [--start-date <date>] [--due-date <date>]");
@@ -188,7 +194,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     printIssueSearch(await multiremiApiRequest("GET", `/api/issues/search?${params.toString()}`, undefined, options), options);
     return;
   }
-  throw new Error("usage: multiremi issue list|get|create|update|assign|status|delete|search|runs|run-messages|rerun|retitle|cancel-task|task|comment|session|archive|subscriber|metadata ...");
+  throw new Error("usage: multiremi issue list|get|create|bind-topic|update|assign|status|delete|search|runs|run-messages|rerun|retitle|cancel-task|task|comment|session|archive|subscriber|metadata ...");
 }
 
 /**
@@ -529,7 +535,39 @@ export async function issueCreate(options: CliOptions): Promise<void> {
     body.assignee_type = null;
     body.assignee_id = null;
   }
-  const response = await multiremiApiRequest("POST", "/api/issues", body, options);
+  const topicPreflight = Boolean(options.noBindTopic ?? options["no-bind-topic"])
+    ? null
+    : await prepareTopicMigration(options);
+  const preparedTopic = topicPreflight?.bound ? topicPreflight : null;
+  if (preparedTopic?.state && preparedTopic.state !== "prepared") {
+    throw new Error(
+      `Topic migration ${preparedTopic.migration_id} is already pending for ${preparedTopic.issue_key ?? preparedTopic.issue_id ?? "an existing Issue"}. `
+      + `Resume it with: remi issue bind-topic ${preparedTopic.issue_key ?? preparedTopic.issue_id ?? "<issue>"}`,
+    );
+  }
+  let response: unknown;
+  try {
+    response = await multiremiApiRequest("POST", "/api/issues", body, options);
+  } catch (error) {
+    if (preparedTopic) await cancelTopicMigration(preparedTopic, options).catch(() => {});
+    throw error;
+  }
+  let topicMigration: Record<string, unknown> | null = null;
+  if (preparedTopic) {
+    const issueId = responseIssueId(response);
+    const issueKey = responseIssueKey(response);
+    try {
+      console.error(`Waiting for the local daemon to bind this topic to ${issueKey}...`);
+      topicMigration = await commitTopicMigration(preparedTopic, issueId, issueKey, options);
+      console.error(`Topic migrated to ${String(topicMigration.path)}`);
+    } catch (error) {
+      throw new Error(
+        `Issue ${issueKey} was created, but its topic workspace was not migrated. `
+        + `Retry with: remi issue bind-topic ${issueKey}. ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  }
   if (attachments.length) {
     const issueId = responseIssueId(response);
     for (const attachmentFile of attachments) {
@@ -541,8 +579,148 @@ export async function issueCreate(options: CliOptions): Promise<void> {
       }
     }
   }
-  printJson(response);
+  printJson(topicMigration && isRecord(response) ? { ...response, topic_migration: topicMigration } : response);
   warnUndispatchedIssue(response, projectId ?? null, !hasExplicitAssignee && !noProjectDefaults);
+}
+
+export async function issueBindTopic(issueRef: string, options: CliOptions): Promise<void> {
+  const baseUrl = await localDaemonBaseUrl(options);
+  if (!baseUrl) throw new Error("No local Multiremi daemon is available for topic migration");
+  const response = await multiremiApiRequest(
+    "GET",
+    `/api/issues/${encodeURIComponent(issueRef)}`,
+    undefined,
+    options,
+  );
+  const issueId = responseIssueId(response);
+  const issueKey = responseIssueKey(response);
+  const cwd = currentWorkingDirectory();
+  console.error(`Waiting for the local daemon to bind this topic to ${issueKey}...`);
+  const result = await localTopicMigrationRequest(baseUrl, {
+    action: "resume",
+    ...(cwd ? { cwd } : {}),
+    issue_id: issueId,
+    issue_key: issueKey,
+  });
+  console.error(`Topic migrated to ${String(result.path)}`);
+  printJson({ issue_id: issueId, issue_key: issueKey, topic_migration: result });
+}
+
+interface PreparedLocalTopicMigration {
+  bound: boolean;
+  migration_id?: string;
+  state?: "prepared" | "migrating" | "returning";
+  issue_id?: string;
+  issue_key?: string;
+  topic_id?: string;
+  session_key?: string;
+  topic_cwd?: string;
+}
+
+async function prepareTopicMigration(options: CliOptions): Promise<PreparedLocalTopicMigration | null> {
+  const baseUrl = await localDaemonBaseUrl(options);
+  if (!baseUrl) return null;
+  const cwd = currentWorkingDirectory();
+  if (!cwd) throw new Error("Cannot resolve the current directory for topic migration");
+  const result = await localTopicMigrationRequest(baseUrl, {
+    action: "prepare",
+    cwd,
+  });
+  return result as unknown as PreparedLocalTopicMigration;
+}
+
+async function localDaemonBaseUrl(options: CliOptions): Promise<string | null> {
+  const daemonPort = stringOpt(options.daemonPort ?? options["daemon-port"], process.env.MULTIREMI_DAEMON_PORT);
+  if (!daemonPort) return null;
+  const baseUrl = `http://127.0.0.1:${daemonPort}`;
+  let health: Response;
+  try {
+    health = await fetch(`${baseUrl}/health`);
+  } catch {
+    // Ordinary CLI use does not require a daemon. A topic binding cannot exist
+    // without the co-resident daemon which created it.
+    return null;
+  }
+  if (!health.ok) return null;
+  let healthBody: Record<string, unknown>;
+  try {
+    healthBody = await health.json() as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (healthBody.mode !== "serving") {
+    throw new Error(`Local daemon is not serving topic migrations (mode=${String(healthBody.mode ?? "unknown")})`);
+  }
+  return baseUrl;
+}
+
+async function commitTopicMigration(
+  prepared: PreparedLocalTopicMigration,
+  issueId: string,
+  issueKey: string,
+  options: CliOptions,
+): Promise<Record<string, unknown>> {
+  if (!prepared.migration_id) throw new Error("Local daemon did not return a topic migration id");
+  const daemonPort = stringOpt(options.daemonPort ?? options["daemon-port"], process.env.MULTIREMI_DAEMON_PORT);
+  if (!daemonPort) throw new Error("MULTIREMI_DAEMON_PORT is required to finish topic migration");
+  return localTopicMigrationRequest(`http://127.0.0.1:${daemonPort}`, {
+    action: "commit",
+    cwd: prepared.topic_cwd ?? process.cwd(),
+    migration_id: prepared.migration_id,
+    issue_id: issueId,
+    issue_key: issueKey,
+  });
+}
+
+async function cancelTopicMigration(
+  prepared: PreparedLocalTopicMigration,
+  options: CliOptions,
+): Promise<void> {
+  if (!prepared.migration_id) return;
+  const daemonPort = stringOpt(options.daemonPort ?? options["daemon-port"], process.env.MULTIREMI_DAEMON_PORT);
+  if (!daemonPort) return;
+  await localTopicMigrationRequest(`http://127.0.0.1:${daemonPort}`, {
+    action: "cancel",
+    cwd: prepared.topic_cwd ?? process.cwd(),
+    migration_id: prepared.migration_id,
+  });
+}
+
+async function localTopicMigrationRequest(
+  baseUrl: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(`${baseUrl}/topic/migrate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  let result: Record<string, unknown>;
+  try {
+    result = text ? JSON.parse(text) as Record<string, unknown> : {};
+  } catch {
+    throw new Error("Local daemon returned invalid topic migration JSON");
+  }
+  if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : `HTTP ${response.status}`);
+  return result;
+}
+
+function responseIssueKey(value: unknown): string {
+  const row = isRecord(value) && isRecord(value.issue) ? value.issue : value;
+  const key = isRecord(row)
+    ? attachmentStringField(row, "key", "identifier", "issue_key", "issueKey")
+    : null;
+  if (!key) throw new Error("create issue response missing issue key; cannot migrate topic workspace");
+  return key;
+}
+
+function currentWorkingDirectory(): string | null {
+  try {
+    return process.cwd();
+  } catch {
+    return null;
+  }
 }
 
 // Assign-on-create can silently end without a task (no assignee, no runnable

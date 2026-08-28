@@ -45,6 +45,7 @@ export interface AgentTaskAgent {
   executable: string | null;
   allowedTools: string[];
   customEnv: Record<string, string>;
+  customArgs?: string[];
 
   // Ephemeral per-task MCP servers (mcp/ephemeral.ts). Standard .mcp.json shape
   // (`{ mcpServers: {...} }`); parsed defensively. Optional + unknown so the
@@ -109,6 +110,11 @@ export interface AgentTaskSessionProjection {
   toSeq?: number;
   to_seq?: number;
   jsonl: string;
+  truncated?: boolean;
+  omittedEvents?: number;
+  omitted_events?: number;
+  estimatedTokens?: number;
+  estimated_tokens?: number;
 }
 
 export interface AgentTaskIssueSessionResult {

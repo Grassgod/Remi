@@ -50,14 +50,17 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
   it("syncs issue and autopilot run state when tasks finish", () => {
     const store = createStore();
-    const agent = store.createAgent({ name: "Claude", provider: "claude" });
-    const runtime = store.registerRuntime({ name: "local-claude", provider: "claude" });
+    const owner = store.createWorkspaceMember({ id: "mem_issue_run_owner", name: "Issue Run Owner" });
+    const agent = store.createAgent({ name: "Claude", provider: "claude", ownerId: owner.id });
+    const runtime = store.registerRuntime({ name: "local-claude", provider: "claude", ownerId: owner.id });
     const project = store.createProject({ title: "Core" });
     const autopilot = store.createAutopilot({
       title: "Regression sweep",
       projectId: project.id,
       assigneeId: agent.id,
       issueTitleTemplate: "Sweep regressions",
+      createdByType: "member",
+      createdById: owner.id,
     });
     const run = store.runAutopilot(autopilot.id);
     expect(store.getTask(run.taskId!)?.autopilotRunId).toBe(run.id);
@@ -80,6 +83,12 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const activityTypes = store.listIssueActivity(run.issueId!).map((entry) => entry.type);
     expect(activityTypes).toContain("task_completed");
     expect(activityTypes.at(-1)).toBe("comment_created");
+    const notification = store.listInboxItems(owner.id)
+      .find((item) => item.type === "autopilot_run_completed");
+    expect(notification?.details).toMatchObject({
+      issue_id: run.issueId,
+      issue_session_id: run.issueSessionId,
+    });
   });
 
   it("records completed and failed run outcomes for member creators and agent owners", () => {
@@ -127,8 +136,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const completed = store.listInboxItems(creator.id).find((item) => item.type === "autopilot_run_completed")!;
     expect(completed.memberId).toBe(creator.id);
     expect(completed.severity).toBe("info");
-    expect(completed.title).toBe("Daily summary completed");
-    expect(completed.body).toContain("Trigger: schedule");
+    expect(completed.title).toMatch(/^Daily summary · Scheduled \d{2}:\d{2} UTC$/);
     expect(completed.body).toContain("Published 12 project updates. No blockers.");
     expect(completed.details).toMatchObject({
       autopilot_id: completedAutopilot.id,
@@ -136,24 +144,54 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       run_id: completedRun.id,
       task_id: completedRun.taskId,
       trigger: "schedule",
+      triggered_at: completedRun.triggeredAt,
       duration_seconds: expect.any(Number),
       issue_id: null,
+      issue_session_id: null,
+      trigger_object: {
+        event_type: "schedule",
+        repository_id: null,
+        repository_name: null,
+      },
+      outcome: {
+        kind: "unknown",
+        headline: "Published 12 project updates.",
+        text: "Published 12 project updates. No blockers.",
+        links: [],
+        counts: null,
+        risks: [],
+        action: { kind: "none", text: null },
+      },
     });
 
     const failed = store.listInboxItems(owner.id).find((item) => item.type === "autopilot_run_failed")!;
     expect(failed.memberId).toBe(owner.id);
     expect(failed.severity).toBe("attention");
-    expect(failed.title).toBe("Dependency audit failed");
-    expect(failed.body).toContain("Trigger: api");
-    expect(failed.body).toContain("Dependency service unavailable");
+    expect(failed.title).toBe("Dependency audit");
+    expect(failed.body).toContain("Dependency service unavailable.");
     expect(failed.details).toMatchObject({
       autopilot_id: failedAutopilot.id,
       autopilot_title: "Dependency audit",
       run_id: failedRun.id,
       task_id: failedRun.taskId,
       trigger: "api",
+      triggered_at: failedRun.triggeredAt,
       duration_seconds: expect.any(Number),
       issue_id: null,
+      issue_session_id: null,
+      trigger_object: null,
+      outcome: {
+        kind: "failed",
+        headline: "Dependency service unavailable.",
+        text: "Dependency service unavailable.",
+        links: [],
+        counts: null,
+        risks: [],
+        action: {
+          kind: "investigate",
+          text: "Dependency service unavailable.",
+        },
+      },
     });
 
     const inboxEvents = events.filter((event) => event.type === "inbox:new");

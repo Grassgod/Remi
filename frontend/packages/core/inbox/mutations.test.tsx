@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import type { InboxItem } from "../types";
-import { useArchiveInbox } from "./mutations";
+import { useArchiveInbox, useArchiveInboxItems } from "./mutations";
 import { inboxKeys } from "./queries";
 
 vi.mock("../hooks", () => ({
@@ -81,5 +81,31 @@ describe("useArchiveInbox", () => {
       { id: "ledger-neighbor", archived: false, read: false },
       { id: "action-neighbor", archived: false, read: false },
     ]);
+  });
+
+  it("archives every immutable row covered by a collapsed run entry", async () => {
+    const key = inboxKeys.list("ws-1");
+    queryClient.setQueryData<InboxItem[]>(key, [
+      makeItem("run-latest", "autopilot_run_completed"),
+      makeItem("run-earlier", "autopilot_run_completed"),
+      makeItem("run-failed", "autopilot_run_failed"),
+    ]);
+    const { result } = renderHook(() => useArchiveInboxItems(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync(["run-latest", "run-earlier"]);
+    });
+
+    expect(archiveInbox).toHaveBeenCalledTimes(2);
+    expect(archiveInbox).toHaveBeenCalledWith("run-latest");
+    expect(archiveInbox).toHaveBeenCalledWith("run-earlier");
+    expect(queryClient.getQueryData<InboxItem[]>(key)?.map(({ id, archived }) => ({ id, archived })))
+      .toEqual([
+        { id: "run-latest", archived: true },
+        { id: "run-earlier", archived: true },
+        { id: "run-failed", archived: false },
+      ]);
   });
 });

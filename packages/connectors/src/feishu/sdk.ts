@@ -17,7 +17,7 @@ export type {
 } from "./channel.js";
 
 // ── Config ────────────────────────────────────────────────────
-export type { FeishuChannelConfig, GroupPolicy, FeishuDomainName } from "./config.js";
+export type { FeishuChannelConfig, FeishuSenderAuthorizer, GroupPolicy, FeishuDomainName } from "./config.js";
 
 // ── Message types ─────────────────────────────────────────────
 export type { ParsedFeishuMessage, FeishuWSHandle } from "./receive.js";

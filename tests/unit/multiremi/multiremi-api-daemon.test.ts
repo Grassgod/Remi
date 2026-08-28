@@ -8,6 +8,242 @@ import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./h
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — daemon endpoints", () => {
+  it("returns only the configured active bot agent from the daemon workspace", async () => {
+    const store = createStore();
+    store.createWorkspace({ id: "other", name: "Other" });
+    const agent = store.createAgent({
+      id: "agt_bot_runtime",
+      name: "Workspace bot",
+      provider: "codex",
+      workspaceId: "local",
+      instructions: "Operate as the workspace concierge.",
+      cwd: "/srv/remi-bot",
+      executable: "/usr/local/bin/codex-acp",
+      model: "gpt-bot",
+      maxConcurrentTasks: 9,
+      allowedTools: ["Read", "Bash"],
+      customEnv: { BOT_MODE: "concierge" },
+      customArgs: ["--profile", "bot"],
+      mcpConfig: { mcpServers: { platform: { command: "remi", args: ["mcp"] } } },
+      thinkingLevel: "high",
+    });
+    const otherAgent = store.createAgent({
+      id: "agt_other_workspace",
+      name: "Other bot",
+      provider: "claude",
+      workspaceId: "other",
+      cwd: "/srv/other",
+    });
+    const archivedAgent = store.createAgent({
+      id: "agt_archived_bot",
+      name: "Archived bot",
+      provider: "claude",
+      workspaceId: "local",
+      cwd: "/srv/archived",
+    });
+    store.archiveAgent(archivedAgent.id);
+    const app = createMultiremiApp({ store });
+
+    const register = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-bot-config",
+        bot_agent_id: agent.id,
+        runtimes: [{ type: "codex", version: "1.0.0" }],
+      }),
+    });
+    expect(register.status).toBe(200);
+    expect(register.headers.get("cache-control")).toBe("no-store");
+    const registerBody = await register.json();
+    expect(registerBody.bot_agent).toMatchObject({
+      id: agent.id,
+      workspace_id: "local",
+      provider: "codex",
+      instructions: "Operate as the workspace concierge.",
+      cwd: "/srv/remi-bot",
+      executable: "/usr/local/bin/codex-acp",
+      model: "gpt-bot",
+      max_concurrent_tasks: 9,
+      allowed_tools: ["Read", "Bash"],
+      custom_env: { BOT_MODE: "concierge" },
+      custom_args: ["--profile", "bot"],
+      thinking_level: "high",
+    });
+    const heartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: registerBody.runtimes[0].id,
+        bot_agent_id: agent.id,
+      }),
+    });
+    expect(heartbeat.status).toBe(200);
+    expect((await heartbeat.json()).bot_agent.id).toBe(agent.id);
+
+    for (const botAgentId of ["agt_missing", otherAgent.id, archivedAgent.id]) {
+      const rejected = await app.request("/api/daemon/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: "local",
+          daemon_id: `daemon-rejected-${botAgentId}`,
+          bot_agent_id: botAgentId,
+          runtimes: [{ type: "claude" }],
+        }),
+      });
+      expect(rejected.status).toBe(404);
+      expect(await rejected.json()).toEqual({ error: "bot agent not found in runtime workspace" });
+    }
+  });
+
+  it("projects only current-workspace directories owned by the requesting daemon", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const foreignWorkspace = store.createWorkspace({
+      id: "ws_foreign_projects",
+      name: "Foreign projects",
+      slug: "foreign-projects",
+    });
+    const visible = store.createProject({ title: "Visible", workspaceId: "local" });
+    const otherDaemon = store.createProject({ title: "Other daemon", workspaceId: "local" });
+    const archived = store.createProject({ title: "Archived", workspaceId: "local", status: "completed" });
+    const foreign = store.createProject({ title: "Foreign", workspaceId: foreignWorkspace.id });
+    for (const [project, daemonId, cwd] of [
+      [visible, "daemon-projects", "/srv/visible"],
+      [otherDaemon, "daemon-other", "/srv/other"],
+      [archived, "daemon-projects", "/srv/archived"],
+      [foreign, "daemon-projects", "/srv/foreign"],
+    ] as const) {
+      store.createProjectResource(project.id, {
+        resourceType: "local_directory",
+        resourceRef: { daemonId, localPath: cwd },
+      });
+    }
+    const app = createMultiremiApp({ store });
+    const registered = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-projects",
+        include_bot_projects: true,
+        runtimes: [{ type: "claude", version: "1" }],
+      }),
+    });
+
+    expect(registered.status).toBe(200);
+    expect(registered.headers.get("cache-control")).toBe("no-store");
+    const registeredBody = await registered.json();
+    expect(registeredBody.bot_projects).toEqual([
+      { id: visible.id, title: "Visible", cwd: "/srv/visible" },
+    ]);
+
+    const added = store.createProject({ title: "Added", workspaceId: "local" });
+    store.createProjectResource(added.id, {
+      resourceType: "local_directory",
+      resourceRef: { daemonId: "daemon-projects", localPath: "/srv/added" },
+    });
+    const heartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: registeredBody.runtimes[0].id,
+        include_bot_projects: true,
+      }),
+    });
+    expect(heartbeat.status).toBe(200);
+    expect(heartbeat.headers.get("cache-control")).toBe("no-store");
+    expect((await heartbeat.json()).bot_projects).toEqual([
+      { id: added.id, title: "Added", cwd: "/srv/added" },
+      { id: visible.id, title: "Visible", cwd: "/srv/visible" },
+    ]);
+  });
+
+  it("checks Feishu external identities against the daemon token workspace", async () => {
+    const store = createStore();
+    const memberUser = store.getOrCreateUser({
+      externalId: "ou_workspace_member",
+      email: "workspace-member@example.test",
+      name: "Workspace Member",
+    });
+    const nonMemberUser = store.getOrCreateUser({
+      externalId: "ou_known_non_member",
+      email: "known-non-member@example.test",
+      name: "Known Non-member",
+    });
+    store.createWorkspaceMember({
+      id: "mem_workspace_member",
+      workspaceId: "local",
+      userId: memberUser.id,
+      name: "Workspace Member",
+      role: "member",
+    });
+    store.createWorkspace({
+      id: "ws_other",
+      name: "Other Workspace",
+      slug: "other-workspace",
+      issuePrefix: "OTH",
+    });
+    const daemonToken = await store.createAccessToken({
+      workspaceId: "local",
+      name: "Membership gate daemon",
+      type: "daemon",
+      daemonId: "daemon-membership-gate",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const request = (workspaceId: string, externalId: string) => app.request(
+      `/api/daemon/workspaces/${workspaceId}/external-membership/check`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${daemonToken.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ external_id: externalId }),
+      },
+    );
+
+    const member = await request("local", memberUser.externalId!);
+    expect(member.status).toBe(200);
+    expect(await member.json()).toEqual({ allowed: true });
+    expect(member.headers.get("cache-control")).toBe("no-store");
+
+    const nonMember = await request("local", nonMemberUser.externalId!);
+    expect(nonMember.status).toBe(200);
+    expect(await nonMember.json()).toEqual({ allowed: false });
+
+    const unknown = await request("local", "ou_unknown_external_user");
+    expect(unknown.status).toBe(200);
+    expect(await unknown.json()).toEqual({ allowed: false });
+    expect(store.getUserByExternalId("ou_unknown_external_user")).toBeNull();
+
+    const crossWorkspace = await request("ws_other", memberUser.externalId!);
+    expect(crossWorkspace.status).toBe(403);
+    expect(await crossWorkspace.json()).toEqual({ error: "forbidden for daemon token workspace" });
+
+    const memberToken = await store.createAccessToken({
+      workspaceId: "local",
+      userId: memberUser.id,
+      name: "Human member",
+      type: "pat",
+    });
+    const humanRequest = await app.request(
+      "/api/daemon/workspaces/local/external-membership/check",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${memberToken.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ external_id: memberUser.externalId }),
+      },
+    );
+    expect(humanRequest.status).toBe(403);
+    expect(await humanRequest.json()).toMatchObject({ code: "daemon_token_required" });
+  });
+
   it("reports an Issue code workspace and exposes it to the Issue sidebar", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({

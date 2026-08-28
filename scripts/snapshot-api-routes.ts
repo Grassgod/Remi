@@ -371,6 +371,7 @@ export interface SeedRefs {
   localSkillImportRequestId: string;
   runtimeUpdateRequestId: string;
   runtimeCommandRequestId: string;
+  botMenuRequestId: string;
   runtimeProvisionId: string;
   dependencyId: string;
   invitationId: string;
@@ -434,6 +435,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     // Roomy enough that the daemon flow can claim its own task even though the
     // seeded chat session already holds one dispatch slot.
     maxConcurrency: 6,
+    metadata: { feishu_bot_menu: true },
   });
 
   const skill = store.createSkill({
@@ -641,6 +643,12 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   const localSkillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "snapshot-skill", name: "Snapshot skill" });
   const runtimeUpdate = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9", scope: "agent" as any });
   const runtimeCommandRequestId = "rcm_snapshot";
+  const botMenuRequest = store.createBotMenuPublishRequest(runtime.id, {
+    workspaceId,
+    config: {},
+    dryRun: true,
+    createdBy: member.userId ?? member.id,
+  });
   const runtimeProvisionId = "prov_snapshot";
   db.run(
     `INSERT INTO multiremi_runtime_command_requests (
@@ -728,6 +736,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     localSkillImportRequestId: (localSkillImport as any).id ?? (localSkillImport as any).requestId,
     runtimeUpdateRequestId: (runtimeUpdate as any).id ?? (runtimeUpdate as any).requestId,
     runtimeCommandRequestId,
+    botMenuRequestId: botMenuRequest.id,
     runtimeProvisionId,
     dependencyId: dependency.id,
     invitationId: invitation.id,
@@ -832,6 +841,7 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       return "sar_snapshot";
     case "requestId":
       if (pattern.includes("/human-requests/")) return refs.humanRequestId;
+      if (pattern.includes("/bot-menu/")) return refs.botMenuRequestId;
       if (pattern.includes("/commands/")) return refs.runtimeCommandRequestId;
       if (pattern.includes("/local-skills/import/")) return refs.localSkillImportRequestId;
       if (pattern.includes("/local-skills/")) return refs.localSkillListRequestId;

@@ -200,6 +200,100 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
     }
   });
 
+  test("issue create prepares and commits a bound topic through the local daemon", async () => {
+    const events: string[] = [];
+    const localDaemon = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/health") {
+          events.push("health");
+          return Response.json({ status: "running", mode: "serving" });
+        }
+        if (url.pathname === "/topic/migrate") {
+          const body = await request.json() as Record<string, unknown>;
+          events.push(String(body.action));
+          if (body.action === "prepare") {
+            return Response.json({
+              bound: true,
+              migration_id: "mig_1",
+              state: "prepared",
+              topic_id: "om_1",
+              session_key: "chat:thread:om_1",
+              topic_cwd: "/workspaces/_topics/om_1",
+            });
+          }
+          return Response.json({
+            migrated: true,
+            issue_id: body.issue_id,
+            issue_key: body.issue_key,
+            path: "/workspaces/MUL-301",
+            session_key: "chat:thread:om_1",
+            topic_id: "om_1",
+          });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    let created = 0;
+    const api = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/api/issues" && request.method === "POST") {
+          events.push("create");
+          created++;
+          return Response.json({ id: `iss_${created}`, identifier: `MUL-${300 + created}`, title: "Topic issue" }, { status: 201 });
+        }
+        if (path === "/api/issues/MUL-301" && request.method === "GET") {
+          events.push("get");
+          return Response.json({ id: "iss_1", identifier: "MUL-301", title: "Topic issue" });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    try {
+      console.log = (value?: unknown) => { logs.push(String(value)); };
+      console.error = (value?: unknown) => { errors.push(String(value)); };
+      const common = [
+        "--server", `http://127.0.0.1:${api.port}`,
+        "--token", "tok_cli",
+        "--daemon-port", String(localDaemon.port),
+        "--output", "json",
+      ];
+      await runMultiremi(["issue", "create", "--title", "Topic issue", ...common], { programName: "multiremi" });
+      expect(events).toEqual(["health", "prepare", "create", "commit"]);
+      expect(JSON.parse(logs.at(-1)!)).toMatchObject({
+        id: "iss_1",
+        topic_migration: { migrated: true, path: "/workspaces/MUL-301" },
+      });
+      expect(errors).toContain("Topic migrated to /workspaces/MUL-301");
+
+      events.length = 0;
+      await runMultiremi(["issue", "create", "--title", "Detached issue", "--no-bind-topic", ...common], { programName: "multiremi" });
+      expect(events).toEqual(["create"]);
+
+      events.length = 0;
+      await runMultiremi(["issue", "bind-topic", "MUL-301", ...common], { programName: "multiremi" });
+      expect(events).toEqual(["health", "get", "resume"]);
+      expect(JSON.parse(logs.at(-1)!)).toMatchObject({
+        issue_key: "MUL-301",
+        topic_migration: { migrated: true, path: "/workspaces/MUL-301" },
+      });
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+      localDaemon.stop(true);
+      api.stop(true);
+    }
+  });
+
   test("issue read commands default to Go-style table output", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",

@@ -4,9 +4,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
-  ArrowDownUp,
   BookText,
   Brain,
+  ChevronRight,
   FileQuestion,
   Files,
   GitFork,
@@ -54,6 +54,7 @@ function SidebarRow({
   nested = false,
   disabledTitle,
   markCurrent = true,
+  onNavigate,
 }: {
   icon: ReactNode;
   label: string;
@@ -63,6 +64,7 @@ function SidebarRow({
   nested?: boolean;
   disabledTitle?: string;
   markCurrent?: boolean;
+  onNavigate?: () => void;
 }) {
   const content = (
     <>
@@ -105,9 +107,73 @@ function SidebarRow({
       href={href}
       className={className}
       aria-current={active && markCurrent ? "page" : undefined}
+      onClick={onNavigate}
     >
       {content}
     </AppLink>
+  );
+}
+
+function SidebarExpandableRow({
+  icon,
+  label,
+  count,
+  active,
+  href,
+  expanded,
+  toggleLabel,
+  onToggle,
+  onNavigate,
+}: {
+  icon: ReactNode;
+  label: string;
+  count: number;
+  active: boolean;
+  href: string;
+  expanded: boolean;
+  toggleLabel: string;
+  onToggle: () => void;
+  onNavigate?: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex h-8 w-full min-w-0 items-center rounded-md text-sm transition-colors",
+        active
+          ? "bg-accent text-foreground"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+      )}
+    >
+      <AppLink
+        href={href}
+        onClick={onNavigate}
+        aria-current={active ? "page" : undefined}
+        className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2"
+      >
+        {icon}
+        <span className="min-w-0 flex-1 truncate" title={label}>
+          {label}
+        </span>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {count || "--"}
+        </span>
+      </AppLink>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-label={toggleLabel}
+        title={toggleLabel}
+        className="flex size-8 shrink-0 items-center justify-center rounded-md hover:bg-accent"
+      >
+        <ChevronRight
+          className={cn(
+            "size-3.5 transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
+      </button>
+    </div>
   );
 }
 
@@ -193,18 +259,18 @@ function WikiPagePane({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) 
   });
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-5">
-      <WikiPathBreadcrumb path={projectWikiPath(doc)} className="mb-1.5" />
-      <h2 className="text-lg font-semibold">{doc.title}</h2>
+    <article className="mx-auto w-full max-w-3xl px-6 py-6">
+      <WikiPathBreadcrumb path={projectWikiPath(doc)} />
+      <h1 className="mt-1 text-xl font-semibold">{doc.title}</h1>
       {doc.summary && (
         <p className="mt-1 text-sm text-muted-foreground">{doc.summary}</p>
       )}
-      <DocRefs refs={doc.refs ?? []} className="mt-2" />
-      <div className="mt-4">
+      <DocRefs refs={doc.refs ?? []} className="mt-3" />
+      <div className="mt-5">
         <ReadonlyContent content={body} />
       </div>
       <WikiLinkChips slugs={linkedSlugs} pages={pages} />
-      <div className="mt-6 flex flex-wrap items-center gap-1.5 border-t pt-3 text-xs text-muted-foreground">
+      <footer className="mt-8 flex flex-wrap items-center gap-1.5 border-t pt-3 text-xs text-muted-foreground">
         <span>{t(($) => $.wiki.updated_by)}</span>
         {updatedByType && updatedById ? (
           <>
@@ -218,8 +284,8 @@ function WikiPagePane({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) 
         <span>{formatRelativeDate(doc.updated_at)}</span>
         <span>·</span>
         <span>{t(($) => $.wiki.version, { version: doc.version })}</span>
-      </div>
-    </div>
+      </footer>
+    </article>
   );
 }
 
@@ -244,10 +310,6 @@ function isLongMemoryBody(body: string): boolean {
 
 function memoryDetail(doc: ProjectDoc): string {
   return doc.body || doc.summary || "";
-}
-
-function memoryPreview(doc: ProjectDoc): string {
-  return memoryDetail(doc).replace(/\s+/g, " ").trim();
 }
 
 function matchesMemoryQuery(doc: ProjectDoc, query: string): boolean {
@@ -302,7 +364,13 @@ export function MemoryCard({
   return (
     <div className="rounded-lg border p-3">
       <div className="flex items-start gap-2">
-        <p className="min-w-0 flex-1 text-sm font-medium">{doc.title}</p>
+        <AppLink
+          href={paths.projectWikiPage(doc.project_id, doc.slug || doc.id)}
+          className="min-w-0 flex-1 truncate text-sm font-medium hover:underline"
+          title={doc.title}
+        >
+          {doc.title}
+        </AppLink>
         {doc.pinned && (
           <Badge variant="secondary" className="shrink-0 gap-1">
             <Pin className="h-3 w-3" />
@@ -361,61 +429,6 @@ export function MemoryCard({
   );
 }
 
-function MemoryListItem({
-  doc,
-  selected,
-  onSelect,
-}: {
-  doc: ProjectDoc;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const { t } = useT("projects");
-  const formatRelativeDate = useFormatRelativeDate();
-  const preview = memoryPreview(doc);
-
-  return (
-    <button
-      type="button"
-      aria-label={doc.title}
-      aria-pressed={selected}
-      onClick={onSelect}
-      className={cn(
-        "relative flex w-full flex-col gap-1.5 border-b px-4 py-3 text-left transition-colors",
-        "hover:bg-accent/50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/40",
-        selected && "bg-accent",
-      )}
-    >
-      {selected && <span className="absolute inset-y-0 left-0 w-0.5 bg-brand" />}
-      <span className="flex w-full items-start gap-2">
-        <span className="min-w-0 flex-1 break-words text-sm font-medium leading-5">
-          {doc.title}
-        </span>
-        {doc.pinned && (
-          <Pin
-            className="mt-0.5 size-3.5 shrink-0 text-amber-600"
-            aria-label={t(($) => $.wiki.pinned_badge)}
-          />
-        )}
-      </span>
-      {preview && (
-        <span className="line-clamp-2 break-words text-xs leading-5 text-muted-foreground">
-          {preview}
-        </span>
-      )}
-      <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground/80">
-        {doc.source_issue_id && (
-          <>
-            <span>{doc.source_issue_id}</span>
-            <span>·</span>
-          </>
-        )}
-        <span>{formatRelativeDate(doc.updated_at)}</span>
-      </span>
-    </button>
-  );
-}
-
 function MemoryDetailPane({
   doc,
   pages,
@@ -443,29 +456,19 @@ function MemoryDetailPane({
     : "";
 
   return (
-    <article className="mx-auto w-full max-w-3xl px-5 py-5">
-      <div className="flex items-start gap-3 border-b pb-4">
+    <article
+      className="mx-auto w-full max-w-3xl px-6 py-6"
+      data-testid="memory-detail"
+    >
+      <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
             <Brain className="size-3.5" />
             <span>{t(($) => $.wiki.memory_node)}</span>
-            {doc.author_type && doc.author_id && (
-              <>
-                <span>·</span>
-                <ActorAvatar
-                  actorType={doc.author_type}
-                  actorId={doc.author_id}
-                  size={16}
-                />
-                <ActorName actorType={doc.author_type} actorId={doc.author_id} />
-              </>
-            )}
-            <span>·</span>
-            <span>{formatRelativeDate(doc.updated_at)}</span>
           </div>
-          <h2 className="mt-2 break-words text-lg font-semibold leading-6">
+          <h1 className="mt-1 break-words text-xl font-semibold">
             {doc.title}
-          </h2>
+          </h1>
         </div>
         {doc.pinned && (
           <Badge variant="secondary" className="shrink-0 gap-1">
@@ -475,33 +478,42 @@ function MemoryDetailPane({
         )}
       </div>
 
+      <DocRefs refs={doc.refs ?? []} className="mt-3" />
+
       {body && (
-        <div className="py-5">
+        <div className="mt-5">
           <ReadonlyContent content={body} />
         </div>
       )}
 
-      <DocRefs refs={doc.refs ?? []} className="border-t pt-4" />
-
-      {doc.source_issue_id && (
-        <div className="mt-4 flex items-center justify-between gap-3 border-y py-3 text-xs">
-          <span className="text-muted-foreground">
-            {t(($) => $.wiki.source_issue)}
-          </span>
-          <AppLink
-            href={paths.issueDetail(doc.source_issue_id)}
-            className="min-w-0 truncate font-medium hover:underline"
-            aria-label={`${t(($) => $.wiki.source_issue)} ${doc.source_issue_id}`}
-          >
-            {doc.source_issue_id}
-          </AppLink>
-        </div>
-      )}
+      <footer className="mt-8 flex flex-wrap items-center gap-1.5 border-t pt-3 text-xs text-muted-foreground">
+        {doc.author_type && doc.author_id && (
+          <>
+            <ActorAvatar actorType={doc.author_type} actorId={doc.author_id} size={16} />
+            <ActorName actorType={doc.author_type} actorId={doc.author_id} />
+            <span>·</span>
+          </>
+        )}
+        <span>{formatRelativeDate(doc.updated_at)}</span>
+        {doc.source_issue_id && (
+          <>
+            <span>·</span>
+            <span>{t(($) => $.wiki.source_issue)}</span>
+            <AppLink
+              href={paths.issueDetail(doc.source_issue_id)}
+              className="font-medium hover:text-foreground hover:underline"
+              aria-label={`${t(($) => $.wiki.source_issue)} ${doc.source_issue_id}`}
+            >
+              {doc.source_issue_id}
+            </AppLink>
+          </>
+        )}
+      </footer>
     </article>
   );
 }
 
-function MemoryPane({
+function MemoryOverviewPane({
   docs,
   pages,
 }: {
@@ -509,125 +521,27 @@ function MemoryPane({
   pages: ProjectDoc[];
 }) {
   const { t } = useT("projects");
-  const [search, setSearch] = useState("");
-  const [onlyPinned, setOnlyPinned] = useState(false);
-  const [newestFirst, setNewestFirst] = useState(true);
-  const [selectedMemoryId, setSelectedMemoryId] = useState<string>();
-  const filteredDocs = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return docs
-      .filter((doc) => !onlyPinned || doc.pinned)
-      .filter((doc) => matchesMemoryQuery(doc, query))
-      .toSorted((a, b) => {
-        const pinnedOrder = Number(b.pinned) - Number(a.pinned);
-        if (pinnedOrder !== 0) return pinnedOrder;
-        return newestFirst
-          ? b.updated_at.localeCompare(a.updated_at)
-          : a.updated_at.localeCompare(b.updated_at);
-      });
-  }, [docs, newestFirst, onlyPinned, search]);
-  const selectedDoc =
-    filteredDocs.find((doc) => doc.id === selectedMemoryId) ?? filteredDocs[0];
-  const hasFilters = search.trim().length > 0 || onlyPinned;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b px-5 py-4">
-        <h2 className="text-lg font-semibold">{t(($) => $.wiki.memory_node)}</h2>
+    <div className="h-full overflow-y-auto" data-testid="memory-overview">
+      <div className="mx-auto w-full max-w-3xl px-6 py-6">
+        <h1 className="text-xl font-semibold">{t(($) => $.wiki.memory_node)}</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
           {t(($) => $.wiki.memory_description)}
         </p>
-      </div>
 
-      {docs.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center px-6 text-sm text-muted-foreground">
-          {t(($) => $.wiki.memory_empty)}
-        </div>
-      ) : (
-        <>
-          <div className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-            <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={t(($) => $.wiki.memory_search_placeholder)}
-                aria-label={t(($) => $.wiki.memory_search_placeholder)}
-                className="h-8 pl-8 text-sm"
-              />
-            </div>
-            <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70">
-              {filteredDocs.length}/{docs.length}
-            </span>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant={onlyPinned ? "secondary" : "outline"}
-              aria-label={t(($) => $.wiki.memory_filter_pinned)}
-              aria-pressed={onlyPinned}
-              title={t(($) => $.wiki.memory_filter_pinned)}
-              onClick={() => setOnlyPinned((value) => !value)}
-            >
-              <Pin className="size-3.5" />
-            </Button>
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="outline"
-              aria-label={t(($) =>
-                newestFirst
-                  ? $.wiki.memory_sort_oldest
-                  : $.wiki.memory_sort_newest,
-              )}
-              title={t(($) =>
-                newestFirst
-                  ? $.wiki.memory_sort_oldest
-                  : $.wiki.memory_sort_newest,
-              )}
-              onClick={() => setNewestFirst((value) => !value)}
-            >
-              <ArrowDownUp className="size-3.5" />
-            </Button>
+        {docs.length === 0 ? (
+          <p className="mt-5 text-sm text-muted-foreground">
+            {t(($) => $.wiki.memory_empty)}
+          </p>
+        ) : (
+          <div className="mt-5 space-y-3">
+            {docs.map((doc) => (
+              <MemoryCard key={doc.id} doc={doc} pages={pages} />
+            ))}
           </div>
-
-          {filteredDocs.length === 0 ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-              <p className="text-sm text-muted-foreground">
-                {t(($) => $.wiki.memory_no_results)}
-              </p>
-              {hasFilters && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setSearch("");
-                    setOnlyPinned(false);
-                  }}
-                >
-                  {t(($) => $.wiki.memory_clear_filters)}
-                </Button>
-              )}
-            </div>
-          ) : (
-            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(12rem,40%)_minmax(0,1fr)] xl:grid-cols-[minmax(13rem,42%)_minmax(0,1fr)] xl:grid-rows-1">
-              <div className="min-w-0 overflow-y-auto border-b xl:border-b-0 xl:border-r">
-                {filteredDocs.map((doc) => (
-                  <MemoryListItem
-                    key={doc.id}
-                    doc={doc}
-                    selected={selectedDoc?.id === doc.id}
-                    onSelect={() => setSelectedMemoryId(doc.id)}
-                  />
-                ))}
-              </div>
-              <div className="min-w-0 overflow-y-auto">
-                {selectedDoc && <MemoryDetailPane doc={selectedDoc} pages={pages} />}
-              </div>
-            </div>
-          )}
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -687,6 +601,7 @@ export function ProjectWikiSection({
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const [pageFilter, setPageFilter] = useState("");
+  const [memoryExpanded, setMemoryExpanded] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const docsQuery = useQuery(projectDocListOptions(wsId, projectId));
   const resourcesQuery = useQuery(projectResourcesOptions(wsId, projectId));
@@ -701,7 +616,12 @@ export function ProjectWikiSection({
     projectRepositoryUrls.has(canonicalRepositoryUrl(repository.url))
   );
 
-  const memoryDocs = docs.filter((doc) => doc.kind === "memory");
+  const memoryDocs = docs
+    .filter((doc) => doc.kind === "memory")
+    .toSorted((a, b) => {
+      const pinnedOrder = Number(b.pinned) - Number(a.pinned);
+      return pinnedOrder || byUpdatedAtDesc(a, b);
+    });
   // Wiki pages sort newest-first; the server sorts pinned-first, which is the
   // memory index's ordering, not the page list's.
   const wikiDocs = docs
@@ -714,6 +634,25 @@ export function ProjectWikiSection({
     title: doc.title,
     searchText: `${doc.summary ?? ""}\n${doc.tags.join(" ")}`,
   })), [visibleWikiDocs]);
+  // Resolve every project document in the same id-first, slug-second order as
+  // getProjectDocByRef. The URL is the selected-memory state as well as the
+  // selected-page state, so refresh and sharing behave identically.
+  const selectedDoc = selectedRef
+    ? (docs.find((doc) => doc.id === selectedRef) ??
+      docs.find((doc) => doc.slug === selectedRef))
+    : undefined;
+  const normalizedFilter = pageFilter.trim().toLowerCase();
+  const filteredMemoryDocs = normalizedFilter
+    ? memoryDocs.filter((doc) => matchesMemoryQuery(doc, normalizedFilter))
+    : memoryDocs;
+  const matchingWikiPageCount = normalizedFilter
+    ? treePages.filter((page) =>
+        `${page.title}\n${page.path}\n${page.searchText ?? ""}`
+          .toLowerCase()
+          .includes(normalizedFilter),
+      ).length
+    : treePages.length;
+  const memoryChildrenVisible = memoryExpanded;
 
   // Nothing prefetches this key, so the first open of every Wiki tab starts
   // here. Falling through to the empty state instead would claim the project
@@ -722,7 +661,7 @@ export function ProjectWikiSection({
   if (docsQuery.isPending) {
     return (
       <div className="flex min-h-0 flex-1" data-testid="wiki-loading">
-        <div className="w-56 shrink-0 space-y-2 border-r p-2">
+        <div className="w-[280px] shrink-0 space-y-2 border-r p-2">
           {Array.from({ length: 4 }).map((_, index) => (
             <Skeleton key={index} className="h-7 w-full" />
           ))}
@@ -775,74 +714,101 @@ export function ProjectWikiSection({
     );
   }
 
-  // The ref in the URL is resolved the way the server's getProjectDocByRef
-  // resolves one — id first, then slug — so a link that opens a page through
-  // the API opens the same one here. No ref at all means the memory stream.
-  const selectedDoc = selectedRef
-    ? (wikiDocs.find((doc) => doc.id === selectedRef) ??
-      wikiDocs.find((doc) => doc.slug === selectedRef))
-    : undefined;
   const sidebar = (
-    <nav className="flex h-full min-h-0 w-full flex-col p-2" aria-label={t(($) => $.wiki.tab_wiki)}>
-      <div className="shrink-0 space-y-0.5">
-        <SidebarRow
-          icon={<Brain className="h-4 w-4 shrink-0" />}
-          label={t(($) => $.wiki.memory_node)}
-          count={memoryDocs.length}
-          active={!selectedRef}
-          href={paths.projectWiki(projectId)}
-        />
-        {projectRepositories.length > 0 && (
-          <SidebarRow
-            icon={<GitFork className="h-4 w-4 shrink-0" />}
-            label={t(($) => $.wiki.repository_facts)}
-            count={projectRepositories.length}
-            active={false}
-            href={paths.repositoryWiki(projectRepositories[0]!.id)}
-            markCurrent={false}
+    <div className="flex h-full min-h-0 w-full flex-col">
+      <div className="shrink-0 border-b p-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={pageFilter}
+            onChange={(event) => {
+              setPageFilter(event.target.value);
+              if (event.target.value.trim()) setMemoryExpanded(true);
+            }}
+            placeholder={t(($) => $.wiki.search_placeholder)}
+            aria-label={t(($) => $.wiki.search_placeholder)}
+            className="h-8 pl-8 text-sm"
           />
-        )}
-        {projectRepositories.map((repository) => (
-          <SidebarRow
-            key={repository.id}
-            icon={<GitFork className="h-4 w-4 shrink-0" />}
-            label={repository.name}
-            active={false}
-            href={paths.repositoryWiki(repository.id)}
-            nested
-            markCurrent={false}
-          />
-        ))}
-        <SidebarRow
-          icon={<Files className="h-4 w-4 shrink-0" />}
-          label={t(($) => $.wiki.pages_label)}
-          count={visibleWikiDocs.length}
-          active={Boolean(selectedRef)}
-          href={visibleWikiDocs[0]
-            ? paths.projectWikiPage(projectId, visibleWikiDocs[0].slug || visibleWikiDocs[0].id)
-            : undefined}
-          disabledTitle={t(($) => $.wiki.pages_empty)}
-          markCurrent={false}
-        />
+        </div>
       </div>
-      {visibleWikiDocs.length > 0 && (
-        <>
-          <div className="relative my-2 shrink-0">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={pageFilter}
-              onChange={(event) => setPageFilter(event.target.value)}
-              placeholder={t(($) => $.wiki.pages_search)}
-              aria-label={t(($) => $.wiki.pages_search)}
-              className="h-8 pl-8 text-sm"
+      <nav
+        className="min-h-0 flex-1 overflow-y-auto p-2"
+        aria-label={t(($) => $.wiki.tab_wiki)}
+      >
+        <div className="space-y-0.5">
+          <SidebarExpandableRow
+            icon={<Brain className="h-4 w-4 shrink-0" />}
+            label={t(($) => $.wiki.memory_node)}
+            count={filteredMemoryDocs.length}
+            active={!selectedRef}
+            href={paths.projectWiki(projectId)}
+            expanded={memoryChildrenVisible}
+            toggleLabel={t(($) =>
+              memoryChildrenVisible
+                ? $.wiki.memory_collapse_group
+                : $.wiki.memory_expand_group,
+            )}
+            onToggle={() => setMemoryExpanded((value) => !value)}
+            onNavigate={() => setSidebarOpen(false)}
+          />
+          {memoryChildrenVisible && filteredMemoryDocs.map((doc) => (
+            <SidebarRow
+              key={doc.id}
+              icon={doc.pinned
+                ? <Pin className="h-3.5 w-3.5 shrink-0" />
+                : <Brain className="h-3.5 w-3.5 shrink-0" />}
+              label={doc.title}
+              active={selectedDoc?.id === doc.id}
+              href={paths.projectWikiPage(projectId, doc.slug || doc.id)}
+              nested
+              onNavigate={() => setSidebarOpen(false)}
             />
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          ))}
+          {normalizedFilter && filteredMemoryDocs.length === 0 && (
+            <p className="px-8 py-1.5 text-xs text-muted-foreground">
+              {t(($) => $.wiki.search_no_memory)}
+            </p>
+          )}
+          {!normalizedFilter && projectRepositories.length > 0 && (
+            <SidebarRow
+              icon={<GitFork className="h-4 w-4 shrink-0" />}
+              label={t(($) => $.wiki.repository_facts)}
+              count={projectRepositories.length}
+              active={false}
+              href={paths.repositoryWiki(projectRepositories[0]!.id)}
+              markCurrent={false}
+            />
+          )}
+          {!normalizedFilter && projectRepositories.map((repository) => (
+            <SidebarRow
+              key={repository.id}
+              icon={<GitFork className="h-4 w-4 shrink-0" />}
+              label={repository.name}
+              active={false}
+              href={paths.repositoryWiki(repository.id)}
+              nested
+              markCurrent={false}
+            />
+          ))}
+          <SidebarRow
+            icon={<Files className="h-4 w-4 shrink-0" />}
+            label={t(($) => $.wiki.pages_label)}
+            count={matchingWikiPageCount}
+            active={selectedDoc?.kind === "wiki"}
+            href={visibleWikiDocs[0]
+              ? paths.projectWikiPage(projectId, visibleWikiDocs[0].slug || visibleWikiDocs[0].id)
+              : undefined}
+            disabledTitle={t(($) => $.wiki.pages_empty)}
+            markCurrent={false}
+          />
+        </div>
+        {visibleWikiDocs.length > 0 ? (
+          <div className="mt-0.5">
             <WikiDirectoryTree
               pages={treePages}
-              selectedId={selectedDoc?.id}
+              selectedId={selectedDoc?.kind === "wiki" ? selectedDoc.id : undefined}
               filter={pageFilter}
-              noMatches={t(($) => $.wiki.pages_no_match)}
+              noMatches={t(($) => $.wiki.search_no_pages)}
               baseDepth={1}
               hrefFor={(page) => {
                 const doc = visibleWikiDocs.find((candidate) => candidate.id === page.id)!;
@@ -851,9 +817,13 @@ export function ProjectWikiSection({
               onNavigate={() => setSidebarOpen(false)}
             />
           </div>
-        </>
-      )}
-    </nav>
+        ) : normalizedFilter ? (
+          <p className="px-8 py-1.5 text-xs text-muted-foreground">
+            {t(($) => $.wiki.search_no_pages)}
+          </p>
+        ) : null}
+      </nav>
+    </div>
   );
 
   return (
@@ -879,15 +849,19 @@ export function ProjectWikiSection({
           </Button>
         </div>
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        {selectedDoc ? (
-          <div className="h-full overflow-y-auto">
-            <WikiPagePane doc={selectedDoc} pages={wikiDocs} />
-          </div>
-        ) : selectedRef ? (
-          <WikiNotFoundPane projectId={projectId} />
-        ) : (
-          <MemoryPane docs={memoryDocs} pages={wikiDocs} />
-        )}
+          {selectedDoc?.kind === "wiki" ? (
+            <div className="h-full overflow-y-auto">
+              <WikiPagePane doc={selectedDoc} pages={wikiDocs} />
+            </div>
+          ) : selectedDoc?.kind === "memory" ? (
+            <div className="h-full overflow-y-auto">
+              <MemoryDetailPane doc={selectedDoc} pages={wikiDocs} />
+            </div>
+          ) : selectedRef ? (
+            <WikiNotFoundPane projectId={projectId} />
+          ) : (
+            <MemoryOverviewPane docs={memoryDocs} pages={wikiDocs} />
+          )}
         </div>
       </div>
     </div>

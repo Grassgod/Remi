@@ -19,13 +19,12 @@ BIN_DIR="${MULTIREMI_BIN_DIR:-/usr/local/bin}"
 
 info() { printf "==> %s\n" "$*"; }
 ok() { printf "OK: %s\n" "$*"; }
-warn() { printf "WARNING: %s\n" "$*" >&2; }
 fail() { printf "ERROR: %s\n" "$*" >&2; exit 1; }
 
 detect_platform() {
   case "$(uname -s)" in
-    Darwin) OS="darwin"; SQLITE_VEC_FILE="vec0.dylib" ;;
-    Linux) OS="linux"; SQLITE_VEC_FILE="vec0.so" ;;
+    Darwin) OS="darwin" ;;
+    Linux) OS="linux" ;;
     *) fail "Unsupported OS: $(uname -s). Multiremi supports macOS and Linux." ;;
   esac
 
@@ -81,11 +80,6 @@ install_binary() {
   fi
 
   install_file "$tmp/remi" "remi"
-  if [ -f "$tmp/$SQLITE_VEC_FILE" ]; then
-    install_file "$tmp/$SQLITE_VEC_FILE" "$SQLITE_VEC_FILE"
-  else
-    warn "Release archive is missing $SQLITE_VEC_FILE; SQLite storage will run without vector search, and other CLI functionality remains available."
-  fi
   if [ -f "$tmp/remi-claude-agent-acp" ]; then
     install_file "$tmp/remi-claude-agent-acp" "remi-claude-agent-acp"
   fi

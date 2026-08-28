@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "@multiremi/core/types";
 import {
+  autopilotDurationParts,
+  getAutopilotRunOutcome,
   getInboxDisplayTitle,
   getQuickCreateFailureDetail,
   stripQuickCreatePrefix,
@@ -29,6 +31,12 @@ function item(overrides: Partial<InboxItem>): InboxItem {
 }
 
 describe("inbox display helpers", () => {
+  const localizer = {
+    locale: "en",
+    scheduled: (time: string) => `Scheduled ${time}`,
+    repeatedRuns: (title: string, count: number) => `${title} and ${count} runs`,
+  };
+
   it("removes legacy quick-create created prefixes from list titles", () => {
     expect(
       stripQuickCreatePrefix(
@@ -76,5 +84,185 @@ describe("inbox display helpers", () => {
     expect(getQuickCreateFailureDetail(failedItem)).toBe(
       "CLI failed with exit status 1",
     );
+  });
+
+  it("builds localized SCM trigger titles with and without branches", () => {
+    const scmItem = item({
+      type: "autopilot_run_completed",
+      title: "legacy server title",
+      details: {
+        autopilot_title: "Atlas · Repository Wiki",
+        trigger: "scm_event",
+        trigger_object: {
+          event_type: "default_branch.updated",
+          repository_id: "repo-1",
+          repository_name: "Remi",
+          change_number: null,
+          change_title: null,
+          target_branch: "main",
+          source_revision: null,
+          occurred_at: null,
+          wiki_build: false,
+        },
+      },
+    });
+
+    expect(getInboxDisplayTitle(scmItem, localizer)).toBe("Atlas · Repository Wiki · Remi@main");
+    expect(getInboxDisplayTitle({
+      ...scmItem,
+      details: {
+        ...scmItem.details,
+        trigger_object: { ...scmItem.details!.trigger_object!, target_branch: null },
+      },
+    }, localizer)).toBe("Atlas · Repository Wiki · Remi");
+  });
+
+  it("prioritizes a change number over a branch", () => {
+    const changeItem = item({
+      type: "autopilot_run_completed",
+      title: "legacy server title",
+      details: {
+        autopilot_title: "Docs sync",
+        trigger_object: {
+          event_type: "change.merged",
+          repository_id: "repo-1",
+          repository_name: "Remi",
+          change_number: 123,
+          change_title: "Improve docs",
+          target_branch: "main",
+          source_revision: "abc123",
+          occurred_at: null,
+          wiki_build: false,
+        },
+      },
+    });
+
+    expect(getInboxDisplayTitle(changeItem, localizer)).toBe("Docs sync · Remi #123");
+  });
+
+  it("localizes schedule time in the viewer's time zone", () => {
+    const scheduledItem = item({
+      type: "autopilot_run_completed",
+      title: "legacy server title",
+      created_at: "2026-08-27T09:00:00Z",
+      details: {
+        autopilot_title: "Daily summary",
+        trigger: "schedule",
+        triggered_at: "2026-08-27T01:00:00Z",
+        trigger_object: null,
+      },
+    });
+
+    expect(getInboxDisplayTitle(scheduledItem, {
+      ...localizer,
+      locale: "zh-CN",
+      timeZone: "Asia/Shanghai",
+    }, 12)).toBe("Daily summary · Scheduled 09:00 and 12 runs");
+  });
+
+  it("falls back to the UTC label when schedule time formatting fails", () => {
+    const scheduledItem = item({
+      type: "autopilot_run_completed",
+      title: "legacy server title",
+      details: {
+        autopilot_title: "Daily summary",
+        trigger: "schedule",
+        triggered_at: "2026-08-27T01:00:00Z",
+        trigger_object: null,
+      },
+    });
+
+    expect(getInboxDisplayTitle(scheduledItem, {
+      ...localizer,
+      timeZone: "not-a-time-zone",
+    })).toBe("Daily summary · Scheduled 01:00 UTC");
+  });
+
+  it("falls back without appending an undefined trigger object", () => {
+    const legacyItem = item({
+      type: "autopilot_run_failed",
+      title: "Legacy failure title",
+      details: { autopilot_title: "Dependency audit" },
+    });
+    const unstructuredItem = item({
+      type: "autopilot_run_completed",
+      title: "Legacy completed title",
+      details: null,
+    });
+
+    expect(getInboxDisplayTitle(legacyItem, localizer)).toBe("Dependency audit");
+    expect(getInboxDisplayTitle(unstructuredItem, localizer)).toBe("Legacy completed title");
+  });
+
+  it("rejects malformed structured outcomes at the API boundary", () => {
+    const malformed = item({
+      type: "autopilot_run_completed",
+      details: {
+        outcome: {
+          kind: "changes",
+          text: { unexpected: true },
+          links: null,
+          counts: null,
+        },
+      } as unknown as InboxItem["details"],
+    });
+
+    expect(getAutopilotRunOutcome(malformed)).toBeNull();
+  });
+
+  it("normalizes optional action and risks fields across API versions", () => {
+    const current = item({
+      type: "autopilot_run_completed",
+      details: {
+        outcome: {
+          kind: "unknown",
+          headline: "Run completed with a warning.",
+          text: "Run completed with a warning.",
+          links: [],
+          counts: null,
+          risks: ["Repository checkout failed."],
+          action: { kind: "investigate", text: "Repository checkout failed." },
+        },
+      },
+    });
+    const legacy = item({
+      type: "autopilot_run_completed",
+      details: {
+        outcome: {
+          kind: "unknown",
+          text: "Run completed.",
+          links: [],
+          counts: null,
+        },
+      } as unknown as InboxItem["details"],
+    });
+    const malformed = item({
+      type: "autopilot_run_completed",
+      details: {
+        outcome: {
+          kind: "unknown",
+          text: "Run completed.",
+          links: [],
+          counts: null,
+          risks: ["valid", 42],
+          action: { kind: "later", text: false },
+        },
+      } as unknown as InboxItem["details"],
+    });
+
+    expect(getAutopilotRunOutcome(current)).toMatchObject({
+      headline: "Run completed with a warning.",
+      risks: ["Repository checkout failed."],
+      action: { kind: "investigate", text: "Repository checkout failed." },
+    });
+    expect(getAutopilotRunOutcome(legacy)).toMatchObject({ headline: null, risks: [], action: null });
+    expect(getAutopilotRunOutcome(malformed)).toMatchObject({ headline: null, risks: [], action: null });
+  });
+
+  it("splits duration boundaries into localized display units", () => {
+    expect(autopilotDurationParts(59)).toEqual({ unit: "seconds", seconds: 59 });
+    expect(autopilotDurationParts(60)).toEqual({ unit: "minutes", minutes: 1 });
+    expect(autopilotDurationParts(3515)).toEqual({ unit: "minutes", minutes: 58 });
+    expect(autopilotDurationParts(7200)).toEqual({ unit: "hours", hours: 2, minutes: 0 });
   });
 });

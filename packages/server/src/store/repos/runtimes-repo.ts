@@ -47,6 +47,7 @@ import {
 } from "@multiremi/store/runtime-lifecycle-tables.js";
 import type {
   CreateRuntimeLocalSkillImportInput,
+  CreateBotMenuPublishRequestInput,
   CreateRuntimeCommandInput,
   CreateRuntimeUpdateInput,
   MultiremiAgent,
@@ -68,6 +69,7 @@ import type {
   MultiremiRuntimeModelListRequestStatus,
   MultiremiRuntimeUpdateRequest,
   MultiremiRuntimeUpdateRequestStatus,
+  MultiremiBotMenuPublishRequest,
   MultiremiRuntimeVisibility,
   MultiremiTaskStatus,
   RegisterRuntimeInput,
@@ -77,6 +79,7 @@ import type {
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeModelListInput,
   ReportRuntimeUpdateInput,
+  ReportBotMenuPublishInput,
   UpdateRuntimeInput,
 } from "@multiremi/contracts/types.js";
 import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
@@ -176,6 +179,16 @@ const COMMAND_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeCommandRequest> = {
   hydrate: toRuntimeCommandRequest,
 };
 
+const BOT_MENU_PUBLISH_REQUESTS: RuntimeRequestSpec<MultiremiBotMenuPublishRequest> = {
+  table: "multiremi_bot_menu_publish_requests",
+  idPrefix: "bmp",
+  pendingTimeoutMs: 3 * 60 * 1000,
+  runningTimeoutMs: 60 * 1000,
+  pendingTimeoutError: "bot menu publisher did not respond within 3 minutes",
+  runningTimeoutError: "bot menu publish did not finish within 60 seconds",
+  hydrate: toBotMenuPublishRequest,
+};
+
 export class RuntimesRepo {
   private readonly modelListQueue: RuntimeRequestQueue<MultiremiRuntimeModelListRequest>;
   private readonly directoryScanQueue: RuntimeRequestQueue<MultiremiRuntimeDirectoryScanRequest>;
@@ -183,6 +196,7 @@ export class RuntimesRepo {
   private readonly localSkillListQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillListRequest>;
   private readonly localSkillImportQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillImportRequest>;
   private readonly commandQueue: RuntimeRequestQueue<MultiremiRuntimeCommandRequest>;
+  private readonly botMenuPublishQueue: RuntimeRequestQueue<MultiremiBotMenuPublishRequest>;
 
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
@@ -191,6 +205,7 @@ export class RuntimesRepo {
     this.localSkillListQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_LIST_REQUESTS);
     this.localSkillImportQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_IMPORT_REQUESTS);
     this.commandQueue = new RuntimeRequestQueue(ctx.db, COMMAND_REQUESTS);
+    this.botMenuPublishQueue = new RuntimeRequestQueue(ctx.db, BOT_MENU_PUBLISH_REQUESTS);
   }
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
@@ -1287,11 +1302,83 @@ export class RuntimesRepo {
     return this.getRuntimeCommandRequest(runtimeId, requestId)!;
   }
 
+  createBotMenuPublishRequest(
+    runtimeId: string,
+    input: CreateBotMenuPublishRequestInput,
+  ): MultiremiBotMenuPublishRequest {
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      if ((runtime.workspaceId ?? "local") !== input.workspaceId) {
+        throw new Error("runtime does not belong to the bot menu workspace");
+      }
+      if (runtime.metadata.feishu_bot_menu !== true) {
+        throw new Error("runtime does not host the Feishu bot menu publisher");
+      }
+      const id = this.botMenuPublishQueue.nextId();
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_bot_menu_publish_requests (
+          id, runtime_id, workspace_id, config, dry_run, status, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        [id, runtimeId, input.workspaceId, toJson(input.config), input.dryRun ? 1 : 0, input.createdBy ?? null, now, now],
+      );
+      return this.getBotMenuPublishRequest(runtimeId, id)!;
+    });
+  }
+
+  getBotMenuPublishRequest(runtimeId: string, requestId: string): MultiremiBotMenuPublishRequest | null {
+    const request = this.botMenuPublishQueue.get(runtimeId, requestId);
+    if (!request || !isTerminalRuntimeRequestStatus(request.status) || !Object.keys(request.config).length) return request;
+    this.ctx.db.run(
+      "UPDATE multiremi_bot_menu_publish_requests SET config = '{}' WHERE id = ? AND runtime_id = ?",
+      [requestId, runtimeId],
+    );
+    return { ...request, config: {} };
+  }
+
+  findBotMenuPublishRequest(workspaceId: string, requestId: string): MultiremiBotMenuPublishRequest | null {
+    const row = this.ctx.db.query(
+      "SELECT runtime_id FROM multiremi_bot_menu_publish_requests WHERE id = ? AND workspace_id = ?",
+    ).get(requestId, workspaceId) as { runtime_id: string } | null;
+    return row ? this.getBotMenuPublishRequest(row.runtime_id, requestId) : null;
+  }
+
+  claimBotMenuPublishRequest(runtimeId: string): MultiremiBotMenuPublishRequest | null {
+    return this.botMenuPublishQueue.claim(runtimeId);
+  }
+
+  reportBotMenuPublishResult(
+    runtimeId: string,
+    requestId: string,
+    input: ReportBotMenuPublishInput,
+  ): MultiremiBotMenuPublishRequest {
+    const current = this.getBotMenuPublishRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    if (isTerminalRuntimeRequestStatus(current.status)) return current;
+    const now = nowIso();
+    const status = input.status === "completed" ? "completed" : "failed";
+    this.ctx.db.run(
+      `UPDATE multiremi_bot_menu_publish_requests
+       SET status = ?, result = ?, error = ?, config = '{}', updated_at = ?
+       WHERE id = ? AND runtime_id = ?`,
+      [
+        status,
+        status === "completed" ? toJson(input.result ?? null) : null,
+        status === "completed" ? null : cleanOptionalString(input.error) ?? "bot menu publish failed",
+        now,
+        requestId,
+        runtimeId,
+      ],
+    );
+    return this.getBotMenuPublishRequest(runtimeId, requestId)!;
+  }
+
   heartbeatRuntime(runtimeId: string, options: {
     claimPending?: boolean;
     supportsBatchImport?: boolean;
     supportsDirectoryScan?: boolean;
     agentPluginProtocol?: number;
+    supportsBotMenu?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     const initialRuntime = this.getRuntime(runtimeId);
     if (!initialRuntime) {
@@ -1313,7 +1400,7 @@ export class RuntimesRepo {
         const now = nowIso();
         this.ctx.db.run(
           "UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
-          [toJson({ ...lockedRuntime.metadata, agent_plugin_protocol: protocol }), now, now, runtimeId],
+          [toJson({ ...lockedRuntime.metadata, agent_plugin_protocol: protocol, ...(options.supportsBotMenu !== undefined ? { feishu_bot_menu: options.supportsBotMenu } : {}) }), now, now, runtimeId],
         );
         const updatedRuntime = this.getRuntime(runtimeId)!;
         const changes = this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
@@ -1361,6 +1448,13 @@ export class RuntimesRepo {
           },
         });
       }
+    } else if (options.supportsBotMenu !== undefined) {
+      const now = nowIso();
+      this.ctx.db.run(
+        "UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+        [toJson({ ...runtime.metadata, feishu_bot_menu: options.supportsBotMenu }), now, now, runtimeId],
+      );
+      runtime = this.getRuntime(runtimeId)!;
     } else {
       const now = nowIso();
       this.ctx.db.run(
@@ -1391,6 +1485,16 @@ export class RuntimesRepo {
         args: pendingCommand.args,
         timeout_ms: pendingCommand.timeoutMs,
       };
+    }
+    if (options.supportsBotMenu) {
+      const pendingBotMenu = this.claimBotMenuPublishRequest(runtimeId);
+      if (pendingBotMenu) {
+        ack.pending_bot_menu = {
+          id: pendingBotMenu.id,
+          config: pendingBotMenu.config,
+          dry_run: pendingBotMenu.dryRun,
+        };
+      }
     }
     const pendingLocalSkills = this.claimRuntimeLocalSkillListRequest(runtimeId);
     if (pendingLocalSkills) {
@@ -1865,6 +1969,29 @@ function toRuntimeCommandRequest(row: Row): MultiremiRuntimeCommandRequest {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function toBotMenuPublishRequest(row: Row): MultiremiBotMenuPublishRequest {
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    workspaceId: String(row.workspace_id),
+    config: parseJson(row.config, {}),
+    dryRun: Number(row.dry_run ?? 1) !== 0,
+    status: normalizeBotMenuPublishStatus(row.status),
+    result: row.result == null ? null : parseJson(row.result, null),
+    error: nullableString(row.error),
+    createdBy: nullableString(row.created_by),
+    runStartedAt: nullableString(row.run_started_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function normalizeBotMenuPublishStatus(value: unknown): MultiremiBotMenuPublishRequest["status"] {
+  const status = String(value ?? "failed").trim();
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
+  return "failed";
 }
 
 function normalizeRuntimeCommandStatus(value: unknown): MultiremiRuntimeCommandRequestStatus {

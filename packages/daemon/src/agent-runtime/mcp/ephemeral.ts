@@ -81,7 +81,11 @@ function toEnvVariables(value: unknown): AcpMcpEnvVariable[] {
 export function buildTaskMcpServers(
   task: AgentTask,
 ): AcpMcpServer[] {
-  const raw = task.agent?.mcpConfig;
+  return buildAgentMcpServers(task.agent?.mcpConfig);
+}
+
+/** Build ACP stdio MCP entries directly from one Multiremi agent row. */
+export function buildAgentMcpServers(raw: unknown): AcpMcpServer[] {
   if (raw == null) return [];
 
   // Tolerate a JSON string as well as an already-parsed object.

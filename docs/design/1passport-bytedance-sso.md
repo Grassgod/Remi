@@ -2,7 +2,8 @@
 
 > **历史文档**:文中的 `src/auth/*` 现为 `packages/auth/src/*`,`bun run src/main.ts …` 现为
 > `bun run apps/remi/main.ts …`;ByteDance SSO 现以外部插件形式装在 `~/.remi/plugins/` 下;
-> 配置也已从 `remi.toml` 迁到 `~/.remi/remi.db` 的 `remi_config` 表(TOML 片段仅示意结构)。
+> 配置曾从 `remi.toml` 迁到 `~/.remi/remi.db` 的 `remi_config` 表；该表现已废除，当前配置
+> 由 defaults + env 装配(TOML 片段仅示意历史结构)。
 
 ## 背景
 

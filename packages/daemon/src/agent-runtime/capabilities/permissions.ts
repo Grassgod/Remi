@@ -4,15 +4,12 @@ export const permissionsBlock: CapabilityBlock = {
   name: "permissions",
 
   persistent(ctx: PersistentContext) {
-    const { groupConfig, sessionRow, config } = ctx;
-    const agentType = groupConfig?.provider ?? config.provider.default;
     const recovery: RecoveryConfig = {
       retryOnStaleSession: true,
       retryOnPromptTooLong: true,
-      fallbackAgentType: agentType === "claude" ? "codex" : null,
     };
     return {
-      permissionMode: sessionRow?.mode ?? null,
+      permissionMode: ctx.sessionRow?.mode ?? null,
       recovery,
     };
   },

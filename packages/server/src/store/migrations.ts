@@ -467,6 +467,27 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_command_runtime ON multiremi_runtime_command_requests(runtime_id, status, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_bot_menu_publish_requests (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      config TEXT NOT NULL DEFAULT '{}',
+      dry_run INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      error TEXT,
+      created_by TEXT,
+      run_started_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_bot_menu_publish_runtime
+      ON multiremi_bot_menu_publish_requests(runtime_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_bot_menu_publish_workspace
+      ON multiremi_bot_menu_publish_requests(workspace_id, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1770,6 +1791,10 @@ export function runMigrations(db: SqlDatabase): void {
       projection_from_seq INTEGER,
       projection_to_seq INTEGER,
       projection_mode TEXT,
+      projection_degrade_level INTEGER NOT NULL DEFAULT 0,
+      projection_truncated INTEGER NOT NULL DEFAULT 0,
+      projection_omitted_events INTEGER NOT NULL DEFAULT 0,
+      projection_estimated_tokens INTEGER NOT NULL DEFAULT 0,
       result TEXT,
       error TEXT,
       failure_reason TEXT,
@@ -2191,6 +2216,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_degrade_level INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_truncated INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_omitted_events INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_estimated_tokens INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "status TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "meta TEXT");

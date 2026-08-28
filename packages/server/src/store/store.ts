@@ -138,6 +138,7 @@ import type {
   AssignIssueInput,
   AssignIssueResult,
   CreateAccessTokenInput,
+  CreateBotMenuPublishRequestInput,
   CreateAgentInput,
   CreateAgentPluginBindingInput,
   CreateAgentPluginVersionInput,
@@ -176,6 +177,7 @@ import type {
   CreateWorkspaceInput,
   CreateWorkspaceMemberInput,
   MultiremiAutopilot,
+  MultiremiBotMenuPublishRequest,
   MultiremiAutopilotRun,
   MultiremiAutopilotTrigger,
   MultiremiWebhookDelivery,
@@ -254,6 +256,7 @@ import type {
   PublishSessionResultInput,
   QuickCreateIssueInput,
   ReportRuntimeDirectoryScanInput,
+  ReportBotMenuPublishInput,
   ReportRuntimeCommandInput,
   ReportRuntimeModelListInput,
   QuickCreateIssueResult,
@@ -2338,6 +2341,26 @@ runMigrations(this.db);
     return request;
   }
 
+  createBotMenuPublishRequest(runtimeId: string, input: CreateBotMenuPublishRequestInput): MultiremiBotMenuPublishRequest {
+    return this.runtimes.createBotMenuPublishRequest(runtimeId, input);
+  }
+
+  getBotMenuPublishRequest(runtimeId: string, requestId: string): MultiremiBotMenuPublishRequest | null {
+    return this.runtimes.getBotMenuPublishRequest(runtimeId, requestId);
+  }
+
+  findBotMenuPublishRequest(workspaceId: string, requestId: string): MultiremiBotMenuPublishRequest | null {
+    return this.runtimes.findBotMenuPublishRequest(workspaceId, requestId);
+  }
+
+  claimBotMenuPublishRequest(runtimeId: string): MultiremiBotMenuPublishRequest | null {
+    return this.runtimes.claimBotMenuPublishRequest(runtimeId);
+  }
+
+  reportBotMenuPublishResult(runtimeId: string, requestId: string, input: ReportBotMenuPublishInput): MultiremiBotMenuPublishRequest {
+    return this.runtimes.reportBotMenuPublishResult(runtimeId, requestId, input);
+  }
+
   listWorkspaceRuntimeProvisions(workspaceId: string): MultiremiWorkspaceRuntimeProvision[] {
     return this.runtimeProvisions.list(workspaceId);
   }
@@ -2472,6 +2495,7 @@ runMigrations(this.db);
     supportsBatchImport?: boolean;
     supportsDirectoryScan?: boolean;
     agentPluginProtocol?: number;
+    supportsBotMenu?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
@@ -2653,6 +2677,15 @@ runMigrations(this.db);
 
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment {
     return this.issues.createIssueComment(issueId, input);
+  }
+
+  createTaskFailureSystemComment(
+    issueId: string,
+    issueSessionId: string | null,
+    taskId: string,
+    body: string,
+  ): MultiremiIssueComment {
+    return this.issues.createTaskFailureSystemComment(issueId, issueSessionId, taskId, body);
   }
 
   updateIssueComment(id: string, input: UpdateIssueCommentInput): MultiremiIssueComment {

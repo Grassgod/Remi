@@ -101,13 +101,6 @@ register("update", "Download latest version from GitHub", async () => {
 });
 
 // ── Internal / hidden ──
-// Feishu production subprocess (legacy PM2 entry; the Feishu channel now also
-// comes up via `remi start`).
-register("serve", "Production daemon (PM2 subprocess)", async () => {
-  const { runServe } = await import("./serve.js");
-  return { run: runServe };
-}, true);
-
 register("git-credential", "Multiremi JIT Git credential helper", async () => {
   return await import("./git-credential.js");
 }, true);
@@ -190,7 +183,7 @@ export async function dispatch(args: string[]): Promise<void> {
 
   // Only load plugin CLI commands when needed: for help (discoverability) or an
   // unknown command (might be plugin-provided). Skip the scan for known built-in
-  // commands so `remi serve`/`status`/etc. don't run external plugin code.
+  // commands so `remi status` and other built-ins don't run external plugin code.
   const isHelp = cmd === "--help" || cmd === "-h" || cmd === "help";
   if (isHelp || !commandRegistry.hasPath([cmd])) loadPluginCommands();
 

@@ -8,48 +8,83 @@
  * worker CLI — so the worker foreground path can import it without a cycle.
  */
 
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { loadConfig, type RemiConfig } from "@shared/config.js";
 import { createLogger } from "@shared/logger.js";
+import type {
+  BotMenuPublishResult,
+  MultiremiAgent,
+  MultiremiDaemonBotProject,
+  ResolvedBotMenuConfig,
+} from "@multiremi/contracts/types.js";
 
 const log = createLogger("agent");
 
 /**
- * Is the Feishu channel configured? Checks env first, then the monolith config
- * DB — but ONLY if it already exists, so a worker-only machine is never forced
- * to create `~/.remi/remi.db` just to answer "no".
+ * Is the Feishu channel configured? A partial credential pair is an error so a
+ * requested bot cannot silently degrade into a worker-only process.
  */
 export function feishuConfigured(): boolean {
-  if (process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) return true;
-  const dbPath = join(homedir(), ".remi", "remi.db");
-  if (!existsSync(dbPath)) return false;
-  try {
-    const { loadConfig } = require("@shared/config.js");
-    const cfg = loadConfig();
-    return Boolean(cfg.feishu?.appId && cfg.feishu?.appSecret);
-  } catch {
-    return false;
+  const config = loadConfig();
+  const missing = missingFeishuEnvironment(config);
+  const anyCredential = Boolean(config.feishu.appId || config.feishu.appSecret);
+  if (anyCredential && missing.length > 0) {
+    throw new Error(`Feishu channel cannot start; missing env: ${missing.join(", ")}`);
   }
+  return missing.length === 0;
+}
+
+function missingFeishuEnvironment(config: RemiConfig): string[] {
+  const missing: string[] = [];
+  if (!config.feishu.appId) missing.push("FEISHU_APP_ID");
+  if (!config.feishu.appSecret) missing.push("FEISHU_APP_SECRET");
+  return missing;
 }
 
 /** A running Feishu channel that can be stopped. */
 export interface FeishuChannelHandle {
   start: Promise<void>;
   stop: () => Promise<void>;
+  updateProjects: (projects: MultiremiDaemonBotProject[]) => void;
+  publishBotMenu: (config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>;
 }
 
 /**
- * Boot the Feishu channel (Remi core + FeishuConnector) if configured.
- * Returns a handle whose `start` promise resolves when the channel exits, or
- * `null` when Feishu is not configured. Remi is loaded via dynamic import so the
- * worker/server paths don't eagerly pull in the monolith.
+ * Boot the configured Feishu channel (Remi core + FeishuConnector). Remi is
+ * loaded via dynamic import so worker/server paths do not pull in the monolith.
  */
-export async function bootFeishuChannel(): Promise<FeishuChannelHandle | null> {
-  if (!feishuConfigured()) return null;
+export async function bootFeishuChannel(
+  agent: MultiremiAgent,
+  projects: MultiremiDaemonBotProject[],
+  authorizeSender: (senderOpenId: string) => Promise<boolean>,
+  options: {
+    daemonPort?: number;
+    workspacesRoot?: string;
+    ensureTopicWorkspace?: (sessionKey: string, topicId: string) => Promise<string | null>;
+  } = {},
+): Promise<FeishuChannelHandle> {
+  const config = loadConfig();
+  const missing = missingFeishuEnvironment(config);
+  if (missing.length > 0) {
+    throw new Error(`Feishu channel cannot start; missing env: ${missing.join(", ")}`);
+  }
   const { Remi } = await import("@remi/core.js");
-  const { loadConfig } = await import("@shared/config.js");
-  const remi = Remi.boot(loadConfig());
+  const remi = Remi.boot(config, agent, projects, {
+    authorizeFeishuSender: authorizeSender,
+    daemonPort: options.daemonPort,
+    workspacesRoot: options.workspacesRoot,
+    ensureTopicWorkspace: options.ensureTopicWorkspace,
+  });
+  const { MenuSyncer } = await import("@connectors/feishu/menu-sync.js");
+  const menuSyncer = new MenuSyncer({
+    appId: config.feishu.appId,
+    appSecret: config.feishu.appSecret,
+    domain: config.feishu.domain,
+  });
   log.info("Starting Feishu channel");
-  return { start: remi.start(), stop: () => remi.stop() };
+  return {
+    start: remi.start(),
+    stop: () => remi.stop(),
+    updateProjects: (next) => remi.setBotProjects(next),
+    publishBotMenu: (menu, dryRun) => menuSyncer.syncAll(menu, { dryRun }),
+  };
 }

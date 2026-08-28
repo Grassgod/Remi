@@ -87,6 +87,79 @@ describe("MultiremiDaemonClient HTTP failures", () => {
   });
 });
 
+describe("MultiremiDaemonClient bot agent wire", () => {
+  it("requests and normalizes the configured bot agent on register and heartbeat", async () => {
+    const requestBodies: Record<string, unknown>[] = [];
+    const wireAgent = {
+      id: "agt_bot",
+      name: "Bot",
+      description: "",
+      avatar_url: null,
+      provider: "codex",
+      workspace_id: "local",
+      owner_id: "owner",
+      visibility: "workspace",
+      runtime_id: null,
+      instructions: "Bot instructions",
+      skills: [],
+      max_concurrent_tasks: 7,
+      cwd: "/srv/bot",
+      executable: "/bin/codex-acp",
+      model: "gpt-bot",
+      allowed_tools: ["Read"],
+      custom_env: { BOT_MODE: "yes" },
+      custom_args: ["--bot"],
+      mcp_config: { mcpServers: {} },
+      thinking_level: "high",
+      issue_creation_requires_proposal: false,
+      supervisor: false,
+      archived_at: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (String(input).endsWith("/api/daemon/register")) {
+        return Response.json({
+          workspace_id: "local",
+          repos: [],
+          repos_version: "none",
+          runtimes: [{ id: "rt_bot", provider: "codex" }],
+          bot_agent: wireAgent,
+        });
+      }
+      return Response.json({ status: "ok", bot_agent: wireAgent });
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    const registered = await client.registerDaemonRuntime({
+      workspaceId: "local",
+      daemonId: "daemon-bot",
+      botAgentId: "agt_bot",
+      runtime: { name: "", type: "codex", version: "1.0.0" },
+    });
+    const heartbeat = await client.heartbeatRuntime("rt_bot", undefined, undefined, "agt_bot");
+
+    expect(requestBodies[0]).toMatchObject({ workspace_id: "local", bot_agent_id: "agt_bot" });
+    expect(requestBodies[1]).toMatchObject({ runtime_id: "rt_bot", bot_agent_id: "agt_bot" });
+    for (const resolved of [registered.botAgent, heartbeat.botAgent]) {
+      expect(resolved).toMatchObject({
+        id: "agt_bot",
+        workspaceId: "local",
+        provider: "codex",
+        maxConcurrentTasks: 7,
+        cwd: "/srv/bot",
+        executable: "/bin/codex-acp",
+        allowedTools: ["Read"],
+        customEnv: { BOT_MODE: "yes" },
+        customArgs: ["--bot"],
+        mcpConfig: { mcpServers: {} },
+        thinkingLevel: "high",
+      });
+    }
+  });
+});
+
 describe("MultiremiDaemonClient SSH Mesh wire", () => {
   it("advertises the protocol and reports machine state on heartbeat", async () => {
     let requestBody: Record<string, unknown> | null = null;
@@ -171,6 +244,76 @@ describe("MultiremiDaemonClient SSH Mesh wire", () => {
 });
 
 describe("MultiremiDaemonClient workspace configuration", () => {
+  it("checks an external identity through the authenticated daemon workspace route", async () => {
+    let requestedUrl = "";
+    let authorization = "";
+    let requestBody: unknown;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrl = String(input);
+      authorization = new Headers(init?.headers).get("authorization") ?? "";
+      requestBody = JSON.parse(String(init?.body));
+      return Response.json({ allowed: true });
+    }) as unknown as typeof globalThis.fetch;
+
+    const allowed = await new MultiremiDaemonClient("https://remi.example/", "daemon-token")
+      .checkExternalWorkspaceMembership("workspace/a", "ou_member");
+
+    expect(allowed).toBe(true);
+    expect(requestedUrl).toBe(
+      "https://remi.example/api/daemon/workspaces/workspace%2Fa/external-membership/check",
+    );
+    expect(authorization).toBe("Bearer daemon-token");
+    expect(requestBody).toEqual({ external_id: "ou_member" });
+  });
+
+  it("requests and normalizes the co-resident bot project catalog", async () => {
+    const requestBodies: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json({
+        status: "ok",
+        runtimes: [{ id: "runtime-1", provider: "claude" }],
+        repos: [],
+        repos_version: "empty",
+        bot_projects: [{ id: "prj_1", title: "Remi", cwd: "/work/remi" }],
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    const registered = await client.registerDaemonRuntime({
+      workspaceId: "ws_1",
+      daemonId: "daemon-1",
+      includeBotProjects: true,
+      runtime: { name: "", type: "claude", version: "1" },
+    });
+    const heartbeat = await client.heartbeatRuntime("runtime-1", undefined, undefined, undefined, true);
+
+    expect(requestBodies).toEqual([
+      expect.objectContaining({ include_bot_projects: true, workspace_id: "ws_1" }),
+      expect.objectContaining({ include_bot_projects: true, runtime_id: "runtime-1" }),
+    ]);
+    expect(registered.botProjects).toEqual([{ id: "prj_1", title: "Remi", cwd: "/work/remi" }]);
+    expect(heartbeat.botProjects).toEqual([{ id: "prj_1", title: "Remi", cwd: "/work/remi" }]);
+  });
+
+  it("combines agent, project, and bot menu capabilities in one heartbeat", async () => {
+    let requestBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({ status: "ok" });
+    }) as unknown as typeof globalThis.fetch;
+
+    await new MultiremiDaemonClient("https://remi.example", "daemon-token")
+      .heartbeatRuntime("runtime-1", undefined, undefined, "agt_bot", true, true);
+
+    expect(requestBody).toMatchObject({
+      runtime_id: "runtime-1",
+      bot_agent_id: "agt_bot",
+      include_bot_projects: true,
+      supports_bot_menu: true,
+    });
+  });
+
   it("returns heartbeat-delivered settings and Relay configuration", async () => {
     globalThis.fetch = (async () => Response.json({
       status: "ok",

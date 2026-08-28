@@ -31,6 +31,62 @@ export type InboxItemType =
   | "feishu_issue_proposal"
   | "feishu_ingest_connection_alert";
 
+export interface AutopilotRunTriggerObject {
+  event_type: string | null;
+  repository_id: string | null;
+  repository_name: string | null;
+  change_number: number | null;
+  change_title: string | null;
+  target_branch: string | null;
+  source_revision: string | null;
+  occurred_at: string | null;
+  wiki_build: boolean;
+}
+
+export interface AutopilotRunOutcomeLink {
+  kind: "pull_request" | "merge_request";
+  url: string;
+  number?: number;
+}
+
+export interface AutopilotRunOutcomeAction {
+  kind: "none" | "review" | "retry" | "investigate";
+  text: string | null;
+}
+
+export interface AutopilotRunOutcome {
+  kind: "no_change" | "changes" | "failed" | "unknown";
+  headline: string | null;
+  text: string | null;
+  links: AutopilotRunOutcomeLink[];
+  counts: Record<string, number> | null;
+  risks: string[];
+  action: AutopilotRunOutcomeAction | null;
+}
+
+export interface InboxItemDetails extends Record<string, unknown> {
+  agent_id?: string;
+  autopilot_id?: string;
+  autopilot_title?: string;
+  comment_id?: string;
+  duration_seconds?: number;
+  emoji?: string;
+  error?: string;
+  identifier?: string;
+  issue_id?: string | null;
+  issue_session_id?: string;
+  new_assignee_id?: string;
+  new_assignee_type?: string;
+  original_prompt?: string;
+  outcome?: AutopilotRunOutcome;
+  run_id?: string;
+  task_id?: string;
+  to?: string;
+  trigger?: string;
+  trigger_object?: AutopilotRunTriggerObject | null;
+  triggered_at?: string;
+}
+
 export interface InboxItem {
   id: string;
   workspace_id: string;
@@ -47,5 +103,5 @@ export interface InboxItem {
   read: boolean;
   archived: boolean;
   created_at: string;
-  details: Record<string, string> | null;
+  details: InboxItemDetails | null;
 }

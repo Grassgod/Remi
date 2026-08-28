@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 
 export type SidebarSectionKey =
   | "properties"
+  | "subIssues"
   | "parentIssue"
   | "codeChanges"
   | "details"
@@ -12,6 +13,7 @@ export type SidebarSectionKey =
 
 const DEFAULT_OPEN: Record<SidebarSectionKey, boolean> = {
   properties: true,
+  subIssues: true,
   parentIssue: true,
   codeChanges: true,
   details: true,
