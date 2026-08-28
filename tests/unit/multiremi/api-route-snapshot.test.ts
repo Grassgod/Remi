@@ -116,6 +116,41 @@ describe("api route golden snapshot", () => {
     expect(scrubString("/tmp/alice", identity)).toBe("<home>");
   });
 
+  // A replacement token must not become a delimiter for the next rule, or one
+  // substitution manufactures a boundary the input never had: `/root/tmp/x` has
+  // `/tmp` preceded by "t", so it is not a token, but rewriting `/root` to
+  // "<home>" used to put a ">" in front of it and the $TMPDIR rule then fired.
+  it("does not let one replacement create a boundary for the next", () => {
+    const identity = { hostname: "unknown", username: "unknown", homedir: "/root" };
+    const scrub = (value: string) => scrubString(value, identity);
+
+    expect(scrub("/root/tmp/x")).toBe("<home>/tmp/x");
+    expect(scrub("<home>/tmp/x")).toBe("<home>/tmp/x");
+    // the same hazard one level down: a home subdir named after the repo root
+    expect(scrub("/root/tmp")).toBe("<home>/tmp");
+  });
+
+  // The golden is byte-compared against a fresh capture, so anything the
+  // scrubber would rewrite a second time is drift waiting to happen.
+  it("is idempotent", () => {
+    const identity = { hostname: "unknown", username: "unknown", homedir: "/root" };
+    const samples = [
+      "/root/tmp/x",
+      "<home>/tmp/x",
+      "<home> <tmp> <repo> <uploads>",
+      "/root",
+      "/root/root",
+      "PATH=/root/bin:/usr/bin",
+      "file:///root/x",
+      "/root中文/secret",
+      "https://github.com/obra/superpowers-skills/tree/main/skills/debugging/root-cause-tracing",
+    ];
+    for (const sample of samples) {
+      const once = scrubString(sample, identity);
+      expect(scrubString(once, identity)).toBe(once);
+    }
+  });
+
   // `C:\` trims to `C:`, which is a drive letter rather than a path; replacing it
   // would corrupt any literal containing "C:". A needle must survive trimming as
   // an actual path — at least one separator with a segment after it.

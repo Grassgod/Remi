@@ -211,13 +211,20 @@ function escapeRegExp(value: string): string {
  * a whole token. A denylist of "path characters" cannot be written correctly
  * (a filename may contain almost any byte), and getting it wrong reintroduces
  * the very bug this guards against.
+ *
+ * `<` and `>` are deliberately NOT boundaries, because every replacement token
+ * is spelled `<…>`. Were they boundaries, substituting one rule would hand the
+ * next rule a delimiter the input never had: `/root/tmp/x` became `<home>` plus
+ * a now-boundary `>`, letting the `/tmp` rule fire and yield `<home><tmp>/x`.
+ * Keeping tokens free of boundary characters makes them inert — a substitution
+ * can only ever remove a boundary, never manufacture one — which is also what
+ * makes scrubbing idempotent, so an already-scrubbed golden is a fixed point.
  */
-const PATH_BOUNDARY = "\\s/\\\\'\"`=:,;|()\\[\\]{}<>";
+const PATH_BOUNDARY = "\\s/\\\\'\"`=:,;|()\\[\\]{}";
 
 interface PathRule {
   needle: string;
   token: string;
-  pattern: RegExp | null;
 }
 
 /**
@@ -241,42 +248,76 @@ interface PathRule {
  * if a machine path actually reaches a response body, so ambiguity resolves
  * toward leaving the string alone.
  */
-function pathRule(needle: string, token: string): PathRule {
+function pathRule(needle: string, token: string): PathRule | null {
   // `$HOME=/root/` would otherwise put the boundary after the separator.
   const trimmed = needle.replace(/[/\\]+$/, "");
   // Must still be an absolute path with at least one segment. `/` and `//` trim
   // to "" and would rewrite every separator in the document; a Windows drive
   // root `C:\` trims to `C:`, which is not a path at all and would rewrite
   // literals like "label C: value".
-  const usable = trimmed.length >= 2 && /[/\\]/.test(trimmed);
-  const pattern = usable
-    ? new RegExp(`(?<![^${PATH_BOUNDARY}])${escapeRegExp(trimmed)}(?![^${PATH_BOUNDARY}])`, "g")
-    : null;
-  return { needle: trimmed, token, pattern };
+  if (trimmed.length < 2 || !/[/\\]/.test(trimmed)) return null;
+  return { needle: trimmed, token };
 }
 
-const FIXED_PATH_RULES: PathRule[] = [
+const FIXED_PATH_RULES = [
   pathRule(UPLOAD_DIR, "<uploads>"),
   pathRule(SNAPSHOT_TMP, "<tmp>"),
   pathRule(REPO_ROOT, "<repo>"),
   pathRule(tmpdir(), "<tmp>"),
 ];
 
-/**
- * Longest needle first, so a prefix never steals a match from the longer path
- * nested under it. Declaration order is not enough: with `$HOME=/tmp/alice` on
- * a box whose `$TMPDIR` is `/tmp`, the shorter rule would win and leave the
- * machine-specific "alice" behind as "<tmp>/alice".
- */
-function orderRules(rules: PathRule[]): PathRule[] {
-  return [...rules].sort((left, right) => right.needle.length - left.needle.length);
+interface PathScrubber {
+  needles: string[];
+  tokens: Map<string, string>;
+  pattern: RegExp | null;
 }
 
-const DEFAULT_PATH_RULES = orderRules([...FIXED_PATH_RULES, pathRule(homedir(), "<home>")]);
+/**
+ * Compiles every prefix into ONE alternation applied in a single pass, so each
+ * boundary is judged against the untouched input and no rule can ever match
+ * text an earlier rule produced.
+ *
+ * Longest needle first: regex alternation is first-match-wins, so this is what
+ * makes a nested path beat the shorter prefix it sits under. With `$HOME` at
+ * `/tmp/alice` on a box whose `$TMPDIR` is `/tmp`, the shorter rule would
+ * otherwise win and leave the machine-specific "alice" behind as "<tmp>/alice".
+ * Where the longer needle matches but its trailing boundary does not hold, the
+ * engine backtracks to the shorter one, which is the desired reading.
+ */
+function buildScrubber(rules: Array<PathRule | null>): PathScrubber {
+  const tokens = new Map<string, string>();
+  for (const rule of rules) {
+    if (rule && !tokens.has(rule.needle)) tokens.set(rule.needle, rule.token);
+  }
+  const needles = [...tokens.keys()].sort((left, right) => right.length - left.length);
+  const pattern = needles.length
+    ? new RegExp(
+        `(?<![^${PATH_BOUNDARY}])(?:${needles.map(escapeRegExp).join("|")})(?![^${PATH_BOUNDARY}])`,
+        "g",
+      )
+    : null;
+  return { needles, tokens, pattern };
+}
 
-function pathRules(identity: SnapshotMachineIdentity): PathRule[] {
-  if (identity.homedir === undefined) return DEFAULT_PATH_RULES;
-  return orderRules([...FIXED_PATH_RULES, pathRule(identity.homedir, "<home>")]);
+const DEFAULT_SCRUBBER = buildScrubber([...FIXED_PATH_RULES, pathRule(homedir(), "<home>")]);
+/** `scrubString` runs per response field, so keep one compiled scrubber per `$HOME`. */
+const SCRUBBER_CACHE = new Map<string, PathScrubber>();
+
+function pathScrubber(identity: SnapshotMachineIdentity): PathScrubber {
+  const home = identity.homedir;
+  if (home === undefined) return DEFAULT_SCRUBBER;
+  let scrubber = SCRUBBER_CACHE.get(home);
+  if (!scrubber) {
+    scrubber = buildScrubber([...FIXED_PATH_RULES, pathRule(home, "<home>")]);
+    SCRUBBER_CACHE.set(home, scrubber);
+  }
+  return scrubber;
+}
+
+function scrubMachinePaths(value: string, scrubber: PathScrubber): string {
+  // `includes` is the cheap gate; the regex only runs on a candidate hit.
+  if (!scrubber.pattern || !scrubber.needles.some((needle) => value.includes(needle))) return value;
+  return value.replace(scrubber.pattern, (match) => scrubber.tokens.get(match) ?? match);
 }
 
 function scrubPathIdentity(
@@ -301,10 +342,7 @@ export function scrubString(value: string, identity: SnapshotMachineIdentity = {
   let out = value
     .replace(ISO_RE, "<timestamp>")
     .replace(LOCAL_TIME_ID_RE, "$1-<timestamp>");
-  for (const { needle, token, pattern } of pathRules(identity)) {
-    // `includes` is the cheap gate; the regex only runs on a candidate hit.
-    if (pattern && out.includes(needle)) out = out.replace(pattern, token);
-  }
+  out = scrubMachinePaths(out, pathScrubber(identity));
   out = scrubPathIdentity(out, identity);
   if (VERSION && out.includes(VERSION)) out = out.split(VERSION).join("<version>");
   return out;
