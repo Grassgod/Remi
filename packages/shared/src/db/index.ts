@@ -12,9 +12,107 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
 const DB_PATH = join(homedir(), ".remi", "remi.db");
+const LEGACY_AGENT_CONFIG_MIGRATION_ID = "legacy-agent-config-purge-v1";
+const LEGACY_AGENT_CONFIG_MIGRATION_DOC = "docs/migrations/remi-memory-to-multiremi.md";
 
 let _db: Database | null = null;
 let _dbPath: string = DB_PATH;
+
+function tableExists(db: Database, tableName: string): boolean {
+  return Boolean(db.query(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+  ).get(tableName));
+}
+
+function isInMemoryDb(path: string): boolean {
+  return path === ":memory:"
+    || path === ""
+    || path.startsWith("file::memory:")
+    || path.includes("mode=memory");
+}
+
+function backupPathForMigration(path: string): string | null {
+  return isInMemoryDb(path) ? null : `${path}.pre-${LEGACY_AGENT_CONFIG_MIGRATION_ID}.bak`;
+}
+
+function purgeLegacyAgentConfig(db: Database, dbPath: string): void {
+  const hasGroupConfigs = tableExists(db, "group_configs");
+  const hasEmbeddings = tableExists(db, "embeddings");
+  const hasVecItems = tableExists(db, "vec_items");
+  const hasLegacyConfig = Boolean(db.query(
+    "SELECT 1 FROM remi_config WHERE section IN ('provider', 'mcp') LIMIT 1",
+  ).get());
+  const vecCleanupRecorded = tableExists(db, "remi_migrations")
+    && Boolean(db.query(
+      "SELECT 1 FROM remi_migrations WHERE id = ? LIMIT 1",
+    ).get(LEGACY_AGENT_CONFIG_MIGRATION_ID));
+
+  if (!hasGroupConfigs && !hasEmbeddings && !hasLegacyConfig && (!hasVecItems || vecCleanupRecorded)) {
+    return;
+  }
+
+  const backupPath = backupPathForMigration(dbPath);
+  if (backupPath) {
+    try {
+      db.run("VACUUM INTO ?", [backupPath]);
+    } catch (error) {
+      throw new Error(
+        `Legacy Remi migration aborted because backup could not be created at ${backupPath}`,
+        { cause: error },
+      );
+    }
+  }
+
+  let transactionStarted = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    transactionStarted = true;
+    if (hasGroupConfigs) db.exec("DROP TABLE group_configs");
+    if (hasEmbeddings) db.exec("DROP TABLE embeddings");
+    if (hasLegacyConfig) {
+      db.run("DELETE FROM remi_config WHERE section IN ('provider', 'mcp')");
+    }
+
+    if (hasVecItems && !vecCleanupRecorded) {
+      db.exec("SAVEPOINT drop_legacy_vec_items");
+      try {
+        db.exec("DROP TABLE vec_items");
+        db.exec("RELEASE drop_legacy_vec_items");
+      } catch (error) {
+        db.exec("ROLLBACK TO drop_legacy_vec_items");
+        db.exec("RELEASE drop_legacy_vec_items");
+        console.warn(
+          `[db] Could not drop legacy vec_items; complete the manual cleanup in ${LEGACY_AGENT_CONFIG_MIGRATION_DOC}.`,
+          error,
+        );
+      }
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS remi_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    db.run("INSERT OR IGNORE INTO remi_migrations (id) VALUES (?)", [LEGACY_AGENT_CONFIG_MIGRATION_ID]);
+    db.exec("COMMIT");
+    transactionStarted = false;
+  } catch (error) {
+    let rollbackError: unknown;
+    if (transactionStarted) {
+      try {
+        db.exec("ROLLBACK");
+      } catch (rollbackFailure) {
+        rollbackError = rollbackFailure;
+      }
+    }
+    const recovery = backupPath
+      ? `The database was rolled back; its pre-migration backup is at ${backupPath}.`
+      : "The in-memory database was rolled back; no backup file applies.";
+    const rollbackDetail = rollbackError ? ` Rollback also failed: ${String(rollbackError)}.` : "";
+    throw new Error(`Legacy Remi migration failed. ${recovery}${rollbackDetail}`, { cause: error });
+  }
+}
 
 /**
  * Override DB file path (call before first getDb()). Used by tests for isolation.
@@ -121,17 +219,11 @@ export function getDb(): Database {
     );
   `);
 
-  // These local configuration/memory stores were replaced atomically by the
-  // Multiremi agent row and project memory. Remove their persisted schema too;
-  // merely stopping new writes would leave misleading live-looking tables.
-  db.exec("DROP TABLE IF EXISTS group_configs");
-  db.exec("DROP TABLE IF EXISTS embeddings");
-  db.run("DELETE FROM remi_config WHERE section IN ('provider', 'mcp')");
   try {
-    db.exec("DROP TABLE IF EXISTS vec_items");
-  } catch {
-    // Old vec0 virtual tables may require the removed sqlite-vec module to run
-    // their DROP hook. The manual migration document covers that rare cleanup.
+    purgeLegacyAgentConfig(db, _dbPath);
+  } catch (error) {
+    db.close();
+    throw error;
   }
 
   // ── Migrations: add new columns to conversations if missing ──
