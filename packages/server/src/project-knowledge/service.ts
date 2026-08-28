@@ -66,7 +66,11 @@ export interface ProjectKnowledgeServiceContract {
 export class ProjectKnowledgeUnavailableError extends Error {}
 
 const log = createLogger("project-knowledge");
-const SEARCH_HYDRATE_CONCURRENCY = 4;
+// Hydration issues one OpenViking `read` per doc. Doing that sequentially is what
+// pushed recall past Bun's socket idle timeout, so batch it. 68 concurrent reads
+// finish in under a second in production, so this bound stays effectively parallel
+// for realistic result sets while capping the worst case at 16 instead of 500.
+const HYDRATE_CONCURRENCY = 16;
 
 export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract {
   constructor(
@@ -228,21 +232,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
   ): Promise<ProjectKnowledgeDoc[]> {
     const hits = await this.recallProjectDocs(projectId, query, input);
     if (this.mode !== "openviking") return hits.map((hit) => hit.doc);
-
-    const docs: ProjectKnowledgeDoc[] = [];
-    for (let offset = 0; offset < hits.length; offset += SEARCH_HYDRATE_CONCURRENCY) {
-      const batch = hits.slice(offset, offset + SEARCH_HYDRATE_CONCURRENCY);
-      const hydrated = await Promise.all(batch.map(async (hit) => {
-        try {
-          return await this.hydrate(hit.doc);
-        } catch (error) {
-          log.warn(`skipping unreadable OpenViking search hit ${hit.doc.id}: ${safeError(error)}`);
-          return null;
-        }
-      }));
-      docs.push(...hydrated.filter((doc): doc is ProjectKnowledgeDoc => doc !== null));
-    }
-    return docs;
+    return this.hydrateBounded(hits.map((hit) => hit.doc), "search hit", (doc) => doc);
   }
 
   async recallProjectDocs(
@@ -291,7 +281,7 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
       const available = this.mode === "openviking" ? docs.filter(isReadyOpenVikingDoc) : docs;
       const limited = available.slice(0, clampLimit(input.limit, 200, 500));
       if (this.mode !== "openviking") return limited.map(asWorkspaceKnowledgeDoc);
-      return Promise.all(limited.map(async (doc) => ({ ...(await this.hydrate(doc)), projectTitle: doc.projectTitle })));
+      return this.hydrateBounded(limited, "workspace doc", (doc, source) => ({ ...doc, projectTitle: source.projectTitle }));
     }
     const projects = this.store.listProjects(workspaceId);
     const roots = projects.map((project) => input.kind
@@ -300,17 +290,49 @@ export class ProjectKnowledgeService implements ProjectKnowledgeServiceContract 
     if (!roots.length) return [];
     const limit = clampLimit(input.limit, 200, 500);
     const hits = await this.requireClient().find(query, roots, Math.min(500, limit * 3), [`workspace_id=${encodeURIComponent(workspaceId)}`]);
+    // Resolve every hit against a single snapshot of the workspace index, then trim
+    // to `limit` before hydrating. Looking the index up per hit re-read the whole
+    // workspace once per candidate, and hydrating before the slice fetched bodies
+    // for up to 500 docs only to discard all but `limit` of them.
     const byId = new Map(projects.map((project) => [project.id, project]));
-    const output: ProjectKnowledgeWorkspaceDoc[] = [];
+    const byUri = new Map(this.store.listProjectDocsForMigration(workspaceId).map((doc) => [doc.contentUri, doc]));
+    const matched: MultiremiWorkspaceProjectDoc[] = [];
     for (const hit of hits) {
+      if (matched.length >= limit) break;
       if (!hit.uri.endsWith(".md") || hit.uri.endsWith("/.abstract.md")) continue;
-      const metadata = this.store.listProjectDocsForMigration(workspaceId).find((doc) => doc.contentUri === hit.uri);
+      const metadata = byUri.get(hit.uri);
       if (!metadata || !isReadyOpenVikingDoc(metadata)) continue;
       const project = byId.get(metadata.projectId);
       if (!project) continue;
-      output.push({ ...(await this.hydrate(metadata)), projectTitle: project.title });
+      matched.push({ ...metadata, projectTitle: project.title });
     }
-    return output.slice(0, limit);
+    return this.hydrateBounded(matched, "workspace search hit", (doc, source) => ({ ...doc, projectTitle: source.projectTitle }));
+  }
+
+  /**
+   * Hydrate docs in bounded-concurrency batches, dropping (and logging) individual
+   * docs whose OpenViking content cannot be read so one bad doc cannot fail the
+   * whole listing.
+   */
+  private async hydrateBounded<S extends MultiremiProjectDoc, T>(
+    docs: S[],
+    label: string,
+    map: (doc: ProjectKnowledgeDoc, source: S) => T,
+  ): Promise<T[]> {
+    const output: T[] = [];
+    for (let offset = 0; offset < docs.length; offset += HYDRATE_CONCURRENCY) {
+      const batch = docs.slice(offset, offset + HYDRATE_CONCURRENCY);
+      const hydrated = await Promise.all(batch.map(async (source) => {
+        try {
+          return { ok: true as const, value: map(await this.hydrate(source), source) };
+        } catch (error) {
+          log.warn(`skipping unreadable OpenViking ${label} ${source.id}: ${safeError(error)}`);
+          return { ok: false as const };
+        }
+      }));
+      for (const entry of hydrated) if (entry.ok) output.push(entry.value);
+    }
+    return output;
   }
 
   async backlinks(projectId: string, ref: string): Promise<ProjectKnowledgeDoc[]> {

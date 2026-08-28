@@ -238,6 +238,66 @@ describe("ProjectKnowledgeService OpenViking mode", () => {
     expect(client.maxActiveReads).toBe(4);
   });
 
+  it("hydrates workspace search hits concurrently, only up to the limit, from one index snapshot", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Workspace search" });
+    const docs = [];
+    for (let index = 0; index < 9; index++) {
+      docs.push(await service.createProjectDoc(project.id, {
+        kind: "memory",
+        title: `Workspace hit ${index}`,
+        body: `workspace hydration body ${index}`,
+      }));
+    }
+
+    let indexSnapshots = 0;
+    const listForMigration = store.listProjectDocsForMigration.bind(store);
+    (store as unknown as Record<string, unknown>).listProjectDocsForMigration = (...args: unknown[]) => {
+      indexSnapshots++;
+      return (listForMigration as (...a: unknown[]) => unknown)(...args);
+    };
+
+    client.readCalls.length = 0;
+    client.readDelayMs = 10;
+    client.failReadUris.add(docs[1]!.contentUri!);
+    const results = await service.listWorkspaceDocs(project.workspaceId, { q: "workspace hydration", limit: 5 });
+
+    // The index is read once for the whole request, not once per candidate hit.
+    expect(indexSnapshots).toBe(1);
+    // Only the 5 docs that survive the limit are hydrated — not all `limit * 3` candidates.
+    expect(client.readCalls).toHaveLength(5);
+    expect(client.maxActiveReads).toBe(5);
+    // The unreadable doc is dropped instead of failing the whole listing.
+    expect(results.map((doc) => doc.id)).toEqual([docs[0]!.id, docs[2]!.id, docs[3]!.id, docs[4]!.id]);
+    expect(results.every((doc) => doc.body.includes("workspace hydration body"))).toBe(true);
+    expect(results.every((doc) => doc.projectTitle === "Workspace search")).toBe(true);
+  });
+
+  it("caps hydration concurrency instead of fanning out one read per doc at once", async () => {
+    const store = createStore();
+    const client = new FakeOpenViking();
+    const service = new ProjectKnowledgeService(store, client, "openviking");
+    const project = store.createProject({ title: "Fan-out cap" });
+    for (let index = 0; index < 20; index++) {
+      await service.createProjectDoc(project.id, {
+        kind: "memory",
+        title: `Capped ${index}`,
+        body: `capped fan-out body ${index}`,
+      });
+    }
+
+    client.readCalls.length = 0;
+    client.readDelayMs = 5;
+    const results = await service.listWorkspaceDocs(project.workspaceId, { q: "capped fan-out", limit: 20 });
+
+    expect(results).toHaveLength(20);
+    expect(client.readCalls).toHaveLength(20);
+    expect(client.maxActiveReads).toBeGreaterThan(1);
+    expect(client.maxActiveReads).toBeLessThanOrEqual(16);
+  });
+
   it("finishes idempotent deletion after ambiguous remote and snapshot failures", async () => {
     const store = createStore();
     const client = new FakeOpenViking();
