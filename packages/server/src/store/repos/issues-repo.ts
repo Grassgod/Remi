@@ -1131,18 +1131,33 @@ export class IssuesRepo {
     systemComment: MultiremiIssueComment,
     parentTaskId: string | null,
   ): void {
-    if (!parent.assigneeType || !parent.assigneeId) return;
+    if (!parent.assigneeType || !parent.assigneeId) {
+      this.recordChildDoneParentSkipped(parent, systemComment, "no_assignee");
+      return;
+    }
     if (parent.assigneeType === "agent") {
       const agent = this.ctx.agents().getAgent(parent.assigneeId);
-      if (!agent || agent.archivedAt || agent.workspaceId !== parent.workspaceId) return;
+      if (!agent || agent.archivedAt || agent.workspaceId !== parent.workspaceId) {
+        this.recordChildDoneParentSkipped(parent, systemComment, "agent_unavailable");
+        return;
+      }
       this.enqueueChildDoneParentTask(parent, agent, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId);
       return;
     }
     if (parent.assigneeType !== "squad") return;
     const squad = this.ctx.squads().getSquad(parent.assigneeId);
-    if (!squad || squad.archivedAt || squad.workspaceId !== parent.workspaceId || !squad.leaderId) return;
+    if (!squad || squad.archivedAt || squad.workspaceId !== parent.workspaceId || !squad.leaderId) {
+      this.recordChildDoneParentSkipped(parent, systemComment, "squad_leader_unavailable");
+      return;
+    }
     const leader = this.ctx.agents().getAgent(squad.leaderId);
-    if (!leader || leader.archivedAt || leader.workspaceId !== parent.workspaceId) return;
+    if (!leader || leader.archivedAt || leader.workspaceId !== parent.workspaceId) {
+      this.recordChildDoneParentSkipped(parent, systemComment, "squad_leader_unavailable", {
+        agentId: squad.leaderId,
+        agent_id: squad.leaderId,
+      });
+      return;
+    }
     this.enqueueChildDoneParentTask(parent, leader, systemComment, parent.assigneeType, parent.assigneeId, parentTaskId);
   }
 
@@ -1154,7 +1169,13 @@ export class IssuesRepo {
     assigneeId: string,
     parentTaskId: string | null,
   ): void {
-    if (this.hasActiveTaskForIssueAndAgent(parent.id, agent.id)) return;
+    if (this.hasActiveTaskForIssueAndAgent(parent.id, agent.id)) {
+      this.recordChildDoneParentSkipped(parent, systemComment, "active_task_exists", {
+        agentId: agent.id,
+        agent_id: agent.id,
+      });
+      return;
+    }
     const task = this.ctx.tasks().createTask({
       agentId: agent.id,
       issueId: parent.id,
@@ -1179,6 +1200,30 @@ export class IssuesRepo {
         agent_id: agent.id,
         taskId: task.id,
         task_id: task.id,
+      },
+    });
+  }
+
+  private recordChildDoneParentSkipped(
+    parent: MultiremiIssue,
+    systemComment: MultiremiIssueComment,
+    reason: "no_assignee" | "agent_unavailable" | "squad_leader_unavailable" | "active_task_exists",
+    details: Record<string, unknown> = {},
+  ): void {
+    this.ctx.appendIssueActivity(parent.id, {
+      actorType: "system",
+      actorId: SYSTEM_AUTHOR_ID,
+      type: "child_done_parent_skipped",
+      body: `Child-done parent wakeup skipped: ${reason}`,
+      data: {
+        reason,
+        commentId: systemComment.id,
+        comment_id: systemComment.id,
+        assigneeType: parent.assigneeType,
+        assignee_type: parent.assigneeType,
+        assigneeId: parent.assigneeId,
+        assignee_id: parent.assigneeId,
+        ...details,
       },
     });
   }

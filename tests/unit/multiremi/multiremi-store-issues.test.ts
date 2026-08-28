@@ -262,22 +262,98 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(squadComments[0]?.body).toContain(`mention://squad/${squad.id}`);
     expect(store.listTasksForIssue(squadParent.id).map((task) => task.agentId)).toEqual([leader.id]);
 
-    const guardedParent = store.createIssue({
+    const sameSquadParent = store.createIssue({
       title: "Same squad parent",
       status: "in_progress",
       assigneeType: "squad",
       assigneeId: squad.id,
     });
-    const guardedChild = store.createIssue({
+    const sameSquadChild = store.createIssue({
       title: "Same squad child",
-      parentIssueId: guardedParent.id,
+      parentIssueId: sameSquadParent.id,
       status: "in_progress",
       assigneeType: "squad",
       assigneeId: squad.id,
     });
-    store.updateIssue(guardedChild.id, { status: "done" });
-    expect(store.listIssueComments(guardedParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(1);
-    expect(store.listTasksForIssue(guardedParent.id)).toHaveLength(0);
+    store.updateIssue(sameSquadChild.id, { status: "done" });
+    expect(store.listIssueComments(sameSquadParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(1);
+    expect(store.listTasksForIssue(sameSquadParent.id).map((task) => task.agentId)).toEqual([leader.id]);
+
+    const leaderChildParent = store.createIssue({
+      title: "Leader child parent",
+      status: "in_progress",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    const leaderChild = store.createIssue({
+      title: "Direct leader child",
+      parentIssueId: leaderChildParent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: leader.id,
+    });
+    store.updateIssue(leaderChild.id, { status: "done" });
+    expect(store.listTasksForIssue(leaderChildParent.id).map((task) => task.agentId)).toEqual([leader.id]);
+  });
+
+  it("audits child-done parent wakeups that do not create a task", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Busy leader", provider: "claude" });
+    const squad = store.createSquad({ name: "Busy squad", leaderId: leader.id });
+    const busyParent = store.createIssue({
+      title: "Busy parent",
+      status: "in_progress",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    store.createTask({ agentId: leader.id, issueId: busyParent.id, prompt: "Already working" });
+    const busyChild = store.createIssue({ title: "Busy child", parentIssueId: busyParent.id, status: "in_progress" });
+
+    store.updateIssue(busyChild.id, { status: "done" });
+
+    expect(store.listTasksForIssue(busyParent.id)).toHaveLength(1);
+    const activeTaskSkip = store.listIssueActivity(busyParent.id)
+      .find((activity) => activity.type === "child_done_parent_skipped");
+    expect(activeTaskSkip?.data).toMatchObject({
+      reason: "active_task_exists",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+      agentId: leader.id,
+    });
+
+    const unassignedParent = store.createIssue({ title: "Unassigned parent", status: "in_progress" });
+    const unassignedChild = store.createIssue({ title: "Unassigned child", parentIssueId: unassignedParent.id, status: "in_progress" });
+    store.updateIssue(unassignedChild.id, { status: "done" });
+    expect(store.listIssueActivity(unassignedParent.id)
+      .find((activity) => activity.type === "child_done_parent_skipped")?.data)
+      .toMatchObject({ reason: "no_assignee" });
+
+    const archivedAgent = store.createAgent({ name: "Archived parent agent", provider: "codex" });
+    const archivedAgentParent = store.createIssue({
+      title: "Archived agent parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: archivedAgent.id,
+    });
+    const archivedAgentChild = store.createIssue({ title: "Archived agent child", parentIssueId: archivedAgentParent.id, status: "in_progress" });
+    store.archiveAgent(archivedAgent.id);
+    store.updateIssue(archivedAgentChild.id, { status: "done" });
+    expect(store.listIssueActivity(archivedAgentParent.id)
+      .find((activity) => activity.type === "child_done_parent_skipped")?.data)
+      .toMatchObject({ reason: "agent_unavailable" });
+
+    const leaderlessSquad = store.createSquad({ name: "Leaderless squad" });
+    const leaderlessParent = store.createIssue({
+      title: "Leaderless parent",
+      status: "in_progress",
+      assigneeType: "squad",
+      assigneeId: leaderlessSquad.id,
+    });
+    const leaderlessChild = store.createIssue({ title: "Leaderless child", parentIssueId: leaderlessParent.id, status: "in_progress" });
+    store.updateIssue(leaderlessChild.id, { status: "done" });
+    expect(store.listIssueActivity(leaderlessParent.id)
+      .find((activity) => activity.type === "child_done_parent_skipped")?.data)
+      .toMatchObject({ reason: "squad_leader_unavailable" });
   });
 
   it("manages issue dependencies with workspace and duplicate guards", () => {

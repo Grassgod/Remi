@@ -146,6 +146,31 @@ describe("formatActivity", () => {
     ).toBe('activity.delegation_return_skipped {"reason":"new_reason"}');
   });
 
+  it("explains child-done parent wakeups and skipped reasons", () => {
+    expect(formatActivity(activity("child_done_parent_triggered"), t)).toBe(
+      "activity.child_done_parent_triggered",
+    );
+    const reasons = {
+      no_assignee: "no_assignee",
+      agent_unavailable: "agent_unavailable",
+      squad_leader_unavailable: "squad_leader_unavailable",
+      active_task_exists: "active_task_exists",
+    };
+    for (const [reason, key] of Object.entries(reasons)) {
+      expect(
+        formatActivity(activity("child_done_parent_skipped", { details: { reason } }), t),
+      ).toBe(
+        `activity.child_done_parent_skipped {"reason":"activity.child_done_parent_reason_${key}"}`,
+      );
+    }
+    expect(
+      formatActivity(
+        activity("child_done_parent_skipped", { details: { reason: "future_reason" } }),
+        t,
+      ),
+    ).toBe('activity.child_done_parent_skipped {"reason":"future_reason"}');
+  });
+
   it("explains why an agent comment mention was skipped", () => {
     expect(
       formatActivity(
