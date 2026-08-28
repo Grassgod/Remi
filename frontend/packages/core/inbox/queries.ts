@@ -1,7 +1,10 @@
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { InboxItem } from "../types";
-import { countAttentionUnreadInboxItems, deduplicateInboxItems } from "./grouping";
+import {
+  countAttentionUnreadInboxItems,
+  countUnreadInboxItems,
+} from "./grouping";
 
 export { deduplicateInboxItems } from "./grouping";
 
@@ -27,8 +30,7 @@ export function useInboxUnreadCount(wsId: string | null | undefined): number {
     queryKey: inboxKeys.list(wsId ?? ""),
     queryFn: () => api.listInbox(),
     enabled: !!wsId,
-    select: (items: InboxItem[]) =>
-      deduplicateInboxItems(items).filter((i) => !i.read).length,
+    select: (items: InboxItem[]) => countUnreadInboxItems(items),
   });
   return data ?? 0;
 }

@@ -1,0 +1,20 @@
+Good, it's identical — the file exists in both, `find` output was just truncated. Now let's check the manifest for revision info and look at the wiki repository status for this specific repo.Working copy remains clean — no local edits were staged, so there's nothing to push. Final summary:
+
+## 结果：no-op（因目标仓库无法检出，未做任何 Wiki 变更）
+
+**触发事件**：`change.merged` — dy-code-context MR !133 "fix(server): separate current and legacy client API chains"
+- head_sha（源分支尖端）：`dc939d6d3b4fe84c05ec7d8934cb3ee4e9b44b52`
+- merge_sha（合入 dev 后的提交）：`c329c19c81c243d6420e30eff08aa087d41d94ba`
+
+**核对过程**：
+1. `remi context` 确认目标仓库为 `repo_nsle98t1ie9j`（dy-code-context），默认分支 `workflow`。
+2. 已检出 Repo Wiki（`./wiki`）与只读合并基线（`.multiremi/wiki-base`）一致，manifest 中该仓库最近一次已发布证据的 source revision 为 `01ec77e2...`/`ef6c3fa6...`/`d6a06549...`，均早于本次事件的 head/merge sha。
+3. 尝试 `remi repo checkout [邮箱已隐藏]:douyin/dy-code-context.git --ref dc939d6d3b4fe84c05ec7d8934cb3ee4e9b44b52` 两次（含 bootstrap 已声明的一次），均因 SSH `Permission denied (publickey,gssapi-with-mic)` 失败，无法获取该 revision 的源码或 diff。
+4. `remi scm event` 未返回可用的变更内容/diff 数据，SCM 域仅提供事件元数据，不提供 diff 抓取能力。
+5. 因此无法核对 before/after revision 的实际代码差异，无法验证 PR 描述中声称的改动（正式/Legacy API 链路隔离、`http-handler.ts` 中 `CLIENT_LEGACY_AUTO_ROUTING_ENABLED` 常量等）是否已在代码中真实落地，也无法确认是否与现有页面 `apps/server/serving/client-module-search-baseline.md`（记录了上一次 MR !131 引入的 `CLIENT_LEGACY_AUTO_ROUTING_ENABLED = false` 及相关行为）存在语义冲突或需要更新。
+6. 未对 `./wiki` 做任何写入；`remi wiki status` 确认工作副本仍为 `clean`，与已发布基线一致，因此未执行 `remi wiki push`（没有可发布的内容）。
+
+**风险/遗留**：
+- 本次 MR 已合并且标题/描述直接指向现有 Wiki 页面所记录的代码区域，一旦仓库检出恢复，应优先重新运行本次增量更新以核实并按需修正 `client-module-search-baseline.md`。
+- 仓库检出失败是基础设施/凭据问题（SSH publickey 被拒），不属于本任务可修复范围，建议报告给负责该 SSH 凭据/deploy key 配置的人员。
+- 最近一次成功发布的 Wiki 版本保持完整可读，未被本次失败尝试破坏。

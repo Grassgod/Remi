@@ -100,7 +100,16 @@ export type {
   AtlasWikiSetupStatus,
   RepositoryWikiBuildResponse,
 } from "./repository";
-export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
+export type {
+  AutopilotRunOutcome,
+  AutopilotRunOutcomeAction,
+  AutopilotRunOutcomeLink,
+  AutopilotRunTriggerObject,
+  InboxItem,
+  InboxItemDetails,
+  InboxSeverity,
+  InboxItemType,
+} from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, Reaction } from "./comment";
 export type {
