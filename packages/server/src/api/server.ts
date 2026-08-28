@@ -702,6 +702,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const server = Bun.serve<MultiremiWebSocketData>({
     port,
     hostname,
+    idleTimeout: 120,
     async fetch(req, server) {
       const socketAddress = server.requestIP(req)?.address;
       setWebhookClientIpAddress(req, resolveWebhookClientIpAddress(req, socketAddress));
