@@ -18,17 +18,19 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import * as sessions from "@shared/db/sessions.js";
+import { createLogger } from "@shared/logger.js";
 import type { IssueWorkspaceLifecycleLocker } from "./lifecycle-lock.js";
 
 export const TOPIC_WORKSPACE_ROOT = "_topics";
 export const TOPIC_MIGRATION_INTENT = ".migration-intent.json";
 export const TOPIC_TASK_DOSSIER = join(".multiremi", "task.json");
 const PREPARED_INTENT_STALE_MS = 10 * 60 * 1000;
+const log = createLogger("topic-workspace-lifecycle");
 
 export interface TopicMigrationIntent {
   version: 1;
   migration_id: string;
-  state: "prepared" | "migrating" | "returning";
+  state: "prepared" | "migrating" | "returning" | "source_cleanup";
   topic_id: string;
   session_key: string;
   topic_cwd: string;
@@ -55,7 +57,9 @@ export interface TopicWorkspaceLifecycleOptions {
   locker: IssueWorkspaceLifecycleLocker;
   assertRootOwner?: () => void;
   renameDirectory?: (source: string, target: string) => void;
+  removeDirectory?: (path: string) => void;
   beforeSessionCommit?: () => void;
+  afterSessionCommit?: () => void;
 }
 
 export interface PreparedTopicMigration {
@@ -84,7 +88,9 @@ export class TopicWorkspaceLifecycle {
   private readonly locker: IssueWorkspaceLifecycleLocker;
   private readonly assertRootOwner: () => void;
   private readonly renameDirectory: (source: string, target: string) => void;
+  private readonly removeDirectory: (path: string) => void;
   private readonly beforeSessionCommit?: () => void;
+  private readonly afterSessionCommit?: () => void;
 
   constructor(options: TopicWorkspaceLifecycleOptions) {
     this.root = resolve(options.root);
@@ -92,7 +98,10 @@ export class TopicWorkspaceLifecycle {
     this.locker = options.locker;
     this.assertRootOwner = options.assertRootOwner ?? (() => {});
     this.renameDirectory = options.renameDirectory ?? renameSync;
+    this.removeDirectory = options.removeDirectory
+      ?? ((path) => rmSync(path, { recursive: true, force: false }));
     this.beforeSessionCommit = options.beforeSessionCommit;
+    this.afterSessionCommit = options.afterSessionCommit;
   }
 
   async ensureTopicWorkspace(sessionKey: string, topicId: string): Promise<string | null> {
@@ -176,82 +185,209 @@ export class TopicWorkspaceLifecycle {
     const issueKey = safeSegment(input.issueKey, "issue key");
     const topic = this.topicFromCwd(input.cwd);
     if (!topic) throw new Error(`Current directory is not a topic workspace: ${input.cwd}`);
-    return this.locker.runExclusive(issueId, () =>
-      this.locker.runExclusive(topicLifecycleKey(topic.topicId), async () => {
-        this.assertRootOwner();
-        const issueCwd = join(this.root, issueKey);
-        if (!existsSync(topic.cwd) && existsSync(issueCwd)) {
-          const dossier = readDossier(issueCwd);
-          if (dossier?.issue_id === issueId && dossier.topic_cwd === topic.cwd) {
-            return this.finishRecoveredMigration(issueCwd, dossier);
-          }
-        }
-        const intent = readIntent(topic.cwd);
-        if (!intent || intent.migration_id !== input.migrationId) {
-          throw new Error(`Topic migration intent ${input.migrationId} was not found in ${topic.cwd}`);
-        }
-        if (
-          (intent.issue_id && intent.issue_id !== issueId)
-          || (intent.issue_key && intent.issue_key !== issueKey)
-        ) {
-          throw new Error(
-            `Topic migration ${intent.migration_id} already belongs to ${intent.issue_key ?? intent.issue_id}`,
-          );
-        }
-        if (intent.session_key !== sessions.getSessionsByCwd(topic.cwd)[0]?.session_key) {
-          throw new Error(`Topic session ownership changed before migration: ${topic.cwd}`);
-        }
-        if (existsSync(issueCwd)) {
-          const dossier = readDossier(issueCwd);
-          if (dossier?.issue_id === issueId && dossier.session_key === intent.session_key) {
-            return this.finishRecoveredMigration(issueCwd, dossier);
-          }
-          throw new Error(`Issue workspace already exists: ${issueCwd}`);
-        }
-        const migrating: TopicMigrationIntent = {
-          ...intent,
-          state: "migrating",
-          issue_id: issueId,
-          issue_key: issueKey,
-          issue_cwd: issueCwd,
-        };
-        writeJsonDurably(join(topic.cwd, TOPIC_MIGRATION_INTENT), migrating);
-        writeJsonDurably(join(topic.cwd, ".multiremi", "gc.json"), {
-          version: 2,
-          kind: "issue",
-          issue_id: issueId,
-          task_id: null,
-        });
-
-        let moved = false;
-        try {
-          moveDirectoryDurably(this.root, topic.cwd, issueCwd, this.renameDirectory);
-          moved = true;
-          const dossier = dossierFromIntent(migrating);
-          writeDossier(issueCwd, dossier);
-          this.beforeSessionCommit?.();
-          sessions.moveSessionCwdAndClearId(intent.session_key, topic.cwd, issueCwd);
-          try { removeFileDurably(join(issueCwd, TOPIC_MIGRATION_INTENT)); } catch {}
+    const issueCwd = join(this.root, issueKey);
+    if (!existsSync(topic.cwd) && existsSync(issueCwd)) {
+      return this.locker.runExclusive(issueId, () =>
+        this.locker.runExclusive(topicLifecycleKey(topic.topicId), async () => {
           this.assertRootOwner();
-          return migrationResult(dossier);
-        } catch (error) {
-          if (moved && existsSync(issueCwd) && !existsSync(topic.cwd)) {
-            moveDirectoryDurably(this.root, issueCwd, topic.cwd, this.renameDirectory);
+          const dossier = readDossier(issueCwd);
+          if (!dossier || dossier.issue_id !== issueId || dossier.topic_cwd !== topic.cwd) {
+            throw new Error(`Topic migration intent ${input.migrationId} was not found in ${topic.cwd}`);
           }
+          return this.finishRecoveredMigration(issueCwd, dossier, topic.cwd);
+        }),
+      );
+    }
+
+    // Persist the Issue identity before waiting for the Issue lock. A freshly
+    // claimed task holding that lock can then observe and complete this intent
+    // before it creates the Issue directory itself.
+    const migrating = await this.locker.runExclusive(topicLifecycleKey(topic.topicId), async () => {
+      this.assertRootOwner();
+      const intent = readIntent(topic.cwd);
+      if (!intent || intent.migration_id !== input.migrationId) {
+        throw new Error(`Topic migration intent ${input.migrationId} was not found in ${topic.cwd}`);
+      }
+      if (
+        (intent.issue_id && intent.issue_id !== issueId)
+        || (intent.issue_key && intent.issue_key !== issueKey)
+      ) {
+        throw new Error(
+          `Topic migration ${intent.migration_id} already belongs to ${intent.issue_key ?? intent.issue_id}`,
+        );
+      }
+      if (intent.session_key !== sessions.getSessionsByCwd(topic.cwd)[0]?.session_key) {
+        throw new Error(`Topic session ownership changed before migration: ${topic.cwd}`);
+      }
+      const next: TopicMigrationIntent = {
+        ...intent,
+        state: "migrating",
+        issue_id: issueId,
+        issue_key: issueKey,
+        issue_cwd: issueCwd,
+      };
+      writeJsonDurably(join(topic.cwd, TOPIC_MIGRATION_INTENT), next);
+      this.assertRootOwner();
+      return next;
+    });
+
+    return this.locker.runExclusive(issueId, () =>
+      this.locker.runExclusive(topicLifecycleKey(topic.topicId), () =>
+        this.commitMigrationLocked(topic, migrating)),
+    );
+  }
+
+  /** Complete a stamped topic intent while the caller already holds the Issue lock. */
+  async preparePendingMigrationForIssue(issueIdValue: string, issueKeyValue: string): Promise<boolean> {
+    const issueId = issueIdValue.trim();
+    if (!issueId) throw new Error("issue id is required");
+    const issueKey = safeSegment(issueKeyValue, "issue key");
+    const candidate = this.findPendingMigration(issueId, issueKey);
+    if (!candidate) return false;
+    return this.locker.runExclusive(topicLifecycleKey(candidate.intent.topic_id), async () => {
+      this.assertRootOwner();
+      const current = readIntent(candidate.cwd);
+      if (!current || current.migration_id !== candidate.intent.migration_id) return false;
+      await this.commitMigrationLocked(
+        { topicId: current.topic_id, cwd: current.topic_cwd },
+        current,
+      );
+      return true;
+    });
+  }
+
+  private async commitMigrationLocked(
+    topic: { topicId: string; cwd: string },
+    intent: TopicMigrationIntent,
+  ): Promise<CommittedTopicMigration> {
+    this.assertRootOwner();
+    if (!intent.issue_id || !intent.issue_key || !intent.issue_cwd) {
+      throw new Error("topic migration intent is missing Issue identity");
+    }
+    const issueCwd = intent.issue_cwd;
+    const issueExisted = existsSync(issueCwd);
+    if (!existsSync(topic.cwd) && issueExisted) {
+      const dossier = readDossier(issueCwd);
+      if (dossier?.issue_id === intent.issue_id && dossier.topic_cwd === topic.cwd) {
+        return this.finishRecoveredMigration(issueCwd, dossier, topic.cwd);
+      }
+      throw new Error(`Topic workspace is missing and Issue workspace cannot be reconciled: ${issueCwd}`);
+    }
+
+    const existingDossier = issueExisted ? readDossier(issueCwd) : null;
+    if (existingDossier) {
+      if (
+        existingDossier.issue_id !== intent.issue_id
+        || existingDossier.session_key !== intent.session_key
+        || existingDossier.topic_cwd !== intent.topic_cwd
+      ) {
+        throw new Error(`Issue workspace belongs to another topic migration: ${issueCwd}`);
+      }
+      // A prior rollback may itself have crossed filesystems and left a partial
+      // Issue-side source behind. Reconcile from the complete topic copy before
+      // trusting the old dossier and committing the session binding.
+      if (existsSync(topic.cwd)) {
+        mergeTopicIntoExistingIssue(topic.cwd, issueCwd, intent.migration_id);
+      }
+      return this.finishRecoveredMigration(issueCwd, existingDossier, topic.cwd);
+    }
+
+    writeJsonDurably(join(topic.cwd, ".multiremi", "gc.json"), {
+      version: 2,
+      kind: "issue",
+      issue_id: intent.issue_id,
+      task_id: null,
+    });
+
+    let ownershipLost = false;
+    let sessionCommitted = false;
+    let targetCreated = false;
+    try {
+      if (issueExisted) {
+        mergeTopicIntoExistingIssue(topic.cwd, issueCwd, intent.migration_id);
+      } else {
+        moveDirectoryDurably(
+          this.root,
+          topic.cwd,
+          issueCwd,
+          this.renameDirectory,
+          this.removeDirectory,
+        );
+        targetCreated = true;
+      }
+      const dossier = dossierFromIntent(intent);
+      writeDossier(issueCwd, dossier);
+      try {
+        // This is the final ownership check that may fail. Once the DB binding
+        // commits, every remaining action is best-effort and may not unwind it.
+        this.assertRootOwner();
+      } catch (error) {
+        ownershipLost = true;
+        throw error;
+      }
+      this.beforeSessionCommit?.();
+      sessions.moveSessionCwdAndClearId(intent.session_key, topic.cwd, issueCwd);
+      sessionCommitted = true;
+      this.runAfterSessionCommitBestEffort(intent.issue_key);
+      this.removeIntentBestEffort(issueCwd);
+      this.cleanupPublishedSourceBestEffort(topic.cwd, intent);
+      return migrationResult(dossier);
+    } catch (error) {
+      if (!sessionCommitted && !ownershipLost) {
+        try {
+          this.assertRootOwner();
+        } catch {
+          ownershipLost = true;
+        }
+      }
+      if (!sessionCommitted && !ownershipLost && targetCreated && existsSync(issueCwd) && !existsSync(topic.cwd)) {
+        try {
+          moveDirectoryDurably(
+            this.root,
+            issueCwd,
+            topic.cwd,
+            this.renameDirectory,
+            this.removeDirectory,
+          );
           removeDossierBinding(topic.cwd);
           rmSync(join(topic.cwd, ".multiremi", "gc.json"), { force: true });
-          throw new Error(
-            `Issue ${issueKey} was created, but topic migration failed. Retry with: remi issue bind-topic ${issueKey}`,
-            { cause: error },
+        } catch (rollbackError) {
+          log.warn(
+            `Topic migration rollback for ${intent.issue_key} remains journaled: ${errorMessage(rollbackError)}`,
           );
         }
-      }),
-    );
+      }
+      throw new Error(
+        `Issue ${intent.issue_key} was created, but topic migration failed. Retry with: remi issue bind-topic ${intent.issue_key}`,
+        { cause: error },
+      );
+    }
   }
 
   async recoverTopicWorkspace(topicCwd: string): Promise<boolean> {
     const intent = readIntent(topicCwd);
     if (!intent) return false;
+    if (intent.state === "source_cleanup") {
+      return this.locker.runExclusive(topicLifecycleKey(intent.topic_id), async () => {
+        this.assertRootOwner();
+        if (!intent.issue_cwd || !existsSync(intent.issue_cwd)) {
+          throw new Error(`Published Issue workspace is missing for source cleanup: ${intent.issue_cwd ?? "unknown"}`);
+        }
+        const dossier = readDossier(intent.issue_cwd);
+        const row = sessions.getSession(intent.session_key);
+        if (
+          !dossier
+          || dossier.issue_id !== intent.issue_id
+          || dossier.topic_cwd !== topicCwd
+          || row?.cwd !== intent.issue_cwd
+        ) {
+          throw new Error(`Topic source cleanup cannot verify committed Issue state: ${topicCwd}`);
+        }
+        this.removeDirectory(topicCwd);
+        fsyncDirectory(dirname(topicCwd));
+        return true;
+      });
+    }
     if (intent.state === "prepared" || !intent.issue_id || !intent.issue_key) {
       const createdAt = Date.parse(intent.created_at);
       if (Number.isFinite(createdAt) && Date.now() - createdAt < PREPARED_INTENT_STALE_MS) return false;
@@ -276,17 +412,12 @@ export class TopicWorkspaceLifecycle {
     if (!intent || intent.state !== "migrating" || !intent.issue_id || !intent.issue_key) return false;
     return this.locker.runExclusive(topicLifecycleKey(intent.topic_id), async () => {
       this.assertRootOwner();
+      if (existsSync(intent.topic_cwd)) {
+        mergeTopicIntoExistingIssue(intent.topic_cwd, issueCwd, intent.migration_id);
+      }
       const dossier = dossierFromIntent(intent);
       writeDossier(issueCwd, dossier);
-      const row = sessions.getSession(intent.session_key);
-      if (row?.cwd === intent.topic_cwd) {
-        this.beforeSessionCommit?.();
-        sessions.moveSessionCwdAndClearId(intent.session_key, intent.topic_cwd, issueCwd);
-      } else if (row?.cwd !== issueCwd) {
-        throw new Error(`Cannot recover topic migration for session ${intent.session_key}: cwd=${row?.cwd ?? "missing"}`);
-      }
-      removeFileDurably(join(issueCwd, TOPIC_MIGRATION_INTENT));
-      this.assertRootOwner();
+      this.finishRecoveredMigration(issueCwd, dossier, intent.topic_cwd);
       return true;
     });
   }
@@ -322,7 +453,13 @@ export class TopicWorkspaceLifecycle {
         }
         await this.recoverIssueWorkspace(issueCwd);
       } else if (!existingDossier) {
-        throw new Error(`No pending topic migration was found for Issue ${issueKey}`);
+        const pending = this.findPendingMigration(issueId, issueKey);
+        if (!pending) throw new Error(`No pending topic migration was found for Issue ${issueKey}`);
+        return this.locker.runExclusive(topicLifecycleKey(pending.intent.topic_id), () =>
+          this.commitMigrationLocked(
+            { topicId: pending.intent.topic_id, cwd: pending.cwd },
+            pending.intent,
+          ));
       }
       const dossier = readDossier(issueCwd);
       if (!dossier || dossier.issue_id !== issueId || dossier.issue_key !== issueKey) {
@@ -330,7 +467,7 @@ export class TopicWorkspaceLifecycle {
       }
       return this.locker.runExclusive(topicLifecycleKey(dossier.topic_id), async () => {
         this.assertRootOwner();
-        return this.finishRecoveredMigration(issueCwd, dossier);
+        return this.finishRecoveredMigration(issueCwd, dossier, dossier.topic_cwd);
       });
     });
   }
@@ -358,19 +495,41 @@ export class TopicWorkspaceLifecycle {
       };
       writeJsonDurably(join(issueCwd, TOPIC_MIGRATION_INTENT), intent);
       let moved = false;
+      let ownershipLost = false;
       try {
-        moveDirectoryDurably(this.root, issueCwd, topicCwd, this.renameDirectory);
+        moveDirectoryDurably(
+          this.root,
+          issueCwd,
+          topicCwd,
+          this.renameDirectory,
+          this.removeDirectory,
+        );
         moved = true;
+        try {
+          this.assertRootOwner();
+        } catch (error) {
+          ownershipLost = true;
+          throw error;
+        }
         this.beforeSessionCommit?.();
         sessions.returnSessionToTopic(dossier.session_key, issueCwd, topicCwd);
       } catch (error) {
-        if (moved && existsSync(topicCwd) && !existsSync(issueCwd)) {
-          moveDirectoryDurably(this.root, topicCwd, issueCwd, this.renameDirectory);
+        if (!ownershipLost) {
+          try { this.assertRootOwner(); } catch { ownershipLost = true; }
+        }
+        if (!ownershipLost && moved && existsSync(topicCwd) && !existsSync(issueCwd)) {
+          moveDirectoryDurably(
+            this.root,
+            topicCwd,
+            issueCwd,
+            this.renameDirectory,
+            this.removeDirectory,
+          );
         }
         throw error;
       }
+      this.runAfterSessionCommitBestEffort(dossier.issue_key);
       try { await this.finalizeReturnedTopic(topicCwd, intent); } catch {}
-      this.assertRootOwner();
       return true;
     });
   }
@@ -383,16 +542,73 @@ export class TopicWorkspaceLifecycle {
     return owners.length === 1 && owners[0]!.status === "active";
   }
 
-  private finishRecoveredMigration(issueCwd: string, dossier: TopicTaskDossier): CommittedTopicMigration {
+  private finishRecoveredMigration(
+    issueCwd: string,
+    dossier: TopicTaskDossier,
+    topicCwd: string,
+  ): CommittedTopicMigration {
     const row = sessions.getSession(dossier.session_key);
     if (row?.cwd === dossier.topic_cwd) {
+      this.assertRootOwner();
       this.beforeSessionCommit?.();
       sessions.moveSessionCwdAndClearId(dossier.session_key, dossier.topic_cwd, issueCwd);
     } else if (row?.cwd !== issueCwd) {
       throw new Error(`Cannot resume topic migration for session ${dossier.session_key}`);
     }
-    rmSync(join(issueCwd, TOPIC_MIGRATION_INTENT), { force: true });
+    this.runAfterSessionCommitBestEffort(dossier.issue_key);
+    this.removeIntentBestEffort(issueCwd);
+    this.cleanupPublishedSourceBestEffort(topicCwd, intentFromDossier(dossier, "source_cleanup"));
     return migrationResult(dossier);
+  }
+
+  private findPendingMigration(
+    issueId: string,
+    issueKey: string,
+  ): { cwd: string; intent: TopicMigrationIntent } | null {
+    if (!existsSync(this.topicsRoot)) return null;
+    const candidates = readdirSync(this.topicsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({ cwd: join(this.topicsRoot, entry.name), intent: readIntent(join(this.topicsRoot, entry.name)) }))
+      .filter((entry): entry is { cwd: string; intent: TopicMigrationIntent } =>
+        Boolean(
+          entry.intent?.state === "migrating"
+          && entry.intent.issue_id === issueId
+          && entry.intent.issue_key === issueKey,
+        ));
+    if (candidates.length > 1) throw new Error(`Issue ${issueKey} has multiple pending topic migrations`);
+    return candidates[0] ?? null;
+  }
+
+  private runAfterSessionCommitBestEffort(issueKey: string): void {
+    try {
+      this.afterSessionCommit?.();
+    } catch (error) {
+      log.warn(`Post-commit topic migration cleanup for ${issueKey} will be retried: ${errorMessage(error)}`);
+    }
+  }
+
+  private removeIntentBestEffort(issueCwd: string): void {
+    try {
+      removeFileDurably(join(issueCwd, TOPIC_MIGRATION_INTENT));
+    } catch (error) {
+      log.warn(`Failed to clear committed topic migration intent in ${issueCwd}: ${errorMessage(error)}`);
+    }
+  }
+
+  private cleanupPublishedSourceBestEffort(topicCwd: string, intent: TopicMigrationIntent): void {
+    if (!existsSync(topicCwd)) return;
+    const cleanupIntent: TopicMigrationIntent = { ...intent, state: "source_cleanup" };
+    try {
+      writeJsonDurably(join(topicCwd, TOPIC_MIGRATION_INTENT), cleanupIntent);
+    } catch (error) {
+      log.warn(`Failed to journal published topic source cleanup in ${topicCwd}: ${errorMessage(error)}`);
+    }
+    try {
+      this.removeDirectory(topicCwd);
+      fsyncDirectory(dirname(topicCwd));
+    } catch (error) {
+      log.warn(`Published Issue data is safe; GC will retry topic source cleanup ${topicCwd}: ${errorMessage(error)}`);
+    }
   }
 
   private async finalizeReturnedTopic(topicCwd: string, intent: TopicMigrationIntent): Promise<void> {
@@ -431,6 +647,7 @@ export function moveDirectoryDurably(
   source: string,
   target: string,
   renameDirectory: (source: string, target: string) => void = renameSync,
+  removeDirectory: (path: string) => void = (path) => rmSync(path, { recursive: true, force: false }),
 ): "rename" | "copy" {
   assertContained(root, source);
   assertContained(root, target);
@@ -447,6 +664,7 @@ export function moveDirectoryDurably(
   }
 
   const staging = `${target}.${process.pid}.${randomUUID()}.partial`;
+  let published = false;
   try {
     copyTreeDurably(source, staging);
     const sourceManifest = treeManifest(source);
@@ -455,13 +673,73 @@ export function moveDirectoryDurably(
       throw new Error(`Cross-filesystem topic copy verification failed: ${source} -> ${target}`);
     }
     renameDirectory(staging, target);
+    // From this point the target is the verified, authoritative complete copy.
+    // Never destroy it merely because best-effort source cleanup later fails.
+    published = true;
     fsyncDirectory(dirname(target));
-    rmSync(source, { recursive: true, force: false });
-    fsyncDirectory(dirname(source));
+    try {
+      removeDirectory(source);
+      fsyncDirectory(dirname(source));
+    } catch (error) {
+      log.warn(`Published workspace copy is safe; source cleanup remains pending: ${source}: ${errorMessage(error)}`);
+    }
     return "copy";
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });
-    if (existsSync(target) && existsSync(source)) rmSync(target, { recursive: true, force: true });
+    if (!published && existsSync(target) && existsSync(source)) {
+      rmSync(target, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
+function mergeTopicIntoExistingIssue(source: string, target: string, migrationId: string): void {
+  const conflictRoot = join(target, ".multiremi", "topic-artifacts", migrationId);
+  const mergeEntry = (sourcePath: string, targetPath: string, rel: string): void => {
+    if (
+      rel === TOPIC_MIGRATION_INTENT
+      || rel === ".multiremi/gc.json"
+      || rel === ".multiremi/task.json"
+    ) return;
+    if (!existsSync(targetPath)) {
+      copyEntryAtomically(sourcePath, targetPath);
+      return;
+    }
+    const sourceInfo = lstatSync(sourcePath);
+    const targetInfo = lstatSync(targetPath);
+    if (sourceInfo.isDirectory() && targetInfo.isDirectory()) {
+      for (const entry of readdirSync(sourcePath, { withFileTypes: true })) {
+        mergeEntry(join(sourcePath, entry.name), join(targetPath, entry.name), rel ? `${rel}/${entry.name}` : entry.name);
+      }
+      return;
+    }
+    if (treeManifest(sourcePath) === treeManifest(targetPath)) return;
+    copyEntryAtomically(sourcePath, join(conflictRoot, rel));
+    log.warn(`Preserved conflicting topic artifact at ${join(conflictRoot, rel)}`);
+  };
+
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    mergeEntry(join(source, entry.name), join(target, entry.name), entry.name);
+  }
+  fsyncDirectory(target);
+}
+
+function copyEntryAtomically(source: string, target: string): void {
+  if (existsSync(target)) {
+    if (treeManifest(source) === treeManifest(target)) return;
+    throw new Error(`Topic merge target already contains different data: ${target}`);
+  }
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+  const staging = `${target}.${process.pid}.${randomUUID()}.partial`;
+  try {
+    copyTreeDurably(source, staging);
+    if (treeManifest(source) !== treeManifest(staging)) {
+      throw new Error(`Topic artifact copy verification failed: ${source} -> ${target}`);
+    }
+    renameSync(staging, target);
+    fsyncDirectory(dirname(target));
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
     throw error;
   }
 }
@@ -483,6 +761,24 @@ function dossierFromIntent(intent: TopicMigrationIntent): TopicTaskDossier {
   };
 }
 
+function intentFromDossier(
+  dossier: TopicTaskDossier,
+  state: TopicMigrationIntent["state"],
+): TopicMigrationIntent {
+  return {
+    version: 1,
+    migration_id: `recovery-${dossier.issue_id}`,
+    state,
+    topic_id: dossier.topic_id,
+    session_key: dossier.session_key,
+    topic_cwd: dossier.topic_cwd,
+    issue_id: dossier.issue_id,
+    issue_key: dossier.issue_key,
+    issue_cwd: dossier.issue_cwd,
+    created_at: dossier.bound_at,
+  };
+}
+
 function migrationResult(dossier: TopicTaskDossier): CommittedTopicMigration {
   return {
     migrated: true,
@@ -500,7 +796,7 @@ function readIntent(workspaceDir: string): TopicMigrationIntent | null {
   if (
     value.version !== 1
     || typeof value.migration_id !== "string"
-    || !["prepared", "migrating", "returning"].includes(String(value.state))
+    || !["prepared", "migrating", "returning", "source_cleanup"].includes(String(value.state))
     || typeof value.topic_id !== "string"
     || typeof value.session_key !== "string"
     || typeof value.topic_cwd !== "string"
@@ -664,4 +960,8 @@ function separator(): string {
 
 function isExdev(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "EXDEV");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

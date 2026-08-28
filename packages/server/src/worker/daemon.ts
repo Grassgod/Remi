@@ -2185,6 +2185,13 @@ export class MultiremiDaemon {
           : task.issueId;
         releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquire(lifecycleKey);
         this.assertWorkspaceRootOwner();
+        if (task.holdsWorkspace !== false && task.issue?.key) {
+          const adopted = await this.topicWorkspaces.preparePendingMigrationForIssue(
+            task.issueId,
+            task.issue.key,
+          );
+          if (adopted) log.info(`Adopted pending Feishu topic workspace for ${task.issue.key}`);
+        }
       }
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
       const issueRuntimeStateRoot = resolveIssueRuntimeStateRoot(
@@ -3234,7 +3241,6 @@ export class MultiremiDaemon {
       } else {
         return jsonResponse({ error: "action must be prepare, commit, resume, or cancel" }, 400);
       }
-      this.assertWorkspaceRootOwner();
       return jsonResponse(result);
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 409);

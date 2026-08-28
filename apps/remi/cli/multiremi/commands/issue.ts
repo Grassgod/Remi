@@ -557,6 +557,7 @@ export async function issueCreate(options: CliOptions): Promise<void> {
     const issueId = responseIssueId(response);
     const issueKey = responseIssueKey(response);
     try {
+      console.error(`Waiting for the local daemon to bind this topic to ${issueKey}...`);
       topicMigration = await commitTopicMigration(preparedTopic, issueId, issueKey, options);
       console.error(`Topic migrated to ${String(topicMigration.path)}`);
     } catch (error) {
@@ -594,6 +595,7 @@ export async function issueBindTopic(issueRef: string, options: CliOptions): Pro
   const issueId = responseIssueId(response);
   const issueKey = responseIssueKey(response);
   const cwd = currentWorkingDirectory();
+  console.error(`Waiting for the local daemon to bind this topic to ${issueKey}...`);
   const result = await localTopicMigrationRequest(baseUrl, {
     action: "resume",
     ...(cwd ? { cwd } : {}),
