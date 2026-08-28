@@ -7,6 +7,7 @@ describe("useSidebarSections", () => {
     const { result } = renderHook(() => useSidebarSections());
 
     expect(result.current.isOpen("properties")).toBe(true);
+    expect(result.current.isOpen("subIssues")).toBe(true);
     expect(result.current.isOpen("parentIssue")).toBe(true);
     expect(result.current.isOpen("codeChanges")).toBe(true);
     expect(result.current.isOpen("details")).toBe(true);

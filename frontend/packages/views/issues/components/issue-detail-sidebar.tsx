@@ -44,6 +44,7 @@ import { ExecutionLogSection } from "./execution-log-section";
 import { ChangeRequestList } from "./change-request-list";
 import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
 import { IssueSessionArchivesSection } from "./issue-session-archives-section";
+import { IssueSubIssuesSummary } from "./issue-sub-issues-summary";
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -249,6 +250,8 @@ export function IssueDetailSidebar({
           )}
         </div>}
       </div>
+
+      <IssueSubIssuesSummary issueId={issueId} sections={sections} />
 
       <IssueCodeWorkspaceSection issueId={issueId} issueKind={issue.issue_kind} />
 

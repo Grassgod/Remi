@@ -170,6 +170,7 @@
     "add_sub_issue_tooltip": "サブイシューを追加",
     "add_sub_issue_aria": "サブイシューを追加",
     "section_properties": "プロパティ",
+    "section_sub_issues": "サブイシュー",
     "section_parent_issue": "親イシュー",
     "section_code_changes": "コード変更",
     "section_metadata": "メタデータ",
