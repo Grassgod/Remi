@@ -54,15 +54,18 @@ export class Remi {
   readonly _activeAborts = new Map<string, AbortController>();
   readonly _runtime = new AgentRuntime();
   private _botProjects: Map<string, MultiremiDaemonBotProject> | null;
+  private readonly _ensureTopicWorkspaceCallback: ((sessionKey: string, topicId: string) => Promise<string | null>) | null;
 
   constructor(
     config: RemiConfig,
     agent: MultiremiAgent,
     botProjects: MultiremiDaemonBotProject[] | null = null,
+    ensureTopicWorkspace: ((sessionKey: string, topicId: string) => Promise<string | null>) | null = null,
   ) {
     this.config = config;
     this.agent = agent;
     this._botProjects = botProjects ? new Map(botProjects.map((project) => [project.id, project])) : null;
+    this._ensureTopicWorkspaceCallback = ensureTopicWorkspace;
     if (!agent.cwd?.trim()) throw new Error(`Bot agent ${agent.id} has no cwd configured`);
     if (agent.archivedAt) throw new Error(`Bot agent ${agent.id} is archived`);
     this._scheduler = new LaneScheduler({ maxConcurrency: agent.maxConcurrentTasks });
@@ -113,6 +116,11 @@ export class Remi {
 
   _getBotProject(id: string): MultiremiDaemonBotProject | null {
     return this._botProjects?.get(id) ?? null;
+  }
+
+  async _ensureTopicWorkspace(sessionKey: string, topicId: string | null): Promise<string | null> {
+    if (!topicId || !this._ensureTopicWorkspaceCallback) return null;
+    return this._ensureTopicWorkspaceCallback(sessionKey, topicId);
   }
 
   /** Abort active processing for a session (called by /esc). */
@@ -191,9 +199,14 @@ export class Remi {
     config: RemiConfig,
     agent: MultiremiAgent,
     botProjects: MultiremiDaemonBotProject[],
-    options: { authorizeFeishuSender?: FeishuSenderAuthorizer } = {},
+    options: {
+      authorizeFeishuSender?: FeishuSenderAuthorizer;
+      daemonPort?: number;
+      workspacesRoot?: string;
+      ensureTopicWorkspace?: (sessionKey: string, topicId: string) => Promise<string | null>;
+    } = {},
   ): Remi {
-    const remi = new Remi(config, agent, botProjects);
+    const remi = new Remi(config, agent, botProjects, options.ensureTopicWorkspace ?? null);
 
     // 1. AuthStore (1Passport) with token sync rules
     const syncRules: TokenSyncRule[] | undefined =
@@ -224,7 +237,10 @@ export class Remi {
     }
 
     // 2. Provider — one Multiremi agent row is the sole execution config.
-    const provider = Remi._buildProvider(agent);
+    const provider = Remi._buildProvider(agent, {
+      ...(options.daemonPort ? { MULTIREMI_DAEMON_PORT: String(options.daemonPort) } : {}),
+      ...(options.workspacesRoot ? { MULTIREMI_WORKSPACES_ROOT: options.workspacesRoot } : {}),
+    });
     remi.addProvider(provider);
 
     // 3. Feishu connector
@@ -260,7 +276,7 @@ export class Remi {
     return remi;
   }
 
-  private static _buildProvider(agent: MultiremiAgent) {
+  private static _buildProvider(agent: MultiremiAgent, runtimeEnv: Record<string, string> = {}) {
     const rawType = agent.provider;
     const type = rawType.startsWith("acp:") ? rawType.slice("acp:".length) : rawType;
     if (type !== "claude" && type !== "codex") {
@@ -273,7 +289,7 @@ export class Remi {
       cwd: agent.cwd!,
       executable: agent.executable ?? undefined,
       args: agent.customArgs,
-      env: agent.customEnv,
+      env: { ...agent.customEnv, ...runtimeEnv },
       getMcpServers: () => buildAgentMcpServers(agent.mcpConfig),
     });
   }

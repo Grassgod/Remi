@@ -284,6 +284,7 @@ export interface WorkerDaemonSupervisorOptions {
   botAgentId?: string | null;
   onBotAgentResolved?: (agent: MultiremiAgent) => void;
   onBotProjectsUpdated?: (projects: MultiremiDaemonBotProject[]) => void;
+  issueWorkspaceLifecycleLocker?: IssueWorkspaceLifecycleLocker;
 }
 
 function configuredWorkerWorkspaceId(
@@ -358,6 +359,7 @@ export async function resolveWorkerDaemons(
     botAgentId: supervisor.botAgentId,
     onBotAgentResolved: supervisor.onBotAgentResolved,
     onBotProjectsUpdated: supervisor.onBotProjectsUpdated,
+    issueWorkspaceLifecycleLocker: supervisor.issueWorkspaceLifecycleLocker,
     daemonPort: providers.length > 1 && baseDaemonPort !== 0 ? baseDaemonPort + providers.indexOf(provider) : baseDaemonPort,
     workspacesRoot: supervisor.workspacesRoot,
     workspaceRootFence: supervisor.workspaceRootFence,
@@ -375,7 +377,8 @@ export function instantiateCoResidentWorkerDaemons(
 ): MultiremiDaemon[] {
   // Claude and Codex are separate daemon instances but their provider
   // lifecycle and GC must cross the same archive-and-delete barrier.
-  const issueWorkspaceLifecycleLocker = new IssueWorkspaceLifecycleLocker();
+  const issueWorkspaceLifecycleLocker = options[0]?.issueWorkspaceLifecycleLocker
+    ?? new IssueWorkspaceLifecycleLocker();
   const cliUpdateCoordinator = options.length > 1
     ? new MultiremiCliUpdateCoordinator()
     : null;
@@ -416,6 +419,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
   let ownershipFailure: unknown = null;
   let restartRequested = false;
   try {
+    const issueWorkspaceLifecycleLocker = new IssueWorkspaceLifecycleLocker();
     const botAgentId = String(process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim();
     const hasFeishuEnvironment = !Boolean(options.once) && feishuConfigured();
     const shouldStartFeishu = !Boolean(options.once) && (hasFeishuEnvironment || Boolean(botAgentId));
@@ -442,6 +446,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     daemons = await resolveWorkerDaemons(options, {
       workspacesRoot: workspaceSupervisor.workspaceRoot,
       workspaceRootFence: () => workspaceSupervisor?.assertOwner(),
+      issueWorkspaceLifecycleLocker,
       // Provider updates must stop the whole supervisor, including Feishu.
       onRestartRequested: () => stopAll(),
       botAgentId: shouldStartFeishu ? botAgentId : null,
@@ -517,6 +522,12 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
             feishuWorkspaceId!,
             senderOpenId,
           ),
+          {
+            daemonPort: daemons[0]!.localPort(),
+            workspacesRoot: workspaceSupervisor!.workspaceRoot,
+            ensureTopicWorkspace: (sessionKey, topicId) =>
+              daemons[0]!.ensureTopicWorkspace(sessionKey, topicId),
+          },
         );
         daemons[0]!.setBotMenuPublisher(feishu.publishBotMenu);
         running.push(feishu.start);

@@ -34,6 +34,7 @@ import {
   recoverOwnedDirectoryQuarantineSync,
   removeOwnedDirectorySync,
 } from "./safe-remove.js";
+import { TOPIC_WORKSPACE_ROOT, topicLifecycleKey } from "./topic-lifecycle.js";
 
 const log = createLogger("multiremi-workspace-gc");
 
@@ -81,6 +82,10 @@ export interface RunWorkspaceGcOnceOptions {
     workspaceDir: string,
     action: () => Promise<void>,
   ) => Promise<void>;
+  recoverTopicWorkspace?: (topicDir: string) => Promise<boolean>;
+  isTopicWorkspaceBound?: (topicDir: string) => boolean;
+  recoverIssueWorkspace?: (issueDir: string) => Promise<boolean>;
+  returnTerminalIssueToTopic?: (issueDir: string) => Promise<boolean>;
   /** Synchronous process-ownership fence, called immediately before local mutations. */
   assertRootOwner?: () => void;
   /** Isolated Git inspection; failures must make cleanup fail closed. */
@@ -141,6 +146,19 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
       || GC_RESERVED_ROOTS.has(workspace.name)
     ) continue;
     const workspaceDir = join(root, workspace.name);
+    if (workspace.name === TOPIC_WORKSPACE_ROOT) {
+      for (const topic of safeReadDir(workspaceDir) ?? []) {
+        if (!topic.isDirectory()) continue;
+        await collectTopicWorkspace(
+          root,
+          join(workspaceDir, topic.name),
+          topic.name,
+          options,
+          summary,
+        );
+      }
+      continue;
+    }
     if (workspace.name === DISCUSSION_SESSION_ROOT) {
       const issues = safeReadDir(workspaceDir) ?? [];
       for (const issue of issues) {
@@ -184,6 +202,47 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
   return summary;
 }
 
+async function collectTopicWorkspace(
+  root: string,
+  topicDir: string,
+  topicId: string,
+  options: RunWorkspaceGcOnceOptions,
+  summary: MultiremiDaemonGcSummary,
+): Promise<void> {
+  try {
+    if (await options.recoverTopicWorkspace?.(topicDir)) {
+      summary.skipped++;
+      return;
+    }
+    if (!safeLstat(topicDir)) {
+      summary.skipped++;
+      return;
+    }
+    const action = async () => {
+      if (options.isTopicWorkspaceBound?.(topicDir)) {
+        summary.skipped++;
+        return;
+      }
+      const decision = staleDirDecision(topicDir, options.orphanTtlMs, options.now ?? Date.now());
+      if (decision !== "orphan") {
+        summary.skipped++;
+        return;
+      }
+      options.assertRootOwner?.();
+      removeGcWorkDir(root, topicDir, options.assertRootOwner);
+      summary.orphaned++;
+    };
+    if (options.withIssueWorkspaceLock) {
+      await options.withIssueWorkspaceLock(topicLifecycleKey(topicId), topicDir, action);
+    } else {
+      await action();
+    }
+  } catch (error) {
+    summary.skipped++;
+    options.onError?.(topicDir, error);
+  }
+}
+
 async function collectWorkspaceGcDecision(
   root: string,
   workspaceDir: string,
@@ -223,6 +282,7 @@ async function collectWorkspaceGcDecisionUnlocked(
 ): Promise<void> {
   let resolution: MultiremiGcResolution;
   try {
+    await options.recoverIssueWorkspace?.(workspaceDir);
     resolution = await getWorkspaceGcDecision(workspaceDir, options);
   } catch (error) {
     // One unavailable entity or archive upload must not prevent later
@@ -485,6 +545,7 @@ async function getIssueGcDecision(
     const status = await options.client.getIssueGcCheck(issueId);
     log.debug(`Workspace GC Issue status: ${taskDir} status=${status.status}`);
     if (!isTerminalIssueStatus(status.status)) return gcResolution("skip");
+    if (await options.returnTerminalIssueToTopic?.(taskDir)) return gcResolution("skip");
     options.assertRootOwner?.();
     log.debug(`Workspace GC inspecting Git state: ${taskDir}`);
     const dirty = options.hasDirtyGitWorktree

@@ -60,6 +60,8 @@ export interface PersistentContext {
   agent: MultiremiAgent;
   sessionRow?: SessionRow | null;
   sessionKey: string;
+  /** Deterministic Feishu topic directory, used only after stronger cwd sources. */
+  topicCwd?: string | null;
 }
 
 export interface EphemeralContext {

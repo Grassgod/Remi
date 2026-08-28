@@ -51,6 +51,8 @@ and therefore requires both credentials.
 | `REMI_PLUGINS_ENABLED_JSON` | `[]` | JSON string array of explicitly enabled plugin IDs. Invalid JSON or non-string items abort config loading. |
 | `REMI_PLUGINS_ALLOW_EXTERNAL` | `true` | Whether external plugins may load. Must be exactly `true` or `false`. |
 | `REMI_PLUGIN_CONFIGS_JSON` | `{}` | JSON object keyed by plugin ID. Invalid JSON or a non-object value aborts config loading. |
+| `MULTIREMI_GC_ENABLED` | `true` | Must remain enabled on 66-8. Topic workspaces return from closed Issues through the GC lifecycle sweep. |
+| `MULTIREMI_GC_INTERVAL_MS` | `900000` (15 min) | Upper bound for closed-Issue topic return latency. Do not set it to an hour or more. |
 
 Systemd `EnvironmentFile` parsing removes outer quotes. Keep structured values
 single-quoted, as in the template, so their JSON double quotes reach Remi
@@ -64,4 +66,13 @@ The v2 startup migration creates a consistent
 converted, run the read-only review and approved apply steps in
 [`remi-bot-menu-to-workspace-settings.md`](../migrations/remi-bot-menu-to-workspace-settings.md)
 before starting the W4 binary. The menu converter intentionally cannot recover
-its source row after the table has been purged.
+its source row from the live database after the table has been purged, but it
+can read the v2 backup with `--backup`.
+
+## Topic lifecycle GC
+
+W7 uses the existing daemon GC sweep to observe terminal Issues and move their
+workspaces back under `_topics`. Keep `MULTIREMI_GC_ENABLED=true` on 66-8 and
+keep `MULTIREMI_GC_INTERVAL_MS` below one hour. The default 15-minute sweep has
+roughly 288 times the safety margin of the 72-hour workspace TTL; disabling GC
+or stretching the interval to hours removes that guarantee.

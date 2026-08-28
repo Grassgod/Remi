@@ -44,7 +44,14 @@ function ephemeralContext(agent: Partial<NonNullable<AgentTask["agent"]>>, task:
   };
 }
 
-function persistentContext(overrides: { model?: string; provider?: string; sessionProvider?: string; cwd?: string | null } = {}): PersistentContext {
+function persistentContext(overrides: {
+  model?: string;
+  provider?: string;
+  sessionProvider?: string;
+  sessionCwd?: string | null;
+  topicCwd?: string | null;
+  cwd?: string | null;
+} = {}): PersistentContext {
   const provider = overrides.provider ?? "claude";
   return {
     kind: "persistent",
@@ -80,8 +87,11 @@ function persistentContext(overrides: { model?: string; provider?: string; sessi
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     },
-    sessionRow: overrides.sessionProvider ? ({ provider: overrides.sessionProvider } as any) : null,
+    sessionRow: overrides.sessionProvider || overrides.sessionCwd
+      ? ({ provider: overrides.sessionProvider ?? null, cwd: overrides.sessionCwd ?? null } as any)
+      : null,
     sessionKey: "c1",
+    topicCwd: overrides.topicCwd,
   };
 }
 
@@ -210,4 +220,20 @@ test("persistent prompts use agent instructions and the Multiremi memory CLI", a
 test("persistent workspace fails loudly instead of falling back to the home directory", () => {
   expect(() => new AgentRuntime().assemble(persistentContext({ cwd: null })))
     .toThrow("Bot agent agt_bot has no cwd configured");
+});
+
+test("persistent cwd priority is session, then agent, then topic", () => {
+  expect(new AgentRuntime().assemble(persistentContext({
+    sessionCwd: "/session/issue",
+    cwd: "/agent/default",
+    topicCwd: "/topics/thread",
+  })).cwd).toBe("/session/issue");
+  expect(new AgentRuntime().assemble(persistentContext({
+    cwd: "/agent/default",
+    topicCwd: "/topics/thread",
+  })).cwd).toBe("/agent/default");
+  expect(new AgentRuntime().assemble(persistentContext({
+    cwd: null,
+    topicCwd: "/topics/thread",
+  })).cwd).toBe("/topics/thread");
 });

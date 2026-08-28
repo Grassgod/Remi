@@ -56,6 +56,11 @@ export async function bootFeishuChannel(
   agent: MultiremiAgent,
   projects: MultiremiDaemonBotProject[],
   authorizeSender: (senderOpenId: string) => Promise<boolean>,
+  options: {
+    daemonPort?: number;
+    workspacesRoot?: string;
+    ensureTopicWorkspace?: (sessionKey: string, topicId: string) => Promise<string | null>;
+  } = {},
 ): Promise<FeishuChannelHandle> {
   const config = loadConfig();
   const missing = missingFeishuEnvironment(config);
@@ -63,7 +68,12 @@ export async function bootFeishuChannel(
     throw new Error(`Feishu channel cannot start; missing env: ${missing.join(", ")}`);
   }
   const { Remi } = await import("@remi/core.js");
-  const remi = Remi.boot(config, agent, projects, { authorizeFeishuSender: authorizeSender });
+  const remi = Remi.boot(config, agent, projects, {
+    authorizeFeishuSender: authorizeSender,
+    daemonPort: options.daemonPort,
+    workspacesRoot: options.workspacesRoot,
+    ensureTopicWorkspace: options.ensureTopicWorkspace,
+  });
   const { MenuSyncer } = await import("@connectors/feishu/menu-sync.js");
   const menuSyncer = new MenuSyncer({
     appId: config.feishu.appId,

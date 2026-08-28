@@ -24,6 +24,16 @@ explicit external targets (`open_id`, `union_id`, or `user_id`). After the
 migration, prefer replacing those entries in Settings with workspace member or
 role targets; those resolve to Feishu identities only at publish time.
 
+If the W4 binary already removed `remi_config`, read the consistent startup
+backup instead. With the default database path, `--backup` selects
+`~/.remi/remi.db.pre-remi-config-purge-v2.bak`; pass an explicit path when the
+backup lives elsewhere:
+
+```bash
+bun run scripts/migrations/migrate-remi-bot-menu.ts --backup
+bun run scripts/migrations/migrate-remi-bot-menu.ts --backup /path/to/remi.db.pre-remi-config-purge-v2.bak --apply
+```
+
 Finally, open **Workspace Settings → Integrations → Feishu bot menu**, run a
 dry-run, inspect the result, and publish only after operator approval. The
 script does not publish anything to Feishu and does not delete the legacy row.

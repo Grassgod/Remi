@@ -14,7 +14,11 @@ type LegacyMenu = {
 
 const apply = process.argv.includes("--apply");
 const dbPath = process.env.REMI_DB_PATH || join(homedir(), ".remi", "remi.db");
-const db = new Database(dbPath, { readonly: true });
+const backupOption = optionValue("--backup");
+const sourceDbPath = backupOption === null
+  ? dbPath
+  : backupOption || `${dbPath}.pre-remi-config-purge-v2.bak`;
+const db = new Database(sourceDbPath, { readonly: true });
 
 try {
   const row = db.query(
@@ -62,4 +66,15 @@ function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required with --apply`);
   return value;
+}
+
+function optionValue(name: string): string | null {
+  const exact = process.argv.indexOf(name);
+  if (exact >= 0) {
+    const next = process.argv[exact + 1];
+    return next && !next.startsWith("--") ? next : "";
+  }
+  const prefix = `${name}=`;
+  const entry = process.argv.find((argument) => argument.startsWith(prefix));
+  return entry ? entry.slice(prefix.length) : null;
 }

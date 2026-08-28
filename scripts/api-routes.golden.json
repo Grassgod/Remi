@@ -8307,6 +8307,17 @@
             "allowed": true
           },
           {
+            "id": "issue.bind-topic",
+            "command": "remi issue bind-topic",
+            "capability": "issue.bind-topic",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "issue.cancel",
             "command": "remi issue cancel-task",
             "capability": "issue.cancel",

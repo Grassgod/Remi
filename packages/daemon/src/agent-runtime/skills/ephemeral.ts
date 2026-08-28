@@ -8,13 +8,15 @@
  */
 
 import { join } from "node:path";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { ISSUE_SESSION_ARCHIVE_RECEIPT_FILE } from "@daemon/agent-runtime/workspace/session-archive.js";
 
 export function writeTaskContext(workDir: string, task: AgentTask): void {
   const dir = join(workDir, ".multiremi");
   mkdirSync(dir, { recursive: true });
+  const taskPath = join(dir, "task.json");
+  const topicBinding = readTopicBinding(taskPath);
   const payload = {
     task_id: task.id,
     workspace_id: task.workspaceId,
@@ -45,8 +47,23 @@ export function writeTaskContext(workDir: string, task: AgentTask): void {
       ...(repo.description ? { description: repo.description } : {}),
     })),
     prompt: task.prompt,
+    ...(topicBinding ? { topic_binding: topicBinding } : {}),
   };
-  writeFileSync(join(dir, "task.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
+  writeFileSync(taskPath, JSON.stringify(payload, null, 2), { mode: 0o644 });
+}
+
+function readTopicBinding(taskPath: string): Record<string, unknown> | null {
+  if (!existsSync(taskPath)) return null;
+  try {
+    const value = JSON.parse(readFileSync(taskPath, "utf8")) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const binding = (value as Record<string, unknown>).topic_binding;
+    return binding && typeof binding === "object" && !Array.isArray(binding)
+      ? binding as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function writeTaskGcContext(workDir: string, task: AgentTask, options: { localDirectory?: boolean } = {}): void {

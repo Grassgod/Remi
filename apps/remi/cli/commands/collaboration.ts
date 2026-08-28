@@ -69,6 +69,12 @@ const ISSUE_FIELDS: readonly CliOptionSpec[] = [
   { name: "no-project-defaults", type: "boolean", description: "Create unassigned: do not inherit the project's default assignee" },
 ];
 
+const ISSUE_CREATE_FIELDS: readonly CliOptionSpec[] = [
+  ...ISSUE_FIELDS,
+  { name: "no-bind-topic", type: "boolean", description: "Create the Issue without moving the current Feishu topic workspace" },
+  { name: "daemon-port", type: "integer", valueName: "port", description: "Local daemon helper port" },
+];
+
 const COMMENT_BODY_OPTIONS: readonly CliOptionSpec[] = [
   { name: "content", type: "string", valueName: "text", description: "Comment body", conflictsWith: ["content-file", "content-stdin"] },
   { name: "content-file", type: "string", valueName: "path|-", description: "Read comment body from a file or stdin", conflictsWith: ["content", "content-stdin"] },
@@ -124,7 +130,10 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     legacySpec("issue.search", ["issue", "search"], "Search issues", "read", HUMAN_TASK, [refPositional("query")], [
       { name: "include-closed", type: "boolean", description: "Include closed issues" },
     ], ["issue", "search"]),
-    legacySpec("issue.create", ["issue", "create"], "Create an issue", "write", HUMAN_TASK, [], ISSUE_FIELDS, ["issue", "create"]),
+    legacySpec("issue.create", ["issue", "create"], "Create an issue", "write", HUMAN_TASK, [], ISSUE_CREATE_FIELDS, ["issue", "create"]),
+    legacySpec("issue.bind-topic", ["issue", "bind-topic"], "Resume a local Feishu topic workspace migration", "write", HUMAN_TASK, [refPositional("issue")], [
+      { name: "daemon-port", type: "integer", valueName: "port", description: "Local daemon helper port" },
+    ], ["issue", "bind-topic"]),
     legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], ISSUE_FIELDS, ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },

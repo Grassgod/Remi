@@ -132,6 +132,11 @@ import {
   type GitWorktreeInspector,
 } from "@daemon/agent-runtime/workspace/git-worktree-inspector.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
+import {
+  TopicWorkspaceLifecycle,
+  type CommittedTopicMigration,
+  type PreparedTopicMigration,
+} from "@daemon/agent-runtime/workspace/topic-lifecycle.js";
 import { configuredMultiremiWorkspacesRoot } from "@daemon/agent-runtime/workspace/process-owner.js";
 import { ownedDirectoryRemovalSupport } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import {
@@ -599,6 +604,7 @@ export class MultiremiDaemon {
   private readonly gitWorktreeInspector: GitWorktreeInspector;
   private localPathLocks = new LocalPathLocker();
   private issueWorkspaceLifecycleLocks: IssueWorkspaceLifecycleLocker;
+  private readonly topicWorkspaces: TopicWorkspaceLifecycle;
   private runtimeGoneInflight = new Set<string>();
   private reregisterGate = new MultiremiRuntimeReregisterGate();
   private readonly explicitRuntimeId: boolean;
@@ -701,6 +707,11 @@ export class MultiremiDaemon {
         options.inProcessRuntimeModelDiscoveryEnabled === true,
       serverUrl: options.serverUrl,
     };
+    this.topicWorkspaces = new TopicWorkspaceLifecycle({
+      root: workspacesRoot,
+      locker: this.issueWorkspaceLifecycleLocks,
+      assertRootOwner: () => this.assertWorkspaceRootOwner(),
+    });
     this.defaultGcPolicy = {
       ttlMs: this.options.gcTtlMs,
       intervalMs: this.options.gcIntervalMs,
@@ -799,6 +810,10 @@ export class MultiremiDaemon {
       throw new Error("Multiremi workspace is required for external membership checks");
     }
     return this.client.checkExternalWorkspaceMembership(workspaceId, externalId);
+  }
+
+  async ensureTopicWorkspace(sessionKey: string, topicId: string): Promise<string | null> {
+    return this.topicWorkspaces.ensureTopicWorkspace(sessionKey, topicId);
   }
 
   setBotMenuPublisher(
@@ -1793,6 +1808,10 @@ export class MultiremiDaemon {
           await action();
           this.assertWorkspaceRootOwner();
         }),
+      recoverTopicWorkspace: (topicDir) => this.topicWorkspaces.recoverTopicWorkspace(topicDir),
+      isTopicWorkspaceBound: (topicDir) => this.topicWorkspaces.isTopicWorkspaceBound(topicDir),
+      recoverIssueWorkspace: (issueDir) => this.topicWorkspaces.recoverIssueWorkspace(issueDir),
+      returnTerminalIssueToTopic: (issueDir) => this.topicWorkspaces.returnTerminalIssueToTopic(issueDir),
       onError: (workspaceDir, error) => {
         log.warn(`Workspace GC skipped ${workspaceDir}: ${error instanceof Error ? error.message : String(error)}`);
       },
@@ -3133,6 +3152,7 @@ export class MultiremiDaemon {
     const url = new URL(request.url);
     if (url.pathname === "/health") return this.handleHealthRequest(request);
     if (url.pathname === "/shutdown") return this.handleShutdownRequest(request);
+    if (url.pathname === "/topic/migrate") return this.handleTopicMigrationRequest(request);
     if (url.pathname !== "/repo/checkout") return jsonResponse({ error: "not found" }, 404);
     if (this.terminalAuthorityMode) {
       return jsonResponse({ error: "daemon is in terminal cleanup-only mode" }, 503);
@@ -3169,6 +3189,55 @@ export class MultiremiDaemon {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return jsonResponse({ error: message }, message.includes("not configured") ? 400 : 500);
+    }
+  }
+
+  private async handleTopicMigrationRequest(request: Request): Promise<Response> {
+    if (this.terminalAuthorityMode) {
+      return jsonResponse({ error: "daemon is in terminal cleanup-only mode" }, 503);
+    }
+    if (request.method !== "POST") return jsonResponse({ error: "method not allowed" }, 405);
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json() as Record<string, unknown>;
+    } catch (error) {
+      return jsonResponse({ error: `invalid request body: ${error instanceof Error ? error.message : String(error)}` }, 400);
+    }
+    const action = stringField(body.action);
+    const cwd = stringField(body.cwd);
+    if (!action) return jsonResponse({ error: "action is required" }, 400);
+    if (!cwd && action !== "resume") return jsonResponse({ error: "cwd is required" }, 400);
+    try {
+      this.assertWorkspaceRootOwner();
+      let result: PreparedTopicMigration | CommittedTopicMigration | { cancelled: true };
+      if (action === "prepare") {
+        result = await this.topicWorkspaces.prepareMigration(cwd!);
+      } else if (action === "cancel") {
+        const migrationId = stringField(body.migration_id ?? body.migrationId);
+        if (!migrationId) return jsonResponse({ error: "migration_id is required" }, 400);
+        await this.topicWorkspaces.cancelPreparedMigration(cwd!, migrationId);
+        result = { cancelled: true };
+      } else if (action === "commit") {
+        const migrationId = stringField(body.migration_id ?? body.migrationId);
+        const issueId = stringField(body.issue_id ?? body.issueId);
+        const issueKey = stringField(body.issue_key ?? body.issueKey);
+        if (!migrationId) return jsonResponse({ error: "migration_id is required" }, 400);
+        if (!issueId) return jsonResponse({ error: "issue_id is required" }, 400);
+        if (!issueKey) return jsonResponse({ error: "issue_key is required" }, 400);
+        result = await this.topicWorkspaces.commitMigration({ cwd: cwd!, migrationId, issueId, issueKey });
+      } else if (action === "resume") {
+        const issueId = stringField(body.issue_id ?? body.issueId);
+        const issueKey = stringField(body.issue_key ?? body.issueKey);
+        if (!issueId) return jsonResponse({ error: "issue_id is required" }, 400);
+        if (!issueKey) return jsonResponse({ error: "issue_key is required" }, 400);
+        result = await this.topicWorkspaces.resumeMigration({ cwd: cwd ?? undefined, issueId, issueKey });
+      } else {
+        return jsonResponse({ error: "action must be prepare, commit, resume, or cancel" }, 400);
+      }
+      this.assertWorkspaceRootOwner();
+      return jsonResponse(result);
+    } catch (error) {
+      return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
   }
 

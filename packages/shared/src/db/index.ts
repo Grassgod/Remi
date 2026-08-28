@@ -250,6 +250,26 @@ export function getDb(): Database {
     );
   `);
 
+  const duplicateTopicCwd = db.query(`
+    SELECT cwd, COUNT(*) AS count
+    FROM sessions
+    WHERE instr(cwd, '/_topics/') > 0
+    GROUP BY cwd
+    HAVING COUNT(*) > 1
+    LIMIT 1
+  `).get() as { cwd: string; count: number } | null;
+  if (duplicateTopicCwd) {
+    db.close();
+    throw new Error(
+      `Cannot enforce topic workspace ownership: ${duplicateTopicCwd.count} sessions share ${duplicateTopicCwd.cwd}`,
+    );
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_topic_cwd
+    ON sessions(cwd)
+    WHERE instr(cwd, '/_topics/') > 0
+  `);
+
   try {
     purgeLegacyAgentConfig(db, _dbPath);
     purgeRemiConfig(db, _dbPath);

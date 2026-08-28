@@ -333,6 +333,32 @@ describe("RemiCore", () => {
     expect(sessDb.getSessionId("chat-1:thread:msg-root-1")).not.toBeNull();
   });
 
+  it("binds the first Feishu thread message to its topic workspace before provider execution", async () => {
+    const calls: Array<{ sessionKey: string; topicId: string }> = [];
+    const topicCwd = join(tmpDir, "workspaces", "_topics", "root-topic");
+    mkdirSync(topicCwd, { recursive: true });
+    const remi = new RemiCore(config, makeAgent(tmpDir), null, async (sessionKey, topicId) => {
+      calls.push({ sessionKey, topicId });
+      sessDb.ensureTopicSessionBinding(sessionKey, topicCwd);
+      return topicCwd;
+    });
+    remi.addProvider(new MockProvider());
+
+    await remi.handleMessage({
+      text: "Start topic",
+      chatId: "chat-topic",
+      sender: "user",
+      connectorName: "feishu",
+      metadata: { messageId: "msg-topic", rootId: "root-topic", chatType: "group" },
+    });
+
+    expect(calls).toEqual([{ sessionKey: "chat-topic:thread:root-topic", topicId: "root-topic" }]);
+    expect(sessDb.getSession("chat-topic:thread:root-topic")).toMatchObject({
+      cwd: topicCwd,
+      session_id: "sess-mock",
+    });
+  });
+
   it("non-thread messages use main session", async () => {
     const remi = new Remi(config);
     remi.addProvider(new MockProvider());

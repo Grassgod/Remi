@@ -2019,6 +2019,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.bind-topic": {
+      "command": "remi issue bind-topic",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.bind-topic",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.update": {
       "command": "remi issue update",
       "aliases": [],

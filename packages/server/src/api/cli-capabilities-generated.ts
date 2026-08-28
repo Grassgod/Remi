@@ -1430,6 +1430,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.bind-topic": {
+      "command": "remi issue bind-topic",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.bind-topic",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.update": {
       "command": "remi issue update",
       "auth": [
