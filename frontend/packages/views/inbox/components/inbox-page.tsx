@@ -65,8 +65,9 @@ import {
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
 import { InboxListItem, useTimeAgo } from "./inbox-list-item";
-import { InboxDetailLabel, useInboxTitle, useTypeLabels } from "./inbox-detail-label";
+import { useInboxTitle, useTypeLabels } from "./inbox-detail-label";
 import { getAutopilotRunOutcome } from "./inbox-display";
+import { AutopilotRunReport } from "./autopilot-run-report";
 import { useT } from "../../i18n";
 
 // A failed inbox fetch resolves to an empty list, and an empty list renders
@@ -142,6 +143,8 @@ export function InboxPage() {
     .flatMap((group) => group.entries)
     .find((entry) => entry.items.some((item) => inboxItemSelectionKey(item) === selectedKey))
     ?? null;
+  const selectedOutcome = selected ? getAutopilotRunOutcome(selected) : null;
+  const selectedIsGroupHead = Boolean(selected && selectedEntry?.item.id === selected.id);
 
   // Track the last key we actually resolved against the inbox list. Lets the
   // fallback effect distinguish "shared-link to a notification not in our
@@ -499,6 +502,38 @@ export function InboxPage() {
       <AlertCircle className="mb-3 h-10 w-10 text-muted-foreground/30" />
       <p className="text-sm">{t(($) => $.detail.item_unavailable)}</p>
     </div>
+  ) : selected && selectedOutcome ? (
+    <div className="p-6">
+      <h2 className="text-lg font-semibold">
+        {inboxTitle(selected, "detail", selectedIsGroupHead ? selectedEntry?.items.length ?? 1 : 1)}
+      </h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {typeLabels[selected.type]} · {timeAgo(selected.created_at)}
+      </p>
+      <AutopilotRunReport
+        item={selected}
+        groupedItems={
+          selectedIsGroupHead && selectedEntry
+            ? selectedEntry.items
+            : [selected]
+        }
+        onSelectItem={handleSelect}
+      />
+      <div className="mt-4">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => handleArchive(
+            selectedIsGroupHead && selectedEntry
+              ? inboxDisplayEntryIds(selectedEntry)
+              : [selected.id],
+          )}
+        >
+          <Archive className="mr-1.5 h-3.5 w-3.5" />
+          {t(($) => $.detail.archive)}
+        </Button>
+      </div>
+    </div>
   ) : selected?.issue_id ? (
     // Key by issue_id (not inbox-item id): a new comment/reaction generates a
     // new inbox notification for the same issue. Keying on the notification id
@@ -535,11 +570,7 @@ export function InboxPage() {
       <p className="mt-1 text-sm text-muted-foreground">
         {typeLabels[selected.type]} · {timeAgo(selected.created_at)}
       </p>
-      {getAutopilotRunOutcome(selected) ? (
-        <div className="mt-4 text-sm leading-relaxed text-foreground/80">
-          <InboxDetailLabel item={selected} />
-        </div>
-      ) : selected.body && (
+      {selected.body && (
         <div className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">
           {selected.body}
         </div>

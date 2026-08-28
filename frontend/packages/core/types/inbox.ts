@@ -72,11 +72,14 @@ export interface InboxItemDetails extends Record<string, unknown> {
   emoji?: string;
   error?: string;
   identifier?: string;
+  issue_id?: string | null;
   issue_session_id?: string;
   new_assignee_id?: string;
   new_assignee_type?: string;
   original_prompt?: string;
   outcome?: AutopilotRunOutcome;
+  run_id?: string;
+  task_id?: string;
   to?: string;
   trigger?: string;
   trigger_object?: AutopilotRunTriggerObject | null;

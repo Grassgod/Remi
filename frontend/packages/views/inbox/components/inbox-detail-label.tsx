@@ -89,11 +89,51 @@ function shortDate(dateStr: string): string {
   return formatDateOnly(dateStr, { month: "short", day: "numeric" }, "en-US");
 }
 
-export function InboxDetailLabel({ item }: { item: InboxItem }) {
+export function useAutopilotOutcomePresentation(item: InboxItem) {
+  const { t } = useT("inbox");
+  const outcome = getAutopilotRunOutcome(item);
+  if (!outcome) return null;
+
+  let summary: string;
+  if (outcome.kind === "no_change") {
+    summary = t(($) => $.autopilot.no_change);
+  } else if (outcome.kind === "failed" || item.type === "autopilot_run_failed") {
+    summary = outcome.text
+      ? t(($) => $.autopilot.failed_with_summary, { summary: outcome.text })
+      : t(($) => $.autopilot.failed);
+  } else if (outcome.kind === "unknown") {
+    summary = outcome.text
+      ? t(($) => $.autopilot.completed_with_summary, { summary: outcome.text })
+      : t(($) => $.autopilot.completed);
+  } else {
+    const count = outcome.counts?.changes ?? outcome.links.length;
+    summary = count > 0
+      ? t(($) => $.autopilot.changes, { count })
+      : outcome.text ?? t(($) => $.autopilot.completed);
+  }
+
+  const actionLabel = outcome.action?.kind && outcome.action.kind !== "none"
+    ? t(($) => $.autopilot.action[outcome.action!.kind])
+    : null;
+  const duration = typeof item.details?.duration_seconds === "number"
+    ? formatAutopilotDuration(item.details.duration_seconds, t)
+    : null;
+
+  return { outcome, summary, actionLabel, duration };
+}
+
+export function InboxDetailLabel({
+  item,
+  groupedItems = [item],
+}: {
+  item: InboxItem;
+  groupedItems?: InboxItem[];
+}) {
   const { t } = useT("inbox");
   const typeLabels = useTypeLabels();
   const { getActorName } = useActorName();
   const details = item.details ?? {};
+  const autopilot = useAutopilotOutcomePresentation(item);
 
   switch (item.type) {
     case "status_changed": {
@@ -153,41 +193,43 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
     }
     case "autopilot_run_completed":
     case "autopilot_run_failed": {
-      const outcome = getAutopilotRunOutcome(item);
-      if (!outcome) {
+      if (!autopilot) {
         if (item.body) return <span>{item.body}</span>;
         return <span>{typeLabels[item.type]}</span>;
       }
-      const duration = typeof details.duration_seconds === "number"
-        ? formatAutopilotDuration(details.duration_seconds, t)
-        : null;
-      let summary: string;
-      if (outcome.kind === "no_change") {
-        summary = t(($) => $.autopilot.no_change);
-      } else if (outcome.kind === "failed") {
-        summary = outcome.text
-          ? t(($) => $.autopilot.failed_with_summary, { summary: outcome.text })
-          : t(($) => $.autopilot.failed);
-      } else if (outcome.kind === "unknown") {
-        if (item.type === "autopilot_run_failed") {
-          summary = outcome.text
-            ? t(($) => $.autopilot.failed_with_summary, { summary: outcome.text })
-            : t(($) => $.autopilot.failed);
-        } else {
-          summary = outcome.text
-            ? t(($) => $.autopilot.completed_with_summary, { summary: outcome.text })
-            : t(($) => $.autopilot.completed);
-        }
-      } else {
-        const count = outcome.counts?.changes ?? outcome.links.length;
-        summary = count > 0
-          ? t(($) => $.autopilot.changes, { count })
-          : outcome.text ?? t(($) => $.autopilot.completed);
+      if (groupedItems.length > 1) {
+        const outputRuns = groupedItems.filter((run) => {
+          const outcome = getAutopilotRunOutcome(run);
+          return outcome?.kind === "changes" || Boolean(outcome?.links.length);
+        }).length;
+        const attentionRuns = groupedItems.filter((run) => {
+          const action = getAutopilotRunOutcome(run)?.action;
+          return action != null && action.kind !== "none";
+        }).length;
+        return (
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <span>
+              {outputRuns > 0
+                ? t(($) => $.autopilot.merged_outputs, { count: outputRuns })
+                : t(($) => $.autopilot.merged_no_outputs)}
+            </span>
+            {attentionRuns > 0 && (
+              <span className="shrink-0">
+                · {t(($) => $.autopilot.merged_attention, { count: attentionRuns })}
+              </span>
+            )}
+          </span>
+        );
       }
       return (
         <span className="inline-flex min-w-0 items-center gap-1">
-          <span>{summary}</span>
-          {outcome.links.map((link) => (
+          {autopilot.actionLabel && (
+            <span className="shrink-0 font-medium text-foreground">
+              {autopilot.actionLabel} ·
+            </span>
+          )}
+          <span>{autopilot.summary}</span>
+          {autopilot.outcome.links.slice(0, 1).map((link) => (
             <a
               key={link.url}
               href={link.url}
@@ -201,7 +243,7 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
                 : t(($) => $.autopilot.merge_request, { number: link.number ?? "" })}
             </a>
           ))}
-          {duration && <span className="shrink-0">· {duration}</span>}
+          {autopilot.duration && <span className="shrink-0">· {autopilot.duration}</span>}
         </span>
       );
     }

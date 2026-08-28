@@ -79,6 +79,7 @@ describe("InboxListItem merged autopilot runs", () => {
     );
 
     expect(screen.getByText("Atlas · Remi@main · 2 runs")).toBeInTheDocument();
+    expect(screen.getByText("No structured outputs")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Expand runs" }));
 
     expect(screen.getAllByText("Atlas · Remi@main").length).toBeGreaterThan(0);

@@ -50,14 +50,17 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
   it("syncs issue and autopilot run state when tasks finish", () => {
     const store = createStore();
-    const agent = store.createAgent({ name: "Claude", provider: "claude" });
-    const runtime = store.registerRuntime({ name: "local-claude", provider: "claude" });
+    const owner = store.createWorkspaceMember({ id: "mem_issue_run_owner", name: "Issue Run Owner" });
+    const agent = store.createAgent({ name: "Claude", provider: "claude", ownerId: owner.id });
+    const runtime = store.registerRuntime({ name: "local-claude", provider: "claude", ownerId: owner.id });
     const project = store.createProject({ title: "Core" });
     const autopilot = store.createAutopilot({
       title: "Regression sweep",
       projectId: project.id,
       assigneeId: agent.id,
       issueTitleTemplate: "Sweep regressions",
+      createdByType: "member",
+      createdById: owner.id,
     });
     const run = store.runAutopilot(autopilot.id);
     expect(store.getTask(run.taskId!)?.autopilotRunId).toBe(run.id);
@@ -80,6 +83,12 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const activityTypes = store.listIssueActivity(run.issueId!).map((entry) => entry.type);
     expect(activityTypes).toContain("task_completed");
     expect(activityTypes.at(-1)).toBe("comment_created");
+    const notification = store.listInboxItems(owner.id)
+      .find((item) => item.type === "autopilot_run_completed");
+    expect(notification?.details).toMatchObject({
+      issue_id: run.issueId,
+      issue_session_id: run.issueSessionId,
+    });
   });
 
   it("records completed and failed run outcomes for member creators and agent owners", () => {
@@ -138,6 +147,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       triggered_at: completedRun.triggeredAt,
       duration_seconds: expect.any(Number),
       issue_id: null,
+      issue_session_id: null,
       trigger_object: {
         event_type: "schedule",
         repository_id: null,
@@ -167,6 +177,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       triggered_at: failedRun.triggeredAt,
       duration_seconds: expect.any(Number),
       issue_id: null,
+      issue_session_id: null,
       trigger_object: null,
       outcome: {
         kind: "failed",

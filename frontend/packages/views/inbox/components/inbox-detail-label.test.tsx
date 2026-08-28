@@ -41,7 +41,11 @@ function autopilotItem(overrides: Partial<InboxItem> = {}): InboxItem {
   };
 }
 
-function renderLabel(value: InboxItem, locale: "en" | "zh-Hans" = "en") {
+function renderLabel(
+  value: InboxItem,
+  locale: "en" | "zh-Hans" = "en",
+  groupedItems?: InboxItem[],
+) {
   return render(
     <I18nProvider
       locale={locale}
@@ -50,7 +54,7 @@ function renderLabel(value: InboxItem, locale: "en" | "zh-Hans" = "en") {
         "zh-Hans": { common: zhCommon, inbox: zhInbox },
       }}
     >
-      <InboxDetailLabel item={value} />
+      <InboxDetailLabel item={value} groupedItems={groupedItems} />
     </I18nProvider>,
   );
 }
@@ -76,7 +80,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
     expect(screen.queryByText(/Completed in/)).not.toBeInTheDocument();
   });
 
-  it("renders change counts and clickable PR/MR links", () => {
+  it("renders change counts and the most important output link", () => {
     renderLabel(autopilotItem({
       details: {
         duration_seconds: 9,
@@ -99,10 +103,7 @@ describe("InboxDetailLabel autopilot outcomes", () => {
       "href",
       "https://github.com/Grassgod/Remi/pull/80",
     );
-    expect(screen.getByRole("link", { name: "MR #12" })).toHaveAttribute(
-      "href",
-      "https://code.byted.org/acme/docs/merge_requests/12",
-    );
+    expect(screen.queryByRole("link", { name: "MR #12" })).not.toBeInTheDocument();
   });
 
   it("localizes the failure wrapper while preserving the cleaned agent summary", () => {
@@ -121,6 +122,41 @@ describe("InboxDetailLabel autopilot outcomes", () => {
     }), "zh-Hans");
 
     expect(screen.getByText("失败：Dependency service unavailable.")).toBeInTheDocument();
+    expect(screen.getByText(/需要排查/)).toBeInTheDocument();
+  });
+
+  it("uses one consistent run-with-output count for a merged row", () => {
+    const changed = autopilotItem({
+      id: "changed",
+      details: {
+        outcome: {
+          kind: "changes",
+          text: "Published.",
+          links: [{ kind: "pull_request", url: "https://github.com/Grassgod/Remi/pull/80", number: 80 }],
+          counts: { changes: 1 },
+          risks: [],
+          action: { kind: "review", text: null },
+        },
+      },
+    });
+    const unchanged = autopilotItem({
+      id: "unchanged",
+      details: {
+        outcome: {
+          kind: "no_change",
+          text: null,
+          links: [],
+          counts: null,
+          risks: [],
+          action: { kind: "none", text: null },
+        },
+      },
+    });
+
+    renderLabel(changed, "zh-Hans", [changed, unchanged]);
+    expect(screen.getByText("1 次包含产出")).toBeInTheDocument();
+    expect(screen.getByText(/1 次需要处理/)).toBeInTheDocument();
+    expect(screen.queryByText(/个改动/)).not.toBeInTheDocument();
   });
 
   it("renders a plain-text completed summary exactly once", () => {

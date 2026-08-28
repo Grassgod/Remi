@@ -125,7 +125,7 @@ export function InboxListItem({
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <p className={`min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs ${read ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
-              <InboxDetailLabel item={item} />
+              <InboxDetailLabel item={item} groupedItems={groupedItems} />
             </p>
             <span className={`shrink-0 text-xs ${read ? "text-muted-foreground/60" : "text-muted-foreground"}`}>
               {timeAgo(item.created_at)}

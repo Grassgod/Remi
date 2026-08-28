@@ -136,12 +136,18 @@ export function autopilotDurationParts(value: number): AutopilotDurationParts {
   };
 }
 
-function getAutopilotTriggerObjectLabel(
+export function getAutopilotTriggerObject(
+  item: InboxItem,
+): AutopilotRunTriggerObject | null {
+  const value = item.details?.trigger_object;
+  return isAutopilotTriggerObject(value) ? value : null;
+}
+
+export function getAutopilotTriggerObjectLabel(
   item: InboxItem,
   localizer?: InboxDisplayLocalizer,
 ): string | null {
-  const value = item.details?.trigger_object;
-  const trigger = isAutopilotTriggerObject(value) ? value : null;
+  const trigger = getAutopilotTriggerObject(item);
   if (trigger?.repository_name) {
     if (trigger.change_number != null) return `${trigger.repository_name} #${trigger.change_number}`;
     return trigger.target_branch

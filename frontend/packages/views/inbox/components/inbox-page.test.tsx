@@ -123,6 +123,25 @@ vi.mock("./inbox-list-item", () => ({
   useTimeAgo: () => () => "just now",
 }));
 
+vi.mock("./autopilot-run-report", () => ({
+  AutopilotRunReport: ({
+    item,
+    groupedItems,
+    onSelectItem,
+  }: {
+    item: { id: string };
+    groupedItems?: Array<{ id: string }>;
+    onSelectItem?: (item: { id: string }) => void;
+  }) => (
+    <div data-testid="autopilot-run-report">
+      {item.id}
+      {groupedItems && groupedItems.length > 1 && (
+        <button type="button" onClick={() => onSelectItem?.(groupedItems[1]!)}>Select child run</button>
+      )}
+    </div>
+  ),
+}));
+
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
@@ -430,6 +449,108 @@ describe("InboxPage", () => {
     expect(
       replace.mock.calls.every(([path]) => String(path).startsWith("/test/inbox")),
     ).toBe(true);
+  });
+
+  it("opens a structured autopilot report before IssueDetail even when the row has an issue", async () => {
+    listInbox.mockResolvedValue([{
+      id: "run-inbox-1",
+      workspace_id: "ws-1",
+      recipient_type: "member",
+      recipient_id: "member-1",
+      actor_type: "system",
+      actor_id: null,
+      type: "autopilot_run_completed",
+      severity: "info",
+      issue_id: "issue-1",
+      issue_status: null,
+      title: "Atlas",
+      body: "Completed in 2m",
+      details: {
+        autopilot_id: "autopilot-1",
+        autopilot_title: "Atlas",
+        run_id: "run-1",
+        outcome: {
+          kind: "no_change",
+          text: null,
+          links: [],
+          counts: null,
+          risks: [],
+          action: { kind: "none", text: null },
+        },
+      },
+      read: true,
+      archived: false,
+      created_at: "2026-08-28T05:28:37.614Z",
+    }]);
+
+    renderInbox();
+    fireEvent.click(await screen.findByTestId("inbox-row"));
+
+    expect(screen.getByTestId("autopilot-run-report")).toHaveTextContent("run-inbox-1");
+    expect(screen.queryByTestId("issue-detail")).not.toBeInTheDocument();
+  });
+
+  it("uses single-run title and archive semantics after opening a child from a grouped report", async () => {
+    const details = (runId: string, branch: string) => ({
+      autopilot_id: "autopilot-1",
+      autopilot_title: "Atlas",
+      run_id: runId,
+      trigger_object: {
+        event_type: "default_branch.updated",
+        repository_id: "repo-1",
+        repository_name: "Remi",
+        change_number: null,
+        change_title: null,
+        target_branch: branch,
+        source_revision: null,
+        occurred_at: "2026-08-28T05:28:37.614Z",
+        wiki_build: true,
+      },
+      outcome: {
+        kind: "no_change",
+        text: null,
+        links: [],
+        counts: null,
+        risks: [],
+        action: { kind: "none", text: null },
+      },
+    });
+    listInbox.mockResolvedValue([
+      {
+        id: "run-latest",
+        type: "autopilot_run_completed",
+        issue_id: "issue-1",
+        title: "Latest",
+        severity: "info",
+        details: details("run-1", "main"),
+        read: true,
+        archived: false,
+        created_at: "2026-08-28T10:00:00.000Z",
+      },
+      {
+        id: "run-earlier",
+        type: "autopilot_run_completed",
+        issue_id: "issue-1",
+        title: "Earlier",
+        severity: "info",
+        details: details("run-2", "release"),
+        read: true,
+        archived: false,
+        created_at: "2026-08-28T09:00:00.000Z",
+      },
+    ]);
+
+    renderInbox();
+    fireEvent.click(await screen.findByRole("button", { name: "run-latest (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select child run" }));
+
+    expect(screen.getByTestId("autopilot-run-report")).toHaveTextContent("run-earlier");
+    expect(screen.getByRole("heading", { name: "Atlas · Remi@release" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(archiveItems).toHaveBeenLastCalledWith(
+      ["run-earlier"],
+      expect.objectContaining({ onError: expect.any(Function) }),
+    );
   });
 
   it("prefers a deep-linked Session over the notification Session", async () => {
