@@ -11,33 +11,6 @@ import type {
 // to {} so consumers never need to nil-guard `issue.metadata`.
 const IssueMetadataSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({});
 
-function normalizeIssueWireShape(value: unknown): unknown {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
-
-  const raw: Record<string, unknown> = { ...value };
-  if ("workspace_id" in raw || typeof raw.workspaceId !== "string") return value;
-
-  return {
-    ...raw,
-    workspace_id: raw.workspaceId,
-    identifier: raw.key,
-    assignee_type: raw.assigneeType ?? null,
-    assignee_id: raw.assigneeId ?? null,
-    creator_type: raw.creatorType ?? "member",
-    creator_id: raw.createdBy ?? "local",
-    parent_issue_id: raw.parentIssueId ?? null,
-    issue_kind: raw.issueKind,
-    source_issue_id: raw.sourceIssueId ?? null,
-    project_id: raw.projectId ?? null,
-    start_date: raw.startDate ?? null,
-    due_date: raw.dueDate ?? null,
-    completed_at: raw.completedAt ?? null,
-    archived_at: raw.archivedAt ?? null,
-    created_at: raw.createdAt,
-    updated_at: raw.updatedAt,
-  };
-}
-
 export const IssueSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
@@ -66,8 +39,6 @@ export const IssueSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
 }).loose();
-
-const ChildIssueSchema = z.preprocess(normalizeIssueWireShape, IssueSchema);
 
 export const ListIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
@@ -106,7 +77,7 @@ const SubscriberSchema = z.object({
 export const SubscribersListSchema = z.array(SubscriberSchema);
 
 export const ChildIssuesResponseSchema = z.object({
-  issues: z.array(ChildIssueSchema).default([]),
+  issues: z.array(IssueSchema).default([]),
 }).loose();
 
 const IssueWorkspaceRepoSchema = z.object({

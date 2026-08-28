@@ -758,8 +758,31 @@ describe("Multiremi API — issue endpoints", () => {
     expect(detailBody.children.map((item: any) => item.id)).toEqual([child.id]);
     expect(detailBody.childProgress).toEqual({ parentIssueId: parent.id, total: 1, done: 1 });
 
-    const children = await app.request(`/api/issues/${parent.id}/children`);
-    expect((await children.json()).total).toBe(1);
+    const compatChildren = await app.request(`/api/issues/${parent.id}/children`);
+    const compatChildrenBody = await compatChildren.json();
+    expect(compatChildrenBody.total).toBe(1);
+    expect(compatChildrenBody.issues[0]).toMatchObject({
+      id: child.id,
+      workspace_id: "local",
+      identifier: child.key,
+      parent_issue_id: parent.id,
+      created_at: child.createdAt,
+    });
+    expect(compatChildrenBody.issues[0].workspaceId).toBeUndefined();
+    expect(compatChildrenBody.issues[0].key).toBeUndefined();
+    expect(compatChildrenBody.issues[0].labels).toBeUndefined();
+
+    const nativeChildren = await app.request(`/api/multiremi/issues/${parent.id}/children`);
+    const nativeChildrenBody = await nativeChildren.json();
+    expect(nativeChildrenBody.issues[0]).toMatchObject({
+      id: child.id,
+      workspaceId: "local",
+      key: child.key,
+      parentIssueId: parent.id,
+      createdAt: child.createdAt,
+    });
+    expect(nativeChildrenBody.issues[0].workspace_id).toBeUndefined();
+    expect(nativeChildrenBody.issues[0].identifier).toBeUndefined();
 
     const progress = await app.request("/api/issues/child-progress?workspaceId=local");
     expect((await progress.json()).progress).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
@@ -777,7 +800,15 @@ describe("Multiremi API — issue endpoints", () => {
     const snakeBatchChildren = await app.request(`/api/issues/children?parent_ids=${remoteParent.id}`);
     const snakeBatchChildrenBody = await snakeBatchChildren.json();
     expect(snakeBatchChildrenBody.total).toBe(1);
-    expect(snakeBatchChildrenBody.issues[0].id).toBe(remoteChild.id);
+    expect(snakeBatchChildrenBody.issues[0]).toMatchObject({
+      id: remoteChild.id,
+      workspace_id: "remote",
+      identifier: remoteChild.key,
+      parent_issue_id: remoteParent.id,
+      created_at: remoteChild.createdAt,
+    });
+    expect(snakeBatchChildrenBody.issues[0].workspaceId).toBeUndefined();
+    expect(snakeBatchChildrenBody.issues[0].key).toBeUndefined();
   });
 
   it("serves issue dependency endpoints", async () => {
