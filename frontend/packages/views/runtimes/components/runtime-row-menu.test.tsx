@@ -38,10 +38,16 @@ vi.mock("@multiremi/core/runtimes/mutations", () => ({
 }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 
-vi.mock("@multiremi/core/runtimes", () => ({
-  deriveRuntimeHealth: () => "online",
-  runtimeUsageOptions: () => ({ kind: "usage" }),
-}));
+vi.mock("@multiremi/core/runtimes", async () => {
+  const actual =
+    await vi.importActual<typeof import("@multiremi/core/runtimes")>(
+      "@multiremi/core/runtimes",
+    );
+  return {
+    ...actual,
+    runtimeUsageOptions: () => ({ kind: "usage" }),
+  };
+});
 
 vi.mock("@multiremi/core/agents", () => ({
   deriveWorkload: () => "idle",
@@ -95,7 +101,7 @@ function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
     metadata: {},
     owner_id: "user-1",
     visibility: "private",
-    last_seen_at: null,
+    last_seen_at: new Date().toISOString(),
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -195,6 +201,19 @@ describe("runtime list row menu", () => {
   it("renders the kebab menu for an offline local runtime", () => {
     renderActionsCell(
       makeRow(makeRuntime({ runtime_mode: "local", status: "offline" })),
+    );
+    expect(screen.getByLabelText("Row actions")).toBeInTheDocument();
+  });
+
+  it("renders the kebab menu for a stale local runtime whose raw status is online", () => {
+    renderActionsCell(
+      makeRow(
+        makeRuntime({
+          runtime_mode: "local",
+          status: "online",
+          last_seen_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+        }),
+      ),
     );
     expect(screen.getByLabelText("Row actions")).toBeInTheDocument();
   });

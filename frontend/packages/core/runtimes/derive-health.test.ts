@@ -26,10 +26,22 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 }
 
 describe("deriveRuntimeHealth", () => {
-  it("returns online when status is online (regardless of last_seen_at)", () => {
+  it("returns online when status is online and the heartbeat is fresh", () => {
     expect(
-      deriveRuntimeHealth(makeRuntime({ status: "online", last_seen_at: null }), FIXED_NOW),
+      deriveRuntimeHealth(makeRuntime({ status: "online" }), FIXED_NOW),
     ).toBe("online");
+  });
+
+  it("does not return online when status is online but the heartbeat is stale", () => {
+    expect(
+      deriveRuntimeHealth(
+        makeRuntime({
+          status: "online",
+          last_seen_at: new Date(FIXED_NOW - 10 * 60_000).toISOString(),
+        }),
+        FIXED_NOW,
+      ),
+    ).toBe("offline");
   });
 
   it("returns recently_lost when offline less than 5 minutes", () => {
@@ -68,17 +80,35 @@ describe("deriveRuntimeHealth", () => {
     ).toBe("about_to_gc");
   });
 
-  it("treats null last_seen_at as long-offline (about_to_gc)", () => {
-    // last_seen_at = null means lastSeen = 0 (epoch), so offlineFor is huge.
+  it("treats a missing last_seen_at as offline", () => {
     expect(
       deriveRuntimeHealth(
-        makeRuntime({ status: "offline", last_seen_at: null }),
+        makeRuntime({ status: "online", last_seen_at: null }),
         FIXED_NOW,
       ),
-    ).toBe("about_to_gc");
+    ).toBe("offline");
   });
 
-  it("respects the 5-minute boundary (just inside → recently_lost)", () => {
+  it.each([
+    { ageMs: 5 * 60_000 - 1_000, expected: "online" },
+    { ageMs: 5 * 60_000, expected: "online" },
+    { ageMs: 5 * 60_000 + 1_000, expected: "offline" },
+  ] as const)(
+    "returns $expected for an online status with a heartbeat age of $ageMs ms",
+    ({ ageMs, expected }) => {
+      expect(
+        deriveRuntimeHealth(
+          makeRuntime({
+            status: "online",
+            last_seen_at: new Date(FIXED_NOW - ageMs).toISOString(),
+          }),
+          FIXED_NOW,
+        ),
+      ).toBe(expected);
+    },
+  );
+
+  it("returns recently_lost for an offline status with a heartbeat just inside the threshold", () => {
     expect(
       deriveRuntimeHealth(
         makeRuntime({
@@ -88,17 +118,5 @@ describe("deriveRuntimeHealth", () => {
         FIXED_NOW,
       ),
     ).toBe("recently_lost");
-  });
-
-  it("respects the 5-minute boundary (just outside → offline)", () => {
-    expect(
-      deriveRuntimeHealth(
-        makeRuntime({
-          status: "offline",
-          last_seen_at: new Date(FIXED_NOW - (5 * 60_000 + 1_000)).toISOString(),
-        }),
-        FIXED_NOW,
-      ),
-    ).toBe("offline");
   });
 });

@@ -6,7 +6,12 @@ import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
-import { RuntimesRepo } from "@multiremi/store/repos/runtimes-repo.js";
+import { RUNTIME_HEARTBEAT_STALE_MS as CONTRACT_RUNTIME_HEARTBEAT_STALE_MS } from "@multiremi/contracts/runtime-health";
+import {
+  isRuntimeEffectivelyOnline,
+  RUNTIME_HEARTBEAT_STALE_MS as REPO_RUNTIME_HEARTBEAT_STALE_MS,
+  RuntimesRepo,
+} from "@multiremi/store/repos/runtimes-repo.js";
 
 let db: Database | null = null;
 let store: MultiremiStore | null = null;
@@ -28,6 +33,36 @@ afterEach(() => {
 });
 
 describe("RuntimesRepo", () => {
+  it("uses the shared heartbeat threshold for effective liveness", () => {
+    const now = new Date("2026-08-28T04:00:00Z").getTime();
+
+    expect(REPO_RUNTIME_HEARTBEAT_STALE_MS).toBe(
+      CONTRACT_RUNTIME_HEARTBEAT_STALE_MS,
+    );
+    expect(
+      isRuntimeEffectivelyOnline(
+        {
+          status: "online",
+          lastHeartbeatAt: new Date(
+            now - CONTRACT_RUNTIME_HEARTBEAT_STALE_MS,
+          ).toISOString(),
+        },
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      isRuntimeEffectivelyOnline(
+        {
+          status: "online",
+          lastHeartbeatAt: new Date(
+            now - CONTRACT_RUNTIME_HEARTBEAT_STALE_MS - 1,
+          ).toISOString(),
+        },
+        now,
+      ),
+    ).toBe(false);
+  });
+
   it("registers a runtime with models and reads it back", () => {
     const repo = createRepo();
 

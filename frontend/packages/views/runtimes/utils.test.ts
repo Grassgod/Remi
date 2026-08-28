@@ -30,6 +30,8 @@ const zeroUsage = {
 };
 
 describe("isSelfHealingRuntime", () => {
+  const NOW = new Date("2026-01-01T00:10:00Z").getTime();
+
   function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
     return {
       id: "rt-1",
@@ -44,7 +46,7 @@ describe("isSelfHealingRuntime", () => {
       metadata: {},
       owner_id: null,
       visibility: "private",
-      last_seen_at: null,
+      last_seen_at: new Date(NOW - 10_000).toISOString(),
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
       ...overrides,
@@ -55,6 +57,7 @@ describe("isSelfHealingRuntime", () => {
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "local", status: "online" }),
+        NOW,
       ),
     ).toBe(true);
   });
@@ -65,6 +68,7 @@ describe("isSelfHealingRuntime", () => {
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "local", status: "offline" }),
+        NOW,
       ),
     ).toBe(false);
   });
@@ -74,11 +78,26 @@ describe("isSelfHealingRuntime", () => {
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "cloud", status: "online" }),
+        NOW,
       ),
     ).toBe(false);
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "cloud", status: "offline" }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("treats a stale online local runtime as safe to delete", () => {
+    expect(
+      isSelfHealingRuntime(
+        makeRuntime({
+          runtime_mode: "local",
+          status: "online",
+          last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+        }),
+        NOW,
       ),
     ).toBe(false);
   });

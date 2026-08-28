@@ -8,6 +8,11 @@
 // `claim` and the timeout sweep are the shared template.
 import { createId, nowIso } from "@multiremi/ids.js";
 import {
+  isRuntimeHeartbeatFresh,
+  RUNTIME_HEARTBEAT_STALE_MS,
+} from "@multiremi/contracts/runtime-health";
+export { RUNTIME_HEARTBEAT_STALE_MS } from "@multiremi/contracts/runtime-health";
+import {
   cleanOptionalString,
   daemonRuntimeId,
   hasAnyField,
@@ -99,7 +104,6 @@ export type ArchiveAgentsAndDeleteRuntimeResult =
   | { status: "plan_changed"; activeAgents: MultiremiAgent[] }
   | { status: "daemon_last_runtime"; daemonId: string };
 
-export const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS = 30 * 1000;
 const RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_UPDATE_PENDING_TIMEOUT_MS = 120 * 1000;
@@ -1921,9 +1925,10 @@ export function isRuntimeEffectivelyOnline(
   runtime: Pick<MultiremiRuntime, "status" | "lastHeartbeatAt">,
   nowMs = Date.now(),
 ): boolean {
-  if (runtime.status === "offline" || !runtime.lastHeartbeatAt) return false;
-  const heartbeat = Date.parse(runtime.lastHeartbeatAt);
-  return Number.isFinite(heartbeat) && nowMs - heartbeat <= RUNTIME_HEARTBEAT_STALE_MS;
+  return (
+    runtime.status !== "offline" &&
+    isRuntimeHeartbeatFresh(runtime.lastHeartbeatAt, nowMs)
+  );
 }
 
 export function withRuntimeLiveness(runtime: MultiremiRuntime): MultiremiRuntime {

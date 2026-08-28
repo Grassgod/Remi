@@ -2,9 +2,32 @@ import { describe, expect, it } from "vitest";
 import type { SshMeshOverview } from "./types";
 import {
   getSshMeshRefreshInterval,
+  RUNTIME_HEARTBEAT_REFRESH_MIN_INTERVAL_MS,
+  RUNTIME_LIST_REFRESH_MS,
+  runtimeListOptions,
+  shouldRefreshOnHeartbeat,
   SSH_MESH_ACTIVE_REFRESH_MS,
   SSH_MESH_IDLE_REFRESH_MS,
 } from "./queries";
+
+describe("runtime list refresh", () => {
+  it("uses a 30-second visible-page refresh interval", () => {
+    expect(RUNTIME_LIST_REFRESH_MS).toBe(30_000);
+    expect(runtimeListOptions("ws-1")).toMatchObject({
+      staleTime: 10_000,
+      refetchInterval: RUNTIME_LIST_REFRESH_MS,
+      refetchIntervalInBackground: false,
+    });
+  });
+
+  it("throttles heartbeat-triggered refreshes", () => {
+    expect(RUNTIME_HEARTBEAT_REFRESH_MIN_INTERVAL_MS).toBe(15_000);
+    expect(shouldRefreshOnHeartbeat(null, 100_000)).toBe(true);
+    expect(shouldRefreshOnHeartbeat(100_000, 114_999)).toBe(false);
+    expect(shouldRefreshOnHeartbeat(100_000, 115_000)).toBe(true);
+    expect(shouldRefreshOnHeartbeat(100_000, 101_000, 1_000)).toBe(true);
+  });
+});
 
 function overview(
   overrides: Partial<SshMeshOverview> = {},

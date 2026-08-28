@@ -105,6 +105,75 @@ describe("runtime machine grouping", () => {
     });
   });
 
+  it("excludes a machine whose runtimes all have stale heartbeats from online summaries", () => {
+    const staleHeartbeat = new Date(NOW - 10 * 60_000).toISOString();
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-claude",
+          provider: "claude",
+          status: "online",
+          last_seen_at: staleHeartbeat,
+        }),
+        makeRuntime({
+          id: "rt-codex",
+          provider: "codex",
+          status: "online",
+          last_seen_at: staleHeartbeat,
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machines).toHaveLength(1);
+    expect(machines[0]).toMatchObject({
+      health: "offline",
+      onlineCount: 0,
+      issueCount: 2,
+    });
+    expect(filterRuntimeMachines(machines, "", "online")).toEqual([]);
+    expect(runtimeMachineCounts(machines)).toEqual({
+      all: 1,
+      online: 0,
+      issues: 1,
+    });
+  });
+
+  it("returns the same machine to online after its heartbeats recover", () => {
+    const staleRuntimes = [
+      makeRuntime({
+        id: "rt-claude",
+        provider: "claude",
+        last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+      }),
+      makeRuntime({
+        id: "rt-codex",
+        provider: "codex",
+        last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+      }),
+    ];
+    const [staleMachine] = buildRuntimeMachines(staleRuntimes, { now: NOW });
+    const [recoveredMachine] = buildRuntimeMachines(
+      staleRuntimes.map((runtime) => ({
+        ...runtime,
+        last_seen_at: new Date(NOW).toISOString(),
+      })),
+      { now: NOW },
+    );
+
+    expect(staleMachine).toMatchObject({
+      id: "local:daemon-1",
+      health: "offline",
+      onlineCount: 0,
+    });
+    expect(recoveredMachine).toMatchObject({
+      id: "local:daemon-1",
+      health: "online",
+      onlineCount: 2,
+      issueCount: 0,
+    });
+  });
+
   it("keeps reported CLI versions visible while providers reconcile", () => {
     const [machine] = buildRuntimeMachines(
       [

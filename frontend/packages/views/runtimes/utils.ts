@@ -3,6 +3,7 @@ import type {
   RuntimeUsage,
   RuntimeUsageByAgent,
 } from "@multiremi/core/types";
+import { deriveRuntimeHealth } from "@multiremi/core/runtimes";
 import { getCustomPricing } from "@multiremi/core/runtimes/custom-pricing-store";
 
 // The compact token formatter lives with the other cross-view formatters.
@@ -14,8 +15,14 @@ export { formatTokens } from "../common/format";
 // delete (daemon self-heal, #2404), so deleting an online local runtime from
 // the UI has no lasting effect. Both the detail page and the list row menu
 // gate their Delete affordance on this same predicate.
-export function isSelfHealingRuntime(runtime: AgentRuntime): boolean {
-  return runtime.runtime_mode === "local" && runtime.status === "online";
+export function isSelfHealingRuntime(
+  runtime: AgentRuntime,
+  now = Date.now(),
+): boolean {
+  return (
+    runtime.runtime_mode === "local" &&
+    deriveRuntimeHealth(runtime, now) === "online"
+  );
 }
 
 // ---------------------------------------------------------------------------
