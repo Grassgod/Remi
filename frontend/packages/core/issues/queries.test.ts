@@ -289,7 +289,7 @@ describe("findCachedIssue", () => {
   it("ignores caches under the same prefix that are not bucketed lists", () => {
     // `myAll` also covers assignee-group queries, which cache a
     // GroupedIssuesResponse — reading those must not throw.
-    qc.setQueryData(issueKeys.myAssigneeGroups(WS_ID, {}), { groups: [] });
+    qc.setQueryData(issueKeys.myAssigneeGroups(WS_ID, "all", {}), { groups: [] });
     seed(issueKeys.listSorted(WS_ID), [makeIssue(3)]);
 
     expect(findCachedIssue(qc, WS_ID, "issue-3")?.identifier).toBe("MUL-3");
