@@ -193,21 +193,72 @@ const LOCAL_TIME_ID_RE = /\b(local(?:-contact|-lark)?)-\d{13}\b/g;
 const TIME_KEY_RE = /(^|_)(duration|elapsed|uptime|latency)(_ms|_seconds)?$/i;
 const MS_KEY_RE = /_ms$/i;
 
-const PATH_REPLACEMENTS: Array<[string, string]> = [
-  [UPLOAD_DIR, "<uploads>"],
-  [SNAPSHOT_TMP, "<tmp>"],
-  [REPO_ROOT, "<repo>"],
-  [tmpdir(), "<tmp>"],
-  [homedir(), "<home>"],
-];
-
 export interface SnapshotMachineIdentity {
   hostname?: string;
   username?: string;
+  /** Overrides `homedir()`; lets a test pin a short `$HOME` such as `/root`. */
+  homedir?: string;
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Characters that can continue a path segment, so cannot be a token boundary. */
+const PATH_TOKEN_CHARS = "A-Za-z0-9._-";
+
+interface PathRule {
+  needle: string;
+  token: string;
+  pattern: RegExp | null;
+}
+
+/**
+ * A machine-path prefix must match a whole path TOKEN, never a bare substring.
+ *
+ * WHY (MUL-181): this used to be `out.split(needle).join(token)`. Under a root
+ * identity `homedir()` is `/root`, which is a substring of the literal URL
+ * ".../skills/debugging/root-cause-tracing" served by an agent template — the
+ * naive replace rewrote it to ".../debugging<home>-cause-tracing", so the byte
+ * comparison in `api-route-snapshot.test.ts` failed 100% of the time on any
+ * container running as root (CI runs non-root, so the gate stayed green there)
+ * and pointed the reader at the regenerate command, which would commit the
+ * corrupted golden. Short `$TMPDIR` values have the same failure mode.
+ *
+ * Left boundary: start of string, or a character that cannot continue a path
+ * segment. `/` qualifies, so `file:///root/x` still scrubs while
+ * `https://host/root/x` does not — a URL authority always ends in a segment
+ * character, so the `/` opening its path is not a boundary.
+ * Right boundary: end of string, or likewise a non-segment character. `/root/x`
+ * and `'/root'` scrub; `/root-cause` and `/root.bak` do not.
+ */
+function pathRule(needle: string, token: string): PathRule {
+  // `$HOME=/root/` would otherwise put the boundary after the separator.
+  const trimmed = needle.replace(/[/\\]+$/, "");
+  // A bare `/` (or `C:\`) as $HOME would rewrite every separator in the file.
+  const pattern =
+    trimmed.length < 2
+      ? null
+      : new RegExp(`(?<![${PATH_TOKEN_CHARS}])${escapeRegExp(trimmed)}(?![${PATH_TOKEN_CHARS}])`, "g");
+  return { needle: trimmed, token, pattern };
+}
+
+/**
+ * Ordered longest-match-first: an entry nested under an earlier one (the upload
+ * dir under the snapshot tmp dir, `$TMPDIR` under both, `$HOME` under the repo
+ * root) only ever sees what the earlier entries left behind.
+ */
+const FIXED_PATH_RULES: PathRule[] = [
+  pathRule(UPLOAD_DIR, "<uploads>"),
+  pathRule(SNAPSHOT_TMP, "<tmp>"),
+  pathRule(REPO_ROOT, "<repo>"),
+  pathRule(tmpdir(), "<tmp>"),
+];
+const DEFAULT_PATH_RULES: PathRule[] = [...FIXED_PATH_RULES, pathRule(homedir(), "<home>")];
+
+function pathRules(identity: SnapshotMachineIdentity): PathRule[] {
+  if (identity.homedir === undefined) return DEFAULT_PATH_RULES;
+  return [...FIXED_PATH_RULES, pathRule(identity.homedir, "<home>")];
 }
 
 function scrubPathIdentity(
@@ -232,8 +283,9 @@ export function scrubString(value: string, identity: SnapshotMachineIdentity = {
   let out = value
     .replace(ISO_RE, "<timestamp>")
     .replace(LOCAL_TIME_ID_RE, "$1-<timestamp>");
-  for (const [needle, replacement] of PATH_REPLACEMENTS) {
-    if (needle && out.includes(needle)) out = out.split(needle).join(replacement);
+  for (const { needle, token, pattern } of pathRules(identity)) {
+    // `includes` is the cheap gate; the regex only runs on a candidate hit.
+    if (pattern && out.includes(needle)) out = out.replace(pattern, token);
   }
   out = scrubPathIdentity(out, identity);
   if (VERSION && out.includes(VERSION)) out = out.split(VERSION).join("<version>");

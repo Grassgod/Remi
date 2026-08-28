@@ -48,6 +48,48 @@ describe("api route golden snapshot", () => {
     );
   });
 
+  // MUL-181: `$HOME` used to be replaced as a bare substring, so a root
+  // identity ($HOME=/root) rewrote the literal URL ".../debugging/root-cause-tracing"
+  // into ".../debugging<home>-cause-tracing" and this suite failed 100% of the
+  // time in any container running as root.
+  it("scrubs $HOME only at path-token boundaries", () => {
+    const identity = { hostname: "unknown", username: "unknown", homedir: "/root" };
+    const scrub = (value: string) => scrubString(value, identity);
+
+    // real machine paths still get scrubbed
+    expect(scrub("/root")).toBe("<home>");
+    expect(scrub("/root/.remi/multiremi/uploads/a.txt")).toBe("<home>/.remi/multiremi/uploads/a.txt");
+    expect(scrub("EACCES: permission denied, mkdir '/root/.remi'")).toBe(
+      "EACCES: permission denied, mkdir '<home>/.remi'",
+    );
+    expect(scrub("PATH=/root/bin:/usr/bin")).toBe("PATH=<home>/bin:/usr/bin");
+    expect(scrub("file:///root/x")).toBe("file://<home>/x");
+
+    // literals that merely start with the same characters must survive
+    expect(scrub("https://github.com/obra/superpowers-skills/tree/main/skills/debugging/root-cause-tracing")).toBe(
+      "https://github.com/obra/superpowers-skills/tree/main/skills/debugging/root-cause-tracing",
+    );
+    expect(scrub("/root-cause-tracing")).toBe("/root-cause-tracing");
+    expect(scrub("/root.bak/x")).toBe("/root.bak/x");
+    expect(scrub("/rootfs/etc")).toBe("/rootfs/etc");
+    expect(scrub("https://example.invalid/root/page")).toBe("https://example.invalid/root/page");
+    // a sub-path named after the home dir is a different directory
+    expect(scrub("/root/root")).toBe("<home>/root");
+
+    // a degenerate $HOME must not rewrite every separator in the document
+    expect(scrubString("/root/a /b", { ...identity, homedir: "/" })).toBe("/root/a /b");
+    // a trailing separator must not move the boundary past it
+    expect(scrubString("/root/.remi", { ...identity, homedir: "/root/" })).toBe("<home>/.remi");
+  });
+
+  // The golden is captured on one machine and byte-compared on another, so it
+  // must contain nothing the scrubber would still rewrite — including under the
+  // short `$HOME` values (`/root`) that only appear in containers.
+  it("golden is a fixed point of the scrubber under a root identity", () => {
+    const identity = { hostname: "unknown-host.invalid", username: "unknown-user", homedir: "/root" };
+    expect(scrubString(goldenText, identity)).toBe(goldenText);
+  });
+
   it("runs green and matches the golden route inventory", async () => {
     const snapshot = await captureApiSnapshot();
 
