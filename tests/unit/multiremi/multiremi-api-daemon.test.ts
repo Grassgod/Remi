@@ -10,7 +10,17 @@ afterEach(resetMultiremiTestEnv);
 describe("Multiremi API — daemon endpoints", () => {
   it("reports an Issue code workspace and exposes it to the Issue sidebar", async () => {
     const store = createStore();
-    const runtime = store.registerRuntime({ id: "rt_workspace_api", name: "codex (devbox)", provider: "codex" });
+    const runtime = store.registerRuntime({
+      id: "rt_workspace_api",
+      name: "codex",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "daemon-workspace-api",
+      runtimeMode: "local",
+      deviceInfo: "devbox · Linux (x86_64)",
+    });
+    store.updateDaemonDisplayName("remote", "daemon-workspace-api", "Wrong workspace", "local");
+    store.updateDaemonDisplayName("local", "daemon-workspace-api", "Build workstation", "local");
     const agent = store.createAgent({ name: "Workspace Codex", provider: "codex" });
     const issue = store.createIssue({ title: "Show workspace", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
@@ -44,8 +54,13 @@ describe("Multiremi API — daemon endpoints", () => {
       workspace: {
         issue_id: issue.id,
         runtime_id: runtime.id,
-        runtime_name: "codex (devbox)",
+        runtime_name: "codex",
         runtime_status: "online",
+        runtime_provider: "codex",
+        runtime_mode: "local",
+        runtime_device_info: "devbox · Linux (x86_64)",
+        runtime_daemon_id: "daemon-workspace-api",
+        runtime_machine_name: "Build workstation",
         root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
         branch_name: `agent/${issue.key}`,
         status: "in_use",

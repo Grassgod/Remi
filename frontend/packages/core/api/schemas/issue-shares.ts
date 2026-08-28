@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IssueSchema } from "./issues";
+import { IssueSchema, IssueWorkspaceSchema } from "./issues";
 import { ProjectSchema } from "./projects";
 import { TimelineEntriesSchema } from "./timeline";
 
@@ -106,7 +106,7 @@ export const SharedIssueBundleSchema = z.object({
   sessions: z.array(SharedSessionSchema).default([]),
   session_results: z.array(SessionResultSchema).default([]),
   tasks: z.array(SharedTaskSchema).default([]),
-  issue_workspace: z.record(z.string(), z.unknown()).nullable(),
+  issue_workspace: IssueWorkspaceSchema.nullable(),
   usage: IssueUsageSchema,
   actors: z.array(z.object({
     type: z.string(),

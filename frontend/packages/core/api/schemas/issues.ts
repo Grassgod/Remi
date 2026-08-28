@@ -2,6 +2,7 @@ import { z } from "zod";
 import type {
   GroupedIssuesResponse,
   IssueRetitleResponse,
+  IssueWorkspace,
   ListIssuesResponse,
 } from "../../types";
 
@@ -78,6 +79,47 @@ export const SubscribersListSchema = z.array(SubscriberSchema);
 export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
 }).loose();
+
+const IssueWorkspaceRepoSchema = z.object({
+  repo_url: z.string(),
+  repo_name: z.string(),
+  worktree_path: z.string(),
+  branch_name: z.string(),
+  base_ref: z.string(),
+  status: z.string(),
+  dirty: z.boolean(),
+  error: z.string().nullable(),
+}).loose();
+
+export const IssueWorkspaceSchema = z.object({
+  issue_id: z.string(),
+  workspace_id: z.string(),
+  issue_key: z.string(),
+  runtime_id: z.string().nullable(),
+  runtime_name: z.string().nullable(),
+  runtime_status: z.string().nullable(),
+  runtime_provider: z.string().nullable().optional().default(null),
+  runtime_mode: z.string().nullable().optional().default(null),
+  runtime_device_info: z.string().nullable().optional().default(null),
+  runtime_daemon_id: z.string().nullable().optional().default(null),
+  runtime_machine_name: z.string().nullable().optional().default(null),
+  root_path: z.string(),
+  branch_name: z.string(),
+  status: z.string(),
+  repos: z.array(IssueWorkspaceRepoSchema).default([]),
+  last_task_id: z.string().nullable(),
+  cleaned_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const IssueWorkspaceResponseSchema = z.object({
+  workspace: IssueWorkspaceSchema.nullable(),
+}).loose();
+
+export const EMPTY_ISSUE_WORKSPACE_RESPONSE: { workspace: IssueWorkspace | null } = {
+  workspace: null,
+};
 
 export const IssueRetitleResponseSchema = z.object({
   title: z.string(),

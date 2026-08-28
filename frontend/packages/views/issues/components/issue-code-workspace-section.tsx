@@ -4,8 +4,9 @@ import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronRight, Copy, FolderGit2, GitBranch, Server, TriangleAlert } from "lucide-react";
 import { issueWorkspaceOptions } from "@multiremi/core/issues/queries";
-import type { IssueWorkspaceStatus } from "@multiremi/core/types";
+import type { IssueWorkspace, IssueWorkspaceStatus } from "@multiremi/core/types";
 import { useT } from "../../i18n";
+import { capitalize, shortDaemonId, splitRuntimeName } from "../../runtimes/components/runtime-machines";
 
 export function IssueCodeWorkspaceSection({
   issueId,
@@ -21,6 +22,11 @@ export function IssueCodeWorkspaceSection({
 
   const copy = (value: string) => void navigator.clipboard?.writeText(value);
   const statusLabel = t(($) => $.detail.workspace_status[workspace.status]);
+  const runtime = runtimePresentation(
+    workspace,
+    t(($) => $.detail.workspace_unknown),
+  );
+  const runtimeOffline = workspace.runtime_status === "offline";
 
   return (
     <div>
@@ -47,8 +53,23 @@ export function IssueCodeWorkspaceSection({
             </WorkspaceRow>
           )}
           <WorkspaceRow icon={<Server className="size-3.5" />} label={t(($) => $.detail.workspace_runtime)}>
-            <span className={workspace.runtime_status === "offline" ? "text-destructive" : "truncate text-muted-foreground"}>
-              {workspace.runtime_name ?? workspace.runtime_id ?? t(($) => $.detail.workspace_unknown)}
+            <span
+              className={`flex min-w-0 items-baseline gap-1 ${runtimeOffline ? "text-destructive" : ""}`}
+              title={runtime.title}
+            >
+              <span className="min-w-0 truncate font-medium">{runtime.machine}</span>
+              {runtime.provider && (
+                <>
+                  <span className={`shrink-0 ${runtimeOffline ? "opacity-60" : "text-muted-foreground"}`}>
+                    ·
+                  </span>
+                  <span
+                    className={`min-w-0 max-w-[40%] truncate ${runtimeOffline ? "opacity-70" : "text-muted-foreground"}`}
+                  >
+                    {runtime.provider}
+                  </span>
+                </>
+              )}
             </span>
           </WorkspaceRow>
           <WorkspaceRow icon={<FolderGit2 className="size-3.5" />} label={t(($) => $.detail.workspace_path)}>
@@ -93,6 +114,40 @@ export function IssueCodeWorkspaceSection({
       )}
     </div>
   );
+}
+
+function runtimePresentation(
+  workspace: IssueWorkspace,
+  unknownLabel: string,
+): { machine: string; provider: string | null; title: string } {
+  const profileName = workspace.runtime_machine_name?.trim() || null;
+  const deviceName = workspace.runtime_device_info?.split(" · ", 1)[0]?.trim() || null;
+  const runtimeName = workspace.runtime_name?.trim() || null;
+  const legacyRuntime = runtimeName ? splitRuntimeName(runtimeName) : null;
+  const legacyName = legacyRuntime?.hostname ?? null;
+  const runtimeId = workspace.runtime_id?.trim() || null;
+  const provider = workspace.runtime_provider?.trim()
+    || (legacyName ? legacyRuntime?.base.trim() : null)
+    || null;
+  const cloudName = workspace.runtime_mode === "cloud"
+    ? `${capitalize(provider ?? "runtime")} cloud`
+    : null;
+  const daemonName = workspace.runtime_daemon_id?.trim()
+    ? shortDaemonId(workspace.runtime_daemon_id.trim())
+    : null;
+  const machine = profileName
+    ?? deviceName
+    ?? legacyName
+    ?? cloudName
+    ?? daemonName
+    ?? runtimeName
+    ?? runtimeId
+    ?? unknownLabel;
+  return {
+    machine,
+    provider,
+    title: provider ? `${machine} · ${provider}` : machine,
+  };
 }
 
 function WorkspaceRow({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
