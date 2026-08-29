@@ -21,6 +21,7 @@ const CLAUDE_PERMISSION_MODE_FALLBACKS: Record<string, string[]> = {
 
 export class ClaudeAdapter implements AgentAdapter {
   readonly agentType = "claude";
+  readonly promptUsageSettleScope = "turn" as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     const claudeCode = this._claudeCodeMeta(update);

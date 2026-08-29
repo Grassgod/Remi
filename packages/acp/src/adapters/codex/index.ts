@@ -25,6 +25,7 @@ const PERMISSION_MODE_ALIASES: Record<string, string[]> = {
 
 export class CodexAdapter implements AgentAdapter {
   readonly agentType = "codex";
+  readonly promptUsageSettleScope = "last-request" as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     // No `_meta` probe here: the only tool-call `_meta` keys codex-acp emits are

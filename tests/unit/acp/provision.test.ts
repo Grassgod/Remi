@@ -1,8 +1,15 @@
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { locateBridgePackage, bridgeVersion, bridgeSatisfied, BRIDGE_PIN } from "@acp/provision.js";
+import {
+  locateBridgePackage,
+  bridgeVersion,
+  bridgeSatisfied,
+  patchCodexUsageBridge,
+  BRIDGE_PIN,
+  CODEX_USAGE_PATCH,
+} from "@acp/provision.js";
 
 let dir: string | null = null;
 const savedHome = process.env.REMI_HOME;
@@ -29,6 +36,20 @@ function writeBridgePackage(home: string, pkg: string, version: string): string 
   return pkgDir;
 }
 
+function writeCodexDist(pkgDir: string, source = `  createUsageUpdate() {
+    return {
+      sessionUpdate: "usage_update",
+      used,
+      size
+    };
+  }
+`): string {
+  const dist = join(pkgDir, "dist", "index.js");
+  mkdirSync(join(pkgDir, "dist"), { recursive: true });
+  writeFileSync(dist, source);
+  return dist;
+}
+
 test("locateBridgePackage + bridgeVersion read the provisioned bridge's package.json", () => {
   const home = freshHome();
   const pkgDir = writeBridgePackage(home, "@agentclientprotocol/claude-agent-acp", "0.53.0");
@@ -49,8 +70,41 @@ test("bridgeSatisfied requires exactly the pinned version", () => {
   expect(bridgeSatisfied("codex")).toBe(false);
 
   rmSync(join(home, "acp"), { recursive: true, force: true });
-  writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
+  const pkgDir = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
+  writeCodexDist(pkgDir);
+  expect(bridgeSatisfied("codex")).toBe(false);
+  expect(patchCodexUsageBridge(() => {}, pkgDir)).toBe(true);
   expect(bridgeSatisfied("codex")).toBe(true);
+});
+
+test("codex usage patch is idempotent and carries the complete last-request split", () => {
+  const home = freshHome();
+  const pkgDir = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
+  const dist = writeCodexDist(pkgDir);
+  chmodSync(dist, 0o755);
+  const logs: string[] = [];
+
+  expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
+  const once = readFileSync(dist, "utf8");
+  expect(once).toContain(`const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH}";`);
+  expect(once).toContain("remiTokenUsage");
+  expect(once).toContain("cachedInputTokens: this.sessionState.lastTokenUsage.cachedInputTokens");
+  expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
+  expect(readFileSync(dist, "utf8")).toBe(once);
+  expect(once.match(/remiTokenUsage/g)).toHaveLength(1);
+  expect(statSync(dist).mode & 0o777).toBe(0o755);
+});
+
+test("codex usage patch logs and degrades when its anchor is missing", () => {
+  const home = freshHome();
+  const pkgDir = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
+  const dist = writeCodexDist(pkgDir, "// unknown future codex-acp layout\n");
+  const logs: string[] = [];
+
+  expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(false);
+  expect(logs.join("\n")).toContain("anchor missing");
+  expect(readFileSync(dist, "utf8")).toBe("// unknown future codex-acp layout\n");
+  expect(bridgeSatisfied("codex")).toBe(false);
 });
 
 test("a bridge binary on PATH alone does not satisfy the pin (legacy Rust codex-acp)", () => {
