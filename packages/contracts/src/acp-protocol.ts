@@ -243,12 +243,9 @@ export type PromptContent =
 export interface PromptResult {
   stopReason: StopReason;
   /**
-   * Accumulated token usage for the whole prompt turn. Both bridges settle
-   * `session/prompt` with this shape: claude-agent-acp (dist/acp-agent.js
-   * `sessionUsage()`) fills all five fields; codex-acp (dist/index.js
-   * `toPromptUsage()`) has no `cachedWriteTokens` and adds `thoughtTokens`.
-   * This is the only place the input/output split is available — the
-   * `usage_update` notification stream only carries `{used, size, cost}`.
+   * Token usage reported when `session/prompt` settles. The scope is
+   * provider-specific: claude-agent-acp reports the whole prompt turn, while
+   * codex-acp reports only the last model request in that turn.
    */
   usage?: {
     inputTokens?: number | null;
@@ -436,10 +433,10 @@ export interface PlanEntry {
 
 /**
  * Context window + cost update — `UsageUpdate`, sdk/dist/schema/zod.gen.js:
- * 2015-2020. The wire shape is flat: both bridges emit `{used, size}` (+ an
- * optional `cost` and `_meta`) and neither ever sends a per-direction token
- * split — claude-agent-acp dist/acp-agent.js:1855-1862, 2456-2473, 2741-2750,
- * 3085-3094; codex-acp dist/index.js:24230-24242.
+ * 2015-2020. The standard wire shape is flat `{used, size}` (+ optional cost
+ * and `_meta`). Remi's provisioner patches its managed codex-acp build to put
+ * the last request's split in `_meta.remiTokenUsage`; unpatched bridges retain
+ * the standard shape and use the totals-only fallback.
  */
 export interface UsageUpdate {
   sessionUpdate: "usage_update";
@@ -536,8 +533,13 @@ export interface CloseSessionParams {
 
 // ── Agent adapter interfaces (moved from acp/adapters/base.ts in Phase 1 — L0 contract) ──
 
+export type PromptUsageSettleScope = "turn" | "last-request";
+
 export interface AgentAdapter {
   readonly agentType: string;
+
+  /** Whether prompt-settle usage covers the whole turn or only its last request. */
+  readonly promptUsageSettleScope: PromptUsageSettleScope;
 
   /** Resolve the canonical tool name from an ACP tool_call event. */
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string;

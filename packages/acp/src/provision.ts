@@ -11,7 +11,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -35,7 +35,31 @@ const PROVIDER_PACKAGES: Record<ProvisionProvider, string[]> = {
 // stay interchangeable. Bump deliberately alongside a remi release; daemons
 // converge on their next start (or via a scope="acp" update request).
 export const BRIDGE_PIN: Record<ProvisionProvider, string> = { claude: "0.66.0", codex: "1.1.14" };
+export const CODEX_USAGE_PATCH = "codex-usage-v1";
 const PROVIDER_BIN: Record<ProvisionProvider, string> = { claude: "claude-agent-acp", codex: "codex-acp" };
+
+const CODEX_USAGE_PATCH_MARKER = `const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH}";`;
+const CODEX_USAGE_UPDATE_ANCHOR = `    return {
+      sessionUpdate: "usage_update",
+      used,
+      size
+    };`;
+const CODEX_USAGE_UPDATE_REPLACEMENT = `    ${CODEX_USAGE_PATCH_MARKER}
+    return {
+      sessionUpdate: "usage_update",
+      used,
+      size,
+      _meta: {
+        remiUsagePatch: CODEX_USAGE_PATCH,
+        remiTokenUsage: {
+          inputTokens: this.sessionState.lastTokenUsage.inputTokens,
+          cachedInputTokens: this.sessionState.lastTokenUsage.cachedInputTokens,
+          outputTokens: this.sessionState.lastTokenUsage.outputTokens,
+          reasoningOutputTokens: this.sessionState.lastTokenUsage.reasoningOutputTokens,
+          totalTokens: this.sessionState.lastTokenUsage.totalTokens
+        }
+      }
+    };`;
 
 function remiHome(): string {
   return process.env.REMI_HOME ?? join(homedir(), ".remi");
@@ -85,8 +109,51 @@ export function bridgeSatisfied(provider: ProvisionProvider): boolean {
   if (!dir) return false;
   try {
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: string };
-    return pkg.version === BRIDGE_PIN[provider];
+    return pkg.version === BRIDGE_PIN[provider]
+      && (provider !== "codex" || codexUsagePatchSatisfied(dir));
   } catch {
+    return false;
+  }
+}
+
+function codexUsagePatchSatisfied(packageDir: string): boolean {
+  try {
+    return readFileSync(join(packageDir, "dist", "index.js"), "utf8").includes(CODEX_USAGE_PATCH_MARKER);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Add a per-request token split to codex-acp's usage_update extension point.
+ * Best-effort: modelContextWindow=null makes upstream return no update at all,
+ * and this patch intentionally leaves that upstream limitation unchanged.
+ */
+export function patchCodexUsageBridge(
+  log: Logger = (m) => console.error(`[provision] ${m}`),
+  packageDir: string | null = locateBridgePackage("codex"),
+): boolean {
+  if (!packageDir) {
+    log("codex usage patch skipped: bridge package not found");
+    return false;
+  }
+  const distPath = join(packageDir, "dist", "index.js");
+  try {
+    const source = readFileSync(distPath, "utf8");
+    if (source.includes(CODEX_USAGE_PATCH_MARKER)) return true;
+    if (!source.includes(CODEX_USAGE_UPDATE_ANCHOR)) {
+      log(`codex usage patch skipped: anchor missing in ${distPath}`);
+      return false;
+    }
+    writeFileSync(distPath, source.replace(CODEX_USAGE_UPDATE_ANCHOR, CODEX_USAGE_UPDATE_REPLACEMENT));
+    if (!codexUsagePatchSatisfied(packageDir)) {
+      log(`codex usage patch verification failed in ${distPath}`);
+      return false;
+    }
+    log(`applied ${CODEX_USAGE_PATCH} to codex ACP bridge`);
+    return true;
+  } catch (err) {
+    log(`codex usage patch failed: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }
@@ -225,7 +292,10 @@ export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (
     const pkg = `${PROVIDER_PACKAGES[provider][0]}@${BRIDGE_PIN[provider]}`;
     log(`installing ${provider} ACP bridge (${pkg}) into ${acpPrefix()}`);
     if (npmInstall(node.npm, node.node, pkg, log)) {
-      if (provider === "codex") linkCodexBin(log);
+      if (provider === "codex") {
+        patchCodexUsageBridge(log);
+        linkCodexBin(log);
+      }
       log(`${provider} ACP bridge ready`);
     }
   }
@@ -247,7 +317,10 @@ export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) =
   if (!npmInstall(node.npm, node.node, pkg, log)) {
     throw new Error(`npm install ${pkg} failed`);
   }
-  if (provider === "codex") linkCodexBin(log);
+  if (provider === "codex") {
+    patchCodexUsageBridge(log);
+    linkCodexBin(log);
+  }
   prependManagedPath();
   // Re-point the claude wrapper unconditionally — the located package dir may
   // have changed (e.g. @zed-industries → @agentclientprotocol).
