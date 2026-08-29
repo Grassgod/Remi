@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type {
-  AtlasWikiSetupStatus,
   RepositoryWikiBuildResponse,
   RepositoryInspectionResponse,
   RepositoryMutationResponse,
@@ -104,22 +103,6 @@ export const repositoryWikiRevisionsResponseSchema = z.object({
   }).loose()),
 }).loose();
 
-export const atlasWikiSetupStatusSchema = z.object({
-  state: z.enum(["not_configured", "plugin_required", "scm_connection_required", "incomplete", "ready"]),
-  configured: z.boolean(),
-  required_plugin: z.string().default("code-to-wiki"),
-  plugin_id: z.string().nullable().default(null),
-  plugin_bound: z.boolean().default(false),
-  agent_id: z.string().nullable().default(null),
-  repository_autopilot_id: z.string().nullable().default(null),
-  repository_trigger_id: z.string().nullable().default(null),
-  project_autopilot_id: z.string().nullable().default(null),
-  project_trigger_id: z.string().nullable().default(null),
-  librarian_autopilot_id: z.string().nullable().default(null),
-  librarian_trigger_id: z.string().nullable().default(null),
-  scm_warning: z.string().nullable().optional(),
-}).loose();
-
 export const repositoryWikiBuildResponseSchema = z.object({
   run_id: z.string(),
   task_id: z.string().nullable().default(null),
@@ -130,21 +113,6 @@ export const EMPTY_REPOSITORY_WIKI_BUILD_RESPONSE: RepositoryWikiBuildResponse =
   run_id: "",
   task_id: null,
   status: "skipped",
-};
-
-export const EMPTY_ATLAS_WIKI_SETUP_STATUS: AtlasWikiSetupStatus = {
-  state: "not_configured",
-  configured: false,
-  required_plugin: "code-to-wiki",
-  plugin_id: null,
-  plugin_bound: false,
-  agent_id: null,
-  repository_autopilot_id: null,
-  repository_trigger_id: null,
-  project_autopilot_id: null,
-  project_trigger_id: null,
-  librarian_autopilot_id: null,
-  librarian_trigger_id: null,
 };
 
 export const EMPTY_REPOSITORY_LIST_RESPONSE: WorkspaceRepositoryListResponse = {

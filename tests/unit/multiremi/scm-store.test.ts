@@ -5,7 +5,7 @@ import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/crede
 import { reconcileObservation } from "@multiremi/scm/reconcile.js";
 import { scmIngestionStore } from "@multiremi/scm/store.js";
 import { ScmWebhookIngestor } from "@multiremi/scm/webhook.js";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { configureRepositoryWikiAutomation, createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 const previousScmKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
 const previousAllowedApiHosts = process.env.MULTIREMI_SCM_ALLOWED_API_HOSTS;
@@ -1286,7 +1286,7 @@ describe("SCM connection and canonical event store", () => {
     expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
   });
 
-  it("keeps Atlas names display-only and gates repository scope by role plus managed identity", async () => {
+  it("keeps Atlas names display-only and gates repository scope by explicit capability composition", async () => {
     const { store, connection } = seedConnection();
     const runtime = store.registerRuntime({ name: "Role scope runtime", provider: "claude" });
     const caller = store.createAgent({
@@ -1355,12 +1355,12 @@ describe("SCM connection and canonical event store", () => {
         title: "Atlas · Repository Wiki",
         assigneeId: caller.id,
         executionMode: "run_only",
-        managedKind: "atlas_repository_wiki",
       }),
     });
     expect(ordinaryResponse.status).toBe(201);
     const ordinary = (await ordinaryResponse.json() as any).autopilot;
-    expect(ordinary).toMatchObject({ title: "Atlas · Repository Wiki", managedKind: null });
+    expect(ordinary).toMatchObject({ title: "Atlas · Repository Wiki" });
+    expect(ordinary).not.toHaveProperty("managedKind");
 
     const roleResponse = await app.request(`/api/agents/${caller.id}/role`, {
       method: "PUT",
@@ -1409,18 +1409,12 @@ describe("SCM connection and canonical event store", () => {
     expect(runToken.scopes).not.toContain("repository-wiki:maintainer");
   });
 
-  it("mints maintainer scope only for a managed Repository Wiki task and revokes it on demotion", async () => {
+  it("mints maintainer scope only for a compatible Repository Wiki task and revokes it on demotion", async () => {
     const store = createLocalStore();
     store.ensureLocalWorkspace();
-    const agent = store.createAgent({ name: "Docs", provider: "claude", role: "maintainer" });
-    const autopilot = store.createAutopilot({
-      title: "Any display title",
-      assigneeId: agent.id,
-      executionMode: "run_only",
-    });
-    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
+    const { agent, autopilot } = configureRepositoryWikiAutomation(store);
     const run = store.runAutopilot(autopilot.id, {
-      payload: { atlas_repository_id: "repo_docs" },
+      payload: { repository_wiki_repository_id: "repo_docs" },
     });
     const task = store.getTask(run.taskId!)!;
 
@@ -1435,18 +1429,9 @@ describe("SCM connection and canonical event store", () => {
 
   it("collapses Wiki revisions without exposing them to ordinary SCM automation claims", async () => {
     const { store, connection } = seedConnection();
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const runtime = store.registerRuntime({ name: "SCM claim runtime", provider: "claude" });
-    const wiki = store.createAutopilot({
-      title: "Atlas · Repository Wiki",
-      workspaceId: "local",
-      assigneeId: agent.id,
-      executionMode: "run_only",
-      description: "Update the repository wiki",
-    });
-    store.setAutopilotManagedKind(wiki.id, "atlas_repository_wiki");
-    const wikiTrigger = store.createAutopilotTrigger(wiki.id, {
-      kind: "scm_event",
+    const { autopilot: wiki, trigger: wikiTrigger } = configureRepositoryWikiAutomation(store, { runtimeId: runtime.id });
+    store.updateAutopilotTrigger(wiki.id, wikiTrigger.id, {
       eventConfig: {
         resource: "scm",
         events: ["change.merged", "default_branch.updated"],
@@ -1469,10 +1454,11 @@ describe("SCM connection and canonical event store", () => {
         repositoryIds: ["repo_widgets"],
       },
     });
+    const announcerAgent = store.createAgent({ name: "Merge announcer", provider: "claude" });
     const announcer = store.createAutopilot({
       title: "Merge announcer",
       workspaceId: "local",
-      assigneeId: agent.id,
+      assigneeId: announcerAgent.id,
       executionMode: "run_only",
       description: "Announce merges",
     });

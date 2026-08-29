@@ -1,5 +1,4 @@
 import type {
-  AtlasWikiSetupStatus,
   ImportWorkspaceRepositoryRequest,
   RepositoryInspectionResponse,
   RepositoryMutationResponse,
@@ -23,8 +22,6 @@ import {
   repositoryWikiDocsResponseSchema,
   repositoryWikiRevisionsResponseSchema,
   repositoryWikiSummariesResponseSchema,
-  atlasWikiSetupStatusSchema,
-  EMPTY_ATLAS_WIKI_SETUP_STATUS,
   repositoryWikiBuildResponseSchema,
   EMPTY_REPOSITORY_WIKI_BUILD_RESPONSE,
 } from "../schemas/repositories";
@@ -125,25 +122,6 @@ export class RepositoriesEndpoints {
     return parseWithFallback(raw, repositoryWikiSummariesResponseSchema, { repositories: [] }, {
       endpoint: "GET /api/workspaces/:id/repository-wikis",
     }).repositories;
-  }
-
-  async getAtlasWikiSetupStatus(workspaceId: string): Promise<AtlasWikiSetupStatus> {
-    const raw = await this.http.fetch<unknown>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/repository-wikis/atlas`,
-    );
-    return parseWithFallback(raw, atlasWikiSetupStatusSchema, EMPTY_ATLAS_WIKI_SETUP_STATUS, {
-      endpoint: "GET /api/workspaces/:id/repository-wikis/atlas",
-    });
-  }
-
-  async configureAtlasWiki(workspaceId: string): Promise<AtlasWikiSetupStatus> {
-    const raw = await this.http.fetch<unknown>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/repository-wikis/atlas`,
-      { method: "POST" },
-    );
-    return parseWithFallback(raw, atlasWikiSetupStatusSchema, EMPTY_ATLAS_WIKI_SETUP_STATUS, {
-      endpoint: "POST /api/workspaces/:id/repository-wikis/atlas",
-    });
   }
 
   async listRepositoryWikiDocs(workspaceId: string, repositoryId: string, query = ""): Promise<RepositoryWikiDoc[]> {

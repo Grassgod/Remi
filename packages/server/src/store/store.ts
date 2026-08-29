@@ -52,6 +52,7 @@ import {
   RepositoryWikiRepo,
   type RepositoryWikiWriteControl,
 } from "@multiremi/store/repos/repository-wiki-repo.js";
+import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
@@ -1789,14 +1790,13 @@ runMigrations(this.db);
     if (agent && agentRoleAtLeast(agent.role, "supervisor")) scopes.push("organizer:supervisor");
     const storedTask = this.getTask(task.id);
     const run = storedTask?.autopilotRunId ? this.getAutopilotRun(storedTask.autopilotRunId) : null;
-    const autopilot = run ? this.getAutopilot(run.autopilotId) : null;
+    const repositoryWikiAutomation = resolveRepositoryWikiAutomation(this, task.workspaceId);
     if (
       agent
       && agentRoleAtLeast(agent.role, "maintainer")
-      && autopilot?.managedKind === "atlas_repository_wiki"
-      && autopilot.assigneeType === "agent"
-      && autopilot.assigneeId === agent.id
-      && autopilot.workspaceId === task.workspaceId
+      && repositoryWikiAutomation
+      && run?.autopilotId === repositoryWikiAutomation.id
+      && repositoryWikiAutomation.assigneeId === agent.id
     ) {
       scopes.push("repository-wiki:maintainer");
     }
@@ -3277,13 +3277,6 @@ runMigrations(this.db);
 
   updateAutopilot(id: string, input: UpdateAutopilotInput): MultiremiAutopilot {
     return this.autopilots.updateAutopilot(id, input);
-  }
-
-  setAutopilotManagedKind(
-    id: string,
-    managedKind: NonNullable<MultiremiAutopilot["managedKind"]>,
-  ): MultiremiAutopilot {
-    return this.autopilots.setAutopilotManagedKind(id, managedKind);
   }
 
   archiveAutopilot(id: string): MultiremiAutopilot {

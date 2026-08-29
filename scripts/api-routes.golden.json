@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 651,
+    "routeCount": 649,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 433,
+      "compat": 431,
       "root": 13
     },
-    "getRoutes": 280,
-    "getRoutesWithBody": 277,
+    "getRoutes": 279,
+    "getRoutesWithBody": 276,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 371,
+    "mutationRoutes": 370,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -379,7 +379,6 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
-    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/runtime-provisions",
     "GET /api/workspaces/:id/runtime-provisions/:provisionId",
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
@@ -653,7 +652,6 @@
     "POST /api/workspaces/:id/repos/:repositoryId/wiki",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "POST /api/workspaces/:id/repos/inspect",
-    "POST /api/workspaces/:id/repository-wikis/atlas",
     "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
     "POST /api/workspaces/:id/ssh-mesh/test",
@@ -1022,7 +1020,6 @@
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
     "GET /api/workspaces/:id/repository-wikis",
-    "GET /api/workspaces/:id/repository-wikis/atlas",
     "GET /api/workspaces/:id/runtime-provisions",
     "GET /api/workspaces/:id/runtime-provisions/:provisionId",
     "GET /api/workspaces/:id/runtime-provisions/:provisionId/states",
@@ -2390,8 +2387,6 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot",
-          "managedKind": null,
-          "managed_kind": null,
           "description": null,
           "projectId": null,
           "project_id": null,
@@ -2444,8 +2439,6 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot patched",
-          "managedKind": null,
-          "managed_kind": null,
           "description": "Autopilot used by the snapshot",
           "projectId": "prj_snapshot",
           "project_id": "prj_snapshot",
@@ -2701,8 +2694,6 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot patched",
-          "managedKind": null,
-          "managed_kind": null,
           "description": "Autopilot used by the snapshot",
           "projectId": "prj_snapshot",
           "project_id": "prj_snapshot",
@@ -5688,7 +5679,7 @@
           "accent": "info",
           "skills": [],
           "recommendedProvider": "claude",
-          "recommendedModel": "opus5",
+          "recommendedModel": "deepseek-v4-flash",
           "requiredPlugins": [
             "code-to-wiki"
           ]
@@ -11176,28 +11167,6 @@
             "allowed": true
           },
           {
-            "id": "wiki.repository.atlas.configure",
-            "command": "remi wiki repository atlas configure",
-            "capability": "wiki.repository.atlas.configure",
-            "outputs": [
-              "table",
-              "json",
-              "jsonl"
-            ],
-            "allowed": true
-          },
-          {
-            "id": "wiki.repository.atlas.status",
-            "command": "remi wiki repository atlas status",
-            "capability": "wiki.repository.atlas.status",
-            "outputs": [
-              "table",
-              "json",
-              "jsonl"
-            ],
-            "allowed": true
-          },
-          {
             "id": "wiki.repository.build",
             "command": "remi wiki repository build",
             "capability": "wiki.repository.build",
@@ -14438,7 +14407,7 @@
             "accent": "info",
             "skills": [],
             "recommendedProvider": "claude",
-            "recommendedModel": "opus5",
+            "recommendedModel": "deepseek-v4-flash",
             "requiredPlugins": [
               "code-to-wiki"
             ]
@@ -15432,8 +15401,6 @@
             "workspaceId": "local",
             "workspace_id": "local",
             "title": "Snapshot autopilot",
-            "managedKind": null,
-            "managed_kind": null,
             "description": "Autopilot used by the snapshot",
             "projectId": "prj_snapshot",
             "project_id": "prj_snapshot",
@@ -15488,8 +15455,6 @@
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Snapshot autopilot",
-          "managedKind": null,
-          "managed_kind": null,
           "description": "Autopilot used by the snapshot",
           "projectId": "prj_snapshot",
           "project_id": "prj_snapshot",
@@ -20859,26 +20824,6 @@
             }
           }
         ]
-      }
-    },
-    {
-      "key": "get-sweep GET /api/workspaces/:id/repository-wikis/atlas",
-      "route": "GET /api/workspaces/:id/repository-wikis/atlas",
-      "path": "/api/workspaces/local/repository-wikis/atlas",
-      "status": 200,
-      "body": {
-        "state": "plugin_required",
-        "configured": false,
-        "required_plugin": "code-to-wiki",
-        "plugin_id": null,
-        "plugin_bound": false,
-        "agent_id": null,
-        "repository_autopilot_id": null,
-        "repository_trigger_id": null,
-        "project_autopilot_id": null,
-        "project_trigger_id": null,
-        "librarian_autopilot_id": null,
-        "librarian_trigger_id": null
       }
     },
     {

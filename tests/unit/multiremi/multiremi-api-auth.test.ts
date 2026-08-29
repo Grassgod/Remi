@@ -26,7 +26,6 @@ describe("Multiremi API — authentication and token scoping", () => {
       ["DELETE", "/api/workspaces/local", "workspace_lifecycle"],
       ["PUT", "/api/agents/agt_1/supervisor", "privilege_configuration"],
       ["PUT", "/api/agents/agt_1/role", "privilege_configuration"],
-      ["POST", "/api/workspaces/local/repository-wikis/atlas", "privilege_configuration"],
       ["PUT", "/api/workspaces/local/organizer", "privilege_configuration"],
       ["GET", "/api/cloud-billing/balance", "billing"],
       // Platform status is task-readable, but only via GET, and only that exact
@@ -194,7 +193,7 @@ describe("Multiremi API — authentication and token scoping", () => {
 
     const build = await app.request(`${root}/build`, { method: "POST", headers: auth });
     expect(build.status).toBe(409);
-    expect((await build.json()).code).toBe("atlas_not_configured");
+    expect((await build.json()).code).toBe("repository_wiki_automation_required");
 
     const daemon = await app.request(root, {
       headers: { Authorization: `Bearer ${daemonToken.token}` },

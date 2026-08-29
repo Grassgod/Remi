@@ -221,7 +221,7 @@ describe("RepositoryWikiPage build state", () => {
     });
     renderPage();
 
-    await user.click(screen.getByRole("button", { name: /Build with Atlas/ }));
+    await user.click(screen.getByRole("button", { name: /Build Wiki/ }));
     expect(toast.info).toHaveBeenCalledTimes(1);
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -230,11 +230,11 @@ describe("RepositoryWikiPage build state", () => {
     const user = userEvent.setup();
     mockDocs.value = [];
     mockMutate.mockImplementation((_vars, opts) => {
-      opts?.onError?.(new ApiError("atlas agent offline", 500, "Internal Server Error"));
+      opts?.onError?.(new ApiError("wiki agent offline", 500, "Internal Server Error"));
     });
     renderPage();
 
-    await user.click(screen.getByRole("button", { name: /Build with Atlas/ }));
+    await user.click(screen.getByRole("button", { name: /Build Wiki/ }));
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(toast.info).not.toHaveBeenCalled();
   });

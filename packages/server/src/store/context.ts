@@ -23,6 +23,8 @@ import type {
   ListIssuesInput,
   UpdateIssueInput,
   MultiremiAgent,
+  MultiremiAgentPlugin,
+  MultiremiAgentPluginBinding,
   MultiremiAgentPluginRuntimeState,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiAnalyticsEvent,
@@ -45,6 +47,7 @@ import type {
   MultiremiNotificationPreferenceResponse,
   MultiremiAssigneeType,
   MultiremiAutopilot,
+  MultiremiAutopilotTrigger,
   MultiremiProject,
   MultiremiProjectDoc,
   MultiremiProjectResource,
@@ -202,6 +205,11 @@ export interface AgentsSurface {
 }
 
 export interface AgentPluginsSurface {
+  listAgentPlugins(
+    workspaceId?: string,
+    options?: { provider?: string | null; includeArchived?: boolean },
+  ): MultiremiAgentPlugin[];
+  listAgentPluginBindings(agentId: string): MultiremiAgentPluginBinding[];
   lockAgentPluginWorkspace(workspaceId: string): void;
   assertAgentPluginWorkspaceMoveAllowed(agentId: string, targetWorkspaceId: string): void;
   reconcileAgentPluginDesiredStateWithinLock(workspaceId: string): void;
@@ -274,6 +282,7 @@ export interface ProjectsSurface {
 export interface AutopilotsSurface {
   getAutopilot(id: string): MultiremiAutopilot | null;
   listAutopilots(workspaceId?: string | null): MultiremiAutopilot[];
+  listAutopilotTriggers(autopilotId: string): MultiremiAutopilotTrigger[];
   getAutopilotRun(id: string): MultiremiAutopilotRun | null;
   runAutopilot(autopilotId: string, input?: import("@multiremi/contracts/types.js").RunAutopilotInput): MultiremiAutopilotRun;
   enqueueIssueStatusChangedEvent(input: {

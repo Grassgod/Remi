@@ -13,7 +13,7 @@ import type {
   OpenVikingFindHit,
   OpenVikingSnapshotCommit,
 } from "@multiremi/project-knowledge/types.js";
-import { createLocalStore, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { configureRepositoryWikiAutomation, createLocalStore, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -491,22 +491,15 @@ describe("RepositoryWikiService OpenViking mode", () => {
     expect(client.files.has(repositoryWikiDocUri("local", "repo_alpha", "design/architecture.md"))).toBeTrue();
   });
 
-  it("hydrates a manual Atlas bootstrap run with only its workspace repository", async () => {
+  it("hydrates a manual repository Wiki build with only its workspace repository", async () => {
     const store = createLocalStore();
     const service = new RepositoryWikiService(store, new FakeOpenViking(), "openviking");
     store.updateWorkspace("local", {
       repos: [{ id: "repo_bootstrap", name: "bootstrap", url: "git@github.com:example/bootstrap.git" }],
     });
-    const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
-    const autopilot = store.createAutopilot({
-      title: "Atlas · Repository Wiki",
-      workspaceId: "local",
-      assigneeId: atlas.id,
-      executionMode: "run_only",
-    });
-    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
+    const { autopilot } = configureRepositoryWikiAutomation(store);
     const run = store.runAutopilot(autopilot.id, {
-      payload: { atlas_repository_id: "repo_bootstrap" },
+      payload: { repository_wiki_repository_id: "repo_bootstrap" },
     });
 
     const hydrated = await service.hydrateTaskWiki({
@@ -539,7 +532,7 @@ describe("RepositoryWikiService OpenViking mode", () => {
       executionMode: "run_only",
     });
     const run = store.runAutopilot(sameTitle.id, {
-      payload: { atlas_repository_id: "repo_private" },
+      payload: { repository_wiki_repository_id: "repo_private" },
     });
 
     const hydrated = await service.hydrateTaskWiki({

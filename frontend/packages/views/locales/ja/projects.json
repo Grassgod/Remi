@@ -215,18 +215,7 @@
     "projects_group": "プロジェクト Wiki",
     "repositories_group": "リポジトリ Wiki",
     "repository_pages": "{{count}} ページ",
-    "repository_unbuilt": "未構築",
-    "atlas_title": "Atlas · LLM Wiki",
-    "atlas_description": "Atlas を設定してリポジトリのコード情報とプロジェクト知識を自動更新します。",
-    "atlas_plugin_required": "先に Claude の code-to-wiki プラグインをインポートしてください。",
-    "atlas_scm_required": "Atlas は作成済みです。増分更新にはコードリポジトリ接続が必要です。",
-    "atlas_ready": "マージと Issue 完了後に知識を自動更新します。",
-    "atlas_configure": "Atlas を設定",
-    "atlas_import_plugin": "プラグインを開く",
-    "atlas_agent": "エージェント",
-    "atlas_automation": "自動化",
-    "atlas_configured": "Atlas を設定しました",
-    "atlas_failed": "Atlas の設定に失敗しました"
+    "repository_unbuilt": "未構築"
   },
   "repo_source": {
     "tab_git": "Git リポジトリ",

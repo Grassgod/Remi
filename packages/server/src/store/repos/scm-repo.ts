@@ -7,7 +7,7 @@ import {
   extractScmPayloadRevision,
   repositoryWikiBuildDedupeKey,
 } from "@multiremi/store/repos/autopilots-repo.js";
-import { resolveAtlasRepositoryWikiAutopilot } from "@multiremi/repository-wiki/atlas.js";
+import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import type {
   ScmSnapshotEventFactory,
   ScmSnapshotEventWriteResult,
@@ -1240,14 +1240,16 @@ export class ScmRepo {
         }
         try {
           // Repository Wiki builds are idempotent per repository + revision:
-          // when the target is the Atlas Repository Wiki autopilot, carry the
+          // when the target is a compatible Repository Wiki automation, carry the
           // repository and a revision-pinned dedupe key so change.merged and
           // default_branch.updated for the same merge produce a single run.
-          const wikiAutopilot = resolveAtlasRepositoryWikiAutopilot(
-            event.workspaceId,
-            this.ctx.agents().listAgents(),
-            this.ctx.autopilots().listAutopilots(event.workspaceId),
-          );
+          const wikiAutopilot = resolveRepositoryWikiAutomation({
+            listAgents: () => this.ctx.agents().listAgents(),
+            listAutopilots: (workspaceId) => this.ctx.autopilots().listAutopilots(workspaceId),
+            listAgentPlugins: (workspaceId, options) => this.ctx.agentPlugins().listAgentPlugins(workspaceId, options),
+            listAgentPluginBindings: (agentId) => this.ctx.agentPlugins().listAgentPluginBindings(agentId),
+            listAutopilotTriggers: (autopilotId) => this.ctx.autopilots().listAutopilotTriggers(autopilotId),
+          }, event.workspaceId);
           const wikiBuild = wikiAutopilot?.id === target.autopilotId;
           const wikiRevision = wikiBuild ? extractScmPayloadRevision(event.payload) : null;
           const run = this.ctx.autopilots().runAutopilot(target.autopilotId, {

@@ -25,7 +25,7 @@ import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
-import { readyArchiveBinding } from "./helpers.js";
+import { configureRepositoryWikiAutomation, readyArchiveBinding } from "./helpers.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -213,13 +213,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   });
 
   it("checks repository Wiki publication without untyped nullable parameters", () => {
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
-    const autopilot = store.createAutopilot({
-      title: "Atlas · Repository Wiki",
-      assigneeId: agent.id,
-      executionMode: "run_only",
-    });
-    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
+    const { autopilot } = configureRepositoryWikiAutomation(store);
 
     const taskRun = store.runAutopilot(autopilot.id, {
       source: "api",

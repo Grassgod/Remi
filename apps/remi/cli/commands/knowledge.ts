@@ -146,17 +146,6 @@ function repositoryWikiSpecs(): CommandSpec[] {
       const response = await target.client.request({ method: "POST", path: target.path, body: {} });
       renderResource(invocation, response.data);
     }, [], ["human"]),
-    spec("wiki.repository.atlas.status", ["wiki", "repository", "atlas", "status"], "Show Repository Wiki Atlas setup", "read", [], [], async (invocation) => {
-      const client = await clientFor(invocation);
-      const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repository-wikis/atlas` });
-      renderResource(invocation, response.data);
-    }, [], ["human"]),
-    spec("wiki.repository.atlas.configure", ["wiki", "repository", "atlas", "configure"], "Configure Repository Wiki Atlas automations", "destructive", [], [YES_OPTION], async (invocation) => {
-      requireConfirmation(invocation);
-      const client = await clientFor(invocation);
-      const response = await client.request({ method: "POST", path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repository-wikis/atlas`, body: {} });
-      renderResource(invocation, response.data);
-    }, [], ["human"]),
   ];
 }
 

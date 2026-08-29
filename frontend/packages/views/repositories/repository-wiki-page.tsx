@@ -141,7 +141,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
     });
   };
 
-  // Minimal AgentTask so TranscriptButton can lazy-load the Atlas build
+  // Minimal AgentTask so TranscriptButton can lazy-load the Wiki build
   // transcript — same pattern as the autopilot run history rows.
   const buildTask: AgentTask | null = buildInfo?.task_id
     ? {
@@ -243,7 +243,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
         <div className="flex shrink-0 items-center gap-2">
           <RepositoryWikiStatusBadge status={building ? "building" : summary?.status ?? "unbuilt"} />
           {building && buildTask && (
-            <TranscriptButton task={buildTask} agentName="Atlas" isLive title={t(($) => $.wiki.view_build_log)} />
+            <TranscriptButton task={buildTask} agentName={t(($) => $.wiki.build_agent_name)} isLive title={t(($) => $.wiki.view_build_log)} />
           )}
           {docs.length > 0 && buildButton("outline", true, true)}
         </div>
@@ -257,7 +257,7 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
             {failureReason && <span className="ml-2 text-muted-foreground" title={failureReason}>{failureReason}</span>}
           </div>
           {buildTask && (
-            <TranscriptButton task={buildTask} agentName="Atlas" title={t(($) => $.wiki.view_build_log)} />
+            <TranscriptButton task={buildTask} agentName={t(($) => $.wiki.build_agent_name)} title={t(($) => $.wiki.view_build_log)} />
           )}
           {docs.length === 0 && buildButton("outline", true)}
         </div>
