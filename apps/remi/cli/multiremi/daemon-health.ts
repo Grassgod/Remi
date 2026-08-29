@@ -27,6 +27,17 @@ export interface MultiremiDaemonHealth {
   /** True only after every provider managed by this process is ready. */
   supervisor_ready?: boolean;
   active_task_count?: number;
+  draining_task_count?: number;
+  outbox?: {
+    pending: number;
+    pendingNonTerminal?: number;
+    pendingTerminal: number;
+    pendingTasks?: number;
+    blocked: number;
+    oldestPendingCreatedAt: string | null;
+    droppedTotal: number;
+    fileBytes: number;
+  } | null;
   daemon_port?: number;
   workspace_cleanup_capability?: "available" | "blocked";
   workspace_cleanup_error?: string | null;

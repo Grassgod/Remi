@@ -15,6 +15,7 @@ interface UpdateReport {
 
 interface TestDaemonState {
   activeTaskCount: number;
+  drainingTaskCount: number;
   pendingClaimCount: number;
   claimsPaused: boolean;
   cliUpdateCoordinator: MultiremiCliUpdateCoordinator | null;
@@ -88,6 +89,25 @@ describe("co-resident CLI update coordination", () => {
     expect(claudeState.claimsPaused).toBe(true);
     expect(codexState.claimsPaused).toBe(true);
     expect(claude.restartRequested()).toBe(true);
+  });
+
+  it("does not treat a sibling's durable report drain as active agent execution", async () => {
+    const [claude, codex] = createDaemons();
+    const claudeState = state(claude);
+    const codexState = state(codex);
+    const reports = captureReports(claudeState);
+    codexState.activeTaskCount = 0;
+    codexState.drainingTaskCount = 3;
+    claudeState.updateRunner = () => "updated while reports drain";
+
+    await claudeState.handleRuntimeUpdate("rt_claude", "upd_draining", "v9.9.9", "cli");
+
+    expect(reports).toEqual([
+      { status: "running" },
+      { status: "completed", output: "updated while reports drain" },
+    ]);
+    expect(claudeState.claimsPaused).toBe(true);
+    expect(codexState.claimsPaused).toBe(true);
   });
 
   it("rejects a CLI update while a sibling claim request is in flight", async () => {

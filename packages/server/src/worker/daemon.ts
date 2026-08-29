@@ -316,6 +316,9 @@ export async function installCodexPluginReadinessHome(
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
 const TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
+const DEFAULT_TASK_DRAIN_TIMEOUT_MS = 5 * 60 * 1_000;
+const DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS = 30_000;
+const OUTBOX_RECONCILE_CONCURRENCY = 6;
 const IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED =
   "Runtime model discovery is temporarily disabled in the daemon process; gateway models remain available";
 
@@ -420,6 +423,10 @@ export interface MultiremiDaemonOptions {
   outboxBackoffMs?: number[];
   /** Soft on-disk cap for the report outbox. */
   outboxMaxBytes?: number;
+  /** Maximum wait for one task's reports before execution accounting moves on. */
+  taskDrainTimeoutMs?: number;
+  /** Maximum startup wait for persisted reports before the daemon becomes ready. */
+  outboxStartupFlushTimeoutMs?: number;
 }
 
 export interface MultiremiDaemonSshMeshRuntime {
@@ -581,6 +588,7 @@ export class MultiremiDaemon {
   private startedAt = new Date();
   private ready = false;
   private activeTaskCount = 0;
+  private drainingTaskCount = 0;
   private pendingClaimCount = 0;
   private inflight = new Set<Promise<void>>();
   private activeTaskAborts = new Set<AbortController>();
@@ -684,6 +692,11 @@ export class MultiremiDaemon {
       once: options.once ?? false,
       launchedBy: options.launchedBy ?? process.env.MULTIREMI_LAUNCHED_BY ?? null,
       taskTimeoutMs: options.taskTimeoutMs ?? parseInt(process.env.MULTIREMI_TASK_TIMEOUT_MS ?? "0", 10),
+      taskDrainTimeoutMs: Math.max(1, options.taskDrainTimeoutMs ?? DEFAULT_TASK_DRAIN_TIMEOUT_MS),
+      outboxStartupFlushTimeoutMs: Math.max(
+        1,
+        options.outboxStartupFlushTimeoutMs ?? DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS,
+      ),
       approvalMode: options.approvalMode ?? (process.env.MULTIREMI_APPROVAL_MODE === "ask" ? "ask" : "auto"),
       humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 30 * 60 * 1000),
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
@@ -842,8 +855,12 @@ export class MultiremiDaemon {
       this.assertWorkspaceRootOwner();
       // Replay reports left over from a previous run BEFORE recover-orphans:
       // recoverOrphans marks in-flight tasks failed, so an undelivered
-      // complete/fail must land first or a finished task gets mislabelled.
-      await outbox.flushAll(this.outboxAbort?.signal);
+      // complete/fail must land first or a finished task gets mislabelled. The
+      // bounded wait only changes behavior while delivery is unavailable; in
+      // that case recoverOrphans uses the same API and cannot succeed either,
+      // while the background pump retains every row for ordered replay.
+      await this.reconcilePendingOutboxTasks(outbox);
+      await this.flushStartupOutbox(outbox);
       await this.refreshWorkspaceRepos(this.options.workspaceId);
       this.assertWorkspaceRootOwner();
       this.startGcLoop();
@@ -2044,14 +2061,104 @@ export class MultiremiDaemon {
     return this.outbox;
   }
 
-  private async awaitTaskReportDrain(taskId: string): Promise<void> {
+  private async awaitTaskReportDrain(taskId: string, resumeActiveExecution = true): Promise<void> {
     const outbox = this.outbox;
-    if (!outbox) return;
-    const result = await outbox.waitForTaskDrain(taskId, this.outboxAbort?.signal);
-    if (result === "blocked") {
-      log.error(`task ${taskId} still has undelivered reports blocked on a permanent error`);
-    } else if (result === "aborted") {
-      log.warn(`task ${taskId} report delivery interrupted by shutdown; will replay on next start`);
+    const wasActive = this.activeTaskCount > 0;
+    if (wasActive) this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
+    this.drainingTaskCount++;
+    const drainAbort = new AbortController();
+    const shutdownSignal = this.outboxAbort?.signal;
+    const onShutdown = () => drainAbort.abort();
+    if (shutdownSignal?.aborted) drainAbort.abort();
+    else shutdownSignal?.addEventListener("abort", onShutdown, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      drainAbort.abort();
+    }, this.options.taskDrainTimeoutMs);
+    timer.unref?.();
+    try {
+      if (!outbox) return;
+      const result = await outbox.waitForTaskDrain(taskId, drainAbort.signal);
+      if (result === "blocked") {
+        log.error(`task ${taskId} still has undelivered reports blocked on a permanent error`);
+      } else if (result === "aborted" && timedOut) {
+        log.warn(
+          `task ${taskId} report delivery exceeded ${this.options.taskDrainTimeoutMs}ms; `
+          + "continuing while the durable outbox retries in the background",
+        );
+      } else if (result === "aborted") {
+        log.warn(`task ${taskId} report delivery interrupted by shutdown; will replay on next start`);
+      }
+    } finally {
+      clearTimeout(timer);
+      shutdownSignal?.removeEventListener("abort", onShutdown);
+      this.drainingTaskCount = Math.max(0, this.drainingTaskCount - 1);
+      if (wasActive && resumeActiveExecution) this.activeTaskCount++;
+    }
+  }
+
+  private async reconcilePendingOutboxTasks(outbox: MultiremiTaskReportOutbox): Promise<void> {
+    const terminalTaskIds = outbox.taskIdsWithPendingTerminal();
+    const terminalSet = new Set(terminalTaskIds);
+    const taskIds = [
+      ...terminalTaskIds,
+      ...outbox.pendingTaskIds().filter((taskId) => !terminalSet.has(taskId)),
+    ];
+    let nextIndex = 0;
+    const reconcile = async () => {
+      while (nextIndex < taskIds.length) {
+        const taskId = taskIds[nextIndex++]!;
+        try {
+          const status = await this.client.getTaskStatus(taskId);
+          if (status === "completed" || status === "failed" || status === "cancelled") {
+            const purged = outbox.purgeTask(taskId);
+            log.debug(`purged ${purged} stale outbox report(s) for terminal task ${taskId} (${status})`);
+          }
+        } catch (error) {
+          if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
+            const purged = outbox.purgeTask(taskId);
+            log.debug(`purged ${purged} stale outbox report(s) for missing task ${taskId}`);
+            continue;
+          }
+          // Status lookup and delivery use the same control-plane dependency.
+          // Preserve unknown tasks so a transient failure cannot lose reports.
+          log.warn(
+            `could not reconcile persisted outbox task ${taskId}; preserving its reports: `
+            + (error instanceof Error ? error.message : String(error)),
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(OUTBOX_RECONCILE_CONCURRENCY, taskIds.length) }, () => reconcile()),
+    );
+  }
+
+  private async flushStartupOutbox(outbox: MultiremiTaskReportOutbox): Promise<void> {
+    const flushAbort = new AbortController();
+    const shutdownSignal = this.outboxAbort?.signal;
+    const onShutdown = () => flushAbort.abort();
+    if (shutdownSignal?.aborted) flushAbort.abort();
+    else shutdownSignal?.addEventListener("abort", onShutdown, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      flushAbort.abort();
+    }, this.options.outboxStartupFlushTimeoutMs);
+    timer.unref?.();
+    try {
+      await outbox.flushAll(flushAbort.signal);
+    } finally {
+      clearTimeout(timer);
+      shutdownSignal?.removeEventListener("abort", onShutdown);
+    }
+    if (timedOut) {
+      log.warn(
+        `startup outbox replay exceeded ${this.options.outboxStartupFlushTimeoutMs}ms; `
+        + "continuing startup while delivery retries in the background",
+      );
+      outbox.pumpAll();
     }
   }
 
@@ -2173,6 +2280,11 @@ export class MultiremiDaemon {
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
     let progressSummarizer: TaskProgressSummarizer | null = null;
+    let activeExecutionReleased = false;
+    const awaitFinalReportDrain = async () => {
+      activeExecutionReleased = true;
+      await this.awaitTaskReportDrain(task.id, false);
+    };
 
     try {
       this.assertWorkspaceRootOwner();
@@ -2293,7 +2405,7 @@ export class MultiremiDaemon {
         });
         log.warn(`Failed task ${task.id} with unusable output: ${failureReason}`);
         this.finalizeTaskProgress(progressSummarizer, "failed", failureReason);
-        await this.awaitTaskReportDrain(task.id);
+        await awaitFinalReportDrain();
         return;
       }
       // Completion itself (progress 3/3, usage, completeTask with the steer
@@ -2301,10 +2413,11 @@ export class MultiremiDaemon {
       // provider session was still open — only the summarizer wrap-up and the
       // outbox drain remain.
       this.finalizeTaskProgress(progressSummarizer, "completed", summary.output);
-      await this.awaitTaskReportDrain(task.id);
+      await awaitFinalReportDrain();
     } catch (err) {
       const error = timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
       if (!timedOut && abort.signal.aborted && await this.wasTaskCancelledByServer(task.id)) {
+        this.outbox?.purgeTask(task.id);
         log.info(`Task ${task.id} was cancelled by the server`);
         this.finalizeTaskProgress(progressSummarizer, "cancelled");
         return;
@@ -2320,7 +2433,7 @@ export class MultiremiDaemon {
       });
       log.error(`Failed task ${task.id}: ${error}`);
       this.finalizeTaskProgress(progressSummarizer, "failed", error);
-      await this.awaitTaskReportDrain(task.id);
+      await awaitFinalReportDrain();
     } finally {
       if (pluginRuntimeBase && !task.issueId && !task.chatSessionId) {
         await cleanupNonIssueTaskPluginRuntime(
@@ -2341,7 +2454,9 @@ export class MultiremiDaemon {
       resolvedWorkDir?.release?.();
       releaseIssueWorkspaceLifecycle?.();
       this.activeTaskAborts.delete(abort);
-      this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
+      if (!activeExecutionReleased) {
+        this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
+      }
       clearInterval(cancelWatcher);
       if (timeout) clearTimeout(timeout);
     }
@@ -3100,9 +3215,18 @@ export class MultiremiDaemon {
 
   private watchCancellation(taskId: string, abort: AbortController): ReturnType<typeof setInterval> {
     return setInterval(() => {
+      if (abort.signal.aborted) return;
       this.client.getTaskStatus(taskId).then((status) => {
-        if (status === "cancelled") abort.abort();
-      }).catch(() => {});
+        if (status === "cancelled") {
+          this.outbox?.purgeTask(taskId);
+          abort.abort();
+        }
+      }).catch((error) => {
+        if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
+          this.outbox?.purgeTask(taskId);
+          abort.abort();
+        }
+      });
     }, 2500);
   }
 
@@ -3110,7 +3234,7 @@ export class MultiremiDaemon {
     try {
       return await this.client.getTaskStatus(taskId) === "cancelled";
     } catch (err) {
-      return err instanceof Error && /\b404\b/.test(err.message);
+      return err instanceof MultiremiDaemonHttpError && err.status === 404;
     }
   }
 
@@ -3264,6 +3388,7 @@ export class MultiremiDaemon {
       cli_version: multiremiVersion,
       supervisor_ready: this.supervisorReady(),
       active_task_count: this.activeTaskCount,
+      draining_task_count: this.drainingTaskCount,
       daemon_port: this.repoServerPort,
       workspace_cleanup_capability: cleanupSupport.capability,
       workspace_cleanup_error: cleanupSupport.error,
