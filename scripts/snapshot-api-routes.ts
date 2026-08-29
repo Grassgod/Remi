@@ -193,21 +193,131 @@ const LOCAL_TIME_ID_RE = /\b(local(?:-contact|-lark)?)-\d{13}\b/g;
 const TIME_KEY_RE = /(^|_)(duration|elapsed|uptime|latency)(_ms|_seconds)?$/i;
 const MS_KEY_RE = /_ms$/i;
 
-const PATH_REPLACEMENTS: Array<[string, string]> = [
-  [UPLOAD_DIR, "<uploads>"],
-  [SNAPSHOT_TMP, "<tmp>"],
-  [REPO_ROOT, "<repo>"],
-  [tmpdir(), "<tmp>"],
-  [homedir(), "<home>"],
-];
-
 export interface SnapshotMachineIdentity {
   hostname?: string;
   username?: string;
+  /** Overrides `homedir()`; lets a test pin a short `$HOME` such as `/root`. */
+  homedir?: string;
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The ONLY characters that can delimit a path token. This is deliberately an
+ * allowlist: anything else — letters in any script, digits, `-` `.` `_` `%`,
+ * `@`, `+` — continues the segment, so a prefix followed by one of them is not
+ * a whole token. A denylist of "path characters" cannot be written correctly
+ * (a filename may contain almost any byte), and getting it wrong reintroduces
+ * the very bug this guards against.
+ *
+ * `<` and `>` are deliberately NOT boundaries, because every replacement token
+ * is spelled `<…>`. Were they boundaries, substituting one rule would hand the
+ * next rule a delimiter the input never had: `/root/tmp/x` became `<home>` plus
+ * a now-boundary `>`, letting the `/tmp` rule fire and yield `<home><tmp>/x`.
+ * Keeping tokens free of boundary characters makes them inert — a substitution
+ * can only ever remove a boundary, never manufacture one — which is also what
+ * makes scrubbing idempotent, so an already-scrubbed golden is a fixed point.
+ */
+const PATH_BOUNDARY = "\\s/\\\\'\"`=:,;|()\\[\\]{}";
+
+interface PathRule {
+  needle: string;
+  token: string;
+}
+
+/**
+ * A machine-path prefix must match a whole path TOKEN, never a bare substring.
+ *
+ * WHY (MUL-181): this used to be `out.split(needle).join(token)`. Under a root
+ * identity `homedir()` is `/root`, which is a substring of the literal URL
+ * ".../skills/debugging/root-cause-tracing" served by an agent template — the
+ * naive replace rewrote it to ".../debugging<home>-cause-tracing", so the byte
+ * comparison in `api-route-snapshot.test.ts` failed 100% of the time on any
+ * container running as root (CI runs non-root, so the gate stayed green there)
+ * and pointed the reader at the regenerate command, which would commit the
+ * corrupted golden. Short `$TMPDIR` values have the same failure mode.
+ *
+ * Both neighbours must be a delimiter or a string edge. `/root/x`, `'/root'`,
+ * `PATH=/root:/usr/bin` and `file:///root/x` scrub; `/root-cause`, `/root.bak`,
+ * `/root中文` and `https://host/root/x` do not — a URL authority always ends in
+ * a segment character, so the `/` opening its path is never a boundary.
+ *
+ * Over-scrubbing breaks the gate outright, while under-scrubbing only matters
+ * if a machine path actually reaches a response body, so ambiguity resolves
+ * toward leaving the string alone.
+ */
+function pathRule(needle: string, token: string): PathRule | null {
+  // `$HOME=/root/` would otherwise put the boundary after the separator.
+  const trimmed = needle.replace(/[/\\]+$/, "");
+  // Must still be an absolute path with at least one segment. `/` and `//` trim
+  // to "" and would rewrite every separator in the document; a Windows drive
+  // root `C:\` trims to `C:`, which is not a path at all and would rewrite
+  // literals like "label C: value".
+  if (trimmed.length < 2 || !/[/\\]/.test(trimmed)) return null;
+  return { needle: trimmed, token };
+}
+
+const FIXED_PATH_RULES = [
+  pathRule(UPLOAD_DIR, "<uploads>"),
+  pathRule(SNAPSHOT_TMP, "<tmp>"),
+  pathRule(REPO_ROOT, "<repo>"),
+  pathRule(tmpdir(), "<tmp>"),
+];
+
+interface PathScrubber {
+  needles: string[];
+  tokens: Map<string, string>;
+  pattern: RegExp | null;
+}
+
+/**
+ * Compiles every prefix into ONE alternation applied in a single pass, so each
+ * boundary is judged against the untouched input and no rule can ever match
+ * text an earlier rule produced.
+ *
+ * Longest needle first: regex alternation is first-match-wins, so this is what
+ * makes a nested path beat the shorter prefix it sits under. With `$HOME` at
+ * `/tmp/alice` on a box whose `$TMPDIR` is `/tmp`, the shorter rule would
+ * otherwise win and leave the machine-specific "alice" behind as "<tmp>/alice".
+ * Where the longer needle matches but its trailing boundary does not hold, the
+ * engine backtracks to the shorter one, which is the desired reading.
+ */
+function buildScrubber(rules: Array<PathRule | null>): PathScrubber {
+  const tokens = new Map<string, string>();
+  for (const rule of rules) {
+    if (rule && !tokens.has(rule.needle)) tokens.set(rule.needle, rule.token);
+  }
+  const needles = [...tokens.keys()].sort((left, right) => right.length - left.length);
+  const pattern = needles.length
+    ? new RegExp(
+        `(?<![^${PATH_BOUNDARY}])(?:${needles.map(escapeRegExp).join("|")})(?![^${PATH_BOUNDARY}])`,
+        "g",
+      )
+    : null;
+  return { needles, tokens, pattern };
+}
+
+const DEFAULT_SCRUBBER = buildScrubber([...FIXED_PATH_RULES, pathRule(homedir(), "<home>")]);
+/** `scrubString` runs per response field, so keep one compiled scrubber per `$HOME`. */
+const SCRUBBER_CACHE = new Map<string, PathScrubber>();
+
+function pathScrubber(identity: SnapshotMachineIdentity): PathScrubber {
+  const home = identity.homedir;
+  if (home === undefined) return DEFAULT_SCRUBBER;
+  let scrubber = SCRUBBER_CACHE.get(home);
+  if (!scrubber) {
+    scrubber = buildScrubber([...FIXED_PATH_RULES, pathRule(home, "<home>")]);
+    SCRUBBER_CACHE.set(home, scrubber);
+  }
+  return scrubber;
+}
+
+function scrubMachinePaths(value: string, scrubber: PathScrubber): string {
+  // `includes` is the cheap gate; the regex only runs on a candidate hit.
+  if (!scrubber.pattern || !scrubber.needles.some((needle) => value.includes(needle))) return value;
+  return value.replace(scrubber.pattern, (match) => scrubber.tokens.get(match) ?? match);
 }
 
 function scrubPathIdentity(
@@ -232,9 +342,7 @@ export function scrubString(value: string, identity: SnapshotMachineIdentity = {
   let out = value
     .replace(ISO_RE, "<timestamp>")
     .replace(LOCAL_TIME_ID_RE, "$1-<timestamp>");
-  for (const [needle, replacement] of PATH_REPLACEMENTS) {
-    if (needle && out.includes(needle)) out = out.split(needle).join(replacement);
-  }
+  out = scrubMachinePaths(out, pathScrubber(identity));
   out = scrubPathIdentity(out, identity);
   if (VERSION && out.includes(VERSION)) out = out.split(VERSION).join("<version>");
   return out;
