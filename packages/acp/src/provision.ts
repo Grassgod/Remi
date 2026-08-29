@@ -11,7 +11,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -138,6 +138,7 @@ export function patchCodexUsageBridge(
     return false;
   }
   const distPath = join(packageDir, "dist", "index.js");
+  const tempPath = `${distPath}.remi-patch-${process.pid}`;
   try {
     const source = readFileSync(distPath, "utf8");
     if (source.includes(CODEX_USAGE_PATCH_MARKER)) return true;
@@ -145,7 +146,9 @@ export function patchCodexUsageBridge(
       log(`codex usage patch skipped: anchor missing in ${distPath}`);
       return false;
     }
-    writeFileSync(distPath, source.replace(CODEX_USAGE_UPDATE_ANCHOR, CODEX_USAGE_UPDATE_REPLACEMENT));
+    const patched = source.replace(CODEX_USAGE_UPDATE_ANCHOR, CODEX_USAGE_UPDATE_REPLACEMENT);
+    writeFileSync(tempPath, patched, { mode: statSync(distPath).mode });
+    renameSync(tempPath, distPath);
     if (!codexUsagePatchSatisfied(packageDir)) {
       log(`codex usage patch verification failed in ${distPath}`);
       return false;
@@ -153,6 +156,7 @@ export function patchCodexUsageBridge(
     log(`applied ${CODEX_USAGE_PATCH} to codex ACP bridge`);
     return true;
   } catch (err) {
+    try { rmSync(tempPath, { force: true }); } catch {}
     log(`codex usage patch failed: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }

@@ -109,6 +109,18 @@ describe("Codex task usage backfill", () => {
     expect(plan.updates).toEqual([]);
     expect(plan.skipped.missingUsageEvents).toBe(1);
   });
+
+  it("refuses to overwrite usage that changed after the plan was built", () => {
+    insertTask("tsk_race", "agt_worker", "completed", [usage("codex", "gpt", 1, 2, 3, 0, 6)]);
+    insertUsage("tsk_race", 1, 100);
+    const plan = buildCodexUsageBackfillPlan(db as never);
+    db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_race'", [JSON.stringify([usage("codex", "gpt", 9, 9, 9, 0, 27)])]);
+
+    expect(() => applyCodexUsageBackfill(db as never, plan, "2026-08-29T00:00:00.000Z"))
+      .toThrow("task usage changed after dry-run plan: tsk_race");
+    const stored = db.query("SELECT usage FROM multiremi_tasks WHERE id = 'tsk_race'").get() as { usage: string };
+    expect(JSON.parse(stored.usage)[0].totalTokens).toBe(27);
+  });
 });
 
 function insertTask(id: string, agentId: string, status: string, entries: ReturnType<typeof usage>[]): void {

@@ -32,6 +32,7 @@ export interface CodexUsageBackfillUpdate {
   eventCount: number;
   beforeTotalTokens: number;
   afterTotalTokens: number;
+  expectedUsage: string;
   usage: RuntimeUsageEntry[];
 }
 
@@ -143,6 +144,7 @@ export function buildCodexUsageBackfillPlan(db: SqlDatabase): CodexUsageBackfill
       eventCount: events.count,
       beforeTotalTokens,
       afterTotalTokens: events.total,
+      expectedUsage: task.usage,
       usage: rewritten,
     });
   }
@@ -183,11 +185,15 @@ export function summarizeCodexUsageBackfill(
 }
 
 export function applyCodexUsageBackfill(db: SqlDatabase, plan: CodexUsageBackfillPlan, updatedAt: string): number {
-  const update = db.prepare("UPDATE multiremi_tasks SET usage = ?, updated_at = ? WHERE id = ?");
+  const update = db.prepare("UPDATE multiremi_tasks SET usage = ?, updated_at = ? WHERE id = ? AND usage = ?");
   return db.transaction(() => {
     let changed = 0;
     for (const item of plan.updates) {
-      changed += update.run(JSON.stringify(item.usage), updatedAt, item.taskId).changes;
+      const result = update.run(JSON.stringify(item.usage), updatedAt, item.taskId, item.expectedUsage);
+      if (result.changes !== 1) {
+        throw new Error(`task usage changed after dry-run plan: ${item.taskId}`);
+      }
+      changed += result.changes;
     }
     return changed;
   })();
@@ -196,7 +202,9 @@ export function applyCodexUsageBackfill(db: SqlDatabase, plan: CodexUsageBackfil
 function usageEventUsed(meta: string | null): number | null {
   if (!meta) return null;
   try {
-    const value = Number((JSON.parse(meta) as Record<string, unknown>)?.used);
+    const raw = (JSON.parse(meta) as Record<string, unknown>)?.used;
+    if (raw == null) return null;
+    const value = Number(raw);
     return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
   } catch {
     return null;

@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -81,6 +81,7 @@ test("codex usage patch is idempotent and carries the complete last-request spli
   const home = freshHome();
   const pkgDir = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
   const dist = writeCodexDist(pkgDir);
+  chmodSync(dist, 0o755);
   const logs: string[] = [];
 
   expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
@@ -91,6 +92,7 @@ test("codex usage patch is idempotent and carries the complete last-request spli
   expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
   expect(readFileSync(dist, "utf8")).toBe(once);
   expect(once.match(/remiTokenUsage/g)).toHaveLength(1);
+  expect(statSync(dist).mode & 0o777).toBe(0o755);
 });
 
 test("codex usage patch logs and degrades when its anchor is missing", () => {

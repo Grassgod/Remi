@@ -128,6 +128,25 @@ describe("resolvePromptUsage", () => {
     });
   });
 
+  it("degrades a mixed detailed/fallback codex stream to an honest total-only result", () => {
+    const usage = createPromptUsageState();
+    accumulateUsage(usage, codexUsageUpdate(100, 15, 70, 8, 7));
+    accumulateUsage(usage, { sessionUpdate: "usage_update", used: 240, size: 200000 });
+
+    expect(resolvePromptUsage(usage, {
+      inputTokens: 25,
+      outputTokens: 20,
+      cachedReadTokens: 180,
+      totalTokens: 240,
+    }, "last-request")).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 340,
+    });
+  });
+
   it("keeps streamed codex usage when a cancelled turn settles with zeros", () => {
     const usage = createPromptUsageState();
     accumulateUsage(usage, codexUsageUpdate(100, 15, 70, 8, 7));

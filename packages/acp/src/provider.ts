@@ -1133,7 +1133,7 @@ export function resolvePromptUsage(
   };
 
   if (settleScope === "last-request") {
-    if (streamed.hasDetailedUsage) {
+    if (streamed.hasDetailedUsage && !streamed.hasStreamedTotal) {
       return {
         inputTokens: streamed.inputTokens,
         outputTokens: streamed.outputTokens,
@@ -1148,7 +1148,7 @@ export function resolvePromptUsage(
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
-        totalTokens: streamed.streamedTotalSum,
+        totalTokens: streamed.detailedTotalTokens + streamed.streamedTotalSum,
       };
     }
   }
