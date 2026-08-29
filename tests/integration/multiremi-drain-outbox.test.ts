@@ -54,16 +54,20 @@ function gate(): StreamGate {
   return { yielded, release };
 }
 
-function taskReportOutageProxy(serverPort: number | undefined): ReturnType<typeof Bun.serve> {
+type ApiProxyInterceptor = (request: Request, url: URL) => Response | null | Promise<Response | null>;
+
+function apiProxy(
+  serverPort: number | undefined,
+  intercept: ApiProxyInterceptor,
+): ReturnType<typeof Bun.serve> {
   if (serverPort === undefined) throw new Error("test server did not bind a port");
   return Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
       const url = new URL(request.url);
-      if (request.method === "POST" && url.pathname.startsWith("/api/daemon/tasks/")) {
-        return new Response("report API unavailable", { status: 503 });
-      }
+      const intercepted = await intercept(request, url);
+      if (intercepted) return intercepted;
       const body = request.method === "GET" || request.method === "HEAD"
         ? undefined
         : await request.arrayBuffer();
@@ -73,6 +77,15 @@ function taskReportOutageProxy(serverPort: number | undefined): ReturnType<typeo
         ...(body !== undefined ? { body } : {}),
       });
     },
+  });
+}
+
+function taskReportOutageProxy(serverPort: number | undefined): ReturnType<typeof Bun.serve> {
+  return apiProxy(serverPort, (request, url) => {
+    if (request.method === "POST" && url.pathname.startsWith("/api/daemon/tasks/")) {
+      return new Response("report API unavailable", { status: 503 });
+    }
+    return null;
   });
 }
 
@@ -202,6 +215,69 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       server.stop(true);
     }
   }, 20_000);
+
+  it("keeps pre-terminal report drain active so a CLI update remains blocked", async () => {
+    const { store, root } = testBed("multiremi-preterminal-active-");
+    const agent = store.createAgent({ name: "Pre-terminal Active Bot", provider: "claude", cwd: root });
+    const task = store.createTask({ agentId: agent.id, prompt: "finish after reports catch up" });
+    const daemonToken = await store.createAccessToken({ name: "pre-terminal daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-preterminal-secret", hostname: "127.0.0.1", port: 0 });
+    let rejectMessages = true;
+    let messageAttempts = 0;
+    const proxy = apiProxy(server.port, (request, url) => {
+      if (request.method === "POST" && url.pathname === `/api/daemon/tasks/${task.id}/messages`) {
+        messageAttempts++;
+        if (rejectMessages) return new Response("messages unavailable", { status: 503 });
+      }
+      return null;
+    });
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${proxy.port}`,
+      token: daemonToken.token,
+      daemonId: "daemon-preterminal-active",
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      pollIntervalMs: 25,
+      daemonPort: 0,
+      workspacesRoot: join(root, "workspaces"),
+      repoCacheRoot: join(root, ".repo-cache"),
+      outboxPath: join(root, "outbox.db"),
+      outboxBackoffMs: [100],
+      taskDrainTimeoutMs: 5_000,
+      providerFactory: () => ({
+        async *sendStream() {
+          yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "finished" }] } as any;
+        },
+        getLastResponse: () => RESPONSE,
+        close: async () => {},
+      }),
+    });
+    const daemonRun = daemon.start();
+    try {
+      await until(() => messageAttempts > 0, 5_000, "pre-terminal message delivery attempt");
+      const state = daemon as unknown as {
+        activeTaskCount: number;
+        drainingTaskCount: number;
+        tryPauseClaimsForUpdate(scope: "cli"): { ok: boolean; error?: string };
+      };
+      expect(state.activeTaskCount).toBe(1);
+      expect(state.drainingTaskCount).toBe(0);
+      expect(state.tryPauseClaimsForUpdate("cli")).toEqual({
+        ok: false,
+        error: "daemon is busy; retry update when idle",
+      });
+
+      rejectMessages = false;
+      await daemonRun;
+      expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "finished" });
+    } finally {
+      daemon.stop();
+      await daemonRun.catch(() => {});
+      proxy.stop(true);
+      server.stop(true);
+    }
+  }, 10_000);
 
   it("survives an API outage mid-stream: provider session lives on, messages land in order", async () => {
     const { store, root } = testBed("multiremi-outage-");
@@ -365,6 +441,74 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     }
   }, 10_000);
 
+  it("requires a second status check before a transient watcher 404 can purge reports", async () => {
+    const { store, root } = testBed("multiremi-outbox-transient-404-");
+    const agent = store.createAgent({ name: "Transient 404 Bot", provider: "claude", cwd: root });
+    const task = store.createTask({ agentId: agent.id, prompt: "survive one missing response" });
+    const daemonToken = await store.createAccessToken({ name: "transient 404 daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-transient-404-secret", hostname: "127.0.0.1", port: 0 });
+    let returnMissingOnce = true;
+    let statusReads = 0;
+    const proxy = apiProxy(server.port, (request, url) => {
+      if (request.method === "GET" && url.pathname === `/api/daemon/tasks/${task.id}/status`) {
+        statusReads++;
+        if (returnMissingOnce) {
+          returnMissingOnce = false;
+          return new Response("task temporarily not routed", { status: 404 });
+        }
+      }
+      return null;
+    });
+    const providerStarted = gate();
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${proxy.port}`,
+      token: daemonToken.token,
+      daemonId: "daemon-transient-404",
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      pollIntervalMs: 25,
+      daemonPort: 0,
+      workspacesRoot: join(root, "workspaces"),
+      repoCacheRoot: join(root, ".repo-cache"),
+      outboxPath: join(root, "outbox.db"),
+      outboxBackoffMs: [20],
+      providerFactory: () => ({
+        async *sendStream(_message, options) {
+          providerStarted.release();
+          await new Promise<void>((resolve) => {
+            if (options?.signal?.aborted) resolve();
+            else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          throw new Error("provider interrupted after transient 404");
+        },
+        getLastResponse: () => null,
+        close: async () => {},
+      }),
+    });
+    const daemonRun = daemon.start();
+    try {
+      await providerStarted.yielded;
+      await daemonRun;
+      expect(statusReads).toBeGreaterThanOrEqual(2);
+      expect(store.getTask(task.id)).toMatchObject({
+        status: "failed",
+        error: "provider interrupted after transient 404",
+      });
+      const persisted = new MultiremiTaskReportOutbox({
+        path: join(root, "outbox.db"),
+        deliver: async () => {},
+      });
+      expect(persisted.stats()).toMatchObject({ pending: 0, pendingTasks: 0 });
+      await persisted.close();
+    } finally {
+      daemon.stop();
+      await daemonRun.catch(() => {});
+      proxy.stop(true);
+      server.stop(true);
+    }
+  }, 10_000);
+
   it("reconciles missing historical tasks before replay and reaches ready without draining them", async () => {
     const { store, root } = testBed("multiremi-outbox-restart-");
     const outboxPath = join(root, "outbox.db");
@@ -484,6 +628,93 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     } finally {
       daemon.stop();
       await daemonRun.catch(() => {});
+      proxy.stop(true);
+      server.stop(true);
+    }
+  }, 10_000);
+
+  it("delivers a persisted terminal result before orphan recovery despite the history timeout", async () => {
+    const { store, root } = testBed("multiremi-outbox-terminal-replay-");
+    const daemonId = "daemon-terminal-replay";
+    const runtime = store.registerRuntime({
+      id: "rt_terminal_replay",
+      name: "Terminal replay runtime",
+      provider: "claude",
+      daemonId,
+      workspaceId: "local",
+      ownerId: "local",
+    });
+    const agent = store.createAgent({ name: "Terminal Replay Bot", provider: "claude", cwd: root });
+    const task = store.createTask({ agentId: agent.id, prompt: "already finished locally" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+
+    const outboxPath = join(root, "outbox.db");
+    const historical = new MultiremiTaskReportOutbox({
+      path: outboxPath,
+      backoffScheduleMs: [60_000],
+      deliver: async () => { throw new Error("old API unavailable"); },
+    });
+    historical.enqueue(task.id, "messages", {
+      messages: [{ seq: 1, type: "text", content: "last buffered message" }],
+    });
+    historical.enqueue(task.id, "complete", {
+      output: "replayed completion",
+      sessionId: "sess-terminal-replay",
+      workDir: root,
+    });
+    await Bun.sleep(20);
+    await historical.close();
+
+    const daemonToken = await store.createAccessToken({
+      name: "terminal replay daemon",
+      type: "daemon",
+      workspaceId: "local",
+      daemonId,
+    });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-terminal-replay-secret", hostname: "127.0.0.1", port: 0 });
+    let delayedMessages = 0;
+    const proxy = apiProxy(server.port, async (request, url) => {
+      if (request.method === "POST" && url.pathname === `/api/daemon/tasks/${task.id}/messages`) {
+        delayedMessages++;
+        await Bun.sleep(300);
+      }
+      return null;
+    });
+    store.beginPlatformDrain({ operationId: "pop_terminal_replay", ttlMs: 120_000 });
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${proxy.port}`,
+      token: daemonToken.token,
+      runtimeId: runtime.id,
+      daemonId,
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      pollIntervalMs: 25,
+      daemonPort: 0,
+      workspacesRoot: join(root, "workspaces"),
+      repoCacheRoot: join(root, ".repo-cache"),
+      outboxPath,
+      outboxBackoffMs: [20],
+      outboxStartupFlushTimeoutMs: 50,
+      providerFactory: () => ({
+        async *sendStream() {},
+        getLastResponse: () => null,
+      }),
+    });
+    try {
+      await daemon.start();
+      expect(delayedMessages).toBe(1);
+      expect(store.getTask(task.id)).toMatchObject({
+        status: "completed",
+        result: "replayed completion",
+      });
+      expect(store.listTasks().filter((candidate) => candidate.parentTaskId === task.id)).toHaveLength(0);
+      const persisted = new MultiremiTaskReportOutbox({ path: outboxPath, deliver: async () => {} });
+      expect(persisted.stats()).toMatchObject({ pending: 0, pendingTerminal: 0, pendingTasks: 0 });
+      await persisted.close();
+    } finally {
+      daemon.stop();
       proxy.stop(true);
       server.stop(true);
     }

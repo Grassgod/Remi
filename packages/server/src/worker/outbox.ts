@@ -159,6 +159,7 @@ export class MultiremiTaskReportOutbox {
   async waitForTaskDrain(taskId: string, signal?: AbortSignal): Promise<MultiremiOutboxDrainResult> {
     const immediate = this.taskDrainState(taskId);
     if (immediate) return immediate;
+    if (signal?.aborted) return "aborted";
     this.ensurePump(taskId);
     return await new Promise<MultiremiOutboxDrainResult>((resolve) => {
       let settled = false;
@@ -173,6 +174,7 @@ export class MultiremiTaskReportOutbox {
       waiters.push(finish);
       this.drainWaiters.set(taskId, waiters);
       signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
       const state = this.taskDrainState(taskId);
       if (state) this.settleDrainWaiters(taskId, state);
     });

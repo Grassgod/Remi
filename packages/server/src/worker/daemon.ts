@@ -855,10 +855,9 @@ export class MultiremiDaemon {
       this.assertWorkspaceRootOwner();
       // Replay reports left over from a previous run BEFORE recover-orphans:
       // recoverOrphans marks in-flight tasks failed, so an undelivered
-      // complete/fail must land first or a finished task gets mislabelled. The
-      // bounded wait only changes behavior while delivery is unavailable; in
-      // that case recoverOrphans uses the same API and cannot succeed either,
-      // while the background pump retains every row for ordered replay.
+      // complete/fail must land first or a finished task gets mislabelled.
+      // Purely non-terminal history has a bounded startup wait and may continue
+      // in the background; tasks with terminal reports must settle first.
       await this.reconcilePendingOutboxTasks(outbox);
       await this.flushStartupOutbox(outbox);
       await this.refreshWorkspaceRepos(this.options.workspaceId);
@@ -2061,11 +2060,8 @@ export class MultiremiDaemon {
     return this.outbox;
   }
 
-  private async awaitTaskReportDrain(taskId: string, resumeActiveExecution = true): Promise<void> {
+  private async awaitTaskReportDrain(taskId: string): Promise<void> {
     const outbox = this.outbox;
-    const wasActive = this.activeTaskCount > 0;
-    if (wasActive) this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
-    this.drainingTaskCount++;
     const drainAbort = new AbortController();
     const shutdownSignal = this.outboxAbort?.signal;
     const onShutdown = () => drainAbort.abort();
@@ -2093,8 +2089,6 @@ export class MultiremiDaemon {
     } finally {
       clearTimeout(timer);
       shutdownSignal?.removeEventListener("abort", onShutdown);
-      this.drainingTaskCount = Math.max(0, this.drainingTaskCount - 1);
-      if (wasActive && resumeActiveExecution) this.activeTaskCount++;
     }
   }
 
@@ -2136,6 +2130,9 @@ export class MultiremiDaemon {
   }
 
   private async flushStartupOutbox(outbox: MultiremiTaskReportOutbox): Promise<void> {
+    const terminalTaskIds = outbox.taskIdsWithPendingTerminal();
+    const terminalTaskSet = new Set(terminalTaskIds);
+    const historicalTaskIds = outbox.pendingTaskIds().filter((taskId) => !terminalTaskSet.has(taskId));
     const flushAbort = new AbortController();
     const shutdownSignal = this.outboxAbort?.signal;
     const onShutdown = () => flushAbort.abort();
@@ -2148,17 +2145,34 @@ export class MultiremiDaemon {
     }, this.options.outboxStartupFlushTimeoutMs);
     timer.unref?.();
     try {
-      await outbox.flushAll(flushAbort.signal);
+      await Promise.all(historicalTaskIds.map((taskId) => outbox.waitForTaskDrain(taskId, flushAbort.signal)));
     } finally {
       clearTimeout(timer);
       shutdownSignal?.removeEventListener("abort", onShutdown);
     }
     if (timedOut) {
       log.warn(
-        `startup outbox replay exceeded ${this.options.outboxStartupFlushTimeoutMs}ms; `
-        + "continuing startup while delivery retries in the background",
+        `startup non-terminal outbox replay exceeded ${this.options.outboxStartupFlushTimeoutMs}ms; `
+        + "continuing those historical deliveries in the background",
       );
       outbox.pumpAll();
+    }
+
+    // Reconciliation removed tasks already terminal on the server. Every
+    // remaining local terminal row is therefore authoritative completion or
+    // failure evidence for an in-flight server task. Do not let orphan
+    // recovery overwrite it, even when ordinary history took too long.
+    const terminalResults = await Promise.all(terminalTaskIds.map(async (taskId) => ({
+      taskId,
+      result: await outbox.waitForTaskDrain(taskId, shutdownSignal),
+    })));
+    const unsettled = terminalResults.filter(({ result }) => result !== "delivered");
+    if (unsettled.length > 0) {
+      throw new Error(
+        `startup terminal outbox replay did not complete for ${unsettled
+          .map(({ taskId, result }) => `${taskId} (${result})`)
+          .join(", ")}`,
+      );
     }
   }
 
@@ -2282,8 +2296,16 @@ export class MultiremiDaemon {
     let progressSummarizer: TaskProgressSummarizer | null = null;
     let activeExecutionReleased = false;
     const awaitFinalReportDrain = async () => {
-      activeExecutionReleased = true;
-      await this.awaitTaskReportDrain(task.id, false);
+      if (!activeExecutionReleased) {
+        activeExecutionReleased = true;
+        this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
+      }
+      this.drainingTaskCount++;
+      try {
+        await this.awaitTaskReportDrain(task.id);
+      } finally {
+        this.drainingTaskCount = Math.max(0, this.drainingTaskCount - 1);
+      }
     };
 
     try {
@@ -3223,7 +3245,6 @@ export class MultiremiDaemon {
         }
       }).catch((error) => {
         if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
-          this.outbox?.purgeTask(taskId);
           abort.abort();
         }
       });

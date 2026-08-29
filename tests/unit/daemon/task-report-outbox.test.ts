@@ -93,6 +93,20 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(delivered).toEqual(["tsk_ok:1"]);
   });
 
+  it("honors a shutdown signal that was already aborted before drain starts", async () => {
+    const outbox = track(new MultiremiTaskReportOutbox({
+      path: ":memory:",
+      backoffScheduleMs: [60_000],
+      deliver: async () => { throw new Error("connection refused"); },
+    }));
+    outbox.enqueue("tsk_shutdown", "complete", { output: "keep on disk" });
+    const shutdown = new AbortController();
+    shutdown.abort();
+
+    expect(await outbox.waitForTaskDrain("tsk_shutdown", shutdown.signal)).toBe("aborted");
+    expect(outbox.stats()).toMatchObject({ pending: 1, pendingTerminal: 1 });
+  });
+
   it("recovers undelivered records after a restart and replays them in order", async () => {
     const path = tempPath();
     const first = track(new MultiremiTaskReportOutbox({
