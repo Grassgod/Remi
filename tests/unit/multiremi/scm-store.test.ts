@@ -79,6 +79,24 @@ function recordChange(
   });
 }
 
+function projectChangeRequest(
+  store: ReturnType<typeof createLocalStore>,
+  connectionId: string,
+  externalId: string,
+  payload: Record<string, unknown>,
+) {
+  return store.advanceScmEntitySnapshot({
+    connectionId,
+    repositoryId: "repo_widgets",
+    entityType: "change_request",
+    externalId,
+    revisionAt: "2026-08-21T10:00:00.000Z",
+    revision: `v-${externalId}`,
+    contentHash: `change-${externalId}`,
+    payload,
+  });
+}
+
 describe("SCM connection and canonical event store", () => {
   it("encrypts credentials and never includes plaintext in connection responses", () => {
     const { store, connection } = seedConnection();
@@ -891,7 +909,13 @@ describe("SCM connection and canonical event store", () => {
       revisionAt: "2026-08-21T10:00:00.000Z",
       revision: "v1",
       contentHash: "v1",
-      payload: { number: 42, title: `${issue.key} merge`, state: "merged" },
+      payload: {
+        number: 42,
+        title: `${issue.key} merge`,
+        state: "merged",
+        source_branch: `agent/${issue.key}`,
+        url: "https://github.com/acme/widgets/pull/42",
+      },
     });
 
     const first = recordChange(store, connection.id, { logicalKey: "change.merged:42:lifecycle" });
@@ -909,6 +933,154 @@ describe("SCM connection and canonical event store", () => {
     expect(db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id = ? AND status = 'applied'",
     ).get(issue.id)).toEqual({ count: 1 });
+    expect(store.listIssueActivity(issue.id).find((activity) => activity.type === "scm_merge_completed"))
+      .toMatchObject({
+        actorType: "system",
+        actorId: null,
+        data: {
+          change_request_id: expect.any(String),
+          number: 42,
+          url: "https://github.com/acme/widgets/pull/42",
+          source_branch: `agent/${issue.key}`,
+          event_id: first.event.id,
+          attribution: ["branch", "title"],
+        },
+      });
+  });
+
+  it("completes only the owning issue while preserving weak cross-reference links", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const mentionedIssue = store.createIssue({ title: "Mentioned defect", workspaceId: "local" });
+    const owningIssue = store.createIssue({ title: "Delivered change", workspaceId: "local" });
+    projectChangeRequest(store, connection.id, "42", {
+      number: 42,
+      title: `${owningIssue.key} delivery`,
+      body: `This unrelated defect is tracked as ${mentionedIssue.key}.`,
+      state: "merged",
+      source_branch: `agent/${owningIssue.key}`,
+    });
+
+    recordChange(store, connection.id, { logicalKey: "change.merged:42:cross-reference" });
+
+    expect(store.getIssue(owningIssue.id)?.status).toBe("done");
+    expect(store.getIssue(mentionedIssue.id)?.status).toBe("todo");
+    expect(store.listScmChangeRequestsForIssue(mentionedIssue.id)).toHaveLength(1);
+  });
+
+  it("does not complete an issue while another non-draft owning change request is open", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const issue = store.createIssue({ title: "Split delivery", workspaceId: "local" });
+    projectChangeRequest(store, connection.id, "42", {
+      number: 42,
+      title: `${issue.key} first part`,
+      state: "merged",
+      source_branch: `agent/${issue.key}-part-one`,
+    });
+    projectChangeRequest(store, connection.id, "43", {
+      number: 43,
+      title: `${issue.key} second part`,
+      state: "open",
+      source_branch: `agent/${issue.key}-part-two`,
+    });
+
+    recordChange(store, connection.id, { logicalKey: "change.merged:42:split-delivery" });
+
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id = ?").get(issue.id))
+      .toEqual({ count: 0 });
+  });
+
+  it("keeps branch-only owning change requests eligible for merge completion", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const issue = store.createIssue({ title: "Branch-owned delivery", workspaceId: "local" });
+    projectChangeRequest(store, connection.id, "42", {
+      number: 42,
+      title: "Implement the delivery",
+      state: "merged",
+      source_branch: `agent/${issue.key}`,
+    });
+
+    recordChange(store, connection.id, { logicalKey: "change.merged:42:branch-owner" });
+
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+  });
+
+  it("treats issue keys anywhere in release titles as ownership", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const issue = store.createIssue({ title: "Release delivery", workspaceId: "local" });
+    projectChangeRequest(store, connection.id, "42", {
+      number: 42,
+      title: `release: prepare v0.2.54 (${issue.key})`,
+      state: "merged",
+      source_branch: "release/v0.2.54",
+    });
+
+    recordChange(store, connection.id, { logicalKey: "change.merged:42:release-title" });
+
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+  });
+
+  it("ignores draft owners and weak open mentions when checking merge completion blockers", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const issue = store.createIssue({ title: "Draft follow-up", workspaceId: "local" });
+    projectChangeRequest(store, connection.id, "42", {
+      number: 42,
+      title: `${issue.key} delivery`,
+      state: "merged",
+    });
+    projectChangeRequest(store, connection.id, "43", {
+      number: 43,
+      title: `${issue.key} draft experiment`,
+      state: "open",
+      draft: true,
+    });
+    projectChangeRequest(store, connection.id, "44", {
+      number: 44,
+      title: "Unrelated open change",
+      body: `This happens to mention ${issue.key}.`,
+      state: "open",
+    });
+
+    recordChange(store, connection.id, { logicalKey: "change.merged:42:draft-blocker" });
+
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+  });
+
+  it("accepts declarative body ownership and explicit manual links", () => {
+    const { store, connection } = seedConnection();
+    store.updateWorkspace("local", {
+      settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+    });
+    const bodyOwnedIssue = store.createIssue({ title: "Body-owned delivery", workspaceId: "local" });
+    const manuallyLinkedIssue = store.createIssue({ title: "Manual delivery", workspaceId: "local" });
+    projectChangeRequest(store, connection.id, "42", {
+      number: 42,
+      title: "Combined delivery",
+      body: `Summary\n\n- Resolves: ${bodyOwnedIssue.key}`,
+      state: "merged",
+    });
+    const changeRequest = store.listScmChangeRequestsForIssue(bodyOwnedIssue.id)![0]!;
+    store.linkScmChangeRequestToIssue(manuallyLinkedIssue.id, changeRequest.id);
+
+    recordChange(store, connection.id, { logicalKey: "change.merged:42:declared-and-manual" });
+
+    expect(store.getIssue(bodyOwnedIssue.id)?.status).toBe("done");
+    expect(store.getIssue(manuallyLinkedIssue.id)?.status).toBe("done");
   });
 
   it("keeps merge completion retryable after a transient lifecycle failure", () => {

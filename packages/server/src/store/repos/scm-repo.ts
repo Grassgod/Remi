@@ -64,6 +64,16 @@ interface LockedSnapshotAdvanceResult {
   workspaceId: string;
 }
 
+type ScmIssueOwnershipAttribution = "manual" | "branch" | "title" | "body";
+
+interface ScmIssueOwnershipCandidate {
+  issueKey: string;
+  linkSource: string;
+  title: string;
+  body: string | null;
+  sourceBranch: string | null;
+}
+
 export class ScmRepo {
   constructor(private readonly ctx: StoreContext) {}
 
@@ -1641,14 +1651,42 @@ export class ScmRepo {
     const workspace = this.ctx.workspaces().getWorkspace(event.workspaceId);
     if (workspace?.settings.scm_complete_issue_on_merge_enabled !== true) return;
     const rows = this.ctx.db.query(
-      `SELECT i.id FROM multiremi_scm_change_requests cr
+      `SELECT i.id AS issue_id, i.issue_key, l.source AS link_source,
+              cr.title, cr.body, cr.source_branch
+       FROM multiremi_scm_change_requests cr
        JOIN multiremi_scm_issue_links l ON l.change_request_id = cr.id AND l.active = 1
        JOIN multiremi_issues i ON i.id = l.issue_id
        WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?
          AND i.workspace_id = ? AND i.status <> 'done'`,
     ).all(event.connectionId, event.repositoryId, event.subjectId, event.workspaceId) as Row[];
     for (const row of rows) {
-      const issueId = String(row.id);
+      const issueId = String(row.issue_id);
+      const issueKey = String(row.issue_key);
+      const attribution = scmIssueOwnershipAttribution({
+        issueKey,
+        linkSource: String(row.link_source),
+        title: String(row.title ?? ""),
+        body: nullableString(row.body),
+        sourceBranch: nullableString(row.source_branch),
+      });
+      if (attribution.length === 0) continue;
+
+      const competingRows = this.ctx.db.query(
+        `SELECT l.source AS link_source, cr.title, cr.body, cr.source_branch
+         FROM multiremi_scm_issue_links l
+         JOIN multiremi_scm_change_requests cr ON cr.id = l.change_request_id
+         WHERE l.issue_id = ? AND l.active = 1 AND cr.workspace_id = ?
+           AND cr.external_id != ? AND cr.state = 'open' AND cr.draft = 0`,
+      ).all(issueId, event.workspaceId, event.subjectId) as Row[];
+      const hasCompetingOwner = competingRows.some((competing) => scmIssueOwnershipAttribution({
+        issueKey,
+        linkSource: String(competing.link_source),
+        title: String(competing.title ?? ""),
+        body: nullableString(competing.body),
+        sourceBranch: nullableString(competing.source_branch),
+      }).length > 0);
+      if (hasCompetingOwner) continue;
+
       this.ctx.db.run(
         `INSERT OR IGNORE INTO multiremi_scm_effects (
           id, event_id, issue_id, effect_type, status, applied_at, last_error, created_at
@@ -1671,9 +1709,39 @@ export class ScmRepo {
       const issueId = String(row.issue_id);
       try {
         const current = this.ctx.issues().getIssue(issueId);
+        const changeRequestRow = this.ctx.db.query(
+          `SELECT cr.id AS change_request_id, cr.number, cr.url, cr.source_branch,
+                  cr.title, cr.body, l.source AS link_source
+           FROM multiremi_scm_change_requests cr
+           LEFT JOIN multiremi_scm_issue_links l
+             ON l.change_request_id = cr.id AND l.issue_id = ?
+           WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?`,
+        ).get(issueId, event.connectionId, event.repositoryId, event.subjectId) as Row | null;
+        if (!changeRequestRow) throw new Error("SCM change request for merge completion could not be found");
         const updated = current && current.status !== "done"
           ? this.ctx.issues().updateIssue(issueId, { status: "done" })
           : null;
+        if (updated) {
+          this.ctx.appendIssueActivity(issueId, {
+            actorType: "system",
+            actorId: null,
+            type: "scm_merge_completed",
+            data: {
+              change_request_id: String(changeRequestRow.change_request_id),
+              number: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
+              url: nullableString(changeRequestRow.url),
+              source_branch: nullableString(changeRequestRow.source_branch),
+              event_id: event.id,
+              attribution: scmIssueOwnershipAttribution({
+                issueKey: updated.key,
+                linkSource: String(changeRequestRow.link_source ?? ""),
+                title: String(changeRequestRow.title ?? ""),
+                body: nullableString(changeRequestRow.body),
+                sourceBranch: nullableString(changeRequestRow.source_branch),
+              }),
+            },
+          });
+        }
         this.ctx.db.run(
           "UPDATE multiremi_scm_effects SET status = 'applied', applied_at = ?, last_error = NULL WHERE id = ? AND status = 'pending'",
           [nowIso(), effectId],
@@ -2175,6 +2243,23 @@ function normalizeChangeRequestState(value: unknown, draft: boolean): MultiremiS
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function scmIssueOwnershipAttribution(
+  candidate: ScmIssueOwnershipCandidate,
+): ScmIssueOwnershipAttribution[] {
+  const issueKey = escapeRegExp(candidate.issueKey);
+  const keyPattern = new RegExp(`\\b${issueKey}\\b`, "i");
+  const bodyDeclarationPattern = new RegExp(
+    `^[\\s\\-*>]*(fix(e[sd])?|close[sd]?|resolve[sd]?|issues?)\\s*[:：-]?\\s*${issueKey}\\b`,
+    "im",
+  );
+  const attribution: ScmIssueOwnershipAttribution[] = [];
+  if (candidate.linkSource === "manual") attribution.push("manual");
+  if (keyPattern.test(candidate.sourceBranch ?? "")) attribution.push("branch");
+  if (keyPattern.test(candidate.title)) attribution.push("title");
+  if (bodyDeclarationPattern.test(candidate.body ?? "")) attribution.push("body");
+  return attribution;
 }
 
 function optionalSecret(value: unknown, label: string): string | null {
