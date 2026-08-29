@@ -63,7 +63,13 @@ describe("MultiremiTaskReportOutbox", () => {
     await Bun.sleep(30);
     expect(failures).toBeGreaterThan(1);
     expect(delivered).toEqual([]);
-    expect(outbox.stats()).toMatchObject({ pending: 4, pendingTerminal: 1 });
+    expect(outbox.stats()).toMatchObject({
+      pending: 4,
+      pendingNonTerminal: 3,
+      pendingTerminal: 1,
+      pendingTasks: 1,
+    });
+    expect(outbox.taskIdsWithPendingTerminal()).toEqual(["tsk_1"]);
 
     apiDown = false;
     expect(await outbox.waitForTaskDrain("tsk_1")).toBe("delivered");
@@ -85,6 +91,20 @@ describe("MultiremiTaskReportOutbox", () => {
     outbox.enqueue("tsk_ok", "complete", { output: "done" });
     expect(await outbox.waitForTaskDrain("tsk_ok")).toBe("delivered");
     expect(delivered).toEqual(["tsk_ok:1"]);
+  });
+
+  it("honors a shutdown signal that was already aborted before drain starts", async () => {
+    const outbox = track(new MultiremiTaskReportOutbox({
+      path: ":memory:",
+      backoffScheduleMs: [60_000],
+      deliver: async () => { throw new Error("connection refused"); },
+    }));
+    outbox.enqueue("tsk_shutdown", "complete", { output: "keep on disk" });
+    const shutdown = new AbortController();
+    shutdown.abort();
+
+    expect(await outbox.waitForTaskDrain("tsk_shutdown", shutdown.signal)).toBe("aborted");
+    expect(outbox.stats()).toMatchObject({ pending: 1, pendingTerminal: 1 });
   });
 
   it("recovers undelivered records after a restart and replays them in order", async () => {
@@ -183,4 +203,108 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(await outbox.waitForTaskDrain("tsk_cap")).toBe("delivered");
     expect(delivered).toContain("complete:1");
   });
+
+  it("purges a task, wakes its retry backoff, and settles drain waiters", async () => {
+    let attempted = false;
+    const outbox = track(new MultiremiTaskReportOutbox({
+      path: ":memory:",
+      backoffScheduleMs: [60_000],
+      deliver: async () => {
+        attempted = true;
+        throw new Error("api unavailable");
+      },
+    }));
+    outbox.enqueue("tsk_purge", "messages", { messages: [] });
+    await until(() => attempted);
+    const drain = outbox.waitForTaskDrain("tsk_purge");
+
+    expect(outbox.purgeTask("tsk_purge")).toBe(1);
+    expect(await drain).toBe("delivered");
+    expect(outbox.stats()).toMatchObject({ pending: 0, pendingTasks: 0 });
+  });
+
+  it("persists tombstones and discards reports enqueued after cancellation", async () => {
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({
+      path,
+      backoffScheduleMs: [60_000],
+      deliver: async () => { throw new Error("api unavailable"); },
+    }));
+    first.enqueue("tsk_cancelled", "messages", { messages: [] });
+    expect(first.purgeTask("tsk_cancelled")).toBe(1);
+    first.enqueue("tsk_cancelled", "progress", { summary: "late" });
+    expect(first.stats()).toMatchObject({ pending: 0, droppedTotal: 1 });
+    await first.close();
+
+    const second = track(new MultiremiTaskReportOutbox({ path, deliver: async () => {} }));
+    second.enqueue("tsk_cancelled", "messages", { messages: [] });
+    expect(second.pendingTaskIds()).toEqual([]);
+    expect(second.stats()).toMatchObject({ pending: 0, droppedTotal: 2 });
+  });
+
+  it("keeps and accepts terminal reports behind a terminal-only tombstone", async () => {
+    let apiDown = true;
+    const delivered: string[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({
+      path: ":memory:",
+      backoffScheduleMs: [60_000],
+      deliver: async (record) => {
+        if (apiDown) throw new Error("api unavailable");
+        delivered.push(`${record.kind}:${record.seq}`);
+      },
+    }));
+    outbox.enqueue("tsk_terminal", "messages", { messages: [] });
+    outbox.enqueue("tsk_terminal", "complete", { output: "done" });
+    await until(() => outbox.stats().pending === 2);
+
+    expect(outbox.purgeTask("tsk_terminal", { keepTerminal: true })).toBe(1);
+    outbox.enqueue("tsk_terminal", "progress", { summary: "late" });
+    outbox.enqueue("tsk_terminal", "fail", { error: "terminal retry" });
+    expect(outbox.stats()).toMatchObject({ pending: 2, pendingNonTerminal: 0, pendingTerminal: 2 });
+
+    apiDown = false;
+    expect(await outbox.waitForTaskDrain("tsk_terminal")).toBe("delivered");
+    expect(delivered).toEqual(["complete:2", "fail:3"]);
+  });
+
+  it("does not let a purged in-flight permanent error block a preserved terminal report", async () => {
+    const deliveryStarted = deferred<void>();
+    const rejectInFlight = deferred<void>();
+    const delivered: string[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({
+      path: ":memory:",
+      deliver: async (record) => {
+        if (record.kind === "messages") {
+          deliveryStarted.resolve();
+          await rejectInFlight.promise;
+          throw httpError(403);
+        }
+        delivered.push(`${record.kind}:${record.seq}`);
+      },
+    }));
+    outbox.enqueue("tsk_race", "messages", { messages: [] });
+    outbox.enqueue("tsk_race", "complete", { output: "done" });
+    await deliveryStarted.promise;
+
+    expect(outbox.purgeTask("tsk_race", { keepTerminal: true })).toBe(1);
+    rejectInFlight.resolve();
+    expect(await outbox.waitForTaskDrain("tsk_race")).toBe("delivered");
+    expect(delivered).toEqual(["complete:2"]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 0 });
+  });
 });
+
+async function until(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error("timed out waiting for condition");
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}

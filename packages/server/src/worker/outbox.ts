@@ -31,8 +31,10 @@ export interface MultiremiOutboxRecord {
 
 export interface MultiremiOutboxStats {
   pending: number;
+  pendingNonTerminal: number;
   blocked: number;
   pendingTerminal: number;
+  pendingTasks: number;
   oldestPendingCreatedAt: string | null;
   droppedTotal: number;
   fileBytes: number;
@@ -55,6 +57,7 @@ export interface MultiremiTaskReportOutboxOptions {
 
 const DEFAULT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 const DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
+const DISCARDED_TASK_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * Durable per-task report queue. Every task-scoped API report is written here
@@ -114,6 +117,11 @@ export class MultiremiTaskReportOutbox {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS outbox_discarded_tasks (
+        task_id TEXT PRIMARY KEY,
+        keep_terminal INTEGER NOT NULL,
+        discarded_at TEXT NOT NULL
+      );
     `);
     this.deliver = options.deliver;
     this.backoff = options.backoffScheduleMs?.length ? options.backoffScheduleMs : DEFAULT_BACKOFF_MS;
@@ -125,6 +133,15 @@ export class MultiremiTaskReportOutbox {
   enqueue(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): void {
     if (this.closed) throw new Error("outbox is closed");
     const terminal = TERMINAL_KINDS.has(kind);
+    const discarded = this.db.query(
+      "SELECT keep_terminal FROM outbox_discarded_tasks WHERE task_id = ?",
+    ).get(taskId) as { keep_terminal: number } | null;
+    if (discarded && !(Number(discarded.keep_terminal) === 1 && terminal)) {
+      const total = Number(this.readMeta("dropped_total") ?? 0) + 1;
+      this.writeMeta("dropped_total", String(total));
+      log.debug(`outbox discarded ${kind} report for tombstoned task ${taskId}`);
+      return;
+    }
     const seqRow = this.db.query(
       "SELECT COALESCE(MAX(seq), 0) AS seq FROM outbox_events WHERE task_id = ?",
     ).get(taskId) as { seq: number };
@@ -142,6 +159,7 @@ export class MultiremiTaskReportOutbox {
   async waitForTaskDrain(taskId: string, signal?: AbortSignal): Promise<MultiremiOutboxDrainResult> {
     const immediate = this.taskDrainState(taskId);
     if (immediate) return immediate;
+    if (signal?.aborted) return "aborted";
     this.ensurePump(taskId);
     return await new Promise<MultiremiOutboxDrainResult>((resolve) => {
       let settled = false;
@@ -156,6 +174,7 @@ export class MultiremiTaskReportOutbox {
       waiters.push(finish);
       this.drainWaiters.set(taskId, waiters);
       signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
       const state = this.taskDrainState(taskId);
       if (state) this.settleDrainWaiters(taskId, state);
     });
@@ -176,11 +195,59 @@ export class MultiremiTaskReportOutbox {
     return rows.map((row) => String(row.task_id));
   }
 
+  taskIdsWithPendingTerminal(): string[] {
+    const rows = this.db.query(
+      "SELECT DISTINCT task_id FROM outbox_events WHERE status = 'pending' AND terminal = 1",
+    ).all() as Array<{ task_id: string }>;
+    return rows.map((row) => String(row.task_id));
+  }
+
+  /**
+   * Discard reports that no longer have server-side value and prevent future
+   * producers from recreating them. A terminal-only tombstone is useful when
+   * callers still need to preserve a completion/failure report.
+   */
+  purgeTask(taskId: string, options: { keepTerminal?: boolean } = {}): number {
+    if (this.closed) return 0;
+    const keepTerminal = options.keepTerminal === true;
+    const discardedAt = new Date().toISOString();
+    const cutoff = new Date(Date.now() - DISCARDED_TASK_TTL_MS).toISOString();
+    const purge = this.db.transaction(() => {
+      this.db.run("DELETE FROM outbox_discarded_tasks WHERE discarded_at < ?", [cutoff]);
+      this.db.run(
+        `INSERT INTO outbox_discarded_tasks (task_id, keep_terminal, discarded_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(task_id) DO UPDATE SET
+           keep_terminal = MIN(outbox_discarded_tasks.keep_terminal, excluded.keep_terminal),
+           discarded_at = excluded.discarded_at`,
+        [taskId, keepTerminal ? 1 : 0, discardedAt],
+      );
+      const tombstone = this.db.query(
+        "SELECT keep_terminal FROM outbox_discarded_tasks WHERE task_id = ?",
+      ).get(taskId) as { keep_terminal: number };
+      const result = Number(tombstone.keep_terminal) === 1
+        ? this.db.run("DELETE FROM outbox_events WHERE task_id = ? AND terminal = 0", [taskId])
+        : this.db.run("DELETE FROM outbox_events WHERE task_id = ?", [taskId]);
+      return Number(result.changes);
+    });
+    const purged = purge();
+
+    // The pump may be in retry backoff, and drain waiters otherwise only settle
+    // from ensurePump().finally(). Re-evaluate both immediately after deletion.
+    this.wakes.get(taskId)?.();
+    const state = this.taskDrainState(taskId);
+    if (state) this.settleDrainWaiters(taskId, state);
+    return purged;
+  }
+
   stats(): MultiremiOutboxStats {
     const pending = this.db.query("SELECT COUNT(*) AS n FROM outbox_events WHERE status = 'pending'").get() as { n: number };
     const blocked = this.db.query("SELECT COUNT(*) AS n FROM outbox_events WHERE status = 'blocked'").get() as { n: number };
     const pendingTerminal = this.db.query(
       "SELECT COUNT(*) AS n FROM outbox_events WHERE status = 'pending' AND terminal = 1",
+    ).get() as { n: number };
+    const pendingTasks = this.db.query(
+      "SELECT COUNT(DISTINCT task_id) AS n FROM outbox_events WHERE status = 'pending'",
     ).get() as { n: number };
     const oldest = this.db.query(
       "SELECT MIN(created_at) AS at FROM outbox_events WHERE status = 'pending'",
@@ -189,8 +256,10 @@ export class MultiremiTaskReportOutbox {
     const pageSize = this.db.query("PRAGMA page_size").get() as { page_size: number };
     return {
       pending: Number(pending.n),
+      pendingNonTerminal: Number(pending.n) - Number(pendingTerminal.n),
       blocked: Number(blocked.n),
       pendingTerminal: Number(pendingTerminal.n),
+      pendingTasks: Number(pendingTasks.n),
       oldestPendingCreatedAt: oldest.at ?? null,
       droppedTotal: Number(this.readMeta("dropped_total") ?? 0),
       fileBytes: Number(pages.page_count) * Number(pageSize.page_size),
@@ -266,10 +335,16 @@ export class MultiremiTaskReportOutbox {
         }
         const message = error instanceof Error ? error.message : String(error);
         if (isPermanentDeliveryError(error)) {
-          this.db.run(
-            "UPDATE outbox_events SET status = 'blocked', last_error = ? WHERE task_id = ? AND status = 'pending'",
-            [message.slice(0, 2_000), taskId],
+          const blocked = this.db.run(
+            `UPDATE outbox_events SET status = 'blocked', last_error = ?
+             WHERE task_id = ? AND status = 'pending'
+               AND EXISTS (SELECT 1 FROM outbox_events WHERE id = ?)`,
+            [message.slice(0, 2_000), taskId, record.id],
           );
+          // purgeTask may have deleted the in-flight record while deliver()
+          // awaited. In that case, do not let its stale failure block terminal
+          // rows that a keepTerminal tombstone still permits.
+          if (Number(blocked.changes) === 0) continue;
           log.error(`outbox for task ${taskId} blocked on permanent error: ${message}`);
           this.onTaskBlocked?.(taskId, message);
           this.settleDrainWaiters(taskId, "blocked");
@@ -277,19 +352,20 @@ export class MultiremiTaskReportOutbox {
         }
         const attempts = record.attempts + 1;
         const delay = this.backoff[Math.min(attempts - 1, this.backoff.length - 1)]!;
-        this.db.run(
+        const updated = this.db.run(
           "UPDATE outbox_events SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
           [attempts, Date.now() + delay, message.slice(0, 2_000), record.id],
         );
+        if (Number(updated.changes) === 0) continue;
         if (attempts === 1 || attempts % 10 === 0) {
           log.warn(`outbox delivery for task ${taskId} (${record.kind} seq ${record.seq}) failed, retrying in ${delay}ms: ${message}`);
         }
-        await this.sleepWithWake(taskId, delay);
+        await this.sleepWithWake(taskId, record.id, delay);
       }
     }
   }
 
-  private async sleepWithWake(taskId: string, ms: number): Promise<void> {
+  private async sleepWithWake(taskId: string, recordId: number, ms: number): Promise<void> {
     await new Promise<void>((resolve) => {
       let settled = false;
       const finish = () => {
@@ -303,6 +379,10 @@ export class MultiremiTaskReportOutbox {
       // unref keeps a retrying pump from pinning the process open after stop().
       (timer as unknown as { unref?: () => void }).unref?.();
       this.wakes.set(taskId, finish);
+      // Close the tiny purge-before-wake-registration race: once the wake is
+      // installed, a missing record means there is no backoff left to observe.
+      const row = this.db.query("SELECT 1 AS present FROM outbox_events WHERE id = ?").get(recordId);
+      if (!row) finish();
     });
   }
 

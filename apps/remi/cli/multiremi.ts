@@ -1076,6 +1076,18 @@ async function daemonStatus(options: CliOptions): Promise<void> {
     if (health.cli_version) console.log(`Version: ${health.cli_version}`);
     if (health.runtime_id) console.log(`Runtime: ${health.runtime_id}`);
     if (health.active_task_count !== undefined) console.log(`Active tasks: ${health.active_task_count}`);
+    if (health.draining_task_count !== undefined) console.log(`Draining tasks: ${health.draining_task_count}`);
+    if (health.outbox) {
+      const pendingNonTerminal = health.outbox.pendingNonTerminal
+        ?? Math.max(0, health.outbox.pending - health.outbox.pendingTerminal);
+      const taskCount = health.outbox.pendingTasks === undefined
+        ? ""
+        : ` across ${health.outbox.pendingTasks} task(s)`;
+      console.log(
+        `Outbox: ${pendingNonTerminal} non-terminal, `
+        + `${health.outbox.pendingTerminal} terminal${taskCount}`,
+      );
+    }
     if (health.workspace_cleanup_capability === "blocked") {
       console.log(`Workspace cleanup capability: blocked${health.workspace_cleanup_error ? ` (${health.workspace_cleanup_error})` : ""}`);
     } else if (health.workspace_cleanup_capability === "available") {
