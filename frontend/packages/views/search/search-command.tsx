@@ -99,9 +99,10 @@ function memberInitials(name: string) {
 }
 
 function matchesMember(member: MemberWithUser, query: string) {
+  const email = member.email?.toLowerCase() ?? "";
   return (
     member.name.toLowerCase().includes(query) ||
-    member.email.toLowerCase().includes(query) ||
+    email.includes(query) ||
     (query.length >= 3 && member.role.startsWith(query)) ||
     matchesPinyin(member.name, query)
   );
@@ -119,6 +120,13 @@ interface CommandItem {
 interface SearchResults {
   issues: SearchIssueResult[];
   projects: SearchProjectResult[];
+}
+
+interface PendingSearch {
+  query: string;
+  promise: Promise<SearchResults | null>;
+  runNow: () => void;
+  cancel: () => void;
 }
 
 export function SearchCommand() {
@@ -160,8 +168,7 @@ export function SearchCommand() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults>({ issues: [], projects: [] });
   const [isLoading, setIsLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const pendingSearchRef = useRef<PendingSearch | null>(null);
 
   const filteredPages = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -344,17 +351,17 @@ export function SearchCommand() {
     return () => document.removeEventListener("keydown", handleEsc, true);
   }, [open, setOpen]);
 
-  // Cleanup debounce/abort on unmount
+  // Cleanup pending work on unmount.
   useEffect(() => {
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      if (abortRef.current) abortRef.current.abort();
+      pendingSearchRef.current?.cancel();
     };
   }, []);
 
   // Reset state when dialog closes
   useEffect(() => {
     if (!open) {
+      pendingSearchRef.current?.cancel();
       setQuery("");
       setResults({ issues: [], projects: [] });
       setIsLoading(false);
@@ -362,47 +369,88 @@ export function SearchCommand() {
   }, [open]);
 
   const search = useCallback((q: string) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (abortRef.current) abortRef.current.abort();
+    pendingSearchRef.current?.cancel();
 
-    if (!q.trim()) {
+    const trimmedQuery = q.trim();
+    if (!trimmedQuery) {
       setResults({ issues: [], projects: [] });
       setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
-    debounceRef.current = setTimeout(async () => {
-      const controller = new AbortController();
-      abortRef.current = controller;
-      try {
-        const [issueRes, projectRes] = await Promise.all([
-          api.searchIssues({
-            q: q.trim(),
-            limit: 20,
-            include_closed: true,
-            signal: controller.signal,
-          }),
-          api.searchProjects({
-            q: q.trim(),
-            limit: 10,
-            include_closed: true,
-            signal: controller.signal,
-          }),
-        ]);
-        if (!controller.signal.aborted) {
-          setResults({
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let started = false;
+    let settled = false;
+    let resolveResult: (result: SearchResults | null) => void = () => {};
+    const promise = new Promise<SearchResults | null>((resolve) => {
+      resolveResult = resolve;
+    });
+
+    const finish = (result: SearchResults | null) => {
+      if (settled) return;
+      settled = true;
+      if (pendingSearchRef.current === pending) {
+        pendingSearchRef.current = null;
+      }
+      resolveResult(result);
+    };
+    const runNow = () => {
+      if (started || settled) return;
+      started = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      void Promise.all([
+        api.searchIssues({
+          q: trimmedQuery,
+          limit: 20,
+          include_closed: true,
+          signal: controller.signal,
+        }),
+        api.searchProjects({
+          q: trimmedQuery,
+          limit: 10,
+          include_closed: true,
+          signal: controller.signal,
+        }),
+      ]).then(
+        ([issueRes, projectRes]) => {
+          if (controller.signal.aborted) {
+            finish(null);
+            return;
+          }
+          const nextResults = {
             issues: issueRes.issues,
             projects: projectRes.projects,
-          });
-          setIsLoading(false);
-        }
-      } catch {
-        if (!controller.signal.aborted) {
-          setIsLoading(false);
-        }
+          };
+          if (pendingSearchRef.current === pending) {
+            setResults(nextResults);
+            setIsLoading(false);
+          }
+          finish(nextResults);
+        },
+        () => {
+          if (!controller.signal.aborted && pendingSearchRef.current === pending) {
+            setIsLoading(false);
+          }
+          finish(null);
+        },
+      );
+    };
+    const cancel = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
       }
-    }, 300);
+      controller.abort();
+      finish(null);
+    };
+    const pending: PendingSearch = { query: trimmedQuery, promise, runNow, cancel };
+    pendingSearchRef.current = pending;
+    timer = setTimeout(runNow, 300);
   }, []);
 
   const handleValueChange = useCallback(
@@ -424,6 +472,36 @@ export function SearchCommand() {
       }
     },
     [push, setOpen, p],
+  );
+
+  const handleInputKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (
+        event.key !== "Enter" ||
+        event.nativeEvent.isComposing ||
+        event.nativeEvent.keyCode === 229
+      ) {
+        return;
+      }
+      const root = event.currentTarget.closest("[cmdk-root]");
+      if (root?.querySelector('[cmdk-item][aria-selected="true"]')) return;
+
+      const pending = pendingSearchRef.current;
+      if (!pending || pending.query !== query.trim()) return;
+      event.preventDefault();
+      pending.runNow();
+      void pending.promise.then((nextResults) => {
+        if (!nextResults) return;
+        const project = nextResults.projects[0];
+        if (project) {
+          handleSelect(`project:${project.id}`);
+          return;
+        }
+        const issue = nextResults.issues[0];
+        if (issue) handleSelect(issue.id);
+      });
+    },
+    [handleSelect, query],
   );
 
   const handlePageSelect = useCallback(
@@ -466,6 +544,7 @@ export function SearchCommand() {
               placeholder={t(($) => $.placeholder)}
               value={query}
               onValueChange={handleValueChange}
+              onKeyDown={handleInputKeyDown}
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
             <kbd className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">
@@ -542,9 +621,11 @@ export function SearchCommand() {
                       <div className="truncate">
                         <HighlightText text={member.name} query={query} />
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        <HighlightText text={member.email} query={query} />
-                      </div>
+                      {member.email && (
+                        <div className="truncate text-xs text-muted-foreground">
+                          <HighlightText text={member.email} query={query} />
+                        </div>
+                      )}
                     </div>
                   </CommandPrimitive.Item>
                 ))}
@@ -606,54 +687,57 @@ export function SearchCommand() {
                 heading={t(($) => $.groups.issues)}
                 className="p-2 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
               >
-                {results.issues.map((issue) => (
-                  <CommandPrimitive.Item
-                    key={issue.id}
-                    value={issue.id}
-                    onSelect={handleSelect}
-                    className="flex cursor-default select-none flex-col gap-1 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <StatusIcon
-                        status={issue.status}
-                        className="size-4 shrink-0"
-                      />
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {issue.identifier}
-                      </span>
-                      <span className="truncate">
-                        <HighlightText text={issue.title} query={query} />
-                      </span>
-                      <span
-                        className={`ml-auto text-xs shrink-0 ${STATUS_CONFIG[issue.status].iconColor}`}
-                      >
-                        {STATUS_CONFIG[issue.status].label}
-                      </span>
-                    </div>
-                    {issue.matched_description_snippet && (
-                      <div className="flex items-start gap-2 pl-[26px]">
-                        <FileText className="size-3 shrink-0 text-muted-foreground mt-0.5" />
-                        <span className="text-xs text-muted-foreground truncate">
-                          <HighlightText
-                            text={issue.matched_description_snippet}
-                            query={query}
-                          />
+                {results.issues.map((issue) => {
+                  const statusConfig = STATUS_CONFIG[issue.status];
+                  return (
+                    <CommandPrimitive.Item
+                      key={issue.id}
+                      value={issue.id}
+                      onSelect={handleSelect}
+                      className="flex cursor-default select-none flex-col gap-1 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <StatusIcon
+                          status={issue.status}
+                          className="size-4 shrink-0"
+                        />
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {issue.identifier}
+                        </span>
+                        <span className="truncate">
+                          <HighlightText text={issue.title} query={query} />
+                        </span>
+                        <span
+                          className={`ml-auto text-xs shrink-0 ${statusConfig?.iconColor ?? ""}`}
+                        >
+                          {statusConfig?.label ?? ""}
                         </span>
                       </div>
-                    )}
-                    {issue.matched_comment_snippet && (
-                      <div className="flex items-start gap-2 pl-[26px]">
-                        <MessageSquare className="size-3 shrink-0 text-muted-foreground mt-0.5" />
-                        <span className="text-xs text-muted-foreground truncate">
-                          <HighlightText
-                            text={issue.matched_comment_snippet}
-                            query={query}
-                          />
-                        </span>
-                      </div>
-                    )}
-                  </CommandPrimitive.Item>
-                ))}
+                      {issue.matched_description_snippet && (
+                        <div className="flex items-start gap-2 pl-[26px]">
+                          <FileText className="size-3 shrink-0 text-muted-foreground mt-0.5" />
+                          <span className="text-xs text-muted-foreground truncate">
+                            <HighlightText
+                              text={issue.matched_description_snippet}
+                              query={query}
+                            />
+                          </span>
+                        </div>
+                      )}
+                      {issue.matched_comment_snippet && (
+                        <div className="flex items-start gap-2 pl-[26px]">
+                          <MessageSquare className="size-3 shrink-0 text-muted-foreground mt-0.5" />
+                          <span className="text-xs text-muted-foreground truncate">
+                            <HighlightText
+                              text={issue.matched_comment_snippet}
+                              query={query}
+                            />
+                          </span>
+                        </div>
+                      )}
+                    </CommandPrimitive.Item>
+                  );
+                })}
               </CommandPrimitive.Group>
             )}
 

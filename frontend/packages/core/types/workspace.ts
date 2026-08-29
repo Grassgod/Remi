@@ -143,7 +143,7 @@ export interface MemberWithUser {
   role: MemberRole;
   created_at: string;
   name: string;
-  email: string;
+  email?: string;
   avatar_url: string | null;
 }
 
