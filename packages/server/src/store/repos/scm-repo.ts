@@ -1651,7 +1651,7 @@ export class ScmRepo {
     const workspace = this.ctx.workspaces().getWorkspace(event.workspaceId);
     if (workspace?.settings.scm_complete_issue_on_merge_enabled !== true) return;
     const rows = this.ctx.db.query(
-      `SELECT i.id AS issue_id, i.issue_key, l.source AS link_source,
+      `SELECT i.id AS issue_id, cr.id AS change_request_id, l.source AS link_source,
               cr.title, cr.body, cr.source_branch
        FROM multiremi_scm_change_requests cr
        JOIN multiremi_scm_issue_links l ON l.change_request_id = cr.id AND l.active = 1
@@ -1661,7 +1661,12 @@ export class ScmRepo {
     ).all(event.connectionId, event.repositoryId, event.subjectId, event.workspaceId) as Row[];
     for (const row of rows) {
       const issueId = String(row.issue_id);
-      const issueKey = String(row.issue_key);
+      // Read the derived key rather than the raw column: `issue_key` is nullable and
+      // Issue.key falls back to the formatted issue number. Using the column directly
+      // would stringify NULL to "null" and match any change request that merely
+      // contains the word "null" — the very over-completion this guard exists to stop.
+      const issueKey = this.ctx.issues().getIssue(issueId)?.key;
+      if (!issueKey) continue;
       const attribution = scmIssueOwnershipAttribution({
         issueKey,
         linkSource: String(row.link_source),
@@ -1671,13 +1676,16 @@ export class ScmRepo {
       });
       if (attribution.length === 0) continue;
 
+      // Exclude the merging change request by primary key. `external_id` is only
+      // unique per connection+repository, so filtering on it would also drop an
+      // unrelated open owner that happens to share the id in another repository.
       const competingRows = this.ctx.db.query(
         `SELECT l.source AS link_source, cr.title, cr.body, cr.source_branch
          FROM multiremi_scm_issue_links l
          JOIN multiremi_scm_change_requests cr ON cr.id = l.change_request_id
          WHERE l.issue_id = ? AND l.active = 1 AND cr.workspace_id = ?
-           AND cr.external_id != ? AND cr.state = 'open' AND cr.draft = 0`,
-      ).all(issueId, event.workspaceId, event.subjectId) as Row[];
+           AND cr.id != ? AND cr.state = 'open' AND cr.draft = 0`,
+      ).all(issueId, event.workspaceId, String(row.change_request_id)) as Row[];
       const hasCompetingOwner = competingRows.some((competing) => scmIssueOwnershipAttribution({
         issueKey,
         linkSource: String(competing.link_source),
