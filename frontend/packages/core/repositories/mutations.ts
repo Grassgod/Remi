@@ -39,19 +39,6 @@ export function useInspectWorkspaceRepository(workspaceId: string) {
   });
 }
 
-export function useConfigureAtlasWiki(workspaceId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.configureAtlasWiki(workspaceId),
-    onSuccess: (status) => {
-      queryClient.setQueryData(repositoryKeys.atlas(workspaceId), status);
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: repositoryKeys.atlas(workspaceId) });
-    },
-  });
-}
-
 export const REPOSITORY_WIKI_BUILD_IN_PROGRESS_CODE = "repository_wiki_build_in_progress";
 
 // A 409 from POST .../wiki/build means "a build is already running" — for the
@@ -115,7 +102,7 @@ export function useBuildRepositoryWiki(workspaceId: string, repositoryId: string
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: repositoryKeys.wiki(workspaceId, repositoryId) });
       queryClient.invalidateQueries({ queryKey: repositoryKeys.wikiSummaries(workspaceId) });
-      // The build runs through the Atlas autopilot — refresh its run history
+      // The build runs through an automation — refresh its run history
       // so an open detail page picks up the new run right away.
       queryClient.invalidateQueries({ queryKey: autopilotKeys.all(workspaceId) });
     },

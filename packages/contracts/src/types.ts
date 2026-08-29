@@ -3158,8 +3158,6 @@ export interface MultiremiAutopilot {
   workspaceId: string;
   workspace_id?: string;
   title: string;
-  managedKind: "atlas_project_knowledge" | "atlas_repository_wiki" | null;
-  managed_kind?: "atlas_project_knowledge" | "atlas_repository_wiki" | null;
   description: string | null;
   projectId: string | null;
   project_id?: string | null;

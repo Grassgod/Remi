@@ -104,8 +104,6 @@ export type {
   RepositoryWikiSummary,
   RepositoryWikiDoc,
   RepositoryWikiRevision,
-  AtlasWikiSetupState,
-  AtlasWikiSetupStatus,
   RepositoryWikiBuildResponse,
 } from "./repository";
 export type {

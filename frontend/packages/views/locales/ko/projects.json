@@ -216,18 +216,7 @@
     "projects_group": "프로젝트 위키",
     "repositories_group": "저장소 위키",
     "repository_pages": "{{count}}개 페이지",
-    "repository_unbuilt": "구축 안 됨",
-    "atlas_title": "Atlas · LLM Wiki",
-    "atlas_description": "Atlas를 구성해 저장소 코드 정보와 프로젝트 지식을 자동으로 유지합니다.",
-    "atlas_plugin_required": "먼저 Claude code-to-wiki 플러그인을 가져오세요.",
-    "atlas_scm_required": "Atlas가 생성되었습니다. 증분 업데이트를 위해 코드 저장소를 연결하세요.",
-    "atlas_ready": "병합과 Issue 완료 후 지식이 자동으로 유지됩니다.",
-    "atlas_configure": "Atlas 구성",
-    "atlas_import_plugin": "플러그인 열기",
-    "atlas_agent": "에이전트",
-    "atlas_automation": "자동화",
-    "atlas_configured": "Atlas가 구성되었습니다",
-    "atlas_failed": "Atlas 구성에 실패했습니다"
+    "repository_unbuilt": "구축 안 됨"
   },
   "repo_source": {
     "tab_git": "Git 저장소",

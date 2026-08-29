@@ -2,7 +2,6 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { toast } from "sonner";
 import {
   AlertCircle,
   ArrowDownUp,
@@ -13,25 +12,17 @@ import {
   FolderKanban,
   GitFork,
   Library,
-  Loader2,
-  Bot,
-  CheckCircle2,
   Search,
 } from "lucide-react";
-import { Button, buttonVariants } from "@multiremi/ui/components/ui/button";
+import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { workspaceDocListOptions } from "@multiremi/core/project-docs";
 import { projectListOptions } from "@multiremi/core/projects/queries";
-import {
-  atlasWikiSetupOptions,
-  repositoryListOptions,
-  repositoryWikiSummariesOptions,
-  useConfigureAtlasWiki,
-} from "@multiremi/core/repositories";
+import { repositoryListOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
-import type { AtlasWikiSetupStatus, Project, RepositoryWikiSummary, WorkspaceDoc, WorkspaceRepository } from "@multiremi/core/types";
+import type { Project, RepositoryWikiSummary, WorkspaceDoc, WorkspaceRepository } from "@multiremi/core/types";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { AppLink } from "../navigation";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -235,56 +226,6 @@ function RepositoryRow({ repository, summary }: { repository: WorkspaceRepositor
   );
 }
 
-function AtlasSetupBar({ status, loading }: { status?: AtlasWikiSetupStatus; loading: boolean }) {
-  const { t } = useT("projects");
-  const workspaceId = useWorkspaceId();
-  const paths = useWorkspacePaths();
-  const configure = useConfigureAtlasWiki(workspaceId);
-
-  if (loading) return <div className="border-b px-4 py-2"><Skeleton className="h-8 w-full" /></div>;
-  const state = status?.state ?? "not_configured";
-  const description = state === "plugin_required"
-    ? t(($) => $.knowledge.atlas_plugin_required)
-    : state === "scm_connection_required"
-      ? t(($) => $.knowledge.atlas_scm_required)
-      : state === "ready"
-        ? t(($) => $.knowledge.atlas_ready)
-        : t(($) => $.knowledge.atlas_description);
-
-  const runConfigure = () => configure.mutate(undefined, {
-    onSuccess: (result) => {
-      if (result.configured) toast.success(t(($) => $.knowledge.atlas_configured));
-      else if (result.scm_warning) toast.warning(result.scm_warning);
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.knowledge.atlas_failed)),
-  });
-
-  return (
-    <div className="flex min-h-12 items-center gap-3 border-b bg-muted/10 px-4 py-2">
-      <span className="flex size-7 shrink-0 items-center justify-center rounded border bg-background">
-        {state === "ready" ? <CheckCircle2 className="size-4 text-emerald-600" /> : <Bot className="size-4 text-muted-foreground" />}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">{t(($) => $.knowledge.atlas_title)}</div>
-        <p className="truncate text-xs text-muted-foreground">{description}</p>
-      </div>
-      {state === "plugin_required" ? (
-        <AppLink href={paths.plugins()} className={buttonVariants({ variant: "outline", size: "sm" })}>{t(($) => $.knowledge.atlas_import_plugin)}</AppLink>
-      ) : state === "ready" ? (
-        <div className="flex items-center gap-2">
-          {status?.agent_id && <AppLink href={paths.agentDetail(status.agent_id)} className={buttonVariants({ variant: "ghost", size: "sm" })}>{t(($) => $.knowledge.atlas_agent)}</AppLink>}
-          {status?.repository_autopilot_id && <AppLink href={paths.autopilotDetail(status.repository_autopilot_id)} className={buttonVariants({ variant: "outline", size: "sm" })}>{t(($) => $.knowledge.atlas_automation)}</AppLink>}
-        </div>
-      ) : (
-        <Button type="button" variant="outline" size="sm" disabled={configure.isPending} onClick={runConfigure}>
-          {configure.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Bot className="size-3.5" />}
-          {t(($) => $.knowledge.atlas_configure)}
-        </Button>
-      )}
-    </div>
-  );
-}
-
 export function KnowledgePage() {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
@@ -292,7 +233,6 @@ export function KnowledgePage() {
   const docsQuery = useQuery(workspaceDocListOptions(wsId));
   const repositoriesQuery = useQuery(repositoryListOptions(wsId));
   const repositoryWikiQuery = useQuery(repositoryWikiSummariesOptions(wsId));
-  const atlasQuery = useQuery(atlasWikiSetupOptions(wsId));
   const [search, setSearch] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
@@ -417,7 +357,6 @@ export function KnowledgePage() {
   if (projects.length === 0 && repositories.length === 0) {
     return (
       <KnowledgeShell projectCount={0}>
-        <AtlasSetupBar status={atlasQuery.data} loading={atlasQuery.isPending} />
         <EmptyState
           icon={BookText}
           title={t(($) => $.knowledge.empty_title)}
@@ -429,7 +368,6 @@ export function KnowledgePage() {
 
   return (
     <KnowledgeShell projectCount={projects.length + repositories.length}>
-      <AtlasSetupBar status={atlasQuery.data} loading={atlasQuery.isPending} />
       <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
         <div className="relative min-w-0 flex-1 sm:flex-none">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />

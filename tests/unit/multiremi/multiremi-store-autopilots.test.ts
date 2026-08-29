@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
+import { configureRepositoryWikiAutomation, createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -944,20 +944,13 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("dedupes repository Wiki build runs by active build and pinned-revision key", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const runtime = store.registerRuntime({ name: "wiki-runtime", provider: "claude" });
-    const autopilot = store.createAutopilot({
-      title: "Atlas · Repository Wiki",
-      assigneeId: agent.id,
-      executionMode: "run_only",
-      description: "Update the repository wiki",
-    });
-    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
+    const { agent, autopilot } = configureRepositoryWikiAutomation(store, { runtimeId: runtime.id });
     const manualInput = {
       source: "api" as const,
       repositoryId: "repo_x",
       dedupeKey: "repo_x:bootstrap_repository:head",
-      payload: { atlas_repository_id: "repo_x", atlas_mode: "bootstrap_repository" },
+      payload: { repository_wiki_repository_id: "repo_x", repository_wiki_mode: "bootstrap_repository" },
     };
 
     const first = store.runAutopilot(autopilot.id, manualInput);
@@ -1066,17 +1059,12 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       assigneeId: userAgent.id,
       executionMode: "run_only",
     });
-    const serverOwned = store.createAutopilot({
-      title: "Atlas · Repository Wiki",
-      assigneeId: atlas.id,
-      executionMode: "run_only",
-    });
-    store.setAutopilotManagedKind(serverOwned.id, "atlas_repository_wiki");
+    const { autopilot: serverOwned } = configureRepositoryWikiAutomation(store, { agent: atlas });
 
     expect(() => store.runAutopilot(userOwned.id, {
       repository_id: "repo_private",
       dedupe_key: "repo_private:incremental_update:abc123",
-    })).toThrow("server-owned Atlas Repository Wiki autopilot");
+    })).toThrow("compatible Repository Wiki automation");
     expect(() => store.runAutopilot(serverOwned.id, {
       repositoryId: "repo_private",
     })).toThrow("repository_id and dedupe_key together");
@@ -1102,14 +1090,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         default_branch: "main",
       }],
     });
-    const agent = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
-    const autopilot = store.createAutopilot({
-      title: "Atlas · Repository Wiki",
-      assigneeId: agent.id,
-      executionMode: "run_only",
-      description: "Update the repository wiki",
-    });
-    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
+    const { autopilot } = configureRepositoryWikiAutomation(store);
 
     const mergedRun = store.runAutopilot(autopilot.id, {
       source: "scm_event",
@@ -1151,7 +1132,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       source: "api",
       repositoryId: "repo_widgets",
       dedupeKey: "repo_widgets:bootstrap_repository:head",
-      payload: { atlas_repository_id: "repo_widgets", atlas_mode: "bootstrap_repository" },
+      payload: { repository_wiki_repository_id: "repo_widgets", repository_wiki_mode: "bootstrap_repository" },
     });
 
     const app = createMultiremiApp({ store });

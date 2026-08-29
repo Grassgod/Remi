@@ -104,29 +104,6 @@ export interface RepositoryWikiRevision {
   created_at: string;
 }
 
-export type AtlasWikiSetupState =
-  | "not_configured"
-  | "plugin_required"
-  | "scm_connection_required"
-  | "incomplete"
-  | "ready";
-
-export interface AtlasWikiSetupStatus {
-  state: AtlasWikiSetupState;
-  configured: boolean;
-  required_plugin: string;
-  plugin_id: string | null;
-  plugin_bound: boolean;
-  agent_id: string | null;
-  repository_autopilot_id: string | null;
-  repository_trigger_id: string | null;
-  project_autopilot_id: string | null;
-  project_trigger_id: string | null;
-  librarian_autopilot_id: string | null;
-  librarian_trigger_id: string | null;
-  scm_warning?: string | null;
-}
-
 export interface RepositoryWikiBuildResponse {
   run_id: string;
   task_id: string | null;

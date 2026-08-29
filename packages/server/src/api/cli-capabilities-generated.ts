@@ -1261,32 +1261,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "wiki.repository.atlas.status": {
-      "command": "remi wiki repository atlas status",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "wiki.repository.atlas.status",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "wiki.repository.atlas.configure": {
-      "command": "remi wiki repository atlas configure",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "wiki.repository.atlas.configure",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
     "wiki.pull": {
       "command": "remi wiki pull",
       "auth": [

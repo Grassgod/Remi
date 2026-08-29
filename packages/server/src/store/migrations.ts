@@ -2057,7 +2057,8 @@ export function runMigrations(db: SqlDatabase): void {
     addColumnIfMissing(db, "multiremi_agents", "role TEXT NOT NULL DEFAULT 'normal'");
     addColumnIfMissing(db, "multiremi_autopilots", "managed_kind TEXT");
     // Legacy names are used only to classify existing platform-owned rows.
-    // Runtime authorization uses role + managed_kind after this migration.
+    // Preserve historical Atlas ownership data for downgrade compatibility;
+    // current runtime authorization no longer reads this field.
     db.run(
       `UPDATE multiremi_agents
        SET role = CASE

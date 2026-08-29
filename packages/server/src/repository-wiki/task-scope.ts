@@ -3,7 +3,7 @@ import type {
   MultiremiTaskWithAgent,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import { resolveAtlasRepositoryWikiAutopilot } from "./atlas.js";
+import { resolveRepositoryWikiAutomation } from "./automation.js";
 
 type RepositoryWikiRepository = MultiremiTaskRepositoryWikiContext["repository"];
 
@@ -32,18 +32,14 @@ export function resolveTaskRepositoryWikiRepositories(
     if (event?.workspaceId === task.workspaceId) selectedIds.add(event.repositoryId);
   }
 
-  // Atlas bootstrap runs are also server-authored. Validate both the owning
-  // workspace and the dedicated autopilot before trusting the payload target.
+  // Manual Wiki builds are server-authored. Validate both the owning workspace
+  // and the compatible automation before trusting the payload target.
   if (task.autopilotRunId) {
     const run = store.getAutopilotRun(task.autopilotRunId);
     const payload = asRecord(run?.payload);
-    const repositoryId = clean(payload?.atlas_repository_id);
+    const repositoryId = clean(payload?.repository_wiki_repository_id);
     if (run && repositoryId) {
-      const autopilot = resolveAtlasRepositoryWikiAutopilot(
-        task.workspaceId,
-        store.listAgents(),
-        store.listAutopilots(task.workspaceId),
-      );
+      const autopilot = resolveRepositoryWikiAutomation(store, task.workspaceId);
       if (autopilot?.id === run.autopilotId) {
         selectedIds.add(repositoryId);
       }

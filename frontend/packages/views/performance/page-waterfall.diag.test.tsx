@@ -359,13 +359,6 @@ function apiResponse(method: string, args: unknown[]): unknown {
     case "listWorkspaceRepositories": return { repositories: [], total: 0 };
     case "listScmConnections": return { connections: [] };
     case "listRepositoryWikiSummaries": return [];
-    case "getAtlasWikiSetupStatus": return {
-      configured: false,
-      plugin_id: null,
-      agent_id: null,
-      repository_autopilot_id: null,
-      project_autopilot_id: null,
-    };
     case "getPlatformStatus": return { canManage: false, activeOperation: null };
     default: return [];
   }

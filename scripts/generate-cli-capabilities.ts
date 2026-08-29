@@ -289,8 +289,6 @@ function mappedResourceCommand(route: string): string | null {
     [/^PATCH \/api\/workspaces\/:id\/repos\/:repositoryId$/, "repo.update"],
     [/^DELETE \/api\/workspaces\/:id\/repos\/:repositoryId$/, "repo.delete"],
     [/^GET \/api\/workspaces\/:id\/repository-wikis$/, "wiki.repository.list"],
-    [/^GET \/api\/workspaces\/:id\/repository-wikis\/atlas$/, "wiki.repository.atlas.status"],
-    [/^POST \/api\/workspaces\/:id\/repository-wikis\/atlas$/, "wiki.repository.atlas.configure"],
     [/^GET \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki$/, "wiki.repository.list"],
     [/^POST \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki$/, "wiki.repository.create"],
     [/^POST \/api\/workspaces\/:id\/repos\/:repositoryId\/wiki\/build$/, "wiki.repository.build"],

@@ -13,7 +13,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { SCM_PROVIDER_CAPABILITIES } from "@multiremi/scm/capabilities.js";
-import { resolveAtlasRepositoryWikiAutopilot } from "@multiremi/repository-wiki/atlas.js";
+import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import type {
   CreateAutopilotInput,
   CreateAutopilotTriggerInput,
@@ -202,26 +202,6 @@ export class AutopilotsRepo {
   getAutopilot(id: string): MultiremiAutopilot | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_autopilots WHERE id = ?").get(id) as Row | null;
     return row ? toAutopilot(row) : null;
-  }
-
-  setAutopilotManagedKind(
-    id: string,
-    managedKind: NonNullable<MultiremiAutopilot["managedKind"]>,
-  ): MultiremiAutopilot {
-    if (managedKind !== "atlas_project_knowledge" && managedKind !== "atlas_repository_wiki") {
-      throw new Error("Invalid managed Autopilot kind");
-    }
-    const current = this.getAutopilot(id);
-    if (!current) throw new Error(`Autopilot not found: ${id}`);
-    const conflict = this.ctx.db.query(
-      "SELECT id FROM multiremi_autopilots WHERE workspace_id = ? AND managed_kind = ? AND id != ?",
-    ).get(current.workspaceId, managedKind, id) as Row | null;
-    if (conflict) throw new Error(`Managed Autopilot already exists: ${managedKind}`);
-    this.ctx.db.run(
-      "UPDATE multiremi_autopilots SET managed_kind = ?, updated_at = ? WHERE id = ?",
-      [managedKind, nowIso(), id],
-    );
-    return this.getAutopilot(id)!;
   }
 
   listAutopilots(workspaceId?: string | null): MultiremiAutopilot[] {
@@ -1118,7 +1098,7 @@ export class AutopilotsRepo {
       }
 
       // Repository Wiki build idempotency (callers pass repositoryId/dedupeKey
-      // only for the Atlas Repository Wiki autopilot; other autopilots are
+      // only for a compatible Wiki automation; other automations are
       // unaffected). Two rules, both inside this transaction:
       //  1. one non-terminal build per (autopilot, repository) — a second
       //     request while a build is queued/running returns the existing run;
@@ -1328,13 +1308,15 @@ export class AutopilotsRepo {
     }
     if (!repositoryId || !dedupeKey) return;
 
-    const repositoryAutopilot = resolveAtlasRepositoryWikiAutopilot(
-      autopilot.workspaceId,
-      this.ctx.agents().listAgents(),
-      this.listAutopilots(autopilot.workspaceId),
-    );
+    const repositoryAutopilot = resolveRepositoryWikiAutomation({
+      listAgents: () => this.ctx.agents().listAgents(),
+      listAutopilots: (workspaceId) => this.listAutopilots(workspaceId),
+      listAgentPlugins: (workspaceId, options) => this.ctx.agentPlugins().listAgentPlugins(workspaceId, options),
+      listAgentPluginBindings: (agentId) => this.ctx.agentPlugins().listAgentPluginBindings(agentId),
+      listAutopilotTriggers: (autopilotId) => this.listAutopilotTriggers(autopilotId),
+    }, autopilot.workspaceId);
     if (repositoryAutopilot?.id !== autopilot.id) {
-      throw new Error("Repository Wiki build scope requires the server-owned Atlas Repository Wiki autopilot");
+      throw new Error("Repository Wiki build scope requires a compatible Repository Wiki automation");
     }
 
     const separator = dedupeKey.indexOf(":");
@@ -2013,14 +1995,11 @@ function toAutopilot(row: Row): MultiremiAutopilot {
   const lastRunAt = nullableString(row.last_run_at);
   const createdAt = String(row.created_at);
   const updatedAt = String(row.updated_at);
-  const managedKind = nullableString(row.managed_kind) as MultiremiAutopilot["managedKind"];
   return {
     id: String(row.id),
     workspaceId,
     workspace_id: workspaceId,
     title: String(row.title),
-    managedKind,
-    managed_kind: managedKind,
     description: nullableString(row.description),
     projectId,
     project_id: projectId,

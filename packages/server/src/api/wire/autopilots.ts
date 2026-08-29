@@ -294,7 +294,7 @@ export function autopilotRunCompatibilityResponse(
 /**
  * Best-effort structured origin summary for a run, extracted from its payload:
  * SCM canonical events ({event, data}), webhook envelopes ({event, request}),
- * schedule metadata, and manual repository Wiki builds (atlas_repository_id).
+ * schedule metadata, and manual repository Wiki builds.
  */
 export function autopilotRunTriggerSummary(
   run: AutopilotRunWireInput,
@@ -303,11 +303,11 @@ export function autopilotRunTriggerSummary(
   const payload = summaryRecord(run.payload);
   const scmEvent = summaryRecord(payload?.event);
   const data = summaryRecord(payload?.data);
-  const atlasRepositoryId = summaryString(payload?.atlas_repository_id);
+  const wikiRepositoryId = summaryString(payload?.repository_wiki_repository_id);
   const repositoryId = run.repositoryId
     ?? (scmEvent ? summaryString(scmEvent.repositoryId) : null)
-    ?? atlasRepositoryId;
-  const wikiBuild = Boolean(run.repositoryId ?? atlasRepositoryId);
+    ?? wikiRepositoryId;
+  const wikiBuild = Boolean(run.repositoryId ?? wikiRepositoryId);
   const eventType = scmEvent
     ? summaryString(scmEvent.type)
     : summaryString(payload?.event)

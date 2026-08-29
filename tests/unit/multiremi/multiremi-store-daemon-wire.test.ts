@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
-import { createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
+import { configureRepositoryWikiAutomation, createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -513,10 +513,10 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       assigneeId: agent.id,
       executionMode: "run_only",
     });
-    store.setAutopilotManagedKind(autopilot.id, "atlas_repository_wiki");
+    configureRepositoryWikiAutomation(store, { agent, autopilot, runtimeId: runtime.id });
     const run = store.runAutopilot(autopilot.id, {
       source: "scm_event",
-      payload: { atlas_repository_id: "repo_claim_context", atlas_mode: "incremental_update" },
+      payload: { repository_wiki_repository_id: "repo_claim_context", repository_wiki_mode: "incremental_update" },
       repositoryId: "repo_claim_context",
       dedupeKey: "repo_claim_context:incremental_update:abc123",
     });
@@ -554,7 +554,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       autopilot_source: "scm_event",
       autopilot_title: "Atlas · Repository Wiki",
       autopilot_description: "Update the repository Wiki",
-      autopilot_trigger_payload: { atlas_repository_id: "repo_claim_context", atlas_mode: "incremental_update" },
+      autopilot_trigger_payload: { repository_wiki_repository_id: "repo_claim_context", repository_wiki_mode: "incremental_update" },
       scm_revision: "abc123",
     });
     expect(byId.get(run.taskId!).autopilotTitle).toBeUndefined();
