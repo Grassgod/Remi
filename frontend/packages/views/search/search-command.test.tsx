@@ -56,7 +56,7 @@ const {
       role: "owner" | "admin" | "member";
       created_at: string;
       name: string;
-      email: string;
+      email?: string;
       avatar_url: string | null;
     }>,
   },
@@ -252,6 +252,81 @@ describe("SearchCommand", () => {
 
     expect(mockPush).toHaveBeenCalledWith("/ws-test/settings");
     expect(useSearchStore.getState().open).toBe(false);
+  });
+
+  it("waits for a pending search when Enter is pressed immediately", async () => {
+    const user = userEvent.setup();
+    mockSearchIssues.mockResolvedValue({
+      issues: [
+        {
+          id: "issue-immediate",
+          identifier: "MUL-198",
+          title: "Immediate Enter result",
+          status: "in_progress",
+        },
+      ],
+    });
+    renderSearch();
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "Immediate Enter result");
+    expect(mockSearchIssues).not.toHaveBeenCalled();
+
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("/ws-test/issues/issue-immediate");
+    });
+    expect(useSearchStore.getState().open).toBe(false);
+  });
+
+  it("navigates with Enter after a search result is rendered", async () => {
+    const user = userEvent.setup();
+    mockSearchIssues.mockResolvedValue({
+      issues: [
+        {
+          id: "issue-settled",
+          identifier: "MUL-199",
+          title: "Settled search result",
+          status: "backlog",
+        },
+      ],
+    });
+    renderSearch();
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "Settled search result");
+    await screen.findByRole("option", { name: /Settled search result/i });
+
+    await user.keyboard("{Enter}");
+
+    expect(mockPush).toHaveBeenCalledWith("/ws-test/issues/issue-settled");
+    expect(useSearchStore.getState().open).toBe(false);
+  });
+
+  it("searches when the member list omits email", async () => {
+    const user = userEvent.setup();
+    mockMembers.current = [
+      {
+        id: "member-without-email",
+        workspace_id: "ws-test",
+        user_id: "user-without-email",
+        role: "owner",
+        created_at: "2026-01-01T00:00:00Z",
+        name: "Local User",
+        avatar_url: null,
+      },
+    ];
+    renderSearch();
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "unmatched query");
+
+    await waitFor(() => {
+      expect(mockSearchIssues).toHaveBeenCalledWith(
+        expect.objectContaining({ q: "unmatched query" }),
+      );
+    });
   });
 
   it("finds and navigates to the plugins page", async () => {
