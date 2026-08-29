@@ -56,7 +56,7 @@ const RELEASE_DIR = join(SNAPSHOT_TMP, "releases");
 const SCRIPTS_DIR = join(SNAPSHOT_TMP, "release-scripts");
 
 /** Routes that cannot be driven through `app.request` (WebSocket upgrade). */
-const STATUS_ONLY_ROUTES = new Set([
+export const SNAPSHOT_STATUS_ONLY_ROUTES = new Set([
   "GET /ws",
   "GET /api/daemon/ws",
   "GET /api/realtime/ws",
@@ -286,7 +286,7 @@ export interface RouteRef {
   path: string;
 }
 
-function routeTable(app: any): RouteRef[] {
+export function snapshotRouteTable(app: any): RouteRef[] {
   const seen = new Set<string>();
   const out: RouteRef[] = [];
   for (const route of app.routes as RouteRef[]) {
@@ -900,7 +900,7 @@ function getQuery(pattern: string, refs: SeedRefs): string {
   }
 }
 
-function concretePath(pattern: string, refs: SeedRefs): string {
+export function snapshotConcretePath(pattern: string, refs: SeedRefs): string {
   const path = pattern
     .split("/")
     .map((segment) => (segment.startsWith(":") ? encodeURIComponent(resolveParam(pattern, segment.slice(1), refs)) : segment))
@@ -970,13 +970,17 @@ class Recorder {
   }
 }
 
-async function buildApp(): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
-  const db = new Database(":memory:");
+async function buildApp(
+  db: Database = new Database(":memory:"),
+): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
   const store = new MultiremiStore(db);
   const refs = await seedStore(store, db);
   const app = createMultiremiApp({ store, realtimeState: { enabled: true, connections: 0 } });
   return { app, store, db, refs };
 }
+
+/** Reuse the canonical route-snapshot fixture from diagnostic benchmarks. */
+export const buildSnapshotApp = buildApp;
 
 // ---------------------------------------------------------------------------
 // families
@@ -1646,7 +1650,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
     // --- route inventory (mechanically enumerated from the Hono route table)
     resetDeterministicState();
     const inventoryBoot = await buildApp();
-    const routes = routeTable(inventoryBoot.app);
+    const routes = snapshotRouteTable(inventoryBoot.app);
     inventoryBoot.db.close();
 
     const routeKeys = routes.map((route) => `${route.method} ${route.path}`);
@@ -1671,11 +1675,11 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
     for (const route of routes) {
       if (route.method !== "GET") continue;
       const key = `${route.method} ${route.path}`;
-      if (STATUS_ONLY_ROUTES.has(key)) {
+      if (SNAPSHOT_STATUS_ONLY_ROUTES.has(key)) {
         covered.add(key);
         let status: number | string = "unavailable";
         try {
-          status = (await sweep.app.request(concretePath(route.path, sweepRefs))).status;
+          status = (await sweep.app.request(snapshotConcretePath(route.path, sweepRefs))).status;
         } catch (error) {
           status = `threw: ${(error as Error).name}`;
         }
@@ -1688,7 +1692,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
         });
         continue;
       }
-      await sweepRecorder.call("GET", concretePath(route.path, sweepRefs));
+      await sweepRecorder.call("GET", snapshotConcretePath(route.path, sweepRefs));
       covered.add(key);
     }
     // Keys inside the sweep must not depend on request order.
@@ -1720,8 +1724,8 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
         routeCount: routes.length,
         routeCountByPrefix: byPrefix,
         getRoutes: getRoutes.length,
-        getRoutesWithBody: getRoutes.length - STATUS_ONLY_ROUTES.size,
-        statusOnlyRoutes: [...STATUS_ONLY_ROUTES].sort(),
+        getRoutesWithBody: getRoutes.length - SNAPSHOT_STATUS_ONLY_ROUTES.size,
+        statusOnlyRoutes: [...SNAPSHOT_STATUS_ONLY_ROUTES].sort(),
         mutationRoutes: mutationRoutes.length,
         mutationRoutesCovered: mutationCovered.length,
         flows: MUTATION_FLOWS.map((item) => item.name).sort(),
