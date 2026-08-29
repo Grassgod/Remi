@@ -505,7 +505,11 @@ const pages: Array<[string, () => ReactElement]> = [
   ["settings", () => <SettingsPage />],
 ];
 
-describe("MUL-180 main-page API waterfall diagnostic", () => {
+// Measurement harness, not an assertion suite: it writes a report to
+// OUTPUT_PATH and its only expectation is that something was recorded. Gate it
+// behind RUN_DIAG so the default suite (and CI) skips it, and run it on demand:
+//   RUN_DIAG=1 ../../../node_modules/.bin/vitest run performance/page-waterfall.diag
+describe.skipIf(!process.env.RUN_DIAG)("MUL-180 main-page API waterfall diagnostic", () => {
   beforeAll(() => rmSync(OUTPUT_PATH, { force: true }));
   afterAll(() => setApiInstance(null as unknown as Parameters<typeof setApiInstance>[0]));
 
