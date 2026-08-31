@@ -912,13 +912,19 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
     case "daemonId":
       return "dmn_snapshot";
     case "connectionId":
-      return "scm_snapshot";
+      // Two unrelated things are called a connection: an SCM one and a
+      // messaging one. The prefix is what each router checks.
+      return pattern.includes("/messaging/") ? "mconn_snapshot" : "scm_snapshot";
     case "eventId":
       return "sce_snapshot";
     case "sourceId":
-      return "fsrc_snapshot";
+      return pattern.includes("/messaging/") ? "msrc_snapshot" : "fsrc_snapshot";
     case "messageId":
       return "fmsg_snapshot";
+    case "externalMessageId":
+      return "om_snapshot";
+    case "proposalId":
+      return "mout_snapshot";
     case "engine":
       return "claude";
     case "key":

@@ -11,6 +11,7 @@ import type {
 import { nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import type { StoreContext } from "@multiremi/store/context.js";
+import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
 import type { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
 import type { StoredCanonicalMessage } from "@multiremi/store/repos/messaging-repo.js";
 
@@ -61,6 +62,30 @@ const SOURCE_ALERT_THRESHOLD = 3;
 
 /** Persisted alongside existing rows written by the pre-Core path; do not rename. */
 const SOURCE_ALERT_INBOX_TYPE = "feishu_ingest_connection_alert";
+
+/**
+ * Every Inbox type the Core can write.
+ *
+ * The Core picks its type from a table rather than writing a literal at each
+ * call, which the static scan in `inbox-routing.test.ts` cannot follow. This
+ * list is what that test checks instead — exactly, rather than by regex.
+ */
+export const MESSAGING_INBOX_TYPES: readonly string[] = [
+  ...Object.values(INBOX_TYPE_BY_KIND),
+  SOURCE_ALERT_INBOX_TYPE,
+];
+
+/**
+ * How loudly an Inbox type is written, read from the routing table.
+ *
+ * Restating the severity here would let the two drift, and the table is the
+ * side that other subsystems and the frontend already agree on.
+ */
+function inboxSeverity(type: string): "info" | "attention" {
+  const registered = INBOX_ROUTING[type];
+  if (!registered) throw new Error(`Unregistered inbox type: ${type}`);
+  return registered.severity;
+}
 
 const log = createLogger("multiremi-messaging");
 
@@ -182,7 +207,7 @@ export class MessagingOutcomeService {
       const item = this.ctx.createInboxItem({
         workspaceId: source.workspaceId,
         memberId: String(recipient.id),
-        severity: "attention",
+        severity: inboxSeverity(SOURCE_ALERT_INBOX_TYPE),
         type: SOURCE_ALERT_INBOX_TYPE,
         title: "消息源连接异常",
         body: `消息源 ${source.name} 连续拉取失败，请检查连接状态。`,
@@ -270,7 +295,7 @@ export class MessagingOutcomeService {
       const inboxItem = this.ctx.createInboxItem({
         workspaceId: input.workspaceId,
         memberId: recipient,
-        severity: kind === "reply_drafted" ? "attention" : "info",
+        severity: inboxSeverity(inboxType),
         type: inboxType,
         title: INBOX_TITLE_BY_KIND[kind],
         body: text,
@@ -364,7 +389,7 @@ export class MessagingOutcomeService {
       const inboxItem = this.ctx.createInboxItem({
         workspaceId: input.workspaceId,
         memberId: recipient,
-        severity: "attention",
+        severity: inboxSeverity(inboxType),
         type: inboxType,
         title: INBOX_TITLE_BY_KIND.issue_proposed,
         body: issueInput.title,

@@ -7,6 +7,7 @@ import {
   type MessageOutcomeKind,
   type MessageProposalStatus,
   type MessageProvider,
+  type MessageProviderHealth,
   type MessageSource,
 } from "@multiremi/contracts/messaging.js";
 import type { MultiremiAssigneeType } from "@multiremi/contracts/types.js";
@@ -132,35 +133,11 @@ export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
   app.post(`${BASE}/connections/:connectionId/check`, async (c) => {
     const loaded = loadConnection(c, deps, true);
     if (loaded instanceof Response) return loaded;
-    const provider = deps.messagingProviders.get(loaded.provider);
-    if (!provider) {
-      const connection = repo.upsertConnection({
-        ...connectionIdentity(loaded),
-        status: "unavailable",
-        lastCheckedAt: new Date().toISOString(),
-        lastErrorCode: "provider_unavailable",
-        lastErrorAt: new Date().toISOString(),
-      });
-      return c.json({ connection, health: null });
-    }
-    // checkHealth is contracted not to throw for expected failures, but a
-    // Provider bug must not take the endpoint down with it.
-    let health;
     try {
-      health = await provider.checkHealth({ connection: loaded });
+      return c.json(await probeConnection(deps, loaded));
     } catch (error) {
       return errorResponse(c, error);
     }
-    const connection = repo.upsertConnection({
-      ...connectionIdentity(loaded),
-      externalAccountId: health.externalAccountId,
-      externalAccountName: health.externalAccountName,
-      status: health.status,
-      lastCheckedAt: health.checkedAt,
-      lastErrorCode: health.errorCode,
-      lastErrorAt: health.errorCode ? health.checkedAt : null,
-    });
-    return c.json({ connection, health });
   });
 
   app.get(`${BASE}/sources`, (c) => {
@@ -503,6 +480,48 @@ export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
   });
 }
 
+/**
+ * Asks the Provider how the Connection is doing, and stores the answer.
+ *
+ * Exported because the legacy `/feishu` endpoint-check route has to reach the
+ * same verdict: two probes that could disagree would be two definitions of
+ * "connected". Throws only on a Provider bug — `checkHealth` is contracted to
+ * report expected failures as a status, not an exception.
+ */
+export async function probeConnection(
+  deps: RouterDeps,
+  connection: MessageConnection,
+): Promise<{ connection: MessageConnection; health: MessageProviderHealth | null }> {
+  const repo = deps.store.messaging;
+  const provider = deps.messagingProviders.get(connection.provider);
+  if (!provider) {
+    const checkedAt = new Date().toISOString();
+    return {
+      connection: repo.upsertConnection({
+        ...connectionIdentity(connection),
+        status: "unavailable",
+        lastCheckedAt: checkedAt,
+        lastErrorCode: "provider_unavailable",
+        lastErrorAt: checkedAt,
+      }),
+      health: null,
+    };
+  }
+  const health = await provider.checkHealth({ connection });
+  return {
+    connection: repo.upsertConnection({
+      ...connectionIdentity(connection),
+      externalAccountId: health.externalAccountId,
+      externalAccountName: health.externalAccountName,
+      status: health.status,
+      lastCheckedAt: health.checkedAt,
+      lastErrorCode: health.errorCode,
+      lastErrorAt: health.errorCode ? health.checkedAt : null,
+    }),
+    health,
+  };
+}
+
 /** The notify and draft-reply paths differ only in which text they carry. */
 function inboxOutcomeResponse(
   c: Context,
@@ -550,7 +569,7 @@ function messageRef(c: Context): { connectionId: string; externalMessageId: stri
   };
 }
 
-function issueDraft(body: IssueBody): MessageIssueInput {
+export function issueDraft(body: IssueBody): MessageIssueInput {
   return {
     title: body.title ?? "",
     description: body.description ?? null,
@@ -646,7 +665,7 @@ function resolveChannel(provider: MessageProvider, channel: string | undefined):
   return requested;
 }
 
-function normalizeAllowlist(value: unknown): MessageSource["allowlist"] {
+export function normalizeAllowlist(value: unknown): MessageSource["allowlist"] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("allowlist must be an array");
   const now = new Date().toISOString();
@@ -724,34 +743,34 @@ function messageKey(connectionId: string, externalMessageId: string): string {
   return `${connectionId}\u0000${externalMessageId}`;
 }
 
-function requireText(value: string | undefined, field: string): string {
+export function requireText(value: string | undefined, field: string): string {
   const text = value?.trim();
   if (!text) throw new Error(`${field} is required`);
   return text;
 }
 
-function parseBooleanQuery(value: string | undefined, name: string): boolean | undefined {
+export function parseBooleanQuery(value: string | undefined, name: string): boolean | undefined {
   if (value === undefined) return undefined;
   if (value === "true" || value === "1") return true;
   if (value === "false" || value === "0") return false;
   throw new Error(`${name} must be true or false`);
 }
 
-function parseLimit(value: string | undefined): number | undefined {
+export function parseLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 500) throw new Error("limit must be between 1 and 500");
   return parsed;
 }
 
-function parseOffset(value: string | undefined): number {
+export function parseOffset(value: string | undefined): number {
   if (value === undefined) return 0;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("offset must be a non-negative integer");
   return parsed;
 }
 
-function resolveProcessedFilter(processed: boolean | undefined, unprocessed: boolean | undefined): boolean | undefined {
+export function resolveProcessedFilter(processed: boolean | undefined, unprocessed: boolean | undefined): boolean | undefined {
   if (processed !== undefined && unprocessed !== undefined && processed === unprocessed) {
     throw new Error("processed and unprocessed filters conflict");
   }
@@ -760,7 +779,7 @@ function resolveProcessedFilter(processed: boolean | undefined, unprocessed: boo
   return undefined;
 }
 
-function cleanQuery(value: string | undefined): string | null {
+export function cleanQuery(value: string | undefined): string | null {
   const cleaned = value?.trim();
   return cleaned ? cleaned : null;
 }

@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 649,
+    "routeCount": 674,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 431,
+      "compat": 456,
       "root": 13
     },
-    "getRoutes": 279,
-    "getRoutesWithBody": 276,
+    "getRoutes": 290,
+    "getRoutesWithBody": 287,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 370,
+    "mutationRoutes": 384,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -122,6 +122,8 @@
     "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "DELETE /api/workspaces/:id/runtime-provisions/:provisionId",
     "DELETE /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+    "DELETE /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+    "DELETE /api/workspaces/:workspaceId/messaging/sources/:sourceId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId/repositories/:repositoryId",
     "GET /",
@@ -392,6 +394,17 @@
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
+    "GET /api/workspaces/:workspaceId/messaging/connections",
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
+    "GET /api/workspaces/:workspaceId/messaging/conversations",
+    "GET /api/workspaces/:workspaceId/messaging/messages",
+    "GET /api/workspaces/:workspaceId/messaging/proposals",
+    "GET /api/workspaces/:workspaceId/messaging/providers",
+    "GET /api/workspaces/:workspaceId/messaging/sources",
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId",
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations",
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "GET /api/workspaces/:workspaceId/scm/events",
@@ -436,6 +449,8 @@
     "PATCH /api/workspaces/:id/repos/:repositoryId",
     "PATCH /api/workspaces/:id/runtime-provisions/:provisionId",
     "PATCH /api/workspaces/:workspaceId/feishu/sources/:sourceId",
+    "PATCH /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+    "PATCH /api/workspaces/:workspaceId/messaging/sources/:sourceId",
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "POST /api/agents",
     "POST /api/agents/:id/archive",
@@ -664,6 +679,16 @@
     "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/approve",
     "POST /api/workspaces/:workspaceId/feishu/proposals/:proposalId/reject",
     "POST /api/workspaces/:workspaceId/feishu/sources",
+    "POST /api/workspaces/:workspaceId/messaging/connections",
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/check",
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/create-issue",
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/draft-reply",
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/notify",
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/propose-issue",
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/resolve",
+    "POST /api/workspaces/:workspaceId/messaging/proposals/:proposalId/approve",
+    "POST /api/workspaces/:workspaceId/messaging/proposals/:proposalId/reject",
+    "POST /api/workspaces/:workspaceId/messaging/sources",
     "POST /api/workspaces/:workspaceId/scm/connections",
     "POST /api/workspaces/:workspaceId/scm/connections/:connectionId/verify",
     "POST /auth/google",
@@ -1033,6 +1058,17 @@
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
+    "GET /api/workspaces/:workspaceId/messaging/connections",
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
+    "GET /api/workspaces/:workspaceId/messaging/conversations",
+    "GET /api/workspaces/:workspaceId/messaging/messages",
+    "GET /api/workspaces/:workspaceId/messaging/proposals",
+    "GET /api/workspaces/:workspaceId/messaging/providers",
+    "GET /api/workspaces/:workspaceId/messaging/sources",
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId",
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations",
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/status",
     "GET /api/workspaces/:workspaceId/scm/connections",
     "GET /api/workspaces/:workspaceId/scm/connections/:connectionId",
     "GET /api/workspaces/:workspaceId/scm/events",
@@ -9168,6 +9204,281 @@
             "id": "memory.update",
             "command": "remi memory update",
             "capability": "memory.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.connection.add",
+            "command": "remi messaging connection add",
+            "capability": "messaging.connection.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.connection.check",
+            "command": "remi messaging connection check",
+            "capability": "messaging.connection.check",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.connection.delete",
+            "command": "remi messaging connection delete",
+            "capability": "messaging.connection.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.connection.get",
+            "command": "remi messaging connection get",
+            "capability": "messaging.connection.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.connection.list",
+            "command": "remi messaging connection list",
+            "capability": "messaging.connection.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.connection.update",
+            "command": "remi messaging connection update",
+            "capability": "messaging.connection.update",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.conversation.list",
+            "command": "remi messaging conversation list",
+            "capability": "messaging.conversation.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.message.create-issue",
+            "command": "remi messaging message create-issue",
+            "capability": "messaging.message.create-issue",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.message.draft-reply",
+            "command": "remi messaging message draft-reply",
+            "capability": "messaging.message.draft-reply",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.message.get",
+            "command": "remi messaging message get",
+            "capability": "messaging.message.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.message.list",
+            "command": "remi messaging message list",
+            "capability": "messaging.message.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.message.notify",
+            "command": "remi messaging message notify",
+            "capability": "messaging.message.notify",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.message.propose-issue",
+            "command": "remi messaging message propose-issue",
+            "capability": "messaging.message.propose-issue",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.message.resolve",
+            "command": "remi messaging message resolve",
+            "capability": "messaging.message.resolve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.proposal.approve",
+            "command": "remi messaging proposal approve",
+            "capability": "messaging.proposal.approve",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.proposal.list",
+            "command": "remi messaging proposal list",
+            "capability": "messaging.proposal.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.proposal.reject",
+            "command": "remi messaging proposal reject",
+            "capability": "messaging.proposal.reject",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.provider.list",
+            "command": "remi messaging provider list",
+            "capability": "messaging.provider.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.source.add",
+            "command": "remi messaging source add",
+            "capability": "messaging.source.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.source.available-conversations",
+            "command": "remi messaging source available-conversations",
+            "capability": "messaging.source.available-conversations",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.source.delete",
+            "command": "remi messaging source delete",
+            "capability": "messaging.source.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.source.get",
+            "command": "remi messaging source get",
+            "capability": "messaging.source.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.source.list",
+            "command": "remi messaging source list",
+            "capability": "messaging.source.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.source.status",
+            "command": "remi messaging source status",
+            "capability": "messaging.source.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "messaging.source.update",
+            "command": "remi messaging source update",
+            "capability": "messaging.source.update",
             "outputs": [
               "table",
               "json",
@@ -21084,6 +21395,144 @@
       "status": 404,
       "body": {
         "error": "Feishu source not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/connections",
+      "route": "GET /api/workspaces/:workspaceId/messaging/connections",
+      "path": "/api/workspaces/local/messaging/connections",
+      "status": 200,
+      "body": {
+        "connections": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+      "route": "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId",
+      "path": "/api/workspaces/local/messaging/connections/mconn_snapshot",
+      "status": 404,
+      "body": {
+        "error": "Message connection not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
+      "route": "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
+      "path": "/api/workspaces/local/messaging/connections/mconn_snapshot/messages/om_snapshot",
+      "status": 404,
+      "body": {
+        "error": "Message not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/conversations",
+      "route": "GET /api/workspaces/:workspaceId/messaging/conversations",
+      "path": "/api/workspaces/local/messaging/conversations",
+      "status": 200,
+      "body": {
+        "conversations": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/messages",
+      "route": "GET /api/workspaces/:workspaceId/messaging/messages",
+      "path": "/api/workspaces/local/messaging/messages",
+      "status": 200,
+      "body": {
+        "messages": [],
+        "total": 0,
+        "limit": 100,
+        "offset": 0,
+        "hasMore": false
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/proposals",
+      "route": "GET /api/workspaces/:workspaceId/messaging/proposals",
+      "path": "/api/workspaces/local/messaging/proposals",
+      "status": 200,
+      "body": {
+        "proposals": [],
+        "total": 0,
+        "limit": 100,
+        "offset": 0,
+        "hasMore": false
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/providers",
+      "route": "GET /api/workspaces/:workspaceId/messaging/providers",
+      "path": "/api/workspaces/local/messaging/providers",
+      "status": 200,
+      "body": {
+        "providers": [
+          {
+            "provider": "lark_cli",
+            "channels": [
+              "feishu"
+            ],
+            "authMethods": [
+              "external_tool"
+            ],
+            "capabilities": {
+              "pull": true,
+              "push": false,
+              "searchConversations": true,
+              "readConversations": true,
+              "send": true,
+              "reply": true,
+              "attachmentDownload": true,
+              "attachmentUpload": false,
+              "mention": false,
+              "reaction": false,
+              "edit": true,
+              "recall": true
+            },
+            "displayName": "Lark CLI"
+          }
+        ],
+        "channels": [
+          "feishu"
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/sources",
+      "route": "GET /api/workspaces/:workspaceId/messaging/sources",
+      "path": "/api/workspaces/local/messaging/sources",
+      "status": 200,
+      "body": {
+        "sources": [],
+        "total": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/sources/:sourceId",
+      "route": "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId",
+      "path": "/api/workspaces/local/messaging/sources/msrc_snapshot",
+      "status": 404,
+      "body": {
+        "error": "Message source not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations",
+      "route": "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations",
+      "path": "/api/workspaces/local/messaging/sources/msrc_snapshot/available-conversations",
+      "status": 404,
+      "body": {
+        "error": "Message source not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/status",
+      "route": "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/status",
+      "path": "/api/workspaces/local/messaging/sources/msrc_snapshot/status",
+      "status": 404,
+      "body": {
+        "error": "Message source not found"
       }
     },
     {

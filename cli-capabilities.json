@@ -28,6 +28,7 @@
     "daemon",
     "autopilot",
     "scm",
+    "messaging",
     "feishu",
     "inbox",
     "notification",
@@ -6208,6 +6209,430 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "messaging.group": {
+      "command": "remi messaging",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.provider.list": {
+      "command": "remi messaging provider list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.provider.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.connection.list": {
+      "command": "remi messaging connection list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.connection.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.connection.add": {
+      "command": "remi messaging connection add",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.connection.get": {
+      "command": "remi messaging connection get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.connection.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.connection.update": {
+      "command": "remi messaging connection update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.connection.delete": {
+      "command": "remi messaging connection delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.connection.check": {
+      "command": "remi messaging connection check",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.check",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.source.list": {
+      "command": "remi messaging source list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.source.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.source.get": {
+      "command": "remi messaging source get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.source.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.source.status": {
+      "command": "remi messaging source status",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.source.status",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.source.add": {
+      "command": "remi messaging source add",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.source.update": {
+      "command": "remi messaging source update",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.source.delete": {
+      "command": "remi messaging source delete",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.delete",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.source.available-conversations": {
+      "command": "remi messaging source available-conversations",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.available-conversations",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.conversation.list": {
+      "command": "remi messaging conversation list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.conversation.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.message.list": {
+      "command": "remi messaging message list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.message.get": {
+      "command": "remi messaging message get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.message.resolve": {
+      "command": "remi messaging message resolve",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.resolve",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.message.notify": {
+      "command": "remi messaging message notify",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.notify",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.message.draft-reply": {
+      "command": "remi messaging message draft-reply",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.draft-reply",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.message.propose-issue": {
+      "command": "remi messaging message propose-issue",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.propose-issue",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.message.create-issue": {
+      "command": "remi messaging message create-issue",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.message.create-issue",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.proposal.list": {
+      "command": "remi messaging proposal list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.proposal.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.proposal.approve": {
+      "command": "remi messaging proposal approve",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.proposal.approve",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.proposal.reject": {
+      "command": "remi messaging proposal reject",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.proposal.reject",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "feishu.group": {
       "command": "remi feishu",
       "aliases": [],
@@ -8256,6 +8681,12 @@
     "DELETE /api/workspaces/:workspaceId/feishu/sources/:sourceId": {
       "command": "feishu.source.delete"
     },
+    "DELETE /api/workspaces/:workspaceId/messaging/connections/:connectionId": {
+      "command": "messaging.connection.delete"
+    },
+    "DELETE /api/workspaces/:workspaceId/messaging/sources/:sourceId": {
+      "command": "messaging.source.delete"
+    },
     "DELETE /api/workspaces/:workspaceId/scm/connections/:connectionId": {
       "command": "scm.connection.delete"
     },
@@ -9106,6 +9537,39 @@
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status": {
       "command": "feishu.source.status"
     },
+    "GET /api/workspaces/:workspaceId/messaging/connections": {
+      "command": "messaging.connection.list"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId": {
+      "command": "messaging.connection.get"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId": {
+      "command": "messaging.message.get"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/conversations": {
+      "command": "messaging.conversation.list"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/messages": {
+      "command": "messaging.message.list"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/proposals": {
+      "command": "messaging.proposal.list"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/providers": {
+      "command": "messaging.provider.list"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/sources": {
+      "command": "messaging.source.list"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId": {
+      "command": "messaging.source.get"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations": {
+      "command": "messaging.source.available-conversations"
+    },
+    "GET /api/workspaces/:workspaceId/messaging/sources/:sourceId/status": {
+      "command": "messaging.source.status"
+    },
     "GET /api/workspaces/:workspaceId/scm/connections": {
       "command": "scm.connection.list"
     },
@@ -9243,6 +9707,12 @@
     },
     "PATCH /api/workspaces/:workspaceId/feishu/sources/:sourceId": {
       "command": "feishu.source.update"
+    },
+    "PATCH /api/workspaces/:workspaceId/messaging/connections/:connectionId": {
+      "command": "messaging.connection.update"
+    },
+    "PATCH /api/workspaces/:workspaceId/messaging/sources/:sourceId": {
+      "command": "messaging.source.update"
     },
     "PATCH /api/workspaces/:workspaceId/scm/connections/:connectionId": {
       "command": "scm.connection.update"
@@ -10031,6 +10501,36 @@
     },
     "POST /api/workspaces/:workspaceId/feishu/sources": {
       "command": "feishu.source.add"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections": {
+      "command": "messaging.connection.add"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/check": {
+      "command": "messaging.connection.check"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/create-issue": {
+      "command": "messaging.message.create-issue"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/draft-reply": {
+      "command": "messaging.message.draft-reply"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/notify": {
+      "command": "messaging.message.notify"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/propose-issue": {
+      "command": "messaging.message.propose-issue"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/resolve": {
+      "command": "messaging.message.resolve"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/proposals/:proposalId/approve": {
+      "command": "messaging.proposal.approve"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/proposals/:proposalId/reject": {
+      "command": "messaging.proposal.reject"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/sources": {
+      "command": "messaging.source.add"
     },
     "POST /api/workspaces/:workspaceId/scm/connections": {
       "command": "scm.connection.create"

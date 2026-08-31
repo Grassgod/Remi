@@ -4396,6 +4396,320 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "messaging.provider.list": {
+      "command": "remi messaging provider list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.provider.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.connection.list": {
+      "command": "remi messaging connection list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.connection.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.connection.add": {
+      "command": "remi messaging connection add",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.connection.get": {
+      "command": "remi messaging connection get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.connection.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.connection.update": {
+      "command": "remi messaging connection update",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.connection.delete": {
+      "command": "remi messaging connection delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.connection.check": {
+      "command": "remi messaging connection check",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.check",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.source.list": {
+      "command": "remi messaging source list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.source.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.source.get": {
+      "command": "remi messaging source get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.source.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.source.status": {
+      "command": "remi messaging source status",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.source.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.source.add": {
+      "command": "remi messaging source add",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.source.update": {
+      "command": "remi messaging source update",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.update",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.source.delete": {
+      "command": "remi messaging source delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.source.available-conversations": {
+      "command": "remi messaging source available-conversations",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.source.available-conversations",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.conversation.list": {
+      "command": "remi messaging conversation list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.conversation.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.message.list": {
+      "command": "remi messaging message list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.message.get": {
+      "command": "remi messaging message get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.message.resolve": {
+      "command": "remi messaging message resolve",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.resolve",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.message.notify": {
+      "command": "remi messaging message notify",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.notify",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.message.draft-reply": {
+      "command": "remi messaging message draft-reply",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.draft-reply",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.message.propose-issue": {
+      "command": "remi messaging message propose-issue",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.message.propose-issue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.message.create-issue": {
+      "command": "remi messaging message create-issue",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.message.create-issue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.proposal.list": {
+      "command": "remi messaging proposal list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "messaging.proposal.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.proposal.approve": {
+      "command": "remi messaging proposal approve",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.proposal.approve",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.proposal.reject": {
+      "command": "remi messaging proposal reject",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.proposal.reject",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "feishu.source.list": {
       "command": "remi feishu source list",
       "auth": [
