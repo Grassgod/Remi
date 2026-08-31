@@ -66,6 +66,7 @@ describe("store migrations", () => {
       "multiremi_scm_event_evidence",
       "multiremi_scm_event_deliveries",
       "multiremi_projects",
+      "multiremi_project_devices",
       "multiremi_chat_sessions",
       "multiremi_feedback",
       "multiremi_access_tokens",
@@ -118,6 +119,7 @@ describe("store migrations", () => {
       "daemon_id",
       "display_name",
       "display_name_customized",
+      "dedicated",
       "updated_by",
       "updated_at",
     ]);

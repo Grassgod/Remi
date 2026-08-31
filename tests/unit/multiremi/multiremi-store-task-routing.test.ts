@@ -7,6 +7,108 @@ import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./h
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — task claim, routing, and workspace scoping", () => {
+  it("enforces project device bindings and dedicated device admission in both directions", () => {
+    const store = createStore();
+    const personal = store.registerRuntime({
+      id: "rt_personal",
+      name: "personal codex",
+      provider: "codex",
+      daemonId: "device-personal",
+    });
+    const devbox = store.registerRuntime({
+      id: "rt_devbox",
+      name: "devbox codex",
+      provider: "codex",
+      daemonId: "device-devbox",
+    });
+    const agent = store.createAgent({ name: "Routing agent", provider: "codex" });
+
+    const unrestricted = store.createProject({ title: "Unrestricted" });
+    const unrestrictedIssue = store.createIssue({ title: "Ordinary work", projectId: unrestricted.id });
+    const unrestrictedTask = store.createTask({ agentId: agent.id, issueId: unrestrictedIssue.id, prompt: "ordinary" });
+    expect(store.claimTask(personal.id)?.id).toBe(unrestrictedTask.id);
+    store.startTask(unrestrictedTask.id);
+    store.completeTask(unrestrictedTask.id, { output: "done" });
+
+    const bound = store.createProject({ title: "Personal-only" });
+    store.createProjectDevice(bound.id, { daemonId: "device-personal", createdBy: "local" });
+    const boundIssue = store.createIssue({ title: "Independent work", projectId: bound.id });
+    const boundTask = store.createTask({ agentId: agent.id, issueId: boundIssue.id, prompt: "independent" });
+    expect(store.claimTask(devbox.id)).toBeNull();
+    expect(store.claimTask(personal.id)?.id).toBe(boundTask.id);
+    store.startTask(boundTask.id);
+    store.completeTask(boundTask.id, { output: "done" });
+
+    store.updateDaemonDedicated("local", "device-personal", true, "local");
+    const ordinaryAfterDedicated = store.createTask({
+      agentId: agent.id,
+      issueId: unrestrictedIssue.id,
+      prompt: "ordinary after dedicated",
+    });
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.claimTask(devbox.id)?.id).toBe(ordinaryAfterDedicated.id);
+    store.startTask(ordinaryAfterDedicated.id);
+    store.completeTask(ordinaryAfterDedicated.id, { output: "done" });
+
+    const exclusive = store.createTask({ agentId: agent.id, issueId: boundIssue.id, prompt: "exclusive" });
+    expect(store.claimTask(devbox.id)).toBeNull();
+    expect(store.claimTask(personal.id)?.id).toBe(exclusive.id);
+  });
+
+  it("rejects projectless tasks and unidentified runtimes on constrained devices", () => {
+    const store = createStore();
+    const dedicated = store.registerRuntime({
+      id: "rt_dedicated",
+      name: "dedicated",
+      provider: "codex",
+      daemonId: "device-dedicated",
+    });
+    const unidentified = store.registerRuntime({
+      id: "rt_unidentified",
+      name: "unidentified",
+      provider: "codex",
+    });
+    const fallback = store.registerRuntime({
+      id: "rt_fallback",
+      name: "fallback",
+      provider: "codex",
+      daemonId: "device-fallback",
+    });
+    const agent = store.createAgent({ name: "Boundary agent", provider: "codex" });
+    const project = store.createProject({ title: "Bound" });
+    store.createProjectDevice(project.id, { daemonId: "device-dedicated" });
+    store.updateDaemonDedicated("local", "device-dedicated", true, "local");
+
+    const projectless = store.createTask({ agentId: agent.id, prompt: "chat-like" });
+    expect(store.claimTask(dedicated.id)).toBeNull();
+    expect(store.claimTask(fallback.id)?.id).toBe(projectless.id);
+    store.startTask(projectless.id);
+    store.completeTask(projectless.id, { output: "done" });
+
+    const issue = store.createIssue({ title: "Bound issue", projectId: project.id });
+    const constrained = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "bound" });
+    expect(store.claimTask(unidentified.id)).toBeNull();
+    expect(store.claimTask(dedicated.id)?.id).toBe(constrained.id);
+  });
+
+  it("treats a missing daemon profile as non-dedicated", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_profile_default",
+      name: "profile default",
+      provider: "codex",
+      daemonId: "device-no-profile",
+    });
+    db!.run(
+      "DELETE FROM multiremi_daemon_profiles WHERE workspace_id = ? AND daemon_id = ?",
+      ["local", "device-no-profile"],
+    );
+    const agent = store.createAgent({ name: "Default admission agent", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "unrestricted" });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  });
+
   it("serializes one Issue across different agents and runtimes", () => {
     const store = createStore();
     const codex = store.registerRuntime({ id: "rt_issue_codex", name: "codex", provider: "codex" });

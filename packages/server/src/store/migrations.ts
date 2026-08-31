@@ -1082,6 +1082,19 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_project_resources_project ON multiremi_project_resources(project_id, position);
 
+    CREATE TABLE IF NOT EXISTS multiremi_project_devices (
+      project_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      PRIMARY KEY(project_id, daemon_id),
+      FOREIGN KEY(project_id) REFERENCES multiremi_projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_project_devices_daemon
+      ON multiremi_project_devices(workspace_id, daemon_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_project_docs (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -2098,6 +2111,7 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, DAEMON_PROFILES_MIGRATION, () => {
     createDaemonProfilesAndBackfill(db);
   });
+  addColumnIfMissing(db, "multiremi_daemon_profiles", "dedicated INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_generation INTEGER");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_at TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_reported_active_tasks INTEGER");
@@ -2749,6 +2763,7 @@ function createDaemonProfilesAndBackfill(db: SqlDatabase): void {
       daemon_id TEXT NOT NULL,
       display_name TEXT NOT NULL,
       display_name_customized INTEGER NOT NULL DEFAULT 0,
+      dedicated INTEGER NOT NULL DEFAULT 0,
       updated_by TEXT,
       updated_at TEXT NOT NULL,
       PRIMARY KEY(workspace_id, daemon_id)
