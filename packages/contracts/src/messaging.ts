@@ -222,6 +222,14 @@ export type MessageOutcomeKind =
   | "ignored"
   | "dismissed";
 
+/**
+ * Review state for an outcome that asked a human first.
+ *
+ * `not_applicable` covers every outcome that needed no approval, so the field
+ * is always readable without a null check.
+ */
+export type MessageProposalStatus = "not_applicable" | "pending" | "approved" | "rejected";
+
 export interface MessageOutcome {
   id: string;
   workspaceId: string;
@@ -231,7 +239,29 @@ export interface MessageOutcome {
   ref: string | null;
   reason: string | null;
   taskId: string | null;
+  /** What an approval would act on. Empty for outcomes that need no approval. */
+  proposalPayload: Record<string, unknown>;
+  proposalStatus: MessageProposalStatus;
+  proposalResolvedAt: string | null;
+  proposalResolvedBy: string | null;
   createdAt: string;
+}
+
+/**
+ * A conversation as reconstructed from what was actually ingested.
+ *
+ * Derived from stored messages rather than fetched, so it stays available when
+ * the Provider is down and never reveals a conversation nobody consented to.
+ */
+export interface MessageConversationSummary {
+  sourceId: string;
+  connectionId: string;
+  externalConversationId: string;
+  name: string | null;
+  kind: MessageConversationKind;
+  messageCount: number;
+  lastMessageAt: string;
+  inAllowlist: boolean;
 }
 
 // ─── Errors ─────────────────────────────────────────────────────────────────────────────────────

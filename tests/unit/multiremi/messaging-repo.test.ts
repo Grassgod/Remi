@@ -242,6 +242,149 @@ describe("MessagingRepo", () => {
     expect(second?.cursor).toEqual({ page: 2 });
   });
 
+  it("filters, pages, and searches stored messages", () => {
+    const repo = createRepo();
+    addConnectionAndSource(repo, "a");
+    repo.ingestMessages({
+      connectionId: "conn_a",
+      sourceId: "source_a",
+      messages: [
+        canonicalMessage({ externalMessageId: "m1", text: "deploy the release", sentAt: "2026-08-31T09:10:00.000Z" }),
+        canonicalMessage({ externalMessageId: "m2", text: "review the plan", sentAt: "2026-08-31T09:20:00.000Z" }),
+        canonicalMessage({ externalMessageId: "m3", text: "DEPLOY again", sentAt: "2026-08-31T09:30:00.000Z" }),
+      ],
+    });
+    repo.updateMessageProcessingState({
+      connectionId: "conn_a",
+      externalMessageId: "m2",
+      processedAt: "2026-08-31T09:25:00.000Z",
+    });
+
+    // Newest first, so a paged list view shows recent traffic without scrolling.
+    expect(repo.listMessages({ workspaceId: "local" }).messages.map((message) => message.externalMessageId))
+      .toEqual(["m3", "m2", "m1"]);
+    expect(repo.listMessages({ workspaceId: "local", limit: 2, offset: 1 }))
+      .toMatchObject({ total: 3 });
+    expect(repo.listMessages({ workspaceId: "local", processed: false }).messages.map((m) => m.externalMessageId))
+      .toEqual(["m3", "m1"]);
+    // Case-insensitive, so an operator does not have to match the sender's casing.
+    expect(repo.listMessages({ workspaceId: "local", query: "deploy" }).messages.map((m) => m.externalMessageId))
+      .toEqual(["m3", "m1"]);
+    expect(repo.listMessages({ workspaceId: "local", since: "2026-08-31T09:20:00.000Z" }).total).toBe(2);
+    // A wildcard in the query is a literal, not a match-everything.
+    expect(repo.listMessages({ workspaceId: "local", query: "%" }).total).toBe(0);
+    expect(repo.listMessages({ workspaceId: "local", externalConversationId: "conversation_9" }).total).toBe(0);
+    expect(() => repo.listMessages({ limit: 0 })).toThrow("limit must be between 1 and 500");
+  });
+
+  it("summarizes conversations from what was ingested, and marks which are still allowed", () => {
+    const repo = createRepo();
+    addConnectionAndSource(repo, "a");
+    repo.ingestMessages({
+      connectionId: "conn_a",
+      sourceId: "source_a",
+      messages: [
+        canonicalMessage({ externalMessageId: "m1", sentAt: "2026-08-31T09:10:00.000Z" }),
+        canonicalMessage({ externalMessageId: "m2", sentAt: "2026-08-31T09:20:00.000Z" }),
+      ],
+    });
+
+    expect(repo.listConversations("local")).toEqual([{
+      sourceId: "source_a",
+      connectionId: "conn_a",
+      externalConversationId: "conversation_1",
+      name: "Test conversation",
+      kind: "group",
+      messageCount: 2,
+      lastMessageAt: "2026-08-31T09:20:00.000Z",
+      inAllowlist: true,
+    }]);
+
+    // Removing consent stops future ingestion but keeps history visible and honest.
+    repo.upsertSource({
+      id: "source_a",
+      workspaceId: "local",
+      connectionId: "conn_a",
+      name: "Source a",
+      allowlist: [],
+    });
+    expect(repo.listConversations("local")[0]?.inAllowlist).toBe(false);
+  });
+
+  it("records outcomes against a message and resolves a proposal exactly once", () => {
+    const repo = createRepo();
+    addConnectionAndSource(repo, "a");
+    repo.ingestMessages({
+      connectionId: "conn_a",
+      sourceId: "source_a",
+      messages: [canonicalMessage({ externalMessageId: "m1", sentAt: "2026-08-31T09:10:00.000Z" })],
+    });
+
+    expect(() => repo.recordOutcome({
+      workspaceId: "local",
+      connectionId: "conn_a",
+      externalMessageId: "missing",
+      outcomeKind: "notified",
+    })).toThrow("Message not found");
+
+    repo.recordOutcome({
+      workspaceId: "local",
+      connectionId: "conn_a",
+      externalMessageId: "m1",
+      outcomeKind: "notified",
+      reason: "mentioned",
+    });
+    const proposal = repo.recordOutcome({
+      workspaceId: "local",
+      connectionId: "conn_a",
+      externalMessageId: "m1",
+      outcomeKind: "issue_proposed",
+      proposalPayload: { title: "Fix the deploy" },
+      proposalStatus: "pending",
+    });
+
+    // Recorded within the same millisecond, so this only holds because ordering
+    // uses a per-message ordinal rather than created_at plus a random id.
+    expect(repo.listOutcomes("conn_a", "m1").map((outcome) => outcome.outcomeKind))
+      .toEqual(["notified", "issue_proposed"]);
+    expect(repo.listOutcomesForMessages([{ connectionId: "conn_a", externalMessageId: "m1" }])).toHaveLength(2);
+    expect(repo.listOutcomesForMessages([])).toEqual([]);
+    // A plain outcome is not review work, so it must not appear in the queue.
+    expect(repo.listProposals({ workspaceId: "local" }).proposals.map((entry) => entry.id)).toEqual([proposal.id]);
+    expect(repo.listProposals({ workspaceId: "local", status: "approved" }).total).toBe(0);
+
+    expect(repo.resolveProposal({
+      id: proposal.id, workspaceId: "local", status: "approved", resolvedBy: "user_1",
+    })).toMatchObject({ proposalStatus: "approved", proposalResolvedBy: "user_1" });
+    // Second reviewer loses the race rather than overwriting the first decision.
+    expect(repo.resolveProposal({
+      id: proposal.id, workspaceId: "local", status: "rejected", resolvedBy: "user_2",
+    })).toBeNull();
+    // Another workspace cannot resolve it either.
+    expect(repo.resolveProposal({
+      id: proposal.id, workspaceId: "other", status: "approved", resolvedBy: "user_3",
+    })).toBeNull();
+  });
+
+  it("cascades message and outcome deletion when a connection goes away", () => {
+    const repo = createRepo();
+    addConnectionAndSource(repo, "a");
+    repo.ingestMessages({
+      connectionId: "conn_a",
+      sourceId: "source_a",
+      messages: [canonicalMessage({ externalMessageId: "m1", sentAt: "2026-08-31T09:10:00.000Z" })],
+    });
+    repo.recordOutcome({
+      workspaceId: "local", connectionId: "conn_a", externalMessageId: "m1", outcomeKind: "ignored",
+    });
+
+    expect(repo.deleteConnection("conn_a")).toBe(true);
+    expect(repo.deleteConnection("conn_a")).toBe(false);
+    expect(repo.getSource("source_a")).toBeNull();
+    expect(repo.listMessages({ workspaceId: "local" }).total).toBe(0);
+    expect(repo.listOutcomes("conn_a", "m1")).toEqual([]);
+  });
+
   it("expires a stale lease so a crashed instance cannot block a Source forever", () => {
     const repo = createRepo();
     addConnectionAndSource(repo, "a");

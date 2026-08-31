@@ -1570,6 +1570,9 @@ export function runMigrations(db: SqlDatabase): void {
       proposal_status TEXT NOT NULL DEFAULT 'not_applicable',
       proposal_resolved_at TEXT,
       proposal_resolved_by TEXT,
+      -- Per-message ordinal. created_at alone is not a stable sort: two outcomes
+      -- recorded in the same millisecond would otherwise fall back to a random id.
+      sequence INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       FOREIGN KEY(connection_id, external_message_id)
         REFERENCES multiremi_message_messages(connection_id, external_message_id) ON DELETE CASCADE,
@@ -1577,7 +1580,7 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_message_outcomes_message
-      ON multiremi_message_outcomes(connection_id, external_message_id, created_at, id);
+      ON multiremi_message_outcomes(connection_id, external_message_id, sequence, id);
     CREATE INDEX IF NOT EXISTS idx_multiremi_message_outcomes_task
       ON multiremi_message_outcomes(task_id, created_at)
       WHERE task_id IS NOT NULL;
@@ -2856,6 +2859,7 @@ function ensureFeishuIssueProposalsV4Schema(db: SqlDatabase): void {
   );
   addColumnIfMissing(db, "multiremi_feishu_message_outcomes", "proposal_resolved_at TEXT");
   addColumnIfMissing(db, "multiremi_feishu_message_outcomes", "proposal_resolved_by TEXT");
+  addColumnIfMissing(db, "multiremi_message_outcomes", "sequence INTEGER NOT NULL DEFAULT 0");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_feishu_issue_proposals_message
       ON multiremi_feishu_message_outcomes(message_id)

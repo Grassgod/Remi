@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import type {
   CanonicalMessage,
   MessageConnection,
+  MessageConversationSummary,
   MessageErrorCode,
+  MessageOutcome,
+  MessageOutcomeKind,
+  MessageProposalStatus,
   MessageSource,
 } from "@multiremi/contracts/messaging.js";
 import type { MessageSyncCursor } from "@multiremi/contracts/messaging.js";
@@ -101,6 +105,57 @@ export interface UpdateMessageProcessingStateInput {
   processedAt?: string | null;
   retryCount?: number;
   lastRetryAt?: string | null;
+}
+
+export interface ListCanonicalMessagesInput {
+  workspaceId?: string | null;
+  connectionId?: string | null;
+  sourceId?: string | null;
+  externalConversationId?: string | null;
+  /** Substring match over the canonical text. */
+  query?: string | null;
+  processed?: boolean;
+  since?: string | null;
+  until?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListCanonicalMessagesResult {
+  messages: StoredCanonicalMessage[];
+  total: number;
+}
+
+export interface RecordMessageOutcomeInput {
+  workspaceId: string;
+  connectionId: string;
+  externalMessageId: string;
+  outcomeKind: MessageOutcomeKind;
+  ref?: string | null;
+  reason?: string | null;
+  taskId?: string | null;
+  proposalPayload?: Record<string, unknown>;
+  proposalStatus?: MessageProposalStatus;
+  createdAt?: string;
+}
+
+export interface ListMessageProposalsInput {
+  workspaceId: string;
+  status?: MessageProposalStatus;
+  sourceId?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListMessageProposalsResult {
+  proposals: MessageOutcome[];
+  total: number;
+}
+
+/** Message identity everywhere outside the message table itself. */
+export interface MessageRef {
+  connectionId: string;
+  externalMessageId: string;
 }
 
 /** Persistence boundary for the channel-independent Messaging Core. */
@@ -516,6 +571,234 @@ export class MessagingRepo {
     return deleted;
   }
 
+  listMessages(input: ListCanonicalMessagesInput = {}): ListCanonicalMessagesResult {
+    const limit = normalizeLimit(input.limit ?? 100);
+    const offset = normalizeNonNegativeInteger(input.offset ?? 0, "offset");
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    const equals = (column: string, value: string | null | undefined): void => {
+      if (!value) return;
+      conditions.push(`${column} = ?`);
+      values.push(value);
+    };
+    equals("workspace_id", input.workspaceId);
+    equals("connection_id", input.connectionId);
+    equals("source_id", input.sourceId);
+    equals("external_conversation_id", input.externalConversationId);
+    if (input.processed !== undefined) {
+      conditions.push(input.processed ? "processed_at IS NOT NULL" : "processed_at IS NULL");
+    }
+    if (input.since) {
+      conditions.push("sent_at >= ?");
+      values.push(input.since);
+    }
+    if (input.until) {
+      conditions.push("sent_at <= ?");
+      values.push(input.until);
+    }
+    const query = input.query?.trim();
+    if (query) {
+      conditions.push("LOWER(searchable_text) LIKE ? ESCAPE '\\'");
+      values.push(`%${escapeLike(query.toLowerCase())}%`);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const total = Number((this.ctx.db.query(
+      `SELECT COUNT(*) AS count FROM multiremi_message_messages${where}`,
+    ).get(...values) as Row | undefined)?.count ?? 0);
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_message_messages${where}
+       ORDER BY sent_at DESC, connection_id ASC, external_message_id ASC
+       LIMIT ? OFFSET ?`,
+    ).all(...values, limit, offset) as Row[];
+    return { messages: rows.map(toMessage), total };
+  }
+
+  /**
+   * Conversations reconstructed from stored messages.
+   *
+   * Deliberately not a Provider call: this stays truthful when the channel is
+   * unreachable, and it can only ever show what was already consented to.
+   */
+  listConversations(workspaceId: string): MessageConversationSummary[] {
+    const allowed = new Map(this.listSources({ workspaceId }).map((source) => [
+      source.id,
+      new Set(source.allowlist.map((entry) => entry.externalConversationId)),
+    ]));
+    const rows = this.ctx.db.query(
+      `SELECT source_id, connection_id, external_conversation_id,
+              MAX(conversation_name) AS conversation_name,
+              MAX(conversation_kind) AS conversation_kind,
+              COUNT(*) AS message_count, MAX(sent_at) AS last_message_at
+       FROM multiremi_message_messages
+       WHERE workspace_id = ?
+       GROUP BY source_id, connection_id, external_conversation_id
+       ORDER BY last_message_at DESC, source_id ASC, external_conversation_id ASC`,
+    ).all(workspaceId) as Row[];
+    return rows.map((row) => {
+      const sourceId = String(row.source_id);
+      const externalConversationId = String(row.external_conversation_id);
+      return {
+        sourceId,
+        connectionId: String(row.connection_id),
+        externalConversationId,
+        name: nullableString(row.conversation_name),
+        kind: String(row.conversation_kind ?? "unknown") as MessageConversationSummary["kind"],
+        messageCount: Number(row.message_count ?? 0),
+        lastMessageAt: String(row.last_message_at),
+        inAllowlist: allowed.get(sourceId)?.has(externalConversationId) ?? false,
+      };
+    });
+  }
+
+  /**
+   * Deletes a Connection and everything reached through it.
+   *
+   * The dependent rows are removed explicitly: the schema's `ON DELETE CASCADE`
+   * is decorative here, because SQLite runs with foreign keys off and the
+   * Postgres translation strips the clauses. Relying on it would leave orphaned
+   * messages holding a credential's history after the credential was removed.
+   */
+  deleteConnection(id: string): boolean {
+    return this.ctx.db.transaction(() => {
+      if (!this.getConnection(id)) return false;
+      for (const source of this.listSources({ connectionId: id })) this.deleteSourceRows(source.id);
+      this.ctx.db.run("DELETE FROM multiremi_message_sources WHERE connection_id = ?", [id]);
+      this.ctx.db.run("DELETE FROM multiremi_message_outcomes WHERE connection_id = ?", [id]);
+      this.ctx.db.run("DELETE FROM multiremi_message_messages WHERE connection_id = ?", [id]);
+      return this.ctx.db.run("DELETE FROM multiremi_message_connections WHERE id = ?", [id]).changes === 1;
+    })();
+  }
+
+  deleteSource(id: string): boolean {
+    return this.ctx.db.transaction(() => {
+      if (!this.getSource(id)) return false;
+      this.deleteSourceRows(id);
+      return this.ctx.db.run("DELETE FROM multiremi_message_sources WHERE id = ?", [id]).changes === 1;
+    })();
+  }
+
+  private deleteSourceRows(sourceId: string): void {
+    this.ctx.db.run(
+      `DELETE FROM multiremi_message_outcomes
+       WHERE (connection_id, external_message_id) IN (
+         SELECT connection_id, external_message_id FROM multiremi_message_messages WHERE source_id = ?
+       )`,
+      [sourceId],
+    );
+    this.ctx.db.run("DELETE FROM multiremi_message_messages WHERE source_id = ?", [sourceId]);
+    this.ctx.db.run("DELETE FROM multiremi_message_sync_cursors WHERE source_id = ?", [sourceId]);
+  }
+
+  recordOutcome(input: RecordMessageOutcomeInput): MessageOutcome {
+    return this.ctx.db.transaction(() => {
+      const message = this.getMessage(input.connectionId, input.externalMessageId);
+      if (!message || message.workspaceId !== input.workspaceId) throw new Error("Message not found");
+      const id = createId("mout");
+      this.ctx.db.run(
+        `INSERT INTO multiremi_message_outcomes (
+          id, workspace_id, connection_id, external_message_id, outcome_kind, ref, reason,
+          task_id, proposal_payload, proposal_status, sequence, created_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          (SELECT COALESCE(MAX(sequence), 0) + 1 FROM multiremi_message_outcomes
+           WHERE connection_id = ? AND external_message_id = ?),
+          ?
+        )`,
+        [
+          id,
+          input.workspaceId,
+          input.connectionId,
+          input.externalMessageId,
+          input.outcomeKind,
+          input.ref ?? null,
+          input.reason ?? null,
+          input.taskId ?? null,
+          toJson(input.proposalPayload ?? {}),
+          input.proposalStatus ?? "not_applicable",
+          input.connectionId,
+          input.externalMessageId,
+          input.createdAt ?? nowIso(),
+        ],
+      );
+      return this.getOutcome(id)!;
+    })();
+  }
+
+  getOutcome(id: string): MessageOutcome | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_message_outcomes WHERE id = ?",
+    ).get(id) as Row | undefined;
+    return row ? toOutcome(row) : null;
+  }
+
+  listOutcomes(connectionId: string, externalMessageId: string): MessageOutcome[] {
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_message_outcomes
+       WHERE connection_id = ? AND external_message_id = ?
+       ORDER BY sequence ASC, id ASC`,
+    ).all(connectionId, externalMessageId) as Row[];
+    return rows.map(toOutcome);
+  }
+
+  /** Outcomes for a page of messages, so a list view needs one query, not N. */
+  listOutcomesForMessages(refs: readonly MessageRef[]): MessageOutcome[] {
+    if (refs.length === 0) return [];
+    const clause = refs.map(() => "(connection_id = ? AND external_message_id = ?)").join(" OR ");
+    const values = refs.flatMap((ref) => [ref.connectionId, ref.externalMessageId]);
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_message_outcomes WHERE ${clause} ORDER BY created_at ASC, sequence ASC, id ASC`,
+    ).all(...values) as Row[];
+    return rows.map(toOutcome);
+  }
+
+  listProposals(input: ListMessageProposalsInput): ListMessageProposalsResult {
+    const limit = normalizeLimit(input.limit ?? 100);
+    const offset = normalizeNonNegativeInteger(input.offset ?? 0, "offset");
+    const conditions = ["o.workspace_id = ?", "o.proposal_status != 'not_applicable'"];
+    const values: unknown[] = [input.workspaceId];
+    if (input.status && input.status !== "not_applicable") {
+      conditions.push("o.proposal_status = ?");
+      values.push(input.status);
+    }
+    if (input.sourceId) {
+      conditions.push("m.source_id = ?");
+      values.push(input.sourceId);
+    }
+    const from = `FROM multiremi_message_outcomes o
+       JOIN multiremi_message_messages m
+         ON m.connection_id = o.connection_id AND m.external_message_id = o.external_message_id
+       WHERE ${conditions.join(" AND ")}`;
+    const total = Number((this.ctx.db.query(
+      `SELECT COUNT(*) AS count ${from}`,
+    ).get(...values) as Row | undefined)?.count ?? 0);
+    const rows = this.ctx.db.query(
+      `SELECT o.* ${from} ORDER BY o.created_at DESC, o.id DESC LIMIT ? OFFSET ?`,
+    ).all(...values, limit, offset) as Row[];
+    return { proposals: rows.map(toOutcome), total };
+  }
+
+  /**
+   * Approves or rejects a pending proposal.
+   *
+   * Conditional on the row still being `pending`, so two reviewers racing on
+   * the same proposal cannot both act on it.
+   */
+  resolveProposal(input: {
+    id: string;
+    workspaceId: string;
+    status: "approved" | "rejected";
+    resolvedBy: string | null;
+    resolvedAt?: string;
+  }): MessageOutcome | null {
+    const changes = this.ctx.db.run(
+      `UPDATE multiremi_message_outcomes
+       SET proposal_status = ?, proposal_resolved_at = ?, proposal_resolved_by = ?
+       WHERE id = ? AND workspace_id = ? AND proposal_status = 'pending'`,
+      [input.status, input.resolvedAt ?? nowIso(), input.resolvedBy ?? null, input.id, input.workspaceId],
+    ).changes;
+    return changes > 0 ? this.getOutcome(input.id) : null;
+  }
+
   private insertMessage(
     source: MessageSource,
     message: CanonicalMessage,
@@ -694,6 +977,34 @@ function toMessage(row: Row): StoredCanonicalMessage {
     retryCount: Number(row.retry_count ?? 0),
     lastRetryAt: nullableString(row.last_retry_at),
   };
+}
+
+function toOutcome(row: Row): MessageOutcome {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    connectionId: String(row.connection_id),
+    externalMessageId: String(row.external_message_id),
+    outcomeKind: String(row.outcome_kind) as MessageOutcomeKind,
+    ref: nullableString(row.ref),
+    reason: nullableString(row.reason),
+    taskId: nullableString(row.task_id),
+    proposalPayload: parseJson<Record<string, unknown>>(row.proposal_payload, {}),
+    proposalStatus: String(row.proposal_status ?? "not_applicable") as MessageProposalStatus,
+    proposalResolvedAt: nullableString(row.proposal_resolved_at),
+    proposalResolvedBy: nullableString(row.proposal_resolved_by),
+    createdAt: String(row.created_at),
+  };
+}
+
+function normalizeLimit(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 500) throw new Error("limit must be between 1 and 500");
+  return value;
+}
+
+/** `LIKE` treats these as wildcards, so a literal search must escape them. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
 }
 
 function normalizePositiveInteger(value: number, field: string): number {
