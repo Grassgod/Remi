@@ -601,12 +601,15 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
  * the process runs; reading them at call time is what keeps a restart from
  * binding to a stale one.
  */
-function controlPlaneConciergeHost(deps: {
+export function controlPlaneConciergeHost(deps: {
   daemon: () => MultiremiDaemon | undefined;
   workspacesRoot: () => string | undefined;
   current: () => FeishuChannelHandle | null;
   attach: (handle: FeishuChannelHandle | null) => void;
+  /** Overridden by tests; booting a real channel needs a Feishu app. */
+  boot?: typeof bootFeishuChannel;
 }): FeishuConciergeHost {
+  const boot = deps.boot ?? bootFeishuChannel;
   return {
     async start(assignment) {
       const daemon = deps.daemon();
@@ -620,7 +623,7 @@ function controlPlaneConciergeHost(deps: {
         );
       }
       const { config, agent, projects } = assignment;
-      const handle = await bootFeishuChannel(
+      const handle = await boot(
         agent,
         projects,
         (senderOpenId) => daemon.checkExternalWorkspaceMembership(config.workspace_id, senderOpenId),

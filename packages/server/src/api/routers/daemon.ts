@@ -374,12 +374,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     ) {
       return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
     }
-    // A daemon that speaks the concierge protocol says so on every heartbeat,
-    // so retiring the capability is just a matter of shipping an older build.
+    // A daemon that can host the concierge says so on every heartbeat, so
+    // silence is an answer: the build is older, or this process is already
+    // running the bot from its own environment (the legacy MUL-190 path) and
+    // must not be offered a second one. Letting the flag stay true from an
+    // earlier run is how a Runtime ends up hosting two connectors at once.
     const feishuConciergeProtocol = normalizeDaemonProtocolVersion(body.feishu_concierge_protocol);
-    const supportsFeishuBotConfig = Object.prototype.hasOwnProperty.call(body, "feishu_concierge_protocol")
-      ? feishuConciergeProtocol >= FEISHU_CONCIERGE_PROTOCOL_VERSION
-      : undefined;
+    const supportsFeishuBotConfig = feishuConciergeProtocol >= FEISHU_CONCIERGE_PROTOCOL_VERSION;
     const ack = store.heartbeatRuntime(runtimeId, {
       supportsBatchImport: body.supports_batch_import ?? false,
       supportsDirectoryScan: body.supports_directory_scan ?? false,
