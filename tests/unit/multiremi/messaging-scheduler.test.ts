@@ -13,6 +13,7 @@ import type {
 import { MessageProviderError } from "@multiremi/contracts/messaging.js";
 import { MessageProviderRegistry } from "@multiremi/messaging/registry.js";
 import { MessagingScheduler } from "@multiremi/messaging/scheduler.js";
+import type { MessagingSchedulerOptions } from "@multiremi/messaging/scheduler.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -140,12 +141,18 @@ class FakeProvider implements MessageSyncProvider {
   }
 }
 
-function createScheduler(repo: MessagingRepo, provider: MessageProvider, leaseOwner = "core-1"): MessagingScheduler {
+function createScheduler(
+  repo: MessagingRepo,
+  provider: MessageProvider,
+  leaseOwner = "core-1",
+  onSourceFailure?: MessagingSchedulerOptions["onSourceFailure"],
+): MessagingScheduler {
   return new MessagingScheduler({
     store: repo,
     registry: new MessageProviderRegistry([provider]),
     leaseOwner,
     healthIntervalMs: 0,
+    onSourceFailure,
   });
 }
 
@@ -269,10 +276,15 @@ describe("MessagingScheduler", () => {
   it("keeps a failed Source retryable and backs off before trying again", async () => {
     const repo = createRepo();
     const provider = new FakeProvider({ syncError: new MessageProviderError("rate_limited", "slow down") });
-    const scheduler = createScheduler(repo, provider);
+    const reported: unknown[][] = [];
+    const scheduler = createScheduler(repo, provider, "core-1", (...args) => void reported.push(args));
 
     expect(await scheduler.runOnce(new Date("2026-08-31T10:00:00.000Z"))).toMatchObject({ failed: 1 });
     expect(repo.getSyncCursor("source_a", "messages")?.lastError).toBe("rate_limited");
+    // The scheduler decides that something failed; who hears about it is
+    // somebody else's call, so it only reports the failure outwards. The
+    // timestamp is the one it recorded, so an alert and the Source agree.
+    expect(reported).toEqual([["source_a", "rate_limited", repo.getSource("source_a")!.lastErrorAt]]);
 
     // Backed off: the default 15s interval is doubled after a failure.
     expect(await scheduler.runOnce(new Date("2026-08-31T10:00:20.000Z"))).toMatchObject({ attempted: 0, skipped: 1 });

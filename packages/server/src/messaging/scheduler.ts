@@ -65,6 +65,14 @@ export interface MessagingSchedulerOptions {
   healthIntervalMs?: number;
   leaseOwner?: string;
   now?: () => Date;
+  /**
+   * Called after a sync failure has been counted.
+   *
+   * Telling an operator means writing to the Inbox, which the scheduler has no
+   * business knowing about. This is the seam that keeps it out: the scheduler
+   * decides *that* something failed, somebody else decides who hears about it.
+   */
+  onSourceFailure?: (sourceId: string, errorCode: MessageErrorCode, failedAt: string) => void;
 }
 
 export interface MessagingRunResult {
@@ -97,6 +105,7 @@ export class MessagingScheduler {
   private readonly healthIntervalMs: number;
   private readonly leaseOwner: string;
   private readonly now: () => Date;
+  private readonly onSourceFailure: MessagingSchedulerOptions["onSourceFailure"];
   private readonly inFlight = new Set<string>();
   private readonly healthCheckedAt = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -111,6 +120,7 @@ export class MessagingScheduler {
     this.healthIntervalMs = Math.max(0, options.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS);
     this.leaseOwner = options.leaseOwner?.trim() || `messaging:${process.pid}:${randomUUID()}`;
     this.now = options.now ?? (() => new Date());
+    this.onSourceFailure = options.onSourceFailure;
   }
 
   start(): void {
@@ -287,7 +297,9 @@ export class MessagingScheduler {
           if (!(writeError instanceof LeaseLostError)) throw writeError;
         }
       }
-      this.store.recordSourceFailure(source.id, code, this.now().toISOString());
+      const failedAt = this.now().toISOString();
+      this.store.recordSourceFailure(source.id, code, failedAt);
+      this.onSourceFailure?.(source.id, code, failedAt);
       log.warn(`Message sync failed for source ${source.id}: ${code}`);
       return { completed: false, inserted, updated, rejected, error: code };
     } finally {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -248,5 +248,75 @@ describe("messaging outcomes", () => {
       reason: "noise",
       taskId: "task_elsewhere",
     })).toThrow("task_id must reference a task in this workspace");
+  });
+
+  it("tells the operator once after repeated sync failures, and again only after a recovery", () => {
+    const { store, ownerId } = seed();
+    const outcomes = store.messagingOutcomes;
+    const fail = (at: string) => {
+      store.messaging.recordSourceFailure("msrc_test", "provider_unavailable", at);
+      return outcomes.alertOnSourceFailure("msrc_test", "provider_unavailable", at);
+    };
+
+    // One or two failures are usually a blip; nobody is woken up for them.
+    expect(fail("2026-08-31T10:00:00.000Z")).toBeNull();
+    expect(fail("2026-08-31T10:05:00.000Z")).toBeNull();
+    expect(store.listInboxItems(ownerId)).toHaveLength(0);
+
+    const alert = fail("2026-08-31T10:10:00.000Z");
+    expect(alert).not.toBeNull();
+    expect(alert!.severity).toBe("attention");
+    expect(alert!.details).toMatchObject({
+      source_id: "msrc_test",
+      connection_id: REF.connectionId,
+      error_code: "provider_unavailable",
+    });
+    expect(store.listInboxItems(ownerId).map((item) => item.id)).toContain(alert!.id);
+
+    // Still broken is not news: the Source stays flagged, so no second item.
+    expect(fail("2026-08-31T10:15:00.000Z")).toBeNull();
+    expect(store.listInboxItems(ownerId)).toHaveLength(1);
+
+    // A success clears the flag, so the next outage is worth reporting again.
+    store.messaging.recordSourceSuccess("msrc_test", "2026-08-31T10:20:00.000Z");
+    expect(store.messaging.getSourceStatus("msrc_test")?.alertedAt).toBeNull();
+    for (const at of ["10:25", "10:30"]) expect(fail(`2026-08-31T${at}:00.000Z`)).toBeNull();
+    expect(fail("2026-08-31T10:35:00.000Z")).not.toBeNull();
+    expect(store.listInboxItems(ownerId)).toHaveLength(2);
+  });
+
+  it("records why an alert could not be delivered instead of dropping it", () => {
+    const { store } = seed();
+    // The API refuses to archive a workspace's last owner, so this state is
+    // reached from below. It is still worth covering: an undelivered alert is
+    // the one failure nobody finds out about by other means.
+    db!.run(
+      "UPDATE multiremi_workspace_members SET archived_at = ? WHERE workspace_id = ?",
+      ["2026-08-31T09:30:00.000Z", "local"],
+    );
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(args.map(String).join(" "));
+    try {
+      for (const at of ["10:00", "10:05", "10:10"]) {
+        const failedAt = `2026-08-31T${at}:00.000Z`;
+        store.messaging.recordSourceFailure("msrc_test", "unauthenticated", failedAt);
+        expect(store.messagingOutcomes.alertOnSourceFailure("msrc_test", "unauthenticated", failedAt)).toBeNull();
+      }
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    const status = store.messaging.getSourceStatus("msrc_test")!;
+    expect(status.alertedAt).toBeNull();
+    expect(status.alertDeliveryErrorCode).toBe("alert_recipient_unavailable");
+    // Only the two ticks at or past the threshold tried to deliver.
+    expect(status.alertDeliveryFailureCount).toBe(1);
+    expect(status.alertDeliveryFailedAt).toBe("2026-08-31T10:10:00.000Z");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("msrc_test");
+    expect(warnings[0]).toContain("alert_recipient_unavailable");
+    // The Source name is operator-supplied and never belongs in a log line.
+    expect(warnings[0]).not.toContain("Test source");
   });
 });

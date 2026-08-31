@@ -247,27 +247,9 @@ export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
   app.get(`${BASE}/sources/:sourceId/status`, (c) => {
     const loaded = loadSource(c, deps);
     if (loaded instanceof Response) return loaded;
-    const cursor = repo.getSyncCursor(loaded.id, "messages");
-    const messages = repo.listMessages({ sourceId: loaded.id, limit: 1 });
-    const unprocessed = repo.listMessages({ sourceId: loaded.id, processed: false, limit: 1 });
-    return c.json({
-      status: {
-        sourceId: loaded.id,
-        connectionId: loaded.connectionId,
-        enabled: loaded.enabled,
-        allowlistCount: loaded.allowlist.length,
-        lastSuccessfulIngestAt: loaded.lastSuccessfulIngestAt,
-        lastErrorCode: loaded.lastErrorCode,
-        lastErrorAt: loaded.lastErrorAt,
-        consecutiveFailures: loaded.consecutiveFailures,
-        messageCount: messages.total,
-        unprocessedCount: unprocessed.total,
-        watermark: cursor?.watermark ?? null,
-        lastStartedAt: cursor?.lastStartedAt ?? null,
-        lastCompletedAt: cursor?.lastCompletedAt ?? null,
-        syncing: Boolean(cursor?.leaseToken),
-      },
-    });
+    const status = repo.getSourceStatus(loaded.id);
+    if (!status) return c.json({ error: "Message source not found" }, 404);
+    return c.json({ status });
   });
 
   /**

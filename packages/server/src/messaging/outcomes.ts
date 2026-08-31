@@ -4,10 +4,12 @@ import type {
   MultiremiIssue,
 } from "@multiremi/contracts/types.js";
 import type {
+  MessageErrorCode,
   MessageOutcome,
   MessageOutcomeKind,
 } from "@multiremi/contracts/messaging.js";
 import { nowIso } from "@multiremi/ids.js";
+import { createLogger } from "@shared/logger.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import type { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
 import type { StoredCanonicalMessage } from "@multiremi/store/repos/messaging-repo.js";
@@ -53,6 +55,14 @@ const INBOX_TITLE_BY_KIND: Record<"notified" | "reply_drafted" | "issue_proposed
 
 /** Outcomes a caller may record directly. The rest have a dedicated command. */
 const DIRECT_OUTCOME_KINDS = new Set<MessageOutcomeKind>(["ignored", "dismissed"]);
+
+/** Consecutive sync failures before the operator is told. One failure is usually a blip. */
+const SOURCE_ALERT_THRESHOLD = 3;
+
+/** Persisted alongside existing rows written by the pre-Core path; do not rename. */
+const SOURCE_ALERT_INBOX_TYPE = "feishu_ingest_connection_alert";
+
+const log = createLogger("multiremi-messaging");
 
 export interface RecordDirectOutcomeInput {
   workspaceId: string;
@@ -141,6 +151,73 @@ export class MessagingOutcomeService {
     private readonly ctx: MessagingOutcomeHost,
     private readonly repo: MessagingRepo,
   ) {}
+
+  /**
+   * Tells somebody once a Source has failed enough times in a row.
+   *
+   * Counting the failure is the repo's job; this reads the count and decides
+   * whether it has become a person's problem. The threshold exists because a
+   * single failure is usually a blip the next tick fixes, while three in a row
+   * is a credential or a dependency that a human has to look at. The alert
+   * bypasses mute — a Source that has stopped ingesting is not a notification
+   * the operator opted out of, it is the feature being broken.
+   */
+  alertOnSourceFailure(sourceId: string, errorCode: MessageErrorCode, failedAt: string): MultiremiInboxItem | null {
+    return this.ctx.db.transaction(() => {
+      const source = this.repo.getSource(sourceId);
+      if (!source || source.consecutiveFailures < SOURCE_ALERT_THRESHOLD) return null;
+      const status = this.repo.getSourceStatus(sourceId);
+      if (status?.alertedAt) return null;
+      const recipient = this.ctx.db.query(
+        `SELECT id FROM multiremi_workspace_members
+         WHERE workspace_id = ? AND archived_at IS NULL
+         ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+                  created_at ASC, id ASC
+         LIMIT 1`,
+      ).get(source.workspaceId) as { id?: unknown } | null;
+      if (!recipient?.id) {
+        this.failAlertDelivery(sourceId, "alert_recipient_unavailable", failedAt);
+        return null;
+      }
+      const item = this.ctx.createInboxItem({
+        workspaceId: source.workspaceId,
+        memberId: String(recipient.id),
+        severity: "attention",
+        type: SOURCE_ALERT_INBOX_TYPE,
+        title: "消息源连接异常",
+        body: `消息源 ${source.name} 连续拉取失败，请检查连接状态。`,
+        actorType: "system",
+        actorId: null,
+        details: {
+          source_id: sourceId,
+          // The sentence above is server-rendered in one language; the name and
+          // code repeat as fields so a client can build a localized line.
+          source_name: source.name,
+          connection_id: source.connectionId,
+          error_code: errorCode,
+          consecutive_failures: source.consecutiveFailures,
+        },
+        emitEvent: true,
+        bypassMute: true,
+      });
+      if (!item) {
+        this.failAlertDelivery(sourceId, "alert_inbox_create_failed", failedAt);
+        return null;
+      }
+      this.repo.markSourceAlerted(sourceId, failedAt);
+      return item;
+    })();
+  }
+
+  /**
+   * An undelivered alert is worse than a failing Source, so it is both stored
+   * and logged. The line carries the id and the reason and nothing else: the
+   * Source name is operator-supplied and can hold anything.
+   */
+  private failAlertDelivery(sourceId: string, errorCode: string, failedAt: string): void {
+    this.repo.recordSourceAlertDeliveryFailure(sourceId, errorCode, failedAt);
+    log.warn(`Message source alert delivery failed for source ${sourceId}: ${errorCode}`);
+  }
 
   /**
    * Records an outcome that needs no side effect.

@@ -8,6 +8,7 @@ import type {
   MessageOutcomeKind,
   MessageProposalStatus,
   MessageSource,
+  MessageSourceStatus,
 } from "@multiremi/contracts/messaging.js";
 import type { MessageSyncCursor } from "@multiremi/contracts/messaging.js";
 import { createId, nowIso } from "@multiremi/ids.js";
@@ -611,6 +612,131 @@ export class MessagingRepo {
        LIMIT ? OFFSET ?`,
     ).all(...values, limit, offset) as Row[];
     return { messages: rows.map(toMessage), total };
+  }
+
+  /**
+   * Every message carrying this channel-native id, across Connections.
+   *
+   * The Core keys messages by `(connectionId, externalMessageId)`. This looks
+   * up the second half alone, which is all the pre-Core API ever carried, and
+   * returns every match so a caller can refuse an ambiguous id rather than
+   * silently pick a Connection.
+   */
+  findMessagesByExternalId(workspaceId: string, externalMessageId: string): StoredCanonicalMessage[] {
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_message_messages
+       WHERE workspace_id = ? AND external_message_id = ?
+       ORDER BY connection_id ASC`,
+    ).all(workspaceId, externalMessageId) as Row[];
+    return rows.map(toMessage);
+  }
+
+  /**
+   * Backlog, sync progress and alert state for one Source.
+   *
+   * One method rather than several because an operator surface always needs
+   * all of it, and reading it in one place keeps the counts consistent with
+   * each other.
+   */
+  getSourceStatus(sourceId: string, now: Date = new Date()): MessageSourceStatus | null {
+    const source = this.getSource(sourceId);
+    if (!source) return null;
+    const alerts = this.ctx.db.query(
+      `SELECT connection_alerted_at, connection_alert_delivery_failure_count,
+              connection_alert_delivery_error_code, connection_alert_delivery_failed_at
+       FROM multiremi_message_sources WHERE id = ?`,
+    ).get(sourceId) as Row;
+    const totals = this.ctx.db.query(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN processed_at IS NULL THEN 1 ELSE 0 END) AS unprocessed,
+              MIN(CASE WHEN processed_at IS NULL THEN ingested_at END) AS oldest_unprocessed,
+              MAX(CASE WHEN processed_at IS NULL THEN retry_count END) AS maximum_retry_count
+       FROM multiremi_message_messages WHERE source_id = ?`,
+    ).get(sourceId) as Row;
+    const dismissals = this.ctx.db.query(
+      `SELECT
+         SUM(CASE WHEN o.reason = 'unprocessed_timeout' THEN 1 ELSE 0 END) AS timed_out,
+         SUM(CASE WHEN o.reason = 'recipient_muted' THEN 1 ELSE 0 END) AS muted
+       FROM multiremi_message_outcomes o
+       JOIN multiremi_message_messages m
+         ON m.connection_id = o.connection_id AND m.external_message_id = o.external_message_id
+       WHERE m.source_id = ? AND o.outcome_kind = 'dismissed'`,
+    ).get(sourceId) as Row;
+    // A proposal counts as pending only while nothing terminal has landed on
+    // its message: a reviewer who approved through another path has answered it.
+    const pendingProposals = this.ctx.db.query(
+      `SELECT COUNT(*) AS count
+       FROM multiremi_message_outcomes proposed
+       JOIN multiremi_message_messages m
+         ON m.connection_id = proposed.connection_id AND m.external_message_id = proposed.external_message_id
+       WHERE m.source_id = ? AND proposed.outcome_kind = 'issue_proposed'
+         AND proposed.proposal_status = 'pending'
+         AND NOT EXISTS (
+           SELECT 1 FROM multiremi_message_outcomes terminal
+           WHERE terminal.connection_id = proposed.connection_id
+             AND terminal.external_message_id = proposed.external_message_id
+             AND terminal.outcome_kind IN ('issue_created', 'dismissed')
+         )`,
+    ).get(sourceId) as Row;
+    const cursor = this.getSyncCursor(sourceId, "messages");
+    const successfulAt = source.lastSuccessfulIngestAt ? Date.parse(source.lastSuccessfulIngestAt) : Number.NaN;
+    return {
+      sourceId,
+      connectionId: source.connectionId,
+      enabled: source.enabled,
+      allowlistCount: source.allowlist.length,
+      messageCount: Number(totals.total ?? 0),
+      unprocessedCount: Number(totals.unprocessed ?? 0),
+      oldestUnprocessedAt: nullableString(totals.oldest_unprocessed),
+      maximumRetryCount: Number(totals.maximum_retry_count ?? 0),
+      timedOutCount: Number(dismissals.timed_out ?? 0),
+      mutedDeliveryCount: Number(dismissals.muted ?? 0),
+      pendingProposalCount: Number(pendingProposals.count ?? 0),
+      lastSuccessfulIngestAt: source.lastSuccessfulIngestAt,
+      lastErrorCode: source.lastErrorCode,
+      lastErrorAt: source.lastErrorAt,
+      lagSeconds: Number.isFinite(successfulAt)
+        ? Math.max(0, Math.floor((now.getTime() - successfulAt) / 1_000))
+        : null,
+      consecutiveFailures: source.consecutiveFailures,
+      alertedAt: nullableString(alerts.connection_alerted_at),
+      alertDeliveryFailureCount: Number(alerts.connection_alert_delivery_failure_count ?? 0),
+      alertDeliveryErrorCode: nullableString(alerts.connection_alert_delivery_error_code),
+      alertDeliveryFailedAt: nullableString(alerts.connection_alert_delivery_failed_at),
+      watermark: cursor?.watermark ?? null,
+      lastStartedAt: cursor?.lastStartedAt ?? null,
+      lastCompletedAt: cursor?.lastCompletedAt ?? null,
+      syncing: Boolean(cursor?.leaseToken),
+    };
+  }
+
+  /**
+   * Marks that the operator has been told this Source is failing.
+   *
+   * Guarded on `connection_alerted_at IS NULL` so a Source that keeps failing
+   * produces one alert, not one per tick; `recordSourceSuccess` clears it, which
+   * is what re-arms the next alert.
+   */
+  markSourceAlerted(sourceId: string, alertedAt: string): boolean {
+    return this.ctx.db.run(
+      `UPDATE multiremi_message_sources
+       SET connection_alerted_at = ?, connection_alert_delivery_error_code = NULL,
+           connection_alert_delivery_failed_at = NULL, updated_at = ?
+       WHERE id = ? AND connection_alerted_at IS NULL`,
+      [alertedAt, nowIso(), sourceId],
+    ).changes > 0;
+  }
+
+  /** Records that an alert could not be delivered, without pretending it was. */
+  recordSourceAlertDeliveryFailure(sourceId: string, errorCode: string, failedAt: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_message_sources
+       SET connection_alert_delivery_failure_count = connection_alert_delivery_failure_count + 1,
+           connection_alert_delivery_error_code = ?, connection_alert_delivery_failed_at = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      [errorCode, failedAt, nowIso(), sourceId],
+    );
   }
 
   /**

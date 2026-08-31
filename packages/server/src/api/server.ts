@@ -666,7 +666,12 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
   const messaging = backgroundJobs
     ? (options.messaging === undefined
-      ? new MessagingScheduler({ store: store.messaging, registry: messagingProviders })
+      ? new MessagingScheduler({
+        store: store.messaging,
+        registry: messagingProviders,
+        onSourceFailure: (sourceId, errorCode, failedAt) =>
+          void store.messagingOutcomes.alertOnSourceFailure(sourceId, errorCode, failedAt),
+      })
       : options.messaging)
     : null;
   const issueTitleScheduler = backgroundJobs

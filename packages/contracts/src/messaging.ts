@@ -248,6 +248,47 @@ export interface MessageOutcome {
 }
 
 /**
+ * Everything an operator needs to judge one Source at a glance.
+ *
+ * Backlog, sync progress and delivery failures are read together because they
+ * are only meaningful together: a Source with no unprocessed messages and a
+ * stale watermark is stuck, while the same backlog with a fresh watermark is
+ * merely busy.
+ */
+export interface MessageSourceStatus {
+  sourceId: string;
+  connectionId: string;
+  enabled: boolean;
+  allowlistCount: number;
+  messageCount: number;
+  unprocessedCount: number;
+  oldestUnprocessedAt: string | null;
+  /** Highest retry count in the backlog: how close the worst message is to being given up on. */
+  maximumRetryCount: number;
+  /** Messages abandoned after exhausting `unprocessedRetryLimit`. */
+  timedOutCount: number;
+  /** Notifications that were recorded but never delivered, because the recipient muted them. */
+  mutedDeliveryCount: number;
+  pendingProposalCount: number;
+  lastSuccessfulIngestAt: string | null;
+  lastErrorCode: MessageErrorCode | null;
+  lastErrorAt: string | null;
+  /** Seconds since the last successful ingest. Null until one has happened. */
+  lagSeconds: number | null;
+  consecutiveFailures: number;
+  /** When the operator was told this Source is failing. Null once it recovers. */
+  alertedAt: string | null;
+  alertDeliveryFailureCount: number;
+  alertDeliveryErrorCode: string | null;
+  alertDeliveryFailedAt: string | null;
+  watermark: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  /** True while some Core instance holds the sync lease. */
+  syncing: boolean;
+}
+
+/**
  * A conversation as reconstructed from what was actually ingested.
  *
  * Derived from stored messages rather than fetched, so it stays available when
