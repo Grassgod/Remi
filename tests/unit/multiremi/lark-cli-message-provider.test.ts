@@ -298,9 +298,9 @@ describe("LarkCliMessageProvider", () => {
       "--chat-id",
       "oc_chat",
       "--start",
-      "2026-08-31T00:00:00.000Z",
+      "2026-08-31T00:00:00Z",
       "--end",
-      "2026-08-31T02:00:00.000Z",
+      "2026-08-31T02:00:00Z",
       "--page-token",
       "page-1",
       "--page-size",
@@ -499,6 +499,180 @@ describe("LarkCliMessageProvider", () => {
   });
 });
 
+/**
+ * Shapes and limits taken from a live lark-cli 1.0.90, not from the Feishu Open
+ * API the Provider was first written against. Each case below passed the
+ * fixtures above while producing nothing — or failing outright — in production;
+ * the live-CLI suite in tests/integration is what found them, and these pin them
+ * on a checkout with no Feishu credentials.
+ */
+describe("LarkCliMessageProvider against real lark-cli shapes", () => {
+  test("clamps page sizes to what each subcommand accepts", async () => {
+    // `im +messages-search` caps at 50 and rejects anything larger outright, so
+    // an over-large value did not read fewer rows, it failed the whole poll.
+    const syncRunner = new FakeRunner([{ data: { messages: [], has_more: false } }]);
+    await providerWith(syncRunner).syncMessages(context({ pageSize: 200 }), {
+      source: source([{ externalConversationId: "oc_chat", addedAt: "2026-08-31T00:00:00Z" }]),
+      cursor: null,
+      start: new Date("2026-08-31T00:00:00Z"),
+      end: new Date("2026-08-31T02:00:00Z"),
+    });
+    expect(argValue(syncRunner.calls[0]?.argv, "--page-size")).toBe("50");
+
+    // `im +chat-search` caps at 100 instead, so the two are clamped separately.
+    const searchRunner = new FakeRunner([{ data: { chats: [], has_more: false } }]);
+    await providerWith(searchRunner).searchConversations(context(), { query: "team", limit: 200 });
+    expect(argValue(searchRunner.calls[0]?.argv, "--page-size")).toBe("100");
+  });
+
+  test("asks for a window lark-cli will accept", async () => {
+    const runner = new FakeRunner([{ data: { messages: [], has_more: false } }]);
+    await providerWith(runner).syncMessages(context(), {
+      source: source([{ externalConversationId: "oc_chat", addedAt: "2026-08-31T00:00:00Z" }]),
+      cursor: null,
+      // Windows come from the clock, so a fractional second is the normal case,
+      // and Feishu rejects the whole request when it sees milliseconds.
+      start: new Date("2026-08-31T00:00:00.123Z"),
+      end: new Date("2026-08-31T02:00:00.456Z"),
+    });
+    expect(argValue(runner.calls[0]?.argv, "--start")).toBe("2026-08-31T00:00:00Z");
+    expect(argValue(runner.calls[0]?.argv, "--end")).toBe("2026-08-31T02:00:00Z");
+  });
+
+  test("browses by member id when the operator gave no keyword", async () => {
+    // lark-cli refuses a search naming neither a keyword nor a member, and the
+    // API sends no query at all when the operator just opens the picker.
+    const runner = new FakeRunner([{ data: { chats: [], has_more: false } }]);
+    await providerWith(runner).searchConversations(context(), {});
+
+    expect(runner.calls[0]?.argv).not.toContain("--query");
+    expect(argValue(runner.calls[0]?.argv, "--member-ids")).toBe("ou_account");
+  });
+
+  test("resolves the chat kind lark-cli reports on a search hit", async () => {
+    // `im +chat-search` returns only group chats and separates plain from topic
+    // ones as `chat_mode`, not the `chat_type` that messages carry.
+    const runner = new FakeRunner([{
+      data: {
+        chats: [
+          { chat_id: "oc_plain", name: "Project", chat_mode: "DEFAULT" },
+          { chat_id: "oc_topic", name: "Topics", chat_mode: "THREAD" },
+        ],
+        has_more: false,
+      },
+    }]);
+
+    const result = await providerWith(runner).searchConversations(context(), { query: "p" });
+    expect(result.conversations.map((entry) => entry.kind)).toEqual(["group", "thread"]);
+  });
+
+  test("normalizes a message in the form lark-cli actually emits", async () => {
+    const runner = new FakeRunner([{
+      data: {
+        messages: [{
+          message_id: "om_real",
+          chat_id: "oc_chat",
+          chat_name: "Project",
+          chat_type: "group",
+          // Already rendered to a string, and stamped with no zone at all.
+          content: "shipped the fix",
+          create_time: "2026-08-31 09:19",
+          update_time: "2026-08-31 09:19",
+          msg_type: "text",
+          deleted: false,
+          reply_to: "om_parent",
+          sender: { id: "ou_sender", id_type: "open_id", name: "Sender", sender_type: "user" },
+          mentions: [{ id: "ou_mentioned", key: "@_user_1", name: "Mentioned" }],
+          reactions: {
+            counts: [{ count: "2", reaction_type: "Get" }],
+            details: [{ operator: { operator_id: "cli_app", operator_type: "app" } }],
+          },
+        }],
+        has_more: false,
+      },
+    }]);
+
+    const page = await providerWith(runner).syncMessages(context(), {
+      source: source([{ externalConversationId: "oc_chat", addedAt: "2026-08-31T00:00:00Z" }]),
+      cursor: null,
+      start: new Date("2026-08-31T00:00:00Z"),
+      end: new Date("2026-08-31T23:00:00Z"),
+    });
+
+    expect(page.messages).toHaveLength(1);
+    expect(page.messages[0]).toMatchObject({
+      externalMessageId: "om_real",
+      externalConversationId: "oc_chat",
+      conversationKind: "group",
+      // The rendered string is the text. Read as JSON, as the raw Feishu shape
+      // would be, it parses as nothing and every message normalized to "".
+      text: "shipped the fix",
+      // lark-cli is pinned to UTC by BunLarkCliRunner precisely so this zoneless
+      // stamp means one instant regardless of where the server runs.
+      sentAt: "2026-08-31T09:19:00.000Z",
+      externalParentId: "om_parent",
+      sender: { externalSenderId: "ou_sender", kind: "user", isSelf: false },
+      reactions: [{ key: "Get", count: 2, reactedBySelf: false }],
+    });
+    // Same minute as create_time, so it is not a real edit.
+    expect(page.messages[0]?.editedAt).toBeNull();
+  });
+
+  test("keeps a refreshable token healthy and a dead one not", async () => {
+    // lark-cli marks an aged-out access token `needs_refresh` and mints a new one
+    // on the next call, so user API calls keep working. Calling that expired
+    // reported a working connection as signed out every time a token aged out.
+    const refreshable = providerWith(new FakeRunner([
+      "lark-cli version 1.0.90",
+      {
+        identities: {
+          user: {
+            status: "needs_refresh",
+            tokenStatus: "needs_refresh",
+            available: true,
+            openId: "ou_account",
+            userName: "Operator",
+            expiresAt: "2026-08-30T00:00:00Z",
+            refreshExpiresAt: "2026-09-07T00:00:00Z",
+          },
+        },
+      },
+    ]));
+    expect(await refreshable.checkHealth(context())).toMatchObject({
+      status: "ready",
+      errorCode: null,
+      externalAccountId: "ou_account",
+    });
+
+    // Once the refresh token itself is gone, only a human can fix it.
+    const dead = providerWith(new FakeRunner([
+      "lark-cli version 1.0.90",
+      {
+        identities: {
+          user: {
+            status: "needs_refresh",
+            tokenStatus: "needs_refresh",
+            available: true,
+            expiresAt: "2026-08-30T00:00:00Z",
+            refreshExpiresAt: "2026-08-30T12:00:00Z",
+          },
+        },
+      },
+    ]));
+    expect(await dead.checkHealth(context())).toMatchObject({
+      status: "unauthenticated",
+      errorCode: "unauthenticated",
+      detail: "lark-cli authorization has expired; sign in again",
+    });
+  });
+});
+
+/** Value lark-cli would receive for `flag`, or null when it was not passed. */
+function argValue(argv: readonly string[] | undefined, flag: string): string | null {
+  const index = argv?.indexOf(flag) ?? -1;
+  return index >= 0 ? argv?.[index + 1] ?? null : null;
+}
+
 describe("BunLarkCliRunner", () => {
   test("executes argv directly and parses JSON only", async () => {
     const runner = new BunLarkCliRunner({ executable: process.execPath, timeoutMs: 2_000 });
@@ -557,7 +731,7 @@ function providerWith(
   });
 }
 
-function context(config: Record<string, unknown> = {}, externalAccountId: string | null = null): MessageProviderContext {
+function context(config: Record<string, unknown> = {}, externalAccountId: string | null = "ou_account"): MessageProviderContext {
   const connection: MessageConnection = {
     id: "connection-1",
     workspaceId: "workspace-1",

@@ -30,7 +30,17 @@ import {
 
 export const LARK_CLI_MINIMUM_VERSION = "1.0.90";
 
-const DEFAULT_PAGE_SIZE = 100;
+/**
+ * Page-size ceilings lark-cli enforces itself, per subcommand.
+ *
+ * These are not tuning knobs. `im +messages-search` rejects anything above 50
+ * outright (`invalid_argument`), so a larger value does not merely read fewer
+ * rows — it fails the poll. They differ between the two commands, so they are
+ * kept apart rather than collapsed into one conservative number.
+ */
+const MAX_MESSAGE_PAGE_SIZE = 50;
+const MAX_CONVERSATION_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = MAX_MESSAGE_PAGE_SIZE;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_READ_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 100;
@@ -156,8 +166,25 @@ export class LarkCliMessageProvider implements
     context: MessageProviderContext,
     query: ConversationSearchQuery,
   ): Promise<ConversationSearchResult> {
-    const argv = ["im", "+chat-search", "--query", query.query?.trim() ?? ""];
-    const limit = boundedInteger(query.limit, 1, 200);
+    const search = query.query?.trim() ?? "";
+    const argv = ["im", "+chat-search"];
+    if (search) {
+      argv.push("--query", search);
+    } else {
+      // lark-cli rejects a search that names neither a keyword nor a member, and
+      // an absent query is how the Core says "browse", not "match everything" —
+      // which for this account means the chats it is a member of. Passing an
+      // empty `--query` instead, as this once did, failed every browse.
+      const account = context.connection.externalAccountId?.trim();
+      if (!account) {
+        throw new MessageProviderError(
+          "unauthenticated",
+          "browsing conversations needs the connected account id; run a health check first",
+        );
+      }
+      argv.push("--member-ids", account);
+    }
+    const limit = clampedPageSize(query.limit, MAX_CONVERSATION_PAGE_SIZE);
     if (limit !== null) argv.push("--page-size", String(limit));
     if (query.cursor) argv.push("--page-token", query.cursor);
     argv.push("--format", "json");
@@ -203,16 +230,16 @@ export class LarkCliMessageProvider implements
     if (activationByConversation.size === 0) return { messages: [], cursor: null, done: true };
 
     const previousPageToken = cursorPageToken(request.cursor);
-    const pageSize = boundedInteger(context.connection.config.pageSize, 1, 200) ?? DEFAULT_PAGE_SIZE;
+    const pageSize = clampedPageSize(context.connection.config.pageSize, MAX_MESSAGE_PAGE_SIZE) ?? DEFAULT_PAGE_SIZE;
     const argv = [
       "im",
       "+messages-search",
       "--chat-id",
       [...activationByConversation.keys()].join(","),
       "--start",
-      request.start.toISOString(),
+      cliTimestamp(request.start),
       "--end",
-      request.end.toISOString(),
+      cliTimestamp(request.end),
     ];
     if (previousPageToken) argv.push("--page-token", previousPageToken);
     argv.push("--page-size", String(pageSize), "--format", "json");
@@ -387,7 +414,7 @@ function normalizeConversation(value: unknown): MessageConversation | null {
   return {
     externalConversationId,
     name: firstString(entry, ["name", "chat_name", "chatName", "title"]) || null,
-    kind: conversationKind(entry.chat_type ?? entry.chatType ?? entry.kind),
+    kind: conversationKind(entry.chat_type ?? entry.chatType ?? entry.chat_mode ?? entry.chatMode ?? entry.kind),
     url: firstString(entry, ["url", "chat_url", "chatUrl", "app_link", "appLink"]) || null,
     memberCount: nonNegativeInteger(memberCountValue),
     metadata: entry,
@@ -427,7 +454,7 @@ function normalizeMessage(value: unknown, externalAccountId: string | null): Can
     conversationKind: conversationKind(message.chat_type ?? message.chatType ?? message.conversation_kind),
     externalThreadId: firstString(message, ["thread_id", "threadId"]) || null,
     externalRootId: firstString(message, ["root_id", "rootId"]) || null,
-    externalParentId: firstString(message, ["parent_id", "parentId"]) || null,
+    externalParentId: firstString(message, ["parent_id", "parentId", "reply_to", "replyTo"]) || null,
     sender: {
       externalSenderId,
       displayName: firstString(sender, ["name", "display_name", "displayName"]) || null,
@@ -495,8 +522,12 @@ function normalizeMentions(value: unknown): MessageMention[] {
 }
 
 function normalizeReactions(value: unknown): MessageReaction[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => {
+  // lark-cli returns `{counts: [...], details: [...]}` — the tally plus one row
+  // per reactor. The raw Feishu shape is a bare array. Only the tally is read;
+  // `details` identifies individual colleagues and nothing here needs it.
+  const entries = Array.isArray(value) ? value : record(value)?.counts;
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry) => {
     const reaction = record(entry);
     if (!reaction) return null;
     const key = firstString(reaction, ["emoji_type", "emojiType", "reaction_type", "reactionType", "key"]);
@@ -513,10 +544,18 @@ function messageText(message: Record<string, unknown>): string {
   const direct = firstString(message, ["text", "searchable_text", "searchableText"]);
   if (direct) return direct;
   const content = structuredContent(message);
-  if (!content) return "";
-  const text = firstString(content, ["text", "title"]);
-  if (text) return text;
-  return collectText(content).join("\n").trim();
+  if (content) {
+    const text = firstString(content, ["text", "title"]);
+    if (text) return text;
+    const collected = collectText(content).join("\n").trim();
+    if (collected) return collected;
+  }
+  // Everything above handles the raw Feishu shape, where `content` is a
+  // JSON-encoded object. lark-cli has already rendered it to a string by the
+  // time we see it, so the string is taken whole. It is deliberately not picked
+  // apart — recovering a file key from `[Image: img_v3_...]`, say, would mean
+  // parsing human-facing text, which this Provider must not do.
+  return stringValue(message.content);
 }
 
 function structuredContent(message: Record<string, unknown>): Record<string, unknown> | null {
@@ -585,11 +624,22 @@ function normalizedVersion(value: unknown): string | null {
 function authFailure(user: Record<string, unknown>, now: Date): string | null {
   const status = stringValue(user.status).toLowerCase();
   const tokenStatus = stringValue(user.token_status ?? user.tokenStatus).toLowerCase();
-  const expired = tokenStatus === "expired"
-    || status === "expired"
-    || status === "needs_refresh"
-    || isPast(user.expires_at ?? user.expiresAt, now);
+  if (user.available === false) return "lark-cli user identity needs authentication";
 
+  // The refresh token is the only part an operator can act on. While it is still
+  // valid, `needs_refresh` is routine bookkeeping rather than a fault: lark-cli
+  // mints a fresh access token on the next user API call and the call succeeds.
+  // Treating it as expired — as this once did — reported a working connection as
+  // unauthenticated every time an access token aged out, which is hourly.
+  const refreshable = ["needs_refresh", "refreshable"].includes(status)
+    || ["needs_refresh", "refreshable"].includes(tokenStatus);
+  const refreshExpired = isPast(user.refresh_expires_at ?? user.refreshExpiresAt, now);
+  if (refreshable && !refreshExpired) return null;
+
+  const expired = refreshExpired
+    || tokenStatus === "expired"
+    || status === "expired"
+    || isPast(user.expires_at ?? user.expiresAt, now);
   if (expired) return "lark-cli authorization has expired; sign in again";
   if (status !== "ready" || (tokenStatus && tokenStatus !== "valid")) {
     return "lark-cli user identity needs authentication";
@@ -658,10 +708,27 @@ function timestampValue(value: unknown): string | null {
   let timestamp: number;
   if (typeof value === "number" && Number.isFinite(value)) timestamp = value;
   else if (typeof value === "string" && /^\d+(?:\.\d+)?$/u.test(value.trim())) timestamp = Number(value);
-  else if (typeof value === "string") timestamp = Date.parse(value);
+  else if (typeof value === "string") timestamp = Date.parse(zonedTimestamp(value.trim()));
   else return null;
   if (timestamp > 0 && timestamp < 100_000_000_000) timestamp *= 1_000;
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+/**
+ * Attach an explicit zone to the zoneless stamp lark-cli prints.
+ *
+ * `im +messages-search` reports `2026-09-01 00:44` — no offset, no seconds. Left
+ * to `Date.parse`, that is read in the *server's* zone, so the same message
+ * lands 8 hours apart on a +08:00 host and a UTC one, which quietly breaks the
+ * allowlist activation cutoff and the incremental window. `BunLarkCliRunner`
+ * pins the CLI's own TZ to UTC so this can be read as UTC and mean one instant.
+ * Anything already carrying a zone is passed through untouched.
+ */
+function zonedTimestamp(value: string): string {
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)$/u);
+  if (!match) return value;
+  const time = match[2] as string;
+  return `${match[1]}T${time}${time.length === 5 ? ":00" : ""}Z`;
 }
 
 function isAfterActivationMinute(sentAt: string, addedAt: string): boolean {
@@ -671,7 +738,10 @@ function isAfterActivationMinute(sentAt: string, addedAt: string): boolean {
 function conversationKind(value: unknown): MessageConversationKind {
   const kind = stringValue(value).toLowerCase();
   if (["p2p", "direct", "private", "single"].includes(kind)) return "direct";
-  if (["group", "group_chat"].includes(kind)) return "group";
+  // `default` is what `im +chat-search` calls an ordinary group: that command
+  // only ever returns group chats, and distinguishes plain ones from topic ones
+  // as DEFAULT vs THREAD rather than with the `chat_type` messages carry.
+  if (["group", "group_chat", "default"].includes(kind)) return "group";
   if (["thread", "topic"].includes(kind)) return "thread";
   return "unknown";
 }
@@ -690,6 +760,18 @@ function attachmentKind(value: unknown): MessageAttachmentRef["kind"] {
   if (["audio", "voice"].includes(kind)) return "audio";
   if (["video", "media"].includes(kind)) return "video";
   return "unknown";
+}
+
+/**
+ * Format a window boundary the way lark-cli's time filters accept it.
+ *
+ * `toISOString()` includes milliseconds, and Feishu rejects the whole request
+ * with `invalid_parameters` when it sees them. Since the Core derives windows
+ * from the clock, that fractional part is present essentially always, so this is
+ * not an edge case — without truncating it, no poll ever returns a message.
+ */
+function cliTimestamp(value: Date): string {
+  return `${value.toISOString().slice(0, 19)}Z`;
 }
 
 function assertValidWindow(start: Date, end: Date): void {
@@ -757,14 +839,18 @@ function nonNegativeInteger(value: unknown): number | null {
   return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function boundedInteger(value: unknown, minimum: number, maximum: number): number | null {
+/**
+ * A page size lark-cli will accept, or null to let it pick its own default.
+ *
+ * Asking for more than the subcommand allows is answered with the most it can
+ * give rather than by dropping the flag: silently falling back to lark-cli's
+ * default of 20 would make a Source configured for large pages poll far more
+ * often than its operator asked for, with nothing to show why.
+ */
+function clampedPageSize(value: unknown, maximum: number): number | null {
   const parsed = typeof value === "string" && /^\d+$/u.test(value) ? Number(value) : value;
-  return typeof parsed === "number"
-    && Number.isSafeInteger(parsed)
-    && parsed >= minimum
-    && parsed <= maximum
-    ? parsed
-    : null;
+  if (typeof parsed !== "number" || !Number.isSafeInteger(parsed) || parsed < 1) return null;
+  return Math.min(parsed, maximum);
 }
 
 function isBase64(value: string): boolean {

@@ -50,7 +50,13 @@ export class BunLarkCliRunner implements LarkCliRunner {
   constructor(options: BunLarkCliRunnerOptions = {}) {
     this.executable = options.executable ?? "lark-cli";
     this.timeoutMs = positiveInteger(options.timeoutMs) ?? DEFAULT_TIMEOUT_MS;
-    this.env = options.env ?? process.env;
+    // lark-cli renders message timestamps as a bare `YYYY-MM-DD HH:MM` in its
+    // own local zone, with no flag to ask for UTC or an epoch. The same message
+    // therefore reads `2026-09-01 00:51` on a +08:00 host and `2026-08-31 16:51`
+    // on a UTC one. Pinning TZ is what makes that field mean one instant, so it
+    // is forced rather than merely defaulted: an inherited TZ would silently
+    // shift every ingested timestamp by the host's offset.
+    this.env = { ...(options.env ?? process.env), TZ: "UTC" };
   }
 
   async run(argv: readonly string[], options: LarkCliRunOptions = {}): Promise<unknown> {

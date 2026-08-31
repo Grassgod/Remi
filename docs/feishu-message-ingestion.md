@@ -59,6 +59,31 @@ rather than a silent stall:
 `rate_limited` and `timeout` are retryable and never disable a Source; the
 others need an operator and say which one.
 
+An access token that has aged out is **not** one of these. lark-cli reports it
+as `needs_refresh` and mints a new one on the next call, so the Connection stays
+`ready`. Only a dead *refresh* token — roughly a week without use — reads as
+`unauthenticated`, and only that needs a new `lark-cli login`.
+
+### What lark-cli 1.0.90 cannot do yet
+
+Constraints the Provider works within, verified against a live CLI by
+`tests/integration/lark-cli-message-provider.test.ts`:
+
+- **Page sizes are capped per subcommand** — 50 for `im +messages-search`, 100
+  for `im +chat-search`. A Source configured for more gets the cap, not an
+  error.
+- **Timestamps arrive as a zoneless `YYYY-MM-DD HH:MM`**, rendered in the CLI's
+  own timezone and with no seconds. The Provider runs lark-cli with `TZ=UTC` so
+  the value means one instant everywhere; do not override `TZ` for the API
+  container without changing the Provider to match. Ordering within a minute is
+  not recoverable, which is why message identity is `(connection, message id)`
+  rather than anything time-based.
+- **Attachments are not addressable.** lark-cli renders them into the message
+  text (`[Image: img_v3_…]`) and exposes no file key, so ingested messages carry
+  their text but no attachment refs. Recovering the key by parsing that string
+  would mean reading human-facing output, which this Provider does not do —
+  closing the gap needs a structured attachment field in lark-cli.
+
 ## Production rollout runbook
 
 Each step needs explicit per-session authorization from the platform owner.
