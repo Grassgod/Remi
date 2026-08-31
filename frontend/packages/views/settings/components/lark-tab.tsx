@@ -52,16 +52,17 @@ import { useT } from "../../i18n";
 // `true` to restore the "Bind to Lark" CTA; nothing else needs to change.
 const LARK_INTL_CONNECT_ENABLED: boolean = false;
 
-// LarkTab is the workspace settings panel for Lark Bot installations.
-// Listing is member-visible; the disconnect action is admin-only (the
-// backend enforces it; the UI hides the button for non-admins to match).
+// LarkTab manages *existing* per-Agent Lark Bot installations. Listing is
+// member-visible; the disconnect action is admin-only (the backend enforces
+// it; the UI hides the button for non-admins to match).
 //
-// Adding a new installation flows through the Agent detail page: the
-// install path is per-agent (each Multiremi Agent gets exactly one Bot —
-// see the (workspace_id, agent_id) UNIQUE in lark_installation), so
-// asking the user to pick an agent here would re-create that page's
-// picker. The "Bind your first agent" copy in the empty state hints
-// users at the right entry point.
+// It is no longer an entry point. The PersonalAgent device flow behind
+// `/lark/install/begin` is a stub in this build — it completes on Lark's side
+// without landing a `lark_installation` row — so advertising it here sent
+// admins into a flow that cannot finish. Workspace Settings → Integrations now
+// leads with the Feishu concierge (MUL-206), which is the configured, running
+// bot; this panel renders only when there is a legacy installation left to
+// disconnect, and disappears once there is not.
 export function LarkTab() {
   const { t } = useT("settings");
   const wsId = useWorkspaceId();
@@ -78,14 +79,6 @@ export function LarkTab() {
     enabled: !!wsId,
   });
   const installations = data?.installations ?? [];
-  const configured = data?.configured === true;
-  // install_supported tracks whether the device-flow install path is
-  // wired end-to-end on the server. When false, scan-to-bind would
-  // fail at the post-poll bot-info step, so we hide install entry
-  // points and surface a "coming soon" notice in their place rather
-  // than send users into a broken flow. Already-installed bots still
-  // appear in the listing below and remain manageable.
-  const installSupported = data?.install_supported === true;
 
   const [disconnectTarget, setDisconnectTarget] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -105,79 +98,32 @@ export function LarkTab() {
     }
   }
 
+  // Nothing to manage means nothing to show. A workspace that never used the
+  // per-Agent flow should not see a panel advertising it.
+  if (isLoading || installations.length === 0) return null;
+
   return (
     <div className="space-y-8">
-      <section className="space-y-1">
-        <p className="text-sm text-muted-foreground">
-          {t(($) => $.lark.page_description)}
-        </p>
-      </section>
-
-      {!configured ? (
-        <Card>
-          <CardContent className="space-y-2">
-            <p className="text-sm font-medium">{t(($) => $.lark.not_enabled_title)}</p>
-            <p className="text-xs text-muted-foreground">
-              {t(($) => $.lark.not_enabled_description_prefix)}{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-[10px]">
-                MULTIMIRA_LARK_SECRET_KEY
-              </code>{" "}
-              {t(($) => $.lark.not_enabled_description_suffix)}{" "}
-              {t(($) => $.lark.not_enabled_self_host_hint)}
-            </p>
-          </CardContent>
-        </Card>
-      ) : !installSupported && installations.length === 0 ? (
-        // Device-flow install path is not wired (HTTP client is the stub
-        // or RegistrationService didn't initialize). We deliberately do
-        // NOT direct users to the agent-detail "Bind" button because the
-        // backend would 503 anyway. Existing installations still render
-        // via the branch below; this only hides the empty-state CTA
-        // when there is nothing to manage.
-        <Card>
-          <CardContent className="space-y-2">
-            <p className="text-sm font-medium">{t(($) => $.lark.preview_title)}</p>
-            <p className="text-xs text-muted-foreground">
-              {t(($) => $.lark.preview_description)}
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <section className="space-y-3">
+      <section className="space-y-3">
+        <div className="space-y-1">
           <h2 className="text-sm font-semibold">{t(($) => $.lark.connected_bots)}</h2>
-          {isLoading ? (
-            <Card>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">{t(($) => $.lark.loading)}</p>
-              </CardContent>
-            </Card>
-          ) : installations.length === 0 ? (
-            <Card>
-              <CardContent className="space-y-2">
-                <p className="text-sm font-medium">{t(($) => $.lark.empty_title)}</p>
-                <p className="text-xs text-muted-foreground">
-                  {t(($) => $.lark.empty_description_prefix)}{" "}
-                  <strong>{t(($) => $.lark.empty_description_cta)}</strong>{" "}
-                  {t(($) => $.lark.empty_description_suffix)}
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="divide-y">
-                {installations.map((inst) => (
-                  <InstallationRow
-                    key={inst.id}
-                    installation={inst}
-                    canManage={canManage}
-                    onDisconnect={() => setDisconnectTarget(inst.id)}
-                  />
-                ))}
-              </CardContent>
-            </Card>
-          )}
-        </section>
-      )}
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            {t(($) => $.lark.legacy_description)}
+          </p>
+        </div>
+        <Card>
+          <CardContent className="divide-y">
+            {installations.map((inst) => (
+              <InstallationRow
+                key={inst.id}
+                installation={inst}
+                canManage={canManage}
+                onDisconnect={() => setDisconnectTarget(inst.id)}
+              />
+            ))}
+          </CardContent>
+        </Card>
+      </section>
 
       <AlertDialog
         open={!!disconnectTarget}

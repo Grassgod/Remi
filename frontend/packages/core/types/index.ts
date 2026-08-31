@@ -177,6 +177,28 @@ export type {
   RedeemLarkBindingTokenResponse,
 } from "./lark";
 export type {
+  FeishuBotDomain,
+  FeishuBotDesiredState,
+  FeishuBotStatus,
+  FeishuBotErrorCode,
+  FeishuBotSecretOp,
+  FeishuBotConfig,
+  FeishuBotAvailability,
+  FeishuBotStatusSnapshot,
+  FeishuBotAgentCandidate,
+  FeishuBotRuntimeCandidate,
+  FeishuBotCandidates,
+  FeishuBotTestResult,
+  FeishuBotAuditAction,
+  FeishuBotAuditEntry,
+  FeishuBotAuditList,
+  FeishuBotRegistrationBrand,
+  FeishuBotRegistrationStatus,
+  FeishuBotRegistrationSession,
+  UpsertFeishuBotRequest,
+  FeishuBotTestRequest,
+} from "./feishu-bot";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,
