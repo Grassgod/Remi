@@ -54,7 +54,7 @@ export function feishuSourceStatusOptions(workspaceId: string, sourceId: string,
 }
 
 /** Chat directory lookup for the allowlist picker. Only runs while the picker
- *  is open — it reaches the sidecar and should not poll in the background. */
+ *  is open — it reaches Feishu itself and should not poll in the background. */
 export function feishuAvailableChatsOptions(
   workspaceId: string,
   sourceId: string,

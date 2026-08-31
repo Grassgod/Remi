@@ -61,8 +61,8 @@ function detailCount(item: InboxItem, key: string): number | null {
 }
 
 /**
- * The message link is copied verbatim out of the Feishu payload by the
- * sidecar, so it is attacker-influenced text that we are about to put in an
+ * The message link is copied verbatim out of the Feishu payload during
+ * ingestion, so it is attacker-influenced text that we are about to put in an
  * `href`. Anything that is not an absolute `https:` URL is dropped rather than
  * rendered, which closes `javascript:` and `data:` injection.
  */

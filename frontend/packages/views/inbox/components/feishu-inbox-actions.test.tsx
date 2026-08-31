@@ -83,12 +83,12 @@ describe("FeishuInboxActions", () => {
     renderPanel(
       item({
         type: "feishu_issue_proposal",
-        body: "Fix the sidecar",
+        body: "Fix the flaky poller",
         details: { message_id: "msg-1", proposal_id: "p-1" },
       } as Partial<InboxItem>),
     );
 
-    expect(screen.getByText("Fix the sidecar")).toBeTruthy();
+    expect(screen.getByText("Fix the flaky poller")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Approve and create issue" }));
 
     await waitFor(() => expect(approve).toHaveBeenCalledWith("p-1", expect.anything()));

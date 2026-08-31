@@ -120,10 +120,10 @@ describe("feishuInboxContext", () => {
       item({
         type: "feishu_issue_proposal",
         body: "body title",
-        details: { proposal_id: "p-1", proposed_issue: { title: "Fix the sidecar" } },
+        details: { proposal_id: "p-1", proposed_issue: { title: "Fix the flaky poller" } },
       } as unknown as Partial<InboxItem>),
     );
-    expect(nested?.proposedTitle).toBe("Fix the sidecar");
+    expect(nested?.proposedTitle).toBe("Fix the flaky poller");
     expect(nested?.proposalId).toBe("p-1");
 
     const fallback = feishuInboxContext(

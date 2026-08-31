@@ -35,8 +35,8 @@ export function FeishuMessagesTab() {
 
   const endpoints = endpointsQuery.data?.endpoints ?? [];
   const sources = sourcesQuery.data?.sources ?? [];
-  // One sidecar is the supported topology; the panel shows the first registered
-  // endpoint and the source list carries the per-source binding.
+  // One connection is the supported topology; the panel shows the first one and
+  // the source list carries the per-source binding.
   const endpoint = endpoints[0] ?? null;
 
   return (
