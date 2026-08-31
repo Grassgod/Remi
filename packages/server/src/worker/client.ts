@@ -24,8 +24,12 @@ import type {
   MultiremiDaemonSshMeshConfig,
   MultiremiDaemonSshMeshStatus,
   ReportAgentPluginRuntimeStateInput,
+  FeishuBotErrorCode,
+  FeishuBotRuntimeState,
+  MultiremiFeishuBotDaemonConfig,
 } from "@multiremi/contracts/types.js";
 import {
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
@@ -249,6 +253,7 @@ export class MultiremiDaemonClient {
     botAgentId?: string | null,
     includeBotProjects = false,
     supportsBotMenu = false,
+    supportsFeishuConcierge = false,
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
     let resp: Partial<MultiremiDaemonHeartbeatConfigAck>;
     try {
@@ -268,6 +273,11 @@ export class MultiremiDaemonClient {
           : {}),
         ...(botAgentId ? { bot_agent_id: botAgentId } : {}),
         ...(includeBotProjects ? { include_bot_projects: true } : {}),
+        // Only claimed when this process can actually host the connector, so
+        // the control plane never hands the bot to a Runtime that cannot run it.
+        ...(supportsFeishuConcierge
+          ? { feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION }
+          : {}),
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
@@ -293,6 +303,44 @@ export class MultiremiDaemonClient {
   ): Promise<void> {
     await this.post(
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/bot-menu/${encodeURIComponent(requestId)}/result`,
+      input,
+    );
+  }
+
+  /**
+   * Fetch the decrypted concierge credentials for this Runtime. Returns null
+   * when the control plane has not assigned the bot here — including on servers
+   * from before MUL-206, which answer with an unstructured 404.
+   */
+  async getFeishuBotConfig(runtimeId: string): Promise<MultiremiFeishuBotDaemonConfig | null> {
+    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot`;
+    try {
+      return await this.get<MultiremiFeishuBotDaemonConfig>(path);
+    } catch (error) {
+      if (
+        error instanceof MultiremiDaemonHttpError
+        && (error.status === 404 || error.status === 405)
+        && error.code !== "runtime_not_found"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async reportFeishuBotRuntimeStatus(
+    runtimeId: string,
+    input: {
+      applied_revision: number;
+      state: FeishuBotRuntimeState;
+      bot_name?: string | null;
+      bot_open_id?: string | null;
+      error_code?: FeishuBotErrorCode | null;
+      error_message?: string | null;
+    },
+  ): Promise<void> {
+    await this.post(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/status`,
       input,
     );
   }

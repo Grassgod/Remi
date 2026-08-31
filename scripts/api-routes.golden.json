@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 649,
+    "routeCount": 663,
     "routeCountByPrefix": {
       "native": 205,
-      "compat": 431,
+      "compat": 445,
       "root": 13
     },
-    "getRoutes": 279,
-    "getRoutesWithBody": 276,
+    "getRoutes": 285,
+    "getRoutesWithBody": 282,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 370,
-    "mutationRoutesCovered": 275,
+    "mutationRoutes": 378,
+    "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -30,6 +30,7 @@
       "daemon",
       "daemon-retirement",
       "daemon-task-lifecycle",
+      "feishu-bot",
       "inbox",
       "issue-relations-compat",
       "issue-relations-native",
@@ -115,6 +116,8 @@
     "DELETE /api/squads/:id/members",
     "DELETE /api/tokens/:id",
     "DELETE /api/workspaces/:id",
+    "DELETE /api/workspaces/:id/feishu-bot",
+    "DELETE /api/workspaces/:id/feishu-bot/registration/:sessionId",
     "DELETE /api/workspaces/:id/invitations/:invitationId",
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
@@ -170,6 +173,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
@@ -365,6 +369,11 @@
     "GET /api/workspaces/:id/bot-menu",
     "GET /api/workspaces/:id/bot-menu/publish/:requestId",
     "GET /api/workspaces/:id/env",
+    "GET /api/workspaces/:id/feishu-bot",
+    "GET /api/workspaces/:id/feishu-bot/audit",
+    "GET /api/workspaces/:id/feishu-bot/candidates",
+    "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
+    "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
@@ -473,6 +482,7 @@
     "POST /api/daemon/runtimes/:runtimeId/commands/claim",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/status",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
@@ -644,6 +654,10 @@
     "POST /api/webhooks/stripe",
     "POST /api/workspaces",
     "POST /api/workspaces/:id/bot-menu/publish",
+    "POST /api/workspaces/:id/feishu-bot/deploy",
+    "POST /api/workspaces/:id/feishu-bot/registration",
+    "POST /api/workspaces/:id/feishu-bot/stop",
+    "POST /api/workspaces/:id/feishu-bot/test",
     "POST /api/workspaces/:id/lark/install/begin",
     "POST /api/workspaces/:id/leave",
     "POST /api/workspaces/:id/members",
@@ -704,6 +718,7 @@
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/bot-menu",
     "PUT /api/workspaces/:id/env",
+    "PUT /api/workspaces/:id/feishu-bot",
     "PUT /api/workspaces/:id/issue-archive",
     "PUT /api/workspaces/:id/organizer",
     "PUT /api/workspaces/:id/prompts",
@@ -762,6 +777,8 @@
     "DELETE /api/squads/:id/members",
     "DELETE /api/tokens/:id",
     "DELETE /api/workspaces/:id",
+    "DELETE /api/workspaces/:id/feishu-bot",
+    "DELETE /api/workspaces/:id/feishu-bot/registration/:sessionId",
     "DELETE /api/workspaces/:id/invitations/:invitationId",
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
@@ -811,6 +828,7 @@
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
@@ -1006,6 +1024,11 @@
     "GET /api/workspaces/:id/bot-menu",
     "GET /api/workspaces/:id/bot-menu/publish/:requestId",
     "GET /api/workspaces/:id/env",
+    "GET /api/workspaces/:id/feishu-bot",
+    "GET /api/workspaces/:id/feishu-bot/audit",
+    "GET /api/workspaces/:id/feishu-bot/candidates",
+    "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
+    "GET /api/workspaces/:id/feishu-bot/status",
     "GET /api/workspaces/:id/invitations",
     "GET /api/workspaces/:id/issue-archive",
     "GET /api/workspaces/:id/lark/install/:sessionId/status",
@@ -1231,6 +1254,10 @@
     "POST /api/webhooks/autopilots/:token",
     "POST /api/webhooks/stripe",
     "POST /api/workspaces",
+    "POST /api/workspaces/:id/feishu-bot/deploy",
+    "POST /api/workspaces/:id/feishu-bot/registration",
+    "POST /api/workspaces/:id/feishu-bot/stop",
+    "POST /api/workspaces/:id/feishu-bot/test",
     "POST /api/workspaces/:id/lark/install/begin",
     "POST /api/workspaces/:id/leave",
     "POST /api/workspaces/:id/members",
@@ -1267,6 +1294,7 @@
     "PUT /api/skills/:id/files",
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
+    "PUT /api/workspaces/:id/feishu-bot",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery"
   ],
@@ -3631,7 +3659,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "e43e2da100fb513ab3d4d00c4c9f819b5f4844b20f34bd095604d9a93ac3a43a",
+          "snapshot": "48f00143b604f8484dd1e2feedf24298969dd325ba50b6c4a8360d9605235632",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -5256,6 +5284,181 @@
       "status": 200,
       "body": {
         "status": "ok"
+      }
+    },
+    {
+      "key": "feishu-bot#000 PUT /api/workspaces/:id/feishu-bot",
+      "route": "PUT /api/workspaces/:id/feishu-bot",
+      "path": "/api/workspaces/local/feishu-bot",
+      "status": 200,
+      "body": {
+        "configured": true,
+        "workspace_id": "local",
+        "agent_id": "agt_snapshot",
+        "agent_name": "Snapshot Agent",
+        "agent_archived": false,
+        "runtime_id": "rt_snapshot",
+        "runtime_name": "snapshot-runtime",
+        "runtime_online": true,
+        "runtime_supports_config": false,
+        "app_id": "cli_snapshot_bot",
+        "domain": "feishu",
+        "enabled": false,
+        "revision": 1,
+        "app_secret_configured": true,
+        "app_secret_hint": "snap••••••",
+        "verification_token_configured": false,
+        "encrypt_key_configured": false,
+        "bot_name": null,
+        "bot_open_id": null,
+        "last_tested_at": null,
+        "last_test_error": null,
+        "last_test_error_code": null,
+        "created_at": "<timestamp>",
+        "updated_at": "<timestamp>",
+        "updated_by": null
+      }
+    },
+    {
+      "key": "feishu-bot#001 PUT /api/workspaces/:id/feishu-bot",
+      "route": "PUT /api/workspaces/:id/feishu-bot",
+      "path": "/api/workspaces/local/feishu-bot",
+      "status": 200,
+      "body": {
+        "configured": true,
+        "workspace_id": "local",
+        "agent_id": "agt_snapshot",
+        "agent_name": "Snapshot Agent",
+        "agent_archived": false,
+        "runtime_id": "rt_snapshot",
+        "runtime_name": "snapshot-runtime",
+        "runtime_online": true,
+        "runtime_supports_config": false,
+        "app_id": "cli_snapshot_bot",
+        "domain": "lark",
+        "enabled": true,
+        "revision": 2,
+        "app_secret_configured": true,
+        "app_secret_hint": "snap••••••",
+        "verification_token_configured": false,
+        "encrypt_key_configured": false,
+        "bot_name": null,
+        "bot_open_id": null,
+        "last_tested_at": null,
+        "last_test_error": null,
+        "last_test_error_code": null,
+        "created_at": "<timestamp>",
+        "updated_at": "<timestamp>",
+        "updated_by": null
+      }
+    },
+    {
+      "key": "feishu-bot#002 POST /api/workspaces/:id/feishu-bot/test",
+      "route": "POST /api/workspaces/:id/feishu-bot/test",
+      "path": "/api/workspaces/local/feishu-bot/test",
+      "status": 200,
+      "body": {
+        "ok": false,
+        "bot_name": null,
+        "bot_open_id": null,
+        "app_name": null,
+        "runtime_online": true,
+        "runtime_supports_config": false,
+        "error_code": "unknown",
+        "error_message": "Feishu rejected the credentials (code -1): "
+      }
+    },
+    {
+      "key": "feishu-bot#003 POST /api/workspaces/:id/feishu-bot/deploy",
+      "route": "POST /api/workspaces/:id/feishu-bot/deploy",
+      "path": "/api/workspaces/local/feishu-bot/deploy",
+      "status": 200,
+      "body": {
+        "status": "deploying",
+        "workspace_id": "local",
+        "enabled": true,
+        "revision": 3,
+        "desired_state": "running",
+        "runtime_id": "rt_snapshot",
+        "runtime_name": "snapshot-runtime",
+        "runtime_online": true,
+        "applied_revision": null,
+        "bot_name": null,
+        "last_heartbeat_at": "<timestamp>",
+        "error_code": null,
+        "error_message": null,
+        "stale_runtime_ids": []
+      }
+    },
+    {
+      "key": "feishu-bot#004 POST /api/workspaces/:id/feishu-bot/stop",
+      "route": "POST /api/workspaces/:id/feishu-bot/stop",
+      "path": "/api/workspaces/local/feishu-bot/stop",
+      "status": 200,
+      "body": {
+        "status": "stopped",
+        "workspace_id": "local",
+        "enabled": false,
+        "revision": 4,
+        "desired_state": "stopped",
+        "runtime_id": "rt_snapshot",
+        "runtime_name": "snapshot-runtime",
+        "runtime_online": true,
+        "applied_revision": null,
+        "bot_name": null,
+        "last_heartbeat_at": "<timestamp>",
+        "error_code": null,
+        "error_message": null,
+        "stale_runtime_ids": []
+      }
+    },
+    {
+      "key": "feishu-bot#005 POST /api/workspaces/:id/feishu-bot/registration",
+      "route": "POST /api/workspaces/:id/feishu-bot/registration",
+      "path": "/api/workspaces/local/feishu-bot/registration",
+      "status": 502,
+      "body": {
+        "error": "registration init failed: network disabled in the api snapshot harness"
+      }
+    },
+    {
+      "key": "feishu-bot#006 DELETE /api/workspaces/:id/feishu-bot/registration/:sessionId",
+      "route": "DELETE /api/workspaces/:id/feishu-bot/registration/:sessionId",
+      "path": "/api/workspaces/local/feishu-bot/registration/fbreg_snapshot",
+      "status": 204,
+      "body": ""
+    },
+    {
+      "key": "feishu-bot#007 DELETE /api/workspaces/:id/feishu-bot",
+      "route": "DELETE /api/workspaces/:id/feishu-bot",
+      "path": "/api/workspaces/local/feishu-bot",
+      "status": 200,
+      "body": {
+        "configured": false,
+        "workspace_id": "local",
+        "agent_id": null,
+        "agent_name": null,
+        "agent_archived": false,
+        "runtime_id": null,
+        "runtime_name": null,
+        "runtime_online": false,
+        "runtime_supports_config": false,
+        "app_id": "",
+        "domain": "feishu",
+        "enabled": false,
+        "revision": 0,
+        "app_secret_configured": false,
+        "app_secret_hint": null,
+        "verification_token_configured": false,
+        "encrypt_key_configured": false,
+        "bot_name": null,
+        "bot_open_id": null,
+        "last_tested_at": null,
+        "last_test_error": null,
+        "last_test_error_code": null,
+        "created_at": null,
+        "updated_at": null,
+        "updated_by": null
       }
     },
     {
@@ -11376,6 +11579,138 @@
             "allowed": true
           },
           {
+            "id": "workspace.feishu-bot.audit",
+            "command": "remi workspace feishu-bot audit",
+            "capability": "workspace.feishu-bot.audit",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.candidates",
+            "command": "remi workspace feishu-bot candidates",
+            "capability": "workspace.feishu-bot.candidates",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.delete",
+            "command": "remi workspace feishu-bot delete",
+            "capability": "workspace.feishu-bot.delete",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.deploy",
+            "command": "remi workspace feishu-bot deploy",
+            "capability": "workspace.feishu-bot.deploy",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.get",
+            "command": "remi workspace feishu-bot get",
+            "capability": "workspace.feishu-bot.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.register",
+            "command": "remi workspace feishu-bot register",
+            "capability": "workspace.feishu-bot.register",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.register-cancel",
+            "command": "remi workspace feishu-bot register-cancel",
+            "capability": "workspace.feishu-bot.register-cancel",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.register-status",
+            "command": "remi workspace feishu-bot register-status",
+            "capability": "workspace.feishu-bot.register-status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.set",
+            "command": "remi workspace feishu-bot set",
+            "capability": "workspace.feishu-bot.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.status",
+            "command": "remi workspace feishu-bot status",
+            "capability": "workspace.feishu-bot.status",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.stop",
+            "command": "remi workspace feishu-bot stop",
+            "capability": "workspace.feishu-bot.stop",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "workspace.feishu-bot.test",
+            "command": "remi workspace feishu-bot test",
+            "capability": "workspace.feishu-bot.test",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "workspace.get",
             "command": "remi workspace get",
             "capability": "workspace.get",
@@ -11923,6 +12258,16 @@
         "runtime_id": "rt_snapshot",
         "revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
         "plugins": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+      "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+      "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot",
+      "status": 403,
+      "body": {
+        "error": "daemon token required",
+        "code": "daemon_token_required"
       }
     },
     {
@@ -15916,7 +16261,7 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "e43e2da100fb513ab3d4d00c4c9f819b5f4844b20f34bd095604d9a93ac3a43a",
+          "snapshot": "48f00143b604f8484dd1e2feedf24298969dd325ba50b6c4a8360d9605235632",
           "already_retired": false,
           "can_retire": true,
           "can_abandon_issue_workspaces": false,
@@ -20537,6 +20882,107 @@
       "body": {
         "workspace_id": "local",
         "env": {}
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot",
+      "route": "GET /api/workspaces/:id/feishu-bot",
+      "path": "/api/workspaces/local/feishu-bot",
+      "status": 200,
+      "body": {
+        "configured": false,
+        "workspace_id": "local",
+        "agent_id": null,
+        "agent_name": null,
+        "agent_archived": false,
+        "runtime_id": null,
+        "runtime_name": null,
+        "runtime_online": false,
+        "runtime_supports_config": false,
+        "app_id": "",
+        "domain": "feishu",
+        "enabled": false,
+        "revision": 0,
+        "app_secret_configured": false,
+        "app_secret_hint": null,
+        "verification_token_configured": false,
+        "encrypt_key_configured": false,
+        "bot_name": null,
+        "bot_open_id": null,
+        "last_tested_at": null,
+        "last_test_error": null,
+        "last_test_error_code": null,
+        "created_at": null,
+        "updated_at": null,
+        "updated_by": null
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot/audit",
+      "route": "GET /api/workspaces/:id/feishu-bot/audit",
+      "path": "/api/workspaces/local/feishu-bot/audit",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "entries": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot/candidates",
+      "route": "GET /api/workspaces/:id/feishu-bot/candidates",
+      "path": "/api/workspaces/local/feishu-bot/candidates",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "agents": [
+          {
+            "id": "agt_snapshot",
+            "name": "Snapshot Agent",
+            "provider": "claude"
+          }
+        ],
+        "runtimes": [
+          {
+            "id": "rt_snapshot",
+            "name": "snapshot-runtime",
+            "daemon_id": "dmn_snapshot",
+            "online": true,
+            "supports_config": false,
+            "last_heartbeat_at": "<timestamp>"
+          }
+        ],
+        "encryption_available": true
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
+      "route": "GET /api/workspaces/:id/feishu-bot/registration/:sessionId",
+      "path": "/api/workspaces/local/feishu-bot/registration/fbreg_snapshot",
+      "status": 404,
+      "body": {
+        "error": "registration session not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/feishu-bot/status",
+      "route": "GET /api/workspaces/:id/feishu-bot/status",
+      "path": "/api/workspaces/local/feishu-bot/status",
+      "status": 200,
+      "body": {
+        "status": "not_configured",
+        "workspace_id": "local",
+        "enabled": false,
+        "revision": 0,
+        "desired_state": "stopped",
+        "runtime_id": null,
+        "runtime_name": null,
+        "runtime_online": false,
+        "applied_revision": null,
+        "bot_name": null,
+        "last_heartbeat_at": null,
+        "error_code": null,
+        "error_message": null,
+        "stale_runtime_ids": []
       }
     },
     {

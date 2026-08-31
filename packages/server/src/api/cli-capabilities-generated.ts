@@ -371,6 +371,150 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.feishu-bot.get": {
+      "command": "remi workspace feishu-bot get",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.status": {
+      "command": "remi workspace feishu-bot status",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.candidates": {
+      "command": "remi workspace feishu-bot candidates",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.candidates",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.audit": {
+      "command": "remi workspace feishu-bot audit",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.audit",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.set": {
+      "command": "remi workspace feishu-bot set",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.test": {
+      "command": "remi workspace feishu-bot test",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.test",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.deploy": {
+      "command": "remi workspace feishu-bot deploy",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.deploy",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.stop": {
+      "command": "remi workspace feishu-bot stop",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.stop",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.register": {
+      "command": "remi workspace feishu-bot register",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.register",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.register-status": {
+      "command": "remi workspace feishu-bot register-status",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.register-status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.register-cancel": {
+      "command": "remi workspace feishu-bot register-cancel",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.register-cancel",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.feishu-bot.delete": {
+      "command": "remi workspace feishu-bot delete",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.feishu-bot.delete",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "workspace.prompt.get": {
       "command": "remi workspace prompt get",
       "auth": [

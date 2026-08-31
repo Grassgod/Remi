@@ -142,6 +142,11 @@ const TASK_PARITY_DENIED_COMMAND_PREFIXES = [
   "platform.settings.",
   "runtime.cloud.",
   "token.",
+  // MUL-206: the Feishu concierge holds workspace-wide bot credentials and can
+  // point the bot at any Agent, so it stays an owner/admin operation even for
+  // the read commands — a task token must not learn which Agent answers, and
+  // must certainly not be able to redeploy the bot.
+  "workspace.feishu-bot.",
 ];
 
 function taskParityCommandSpec(spec: CommandSpec): CommandSpec {

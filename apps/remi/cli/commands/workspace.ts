@@ -48,6 +48,26 @@ const RUNTIME_PROVISION_FIELDS: readonly CliOptionSpec[] = [
   { name: "timeout-ms", type: "integer", valueName: "ms", description: "Execution deadline" },
 ];
 
+/**
+ * Secrets are accepted but never echoed: the API answers with `*_configured`
+ * flags only, so `--app-secret` is the one direction a credential travels. The
+ * `*-op` flags exist because omitting a secret means "keep what is stored",
+ * which is the only safe default for a partial update.
+ */
+const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
+  { name: "agent", type: "string", valueName: "agent-id", description: "Agent that answers concierge messages" },
+  { name: "runtime", type: "string", valueName: "runtime-id", description: "Runtime that hosts the connector" },
+  { name: "app-id", type: "string", valueName: "cli_xxx", description: "Feishu App ID" },
+  { name: "app-secret", type: "string", valueName: "secret", description: "Feishu App Secret (stored encrypted)" },
+  { name: "domain", type: "string", valueName: "feishu|lark|bytedance", description: "Open platform domain" },
+  { name: "enabled", type: "boolean", description: "Run the concierge after saving" },
+  { name: "disabled", type: "boolean", description: "Save the configuration without running it" },
+  { name: "verification-token", type: "string", valueName: "token", description: "Event verification token" },
+  { name: "encrypt-key", type: "string", valueName: "key", description: "Event encrypt key" },
+  { name: "verification-token-op", type: "string", valueName: "keep|set|clear", description: "Verification token update mode" },
+  { name: "encrypt-key-op", type: "string", valueName: "keep|set|clear", description: "Encrypt key update mode" },
+];
+
 export function workspaceCommandSpecs(): CommandSpec[] {
   return [
     groupSpec(),
@@ -173,6 +193,65 @@ export function workspaceCommandSpecs(): CommandSpec[] {
         renderResource(invocation, response.data);
       },
     ),
+    scopedRead("workspace.feishu-bot.get", ["workspace", "feishu-bot", "get"], "Read the workspace Feishu concierge configuration", "/feishu-bot"),
+    scopedRead("workspace.feishu-bot.status", ["workspace", "feishu-bot", "status"], "Read Feishu concierge runtime status", "/feishu-bot/status"),
+    scopedRead("workspace.feishu-bot.candidates", ["workspace", "feishu-bot", "candidates"], "List Agents and Runtimes the concierge can use", "/feishu-bot/candidates"),
+    scopedRead("workspace.feishu-bot.audit", ["workspace", "feishu-bot", "audit"], "Read the Feishu concierge audit trail", "/feishu-bot/audit"),
+    scopedWrite(
+      "workspace.feishu-bot.set",
+      ["workspace", "feishu-bot", "set"],
+      "Create or update the workspace Feishu concierge configuration",
+      "/feishu-bot",
+      "PUT",
+      FEISHU_BOT_FIELDS,
+      feishuBotBody,
+    ),
+    scopedWrite("workspace.feishu-bot.test", ["workspace", "feishu-bot", "test"], "Test the Feishu concierge credentials", "/feishu-bot/test", "POST"),
+    scopedWrite("workspace.feishu-bot.deploy", ["workspace", "feishu-bot", "deploy"], "Enable and deploy the Feishu concierge", "/feishu-bot/deploy", "POST"),
+    scopedWrite("workspace.feishu-bot.stop", ["workspace", "feishu-bot", "stop"], "Stop the Feishu concierge", "/feishu-bot/stop", "POST"),
+    scopedWrite(
+      "workspace.feishu-bot.register",
+      ["workspace", "feishu-bot", "register"],
+      "Start a scan-to-create registration for a Feishu concierge app",
+      "/feishu-bot/registration",
+      "POST",
+      [{ name: "brand", type: "string", valueName: "feishu|lark", description: "Open platform brand" }],
+      async (invocation) => requestBody(invocation, { brand: stringOption(invocation, "brand") ?? undefined }),
+    ),
+    readSpec(
+      "workspace.feishu-bot.register-status",
+      ["workspace", "feishu-bot", "register-status"],
+      "Poll a Feishu concierge registration session",
+      [refPositional("workspace"), refPositional("session")],
+      async (invocation) => {
+        const { client, workspaceId } = await feishuBotRegistrationScope(invocation);
+        const response = await client.request({
+          method: "GET",
+          path: `${feishuBotRegistrationPath(workspaceId, positional(invocation, 1, "session"))}`,
+        });
+        renderResource(invocation, response.data);
+      },
+    ),
+    destructiveSpec(
+      "workspace.feishu-bot.register-cancel",
+      ["workspace", "feishu-bot", "register-cancel"],
+      "Discard a Feishu concierge registration session",
+      [refPositional("workspace"), refPositional("session")],
+      async (invocation) => {
+        const { client, workspaceId } = await feishuBotRegistrationScope(invocation);
+        const response = await client.request({
+          method: "DELETE",
+          path: feishuBotRegistrationPath(workspaceId, positional(invocation, 1, "session")),
+        });
+        renderResource(invocation, response.data);
+      },
+    ),
+    destructiveSpec("workspace.feishu-bot.delete", ["workspace", "feishu-bot", "delete"], "Delete the workspace Feishu concierge configuration", [refPositional("workspace")], async (invocation) => {
+      const client = await clientFor(invocation);
+      const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+      const response = await client.request({ method: "DELETE", path: `/api/workspaces/${encodePath(String(workspace.id))}/feishu-bot` });
+      renderResource(invocation, response.data);
+    }),
     scopedRead("workspace.prompt.get", ["workspace", "prompt", "get"], "Read workspace prompt appendices", "/prompts"),
     scopedRead("workspace.prompt.template", ["workspace", "prompt", "template"], "Read the platform prompt template", "/prompt-template"),
     scopedWrite("workspace.prompt.update", ["workspace", "prompt", "update"], "Update workspace prompt appendices", "/prompts", "PUT", [
@@ -218,7 +297,7 @@ function groupSpec(): CommandSpec {
     path: ["workspace"],
     description: "Manage workspaces and workspace settings",
     parse: "passthrough",
-    run: async () => { throw new CliError("usage", "usage: remi workspace list|get|create|update|delete|leave|runtime-provision|env|ssh-mesh|relay|bot-menu ..."); },
+    run: async () => { throw new CliError("usage", "usage: remi workspace list|get|create|update|delete|leave|runtime-provision|env|ssh-mesh|relay|bot-menu|feishu-bot ..."); },
   };
 }
 
@@ -382,6 +461,37 @@ async function envBody(invocation: CommandInvocation): Promise<Record<string, un
     env[pair.slice(0, separator)] = pair.slice(separator + 1);
   }
   return { ...body, env };
+}
+
+async function feishuBotRegistrationScope(invocation: CommandInvocation) {
+  const client = await clientFor(invocation);
+  const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+  return { client, workspaceId: String(workspace.id) };
+}
+
+function feishuBotRegistrationPath(workspaceId: string, sessionId: string): string {
+  return `/api/workspaces/${encodePath(workspaceId)}/feishu-bot/registration/${encodePath(sessionId)}`;
+}
+
+async function feishuBotBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const body = await requestBody(invocation, {
+    agent_id: stringOption(invocation, "agent") ?? undefined,
+    runtime_id: stringOption(invocation, "runtime") ?? undefined,
+    app_id: stringOption(invocation, "app-id") ?? undefined,
+    app_secret: rawStringOption(invocation, "app-secret"),
+    domain: stringOption(invocation, "domain") ?? undefined,
+    enabled: booleanOption(invocation, "disabled") === true ? false : booleanOption(invocation, "enabled") ?? undefined,
+    verification_token: rawStringOption(invocation, "verification-token"),
+    encrypt_key: rawStringOption(invocation, "encrypt-key"),
+    verification_token_op: stringOption(invocation, "verification-token-op") ?? undefined,
+    encrypt_key_op: stringOption(invocation, "encrypt-key-op") ?? undefined,
+  });
+  // The API requires an explicit boolean so a save can never flip the bot on or
+  // off by accident; the CLI asks rather than guessing.
+  if (typeof body.enabled !== "boolean") {
+    throw new CliError("usage", "workspace feishu-bot set requires --enabled or --disabled");
+  }
+  return body;
 }
 
 async function promptBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {

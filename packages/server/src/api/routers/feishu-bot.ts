@@ -37,7 +37,6 @@ import {
 } from "@multiremi/feishu-bot/credentials.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import {
-  FeishuBotRegistrationError,
   FeishuBotRegistrationService,
   type FeishuBotRegistrationBrand,
 } from "@multiremi/feishu-bot/registration.js";
@@ -315,9 +314,8 @@ export function registerFeishuBotRoutes(
       });
       return c.json(session, 202);
     } catch (error) {
-      if (error instanceof FeishuBotRegistrationError) {
-        return c.json({ error: redactFeishuBotError(error) }, 502);
-      }
+      // Every failure here is upstream Feishu refusing the registration, so it
+      // reports as a bad gateway rather than as our own error.
       return c.json({ error: redactFeishuBotError(error) }, 502);
     }
   });
