@@ -144,7 +144,7 @@ const FOCUSED_PROBES: Probe[] = [
   { router: "daemon-retirement", method: "GET", path: () => "/api/multiremi/daemons/dmn_snapshot/retirement-plan?workspace_id=local", representative: true },
   { router: "daemon", method: "GET", path: (r) => `/api/daemon/tasks/${r.taskId}/status`, representative: true },
   { router: "dashboard", method: "GET", path: () => "/api/dashboard/agent-runtime?workspace_id=local", representative: true },
-  { router: "feishu-ingest", method: "GET", path: () => "/api/workspaces/local/feishu/messages", representative: true },
+  { router: "feishu-compat", method: "GET", path: () => "/api/workspaces/local/feishu/messages", representative: true },
   { router: "inbox", method: "GET", path: (r) => `/api/inbox?member_id=${r.inboxMemberId}`, representative: true },
   { router: "invitations", method: "GET", path: () => "/api/workspaces/local/invitations", representative: true },
   { router: "issue-shares", method: "GET", path: (r) => `/api/issues/${r.issueId}/share`, representative: true },

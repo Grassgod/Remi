@@ -1,7 +1,6 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
-import { normalizeFeishuSidecarEndpointName } from "@multiremi/feishu-ingest/endpoints.js";
 import { createLogger } from "@shared/logger.js";
 import type {
   CreateIssueFromMultiremiFeishuMessageInput,
@@ -203,7 +202,7 @@ export class FeishuIngestRepo {
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
     const type = input.type ?? "personal_automation";
     if (type !== "personal_automation") throw new Error("unsupported Feishu source type");
-    const endpointName = normalizeFeishuSidecarEndpointName(input.endpointName ?? input.endpoint_name);
+    const endpointName = normalizeLegacyEndpointName(input.endpointName ?? input.endpoint_name);
     const now = nowIso();
     const id = cleanOptionalString(input.id) ?? createId("fsrc");
     const name = cleanOptionalString(input.name) ?? "Personal Automation";
@@ -259,7 +258,7 @@ export class FeishuIngestRepo {
         input.name === undefined ? current.name : cleanOptionalString(input.name) ?? "Personal Automation",
         input.endpointName === undefined && input.endpoint_name === undefined
           ? current.endpointName
-          : normalizeFeishuSidecarEndpointName(input.endpointName ?? input.endpoint_name),
+          : normalizeLegacyEndpointName(input.endpointName ?? input.endpoint_name),
         toJson(allowlist),
         input.enabled === undefined ? (current.enabled ? 1 : 0) : (input.enabled ? 1 : 0),
         input.retentionDays === undefined && input.retention_days === undefined
@@ -1339,6 +1338,19 @@ export class FeishuIngestRepo {
       return deleted;
     })();
   }
+}
+
+/**
+ * The `endpoint_name` column predates Messaging Core. Nothing dials an endpoint
+ * any more — the compat layer maps the name to a Connection id — but the shape
+ * is still validated so old and new rows share one id space.
+ */
+function normalizeLegacyEndpointName(value: unknown): string {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(name)) {
+    throw new Error("Feishu endpoint_name must start with a letter and contain only lowercase letters, numbers, _ or -");
+  }
+  return name;
 }
 
 function normalizeAllowlist(

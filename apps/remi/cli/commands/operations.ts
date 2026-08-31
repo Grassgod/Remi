@@ -599,7 +599,7 @@ function feishuSpecs(): CommandSpec[] {
     `${workspaceBase(i)}/sources/${encodePath(positional(i, 0, "source"))}`;
   const sourceFields: readonly CliOptionSpec[] = [
     { name: "name", type: "string", valueName: "name", description: "Source display name" },
-    { name: "endpoint-name", type: "string", valueName: "name", description: "Server-configured sidecar endpoint name" },
+    { name: "endpoint-name", type: "string", valueName: "name", description: "Legacy endpoint name; maps to a messaging connection" },
     { name: "chat", type: "string", valueName: "chat-id", repeatable: true, description: "Allowlisted chat ID" },
     { name: "clear-allowlist", type: "boolean", conflictsWith: ["chat"], description: "Replace the allowlist with an empty list" },
     { name: "enabled", type: "boolean", description: "Enable or disable ingestion" },
@@ -641,11 +641,11 @@ function feishuSpecs(): CommandSpec[] {
     op({ id: "feishu.source.list", path: ["feishu", "source", "list"], description: "List Feishu message sources", method: "GET", apiPath: (i) => `${workspaceBase(i)}/sources`, auth: HUMAN, collections: ["sources"] }),
     op({ id: "feishu.source.get", path: ["feishu", "source", "get"], description: "Get a Feishu message source", method: "GET", apiPath: source, auth: HUMAN, positionals: [ref("source")] }),
     op({ id: "feishu.source.status", path: ["feishu", "source", "status"], description: "Show connection health, lag, and unresolved backlog", method: "GET", apiPath: (i) => `${source(i)}/status`, auth: HUMAN_TASK, positionals: [ref("source")] }),
-    op({ id: "feishu.source.add", path: ["feishu", "source", "add"], description: "Add a personal_automation Feishu source", method: "POST", apiPath: (i) => `${workspaceBase(i)}/sources`, mutation: "write", auth: HUMAN, options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
+    op({ id: "feishu.source.add", path: ["feishu", "source", "add"], description: "Add a Feishu source (legacy id space; prefer remi messaging source add)", method: "POST", apiPath: (i) => `${workspaceBase(i)}/sources`, mutation: "write", auth: HUMAN, options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
     op({ id: "feishu.source.update", path: ["feishu", "source", "update"], description: "Update a Feishu source and its allowlist", method: "PATCH", apiPath: source, mutation: "write", auth: HUMAN, positionals: [ref("source")], options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
     op({ id: "feishu.source.delete", path: ["feishu", "source", "delete"], description: "Delete a Feishu source with its messages and outcomes", method: "DELETE", apiPath: source, mutation: "destructive", auth: HUMAN, positionals: [ref("source")] }),
-    op({ id: "feishu.endpoint.list", path: ["feishu", "endpoint", "list"], description: "List server-registered sidecar endpoint names and health", method: "GET", apiPath: (i) => `${workspaceBase(i)}/endpoints`, auth: HUMAN, collections: ["endpoints"] }),
-    op({ id: "feishu.endpoint.check", path: ["feishu", "endpoint", "check"], description: "Re-probe one registered sidecar endpoint", method: "POST", apiPath: (i) => `${workspaceBase(i)}/endpoints/${encodePath(positional(i, 0, "endpoint"))}/check`, mutation: "write", auth: HUMAN, positionals: [ref("endpoint")] }),
+    op({ id: "feishu.endpoint.list", path: ["feishu", "endpoint", "list"], description: "List legacy endpoint names and health", method: "GET", apiPath: (i) => `${workspaceBase(i)}/endpoints`, auth: HUMAN, collections: ["endpoints"] }),
+    op({ id: "feishu.endpoint.check", path: ["feishu", "endpoint", "check"], description: "Re-probe one legacy endpoint", method: "POST", apiPath: (i) => `${workspaceBase(i)}/endpoints/${encodePath(positional(i, 0, "endpoint"))}/check`, mutation: "write", auth: HUMAN, positionals: [ref("endpoint")] }),
     op({
       id: "feishu.source.available-chats",
       path: ["feishu", "source", "available-chats"],

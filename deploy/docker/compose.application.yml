@@ -20,13 +20,11 @@ services:
       MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-0}
       MULTIREMI_SSH_MESH_CONTROL_PLANE: 0
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
-      # Operator-owned endpoint registry. Empty (the default) keeps Feishu
-      # ingestion fail-closed. Only loopback values are meaningful here: the
-      # sidecar shares this container's network namespace, so a name may not
-      # point at an arbitrary host. This Compose value overrides the API env
-      # file, which is why the registry is deployment configuration and never
-      # a browser-submitted URL.
-      MULTIREMI_FEISHU_SIDECAR_ENDPOINTS: ${REMI_FEISHU_SIDECAR_ENDPOINTS:-}
+    # lark-cli ships in this image and reads its credential from $HOME, so the
+    # Feishu message provider needs no service, port, or network of its own.
+    # The credential is written by `docker compose exec api lark-cli login` and
+    # lives in the home bind mount below — never in this file, an env file, or
+    # Git.
     volumes:
       - ${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi
       - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads
@@ -43,35 +41,6 @@ services:
       retries: 12
     ports:
       - 127.0.0.1:${REMI_API_BIND_PORT:-16120}:6120
-
-  # Feishu ingestion sidecar. It binds 8042 to loopback only and refuses a
-  # non-loopback listener, so it shares the API container's network namespace
-  # instead of joining a bridge network. It therefore must not declare `ports`,
-  # `expose`, or `networks`: the namespace belongs to `api`, and any published
-  # port would have to be declared there. Disabled unless
-  # `COMPOSE_PROFILES=feishu-sidecar` is set, so existing installations are
-  # unaffected. Because the namespace belongs to `api`, deployment automation
-  # recreates this container whenever it replaces the API container.
-  feishu-sidecar:
-    profiles: ["feishu-sidecar"]
-    image: ${REMI_FEISHU_SIDECAR_IMAGE:-multiremi-feishu-sidecar:set-REMI_FEISHU_SIDECAR_IMAGE}
-    restart: unless-stopped
-    network_mode: service:api
-    depends_on:
-      api:
-        condition: service_started
-    # The sidecar owns personal Feishu credentials. They live in its own data
-    # volume, written by its first-run wizard — never in this file, the API env
-    # file, or Git.
-    volumes:
-      - feishu-sidecar-data:/data
-      - feishu-sidecar-home:/home/personal-automation
-    shm_size: 512m
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8042/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
 
   ssh-mesh-control-plane:
     image: ${REMI_API_IMAGE:?set REMI_API_IMAGE}
@@ -114,15 +83,6 @@ services:
       retries: 12
     ports:
       - 127.0.0.1:${REMI_WEB_BIND_PORT:-13000}:3000
-
-volumes:
-  # Named so an operator can point them at the volumes an existing
-  # `personal-automation` deployment already uses. Never attach a volume that a
-  # running container still owns.
-  feishu-sidecar-data:
-    name: ${REMI_FEISHU_SIDECAR_DATA_VOLUME:-multiremi-feishu-sidecar-data}
-  feishu-sidecar-home:
-    name: ${REMI_FEISHU_SIDECAR_HOME_VOLUME:-multiremi-feishu-sidecar-home}
 
 networks:
   app:

@@ -6,9 +6,33 @@ ENV NODE_ENV=production
 ENV MULTIREMI_VERSION=$MULTIREMI_VERSION
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git gosu openssh-client passwd \
+  && apt-get install -y --no-install-recommends ca-certificates curl git gosu openssh-client passwd \
   && git --version \
   && rm -rf /var/lib/apt/lists/*
+
+# lark-cli is how the Feishu message provider reaches Feishu, so it belongs in
+# this image rather than in a separate container. The release archive is pinned
+# and checksum-verified: `@larksuite/cli` on npm is only a downloader for the
+# same GitHub asset, and going straight to the asset keeps node out of the
+# image. LARK_CLI_MINIMUM_VERSION in the provider must stay <= this version; to
+# bump, take the new digests from the release's checksums.txt.
+ARG LARK_CLI_VERSION=1.0.90
+ARG LARK_CLI_SHA256_AMD64=301db5eb6d64b295e8bd366036dd839cc6686471c68e54c2602d274de0bf032a
+ARG LARK_CLI_SHA256_ARM64=dd591e9ae956d8cf34bed23901017ab842d25534fe1579e9b9bbabed267864d7
+RUN set -eu; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) lark_arch=amd64; lark_sha="$LARK_CLI_SHA256_AMD64" ;; \
+    arm64) lark_arch=arm64; lark_sha="$LARK_CLI_SHA256_ARM64" ;; \
+    *) echo "unsupported architecture for lark-cli: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac; \
+  archive="lark-cli-${LARK_CLI_VERSION}-linux-${lark_arch}.tar.gz"; \
+  curl -fsSL --retry 3 --max-redirs 3 -o "/tmp/${archive}" \
+    "https://github.com/larksuite/cli/releases/download/v${LARK_CLI_VERSION}/${archive}"; \
+  echo "${lark_sha}  /tmp/${archive}" | sha256sum -c -; \
+  tar -xzf "/tmp/${archive}" -C /usr/local/bin lark-cli; \
+  rm -f "/tmp/${archive}"; \
+  chmod 0755 /usr/local/bin/lark-cli; \
+  lark-cli --version
 
 COPY . .
 RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts \
