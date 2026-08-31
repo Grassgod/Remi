@@ -488,6 +488,53 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_bot_menu_publish_workspace
       ON multiremi_bot_menu_publish_requests(workspace_id, created_at);
 
+    -- MUL-206: one Feishu concierge bot per workspace. workspace_id is the
+    -- primary key rather than a UNIQUE index so a second config physically
+    -- cannot exist. Secrets are stored only in the *_encrypted columns; the
+    -- *_hint columns hold a non-reversible display prefix.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_configs (
+      workspace_id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      app_secret_encrypted TEXT NOT NULL,
+      app_secret_hint TEXT,
+      verification_token_encrypted TEXT,
+      encrypt_key_encrypted TEXT,
+      domain TEXT NOT NULL DEFAULT 'feishu',
+      enabled INTEGER NOT NULL DEFAULT 0,
+      revision INTEGER NOT NULL DEFAULT 1,
+      bot_name TEXT,
+      bot_open_id TEXT,
+      last_tested_at TEXT,
+      last_test_error TEXT,
+      last_test_error_code TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      FOREIGN KEY(workspace_id) REFERENCES multiremi_workspaces(id) ON DELETE CASCADE
+    );
+
+    -- Reported state per Runtime, not per workspace: keeping a row for a
+    -- Runtime that is no longer selected is what lets the control plane see a
+    -- stale connector and refuse to hand over until it confirms it stopped.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_runtime_states (
+      workspace_id TEXT NOT NULL,
+      runtime_id TEXT NOT NULL,
+      applied_revision INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'stopped',
+      bot_name TEXT,
+      bot_open_id TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      reported_at TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, runtime_id),
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_runtime_states_workspace
+      ON multiremi_feishu_bot_runtime_states(workspace_id, state);
+
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

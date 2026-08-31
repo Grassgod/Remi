@@ -27,6 +27,10 @@ import {
   type ScmConnectionWithRepositories,
 } from "@multiremi/store/repos/scm-repo.js";
 import {
+  FeishuBotRepo,
+  type FeishuBotStatusSnapshot,
+} from "@multiremi/store/repos/feishu-bot-repo.js";
+import {
   FeishuIngestRepo,
   type CreateFeishuInboxOutcomeInput,
   type CreateFeishuInboxOutcomeResult,
@@ -361,13 +365,19 @@ import type {
   MultiremiScmSyncCursor,
   MultiremiScmSyncStream,
   CreateMultiremiFeishuSourceInput,
+  MultiremiFeishuBotConfig,
+  MultiremiFeishuBotDaemonConfig,
+  MultiremiFeishuBotDirective,
+  MultiremiFeishuBotRuntimeStatus,
   MultiremiFeishuMessage,
   MultiremiFeishuMessageOutcome,
   MultiremiFeishuSource,
   MultiremiFeishuSyncCursor,
   MultiremiFeishuSourceStatus,
   RecordScmCanonicalEventInput,
+  ReportFeishuBotRuntimeStatusInput,
   ResolveMultiremiFeishuMessageInput,
+  UpsertFeishuBotConfigInput,
   ReleaseScmSyncStreamInput,
   UpdateMultiremiFeishuSourceInput,
   UpdateScmConnectionInput,
@@ -396,6 +406,7 @@ export class MultiremiStore {
   private workspaces: WorkspacesRepo;
   private scm: ScmRepo;
   private feishuIngest: FeishuIngestRepo;
+  private feishuBot: FeishuBotRepo;
   private usage: UsageRepo;
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
@@ -447,6 +458,7 @@ export class MultiremiStore {
     this.workspaces = new WorkspacesRepo(this.ctx);
     this.scm = new ScmRepo(this.ctx);
     this.feishuIngest = new FeishuIngestRepo(this.ctx);
+    this.feishuBot = new FeishuBotRepo(this.ctx);
     this.usage = new UsageRepo(this.ctx);
     this.squads = new SquadsRepo(this.ctx);
     this.analytics = new AnalyticsRepo(this.ctx);
@@ -1589,6 +1601,66 @@ runMigrations(this.db);
 
   deleteExpiredFeishuMessages(now?: Date): number {
     return this.feishuIngest.deleteExpiredMessages(now);
+  }
+
+  // ── Workspace Feishu concierge bot (MUL-206) ──────────────────────────────
+  // Secrets stay inside the repo: only `getFeishuBotDaemonConfig` and
+  // `revealFeishuBotSecrets` decrypt, and both are reachable solely from the
+  // daemon route and the admin-only test route.
+
+  getFeishuBotConfig(workspaceId: string): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.getConfig(workspaceId);
+  }
+
+  upsertFeishuBotConfig(workspaceId: string, input: UpsertFeishuBotConfigInput): MultiremiFeishuBotConfig {
+    return this.feishuBot.upsertConfig(workspaceId, input);
+  }
+
+  deleteFeishuBotConfig(workspaceId: string): boolean {
+    return this.feishuBot.deleteConfig(workspaceId);
+  }
+
+  setFeishuBotEnabled(workspaceId: string, enabled: boolean, actor?: string | null): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.setEnabled(workspaceId, enabled, actor);
+  }
+
+  bumpFeishuBotRevision(workspaceId: string, actor?: string | null): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.bumpRevision(workspaceId, actor);
+  }
+
+  recordFeishuBotTestResult(
+    workspaceId: string,
+    result: Parameters<FeishuBotRepo["recordTestResult"]>[1],
+  ): MultiremiFeishuBotConfig | null {
+    return this.feishuBot.recordTestResult(workspaceId, result);
+  }
+
+  revealFeishuBotSecrets(workspaceId: string): ReturnType<FeishuBotRepo["revealSecrets"]> {
+    return this.feishuBot.revealSecrets(workspaceId);
+  }
+
+  getFeishuBotDaemonConfig(workspaceId: string, runtimeId: string): MultiremiFeishuBotDaemonConfig | null {
+    return this.feishuBot.getDaemonConfig(workspaceId, runtimeId);
+  }
+
+  feishuBotDirectiveForRuntime(workspaceId: string, runtimeId: string): MultiremiFeishuBotDirective | null {
+    return this.feishuBot.directiveForRuntime(workspaceId, runtimeId);
+  }
+
+  reportFeishuBotRuntimeStatus(
+    workspaceId: string,
+    runtimeId: string,
+    input: ReportFeishuBotRuntimeStatusInput,
+  ): MultiremiFeishuBotRuntimeStatus {
+    return this.feishuBot.reportRuntimeStatus(workspaceId, runtimeId, input);
+  }
+
+  listFeishuBotRuntimeStatuses(workspaceId: string): MultiremiFeishuBotRuntimeStatus[] {
+    return this.feishuBot.listRuntimeStatuses(workspaceId);
+  }
+
+  feishuBotStatusSnapshot(workspaceId: string): FeishuBotStatusSnapshot {
+    return this.feishuBot.statusSnapshot(workspaceId);
   }
 
   listScmConnections(input: {
