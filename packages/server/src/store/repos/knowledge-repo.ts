@@ -409,9 +409,9 @@ export class KnowledgeRepo {
     const params: unknown[] = [input.workspaceId, input.scope, input.contentSha256];
     nullableEquality(conditions, params, "project_id", input.projectId);
     nullableEquality(conditions, params, "repository_id", input.repositoryId);
-    nullableEquality(conditions, params, "proposed_path", input.proposedPath);
-    nullableEquality(conditions, params, "proposed_slug", input.proposedSlug);
     if (input.allStatuses) {
+      nullableEquality(conditions, params, "proposed_path", input.proposedPath);
+      nullableEquality(conditions, params, "proposed_slug", input.proposedSlug);
       conditions.push("source_type = ?");
       params.push(input.sourceType);
     } else {

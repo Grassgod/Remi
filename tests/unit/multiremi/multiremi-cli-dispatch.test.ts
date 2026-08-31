@@ -70,6 +70,7 @@ describe("remi CLI dispatcher", () => {
       "token",
       "project",
       "repo",
+      "knowledge",
       "memory",
       "wiki",
       "comment",

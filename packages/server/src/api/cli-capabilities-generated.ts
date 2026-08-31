@@ -975,6 +975,84 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "knowledge.submit": {
+      "command": "remi knowledge submit",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submit",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.submissions": {
+      "command": "remi knowledge submissions",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submissions",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.inspect": {
+      "command": "remi knowledge inspect",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.inspect",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.runs": {
+      "command": "remi knowledge runs",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.runs",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.run.show": {
+      "command": "remi knowledge run show",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.run.show",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.migrate-legacy": {
+      "command": "remi knowledge migrate-legacy",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.migrate-legacy",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "memory.list": {
       "command": "remi memory list",
       "auth": [
@@ -1164,6 +1242,30 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "wiki.revisions",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.publish": {
+      "command": "remi memory publish",
+      "auth": [
+        "task"
+      ],
+      "capability": "memory.publish",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.publish": {
+      "command": "remi wiki publish",
+      "auth": [
+        "task"
+      ],
+      "capability": "wiki.publish",
       "output": [
         "table",
         "json",

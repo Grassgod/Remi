@@ -59,6 +59,7 @@ import {
   assertProjectKnowledgeTarget,
   createFormalWriteRun,
   createProjectMutationSubmission,
+  linkSeededProjectSchema,
   knowledgePolicyErrorResponse,
   rawSubmissionResponse,
   resolveKnowledgeWriteActor,
@@ -493,6 +494,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
         return c.json(rawSubmissionResponse(submission), 202);
       }
       const scope = input.kind === "memory" ? "memory" : "project_wiki";
+      const schemaExisted = Boolean(store.getProjectDocByRef(project.id, "_schema"));
       const run = createFormalWriteRun({
         store, actor, workspaceId: project.workspaceId, projectId: project.id, scope,
       });
@@ -506,6 +508,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
         action: "create",
         contentSha256: written.contentSha256 ?? sha256Text(written.body),
       });
+      linkSeededProjectSchema({ store, projectId: project.id, runId: run.id, schemaExisted });
       store.completeKnowledgeCompilationRun(run.id, "published", `created ${written.id} v${written.version}`);
       const doc = { ...written, compilationRunId: run.id };
       const response = projectDocCompatibilityResponse(doc);

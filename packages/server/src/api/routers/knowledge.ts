@@ -18,14 +18,17 @@ import {
   assertProjectKnowledgeTarget,
   assertRepositoryKnowledgeTarget,
   KnowledgeWritePolicyError,
+  linkSeededProjectSchema,
   knowledgePolicyErrorResponse,
   resolveKnowledgeWriteActor,
+  resolveTaskSourceRevision,
 } from "../helpers/knowledge.js";
 import { currentAccessToken } from "../wire/index.js";
 import { listWorkspaceRepositories } from "../helpers/repositories.js";
-import { normalizeProjectWikiPath } from "@multiremi/store/repos/projects-repo.js";
+import { normalizeProjectWikiPath, projectDocSlug } from "@multiremi/store/repos/projects-repo.js";
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
+import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 
 interface KnowledgeSubmitBody {
   workspace_id?: string;
@@ -200,6 +203,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       const actor = requireAtlasActor(c, store);
       assertProjectKnowledgeTarget(actor, project.id);
       const outputs = publishOutputs(body);
+      const schemaExisted = Boolean(store.getProjectDocByRef(project.id, "_schema"));
       const submissions = requirePublishSubmissions(store, body.submission_ids, {
         workspaceId: project.workspaceId,
         projectId: project.id,
@@ -255,6 +259,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
           contentSha256: doc.contentSha256 ?? sha256Text(doc.body),
         });
       }
+      linkSeededProjectSchema({ store, projectId: project.id, runId, schemaExisted });
       finalizePublishSources(store, submissions, outputs);
       const run = store.completeKnowledgeCompilationRun(runId, "published", `published ${outputs.length} output(s)`);
       return c.json({ run: runResponse(run), outputs: store.listKnowledgeRunOutputs(runId) });
@@ -298,6 +303,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       for (const submission of submissions) store.addKnowledgeRunSubmissionSource(runId, submission.id);
       const batchRefs = new Set(outputs.flatMap(repositoryOutputRefs));
       for (const output of outputs) await assertRepositoryLinks(repositoryWiki, workspaceId, repositoryId, String(output.body ?? ""), batchRefs);
+      const sourceRevision = compiledSourceRevision(actor.sourceRevision, submissions);
       for (const output of outputs) {
         const action = normalizeAction(output.action);
         if (action === "reject" || action === "noop") {
@@ -310,8 +316,8 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
           source_task_id: actor.task!.id,
           sourceIssueId: actor.issue?.id ?? null,
           source_issue_id: actor.issue?.id ?? null,
-          sourceRevision: actor.sourceRevision,
-          source_revision: actor.sourceRevision,
+          sourceRevision,
+          source_revision: sourceRevision,
           authorType: "agent" as const,
           author_type: "agent" as const,
           authorId: actor.agent!.id,
@@ -510,14 +516,44 @@ function requirePublishSubmissions(
       && submission.sourceRevision) {
       requireCommitSha(submission.sourceRevision, "source_revision");
     }
-    if (submission.sourceTaskId && !store.getTask(submission.sourceTaskId)) {
+    const sourceTask = submission.sourceTaskId ? store.getTask(submission.sourceTaskId) : null;
+    if (submission.sourceTaskId && !sourceTask) {
       throw new KnowledgeWritePolicyError(`source task not found: ${submission.sourceTaskId}`, 409);
     }
-    if (submission.sourceIssueId && !store.getIssue(submission.sourceIssueId)) {
+    const sourceIssue = submission.sourceIssueId ? store.getIssue(submission.sourceIssueId) : null;
+    if (submission.sourceIssueId && !sourceIssue) {
       throw new KnowledgeWritePolicyError(`source issue not found: ${submission.sourceIssueId}`, 409);
+    }
+    if (sourceTask && sourceTask.workspaceId !== target.workspaceId) {
+      throw new KnowledgeWritePolicyError(`source task workspace mismatch: ${sourceTask.id}`, 409);
+    }
+    if (sourceTask?.issueId && submission.sourceIssueId && sourceTask.issueId !== submission.sourceIssueId) {
+      throw new KnowledgeWritePolicyError(`source task and issue mismatch: ${sourceTask.id}`, 409);
+    }
+    if (target.issueId && sourceTask?.issueId && sourceTask.issueId !== target.issueId) {
+      throw new KnowledgeWritePolicyError(`source task issue mismatch: ${sourceTask.id}`, 409);
+    }
+    if (target.projectId && sourceIssue && sourceIssue.projectId !== target.projectId) {
+      throw new KnowledgeWritePolicyError(`source issue project mismatch: ${sourceIssue.id}`, 409);
+    }
+    if (target.repositoryId && sourceTask) {
+      const task = store.getTaskWithAgent(sourceTask.id);
+      if (!task || !resolveTaskRepositoryWikiRepositories(store, task).some((repository) => repository.id === target.repositoryId)) {
+        throw new KnowledgeWritePolicyError(`source task repository mismatch: ${sourceTask.id}`, 409);
+      }
+    }
+    const sourceTaskRevision = sourceTask ? resolveTaskSourceRevision(store, sourceTask) : null;
+    if (submission.sourceRevision && sourceTaskRevision && submission.sourceRevision !== sourceTaskRevision) {
+      throw new KnowledgeWritePolicyError(`source revision mismatch: ${submission.id}`, 409);
     }
     return submission;
   });
+}
+
+function compiledSourceRevision(actorRevision: string | null, submissions: MultiremiKnowledgeSubmission[]): string | null {
+  if (actorRevision) return actorRevision;
+  const revisions = [...new Set(submissions.map((submission) => clean(submission.sourceRevision)).filter((value): value is string => Boolean(value)))];
+  return revisions.length === 1 ? revisions[0]! : null;
 }
 
 function publishOutputs(body: PublishBody): PublishOutputBody[] {
@@ -618,7 +654,9 @@ function finalizePublishSources(
 }
 
 function projectOutputRefs(output: PublishOutputBody): string[] {
-  const values = [clean(output.slug), clean(output.path)?.replace(/\.md$/i, "")];
+  const title = clean(output.title);
+  const generatedSlug = title ? projectDocSlug(clean(output.slug), title, "") : null;
+  const values = [clean(output.slug), generatedSlug, clean(output.path)?.replace(/\.md$/i, "")];
   return values.filter((value): value is string => Boolean(value));
 }
 

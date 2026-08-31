@@ -123,7 +123,7 @@ describe("Multiremi API — authentication and token scoping", () => {
     });
   });
 
-  it("scopes task-token Repository Wiki CRUD to its workspace rather than its current project", async () => {
+  it("routes task-token Repository Wiki writes to Raw and enforces repository scope", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.updateWorkspace(workspace.id, {
@@ -160,8 +160,20 @@ describe("Multiremi API — authentication and token scoping", () => {
       headers: jsonAuth,
       body: JSON.stringify({ path: "overview.md", title: "Overview", body: "Alpha facts" }),
     });
-    expect(createdResponse.status).toBe(201);
-    const created = (await createdResponse.json() as any).doc;
+    expect(createdResponse.status).toBe(202);
+    expect(await createdResponse.json()).toEqual(expect.objectContaining({
+      submission_id: expect.stringMatching(/^ksub_/),
+      status: "pending",
+    }));
+    expect((await (await app.request(root, { headers: auth })).json() as any).docs).toEqual([]);
+
+    const humanCreatedResponse = await app.request(root, {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "published.md", title: "Published", body: "v1" }),
+    });
+    expect(humanCreatedResponse.status).toBe(201);
+    const created = (await humanCreatedResponse.json() as any).doc;
     expect((await app.request(`${root}/${created.id}`, { headers: auth })).status).toBe(200);
 
     const updated = await app.request(`${root}/${created.id}`, {
@@ -169,8 +181,9 @@ describe("Multiremi API — authentication and token scoping", () => {
       headers: jsonAuth,
       body: JSON.stringify({ body: "Alpha facts v2", expected_version: 1 }),
     });
-    expect(updated.status).toBe(200);
-    expect((await updated.json() as any).doc.version).toBe(2);
+    expect(updated.status).toBe(202);
+    expect((await updated.json() as any).status).toBe("pending");
+    expect(store.getRepositoryWikiDocByRef(workspace.id, "repo_alpha", created.id)?.version).toBe(1);
     expect((await app.request(`${root}/${created.id}/revisions`, { headers: auth })).status).toBe(200);
 
     const foreignRoot = `/api/workspaces/${workspace.id}/repos/repo_beta/wiki`;
@@ -180,16 +193,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       headers: jsonAuth,
       body: JSON.stringify({ path: "secret.md", title: "Secret", body: "v1" }),
     });
-    expect(betaCreated.status).toBe(201);
-    const betaDoc = (await betaCreated.json() as any).doc;
-    expect((await app.request(`${foreignRoot}/${betaDoc.id}`, { headers: auth })).status).toBe(200);
-    expect((await app.request(`${foreignRoot}/${betaDoc.id}`, {
-      method: "PUT",
-      headers: jsonAuth,
-      body: JSON.stringify({ body: "v2", expected_version: 1 }),
-    })).status).toBe(200);
-    expect((await app.request(`${foreignRoot}/${betaDoc.id}/revisions`, { headers: auth })).status).toBe(200);
-    expect((await app.request(`${foreignRoot}/${betaDoc.id}`, { method: "DELETE", headers: auth })).status).toBe(200);
+    expect(betaCreated.status).toBe(403);
 
     const build = await app.request(`${root}/build`, { method: "POST", headers: auth });
     expect(build.status).toBe(409);
@@ -201,7 +205,8 @@ describe("Multiremi API — authentication and token scoping", () => {
     expect(daemon.status).toBe(403);
     expect(await daemon.json()).toEqual({ error: "forbidden for daemon token" });
 
-    expect((await app.request(`${root}/${created.id}`, { method: "DELETE", headers: auth })).status).toBe(200);
+    expect((await app.request(`${root}/${created.id}`, { method: "DELETE", headers: auth })).status).toBe(202);
+    expect(store.getRepositoryWikiDocByRef(workspace.id, "repo_alpha", created.id)).not.toBeNull();
   });
 
   // Native browser loads (<img src="/api/attachments/…/content">) cannot set

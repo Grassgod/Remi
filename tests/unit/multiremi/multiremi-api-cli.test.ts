@@ -143,7 +143,11 @@ describe("Multiremi API - CLI context and capabilities", () => {
       headers: { ...taskHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({ kind: "memory", title: "Task memory", body: "Current project only" }),
     });
-    expect(created.status).toBe(201);
+    expect(created.status).toBe(202);
+    expect(await created.json()).toEqual(expect.objectContaining({
+      submission_id: expect.stringMatching(/^ksub_/),
+      status: "pending",
+    }));
 
     const sibling = fixture.store.createProject({ title: "Sibling", workspaceId: "local" });
     const siblingRead = await fixture.app.request(`/api/projects/${sibling.id}`, { headers: taskHeaders });

@@ -17,7 +17,9 @@ import type {
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { currentTaskAccessToken } from "../wire/index.js";
 import { agentHasKnowledgePublishCapability } from "@multiremi/knowledge/capability.js";
+import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
+import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 
 export interface KnowledgeWriteActor {
   kind: "member" | "agent";
@@ -63,8 +65,15 @@ export function resolveKnowledgeWriteActor(c: Context, store: MultiremiStore): K
     issue: task.issueId ? store.getIssue(task.issueId) : null,
     agent,
     canPublish: agentHasKnowledgePublishCapability(store, agent),
-    sourceRevision: task.scmRevision ?? null,
+    sourceRevision: resolveTaskSourceRevision(store, task),
   };
+}
+
+export function resolveTaskSourceRevision(store: MultiremiStore, task: MultiremiTask): string | null {
+  if (task.scmRevision) return task.scmRevision;
+  if (!task.autopilotRunId) return null;
+  const run = store.getAutopilotRun(task.autopilotRunId);
+  return run ? autopilotRunSourceRevision(run) : null;
 }
 
 export function assertProjectKnowledgeTarget(actor: KnowledgeWriteActor, projectId: string): void {
@@ -178,6 +187,25 @@ export function createFormalWriteRun(input: {
     status: "validating",
     dedupeKey: input.dedupeKey,
   }).run;
+}
+
+export function linkSeededProjectSchema(input: {
+  store: MultiremiStore;
+  projectId: string;
+  runId: string;
+  schemaExisted: boolean;
+}): void {
+  if (input.schemaExisted) return;
+  const schema = input.store.getProjectDocByRef(input.projectId, "_schema");
+  if (!schema || schema.compilationRunId) return;
+  input.store.linkKnowledgeFormalVersion({
+    runId: input.runId,
+    artifactScope: "project_wiki",
+    docId: schema.id,
+    version: schema.version,
+    action: "create",
+    contentSha256: schema.contentSha256 ?? sha256Text(schema.body),
+  });
 }
 
 export function rawSubmissionResponse(result: {
