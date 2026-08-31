@@ -17,7 +17,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { AvatarGroup, AvatarGroupCount } from "@multiremi/ui/components/ui/avatar";
@@ -26,11 +25,7 @@ import { toast } from "sonner";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT, useTimeAgo } from "../../i18n";
 import { getSessionDisplayName } from "../utils/session-display";
-import {
-  NewSessionButton,
-  SessionDelegateTaskDialog,
-  SessionPublishResultDialog,
-} from "./issue-session-bar";
+import { NewSessionButton } from "./issue-session-bar";
 
 interface IssueSessionListProps {
   issueId: string;
@@ -123,8 +118,6 @@ function SessionRow({
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const [participantsOpen, setParticipantsOpen] = useState(false);
-  const [delegateOpen, setDelegateOpen] = useState(false);
-  const [publishOpen, setPublishOpen] = useState(false);
 
   return (
     <div
@@ -175,37 +168,17 @@ function SessionRow({
           <DropdownMenuItem onClick={() => setParticipantsOpen(true)}>
             {t(($) => $.detail.session_participants)}
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => setPublishOpen(true)}>
-            {t(($) => $.detail.publish_result)}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setDelegateOpen(true)}>
-            {t(($) => $.detail.delegate_task)}
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Dialogs live outside the menu: the menu content unmounts on close,
-          which would take an open dialog with it. */}
+      {/* The dialog lives outside the menu: the menu content unmounts on
+          close, which would take an open dialog with it. */}
       <SessionParticipantsDialog
         issueId={issueId}
         session={session}
         agents={agents}
         open={participantsOpen}
         onOpenChange={setParticipantsOpen}
-      />
-      <SessionPublishResultDialog
-        issueId={issueId}
-        issueSessionId={session.id}
-        open={publishOpen}
-        onOpenChange={setPublishOpen}
-      />
-      <SessionDelegateTaskDialog
-        issueId={issueId}
-        issueSessionId={session.id}
-        agents={agents}
-        open={delegateOpen}
-        onOpenChange={setDelegateOpen}
       />
     </div>
   );

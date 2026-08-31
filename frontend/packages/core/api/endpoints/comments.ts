@@ -17,21 +17,17 @@ import {
   CommentsListSchema,
   EMPTY_ISSUE_SESSION,
   EMPTY_ISSUE_SESSIONS,
-  EMPTY_ISSUE_SESSION_TASK,
   EMPTY_ISSUE_SESSION_TASKS,
   EMPTY_SESSION_EVENTS,
   EMPTY_SESSION_PARTICIPANTS,
-  EMPTY_SESSION_RESULT,
   EMPTY_SESSION_RESULTS,
   IssueSessionListSchema,
   IssueSessionSchema,
   IssueSessionTaskListSchema,
-  IssueSessionTaskSchema,
   SessionEventListSchema,
   SessionParticipantListSchema,
   SessionParticipantSchema,
   SessionResultListSchema,
-  SessionResultSchema,
 } from "../schemas/comments";
 import { EMPTY_TIMELINE_ENTRIES, TimelineEntriesSchema } from "../schemas/timeline";
 
@@ -161,40 +157,10 @@ export class CommentsEndpoints {
     });
   }
 
-  async createSessionTask(
-    issueId: string,
-    sessionId: string,
-    agentId: string,
-    prompt: string,
-  ): Promise<IssueSessionTask> {
-    const raw = await this.http.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/tasks`, {
-      method: "POST",
-      body: JSON.stringify({ agent_id: agentId, prompt }),
-    });
-    return parseWithFallback(raw, IssueSessionTaskSchema, EMPTY_ISSUE_SESSION_TASK, {
-      endpoint: "POST /api/issues/:id/sessions/:sessionId/tasks",
-    });
-  }
-
   async listIssueSessionResults(issueId: string): Promise<SessionResult[]> {
     const raw = await this.http.fetch<unknown>(`/api/issues/${issueId}/session-results`);
     return parseWithFallback(raw, SessionResultListSchema, EMPTY_SESSION_RESULTS, {
       endpoint: "GET /api/issues/:id/session-results",
-    });
-  }
-
-  async publishSessionResult(
-    issueId: string,
-    sessionId: string,
-    title: string,
-    body: string,
-  ): Promise<SessionResult> {
-    const raw = await this.http.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/results`, {
-      method: "POST",
-      body: JSON.stringify({ title, body }),
-    });
-    return parseWithFallback(raw, SessionResultSchema, EMPTY_SESSION_RESULT, {
-      endpoint: "POST /api/issues/:id/sessions/:sessionId/results",
     });
   }
 
