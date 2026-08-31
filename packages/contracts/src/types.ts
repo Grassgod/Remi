@@ -2514,6 +2514,17 @@ export interface MultiremiProjectResource {
   createdBy: string | null;
 }
 
+export interface MultiremiProjectDevice {
+  projectId: string;
+  workspaceId: string;
+  daemonId: string;
+  displayName: string;
+  online: boolean;
+  providers: Array<MultiremiAgentProvider | "any">;
+  createdAt: string;
+  createdBy: string | null;
+}
+
 /** Daemon-only projection used by the co-resident bot's persistent project switcher. */
 export interface MultiremiDaemonBotProject {
   id: string;
@@ -2760,6 +2771,20 @@ export interface CreateProjectResourceInput {
   label?: string | null;
   position?: number | null;
   createdBy?: string | null;
+}
+
+export interface CreateProjectDeviceInput {
+  daemonId?: string;
+  daemon_id?: string;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface ReplaceProjectDevicesInput {
+  daemonIds?: string[];
+  daemon_ids?: string[];
+  createdBy?: string | null;
+  created_by?: string | null;
 }
 
 export interface UpdateProjectResourceInput {

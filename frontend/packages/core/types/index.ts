@@ -156,6 +156,9 @@ export type {
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
+  ProjectDevice,
+  ListProjectDevicesResponse,
+  ProjectDeviceMutationResponse,
 } from "./project";
 export type {
   ProjectDoc,

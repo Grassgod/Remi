@@ -2,9 +2,11 @@ import type {
   CreateProjectRequest,
   CreateProjectResourceRequest,
   ListProjectResourcesResponse,
+  ListProjectDevicesResponse,
   ListProjectsResponse,
   Project,
   ProjectResource,
+  ProjectDeviceMutationResponse,
   UpdateProjectRequest,
   UpdateProjectResourceRequest,
 } from "../../types";
@@ -15,6 +17,10 @@ import {
   EMPTY_PROJECT_LIST,
   ListProjectsResponseSchema,
   ProjectSchema,
+  EMPTY_PROJECT_DEVICE_LIST,
+  EMPTY_PROJECT_DEVICE_MUTATION,
+  ListProjectDevicesResponseSchema,
+  ProjectDeviceMutationResponseSchema,
 } from "../schemas/projects";
 
 export class ProjectsEndpoints {
@@ -105,5 +111,56 @@ export class ProjectsEndpoints {
     await this.http.fetch(`/api/projects/${projectId}/resources/${resourceId}`, {
       method: "DELETE",
     });
+  }
+
+  async listProjectDevices(projectId: string): Promise<ListProjectDevicesResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/devices`,
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectDevicesResponseSchema,
+      EMPTY_PROJECT_DEVICE_LIST,
+      { endpoint: "GET /api/projects/:id/devices" },
+    );
+  }
+
+  async createProjectDevice(
+    projectId: string,
+    daemonId: string,
+  ): Promise<ProjectDeviceMutationResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/devices`,
+      { method: "POST", body: JSON.stringify({ daemon_id: daemonId }) },
+    );
+    return parseWithFallback(
+      raw,
+      ProjectDeviceMutationResponseSchema,
+      EMPTY_PROJECT_DEVICE_MUTATION,
+      { endpoint: "POST /api/projects/:id/devices" },
+    );
+  }
+
+  async replaceProjectDevices(
+    projectId: string,
+    daemonIds: string[],
+  ): Promise<ListProjectDevicesResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/devices`,
+      { method: "PUT", body: JSON.stringify({ daemon_ids: daemonIds }) },
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectDevicesResponseSchema,
+      EMPTY_PROJECT_DEVICE_LIST,
+      { endpoint: "PUT /api/projects/:id/devices" },
+    );
+  }
+
+  async deleteProjectDevice(projectId: string, daemonId: string): Promise<void> {
+    await this.http.fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/devices/${encodeURIComponent(daemonId)}`,
+      { method: "DELETE" },
+    );
   }
 }

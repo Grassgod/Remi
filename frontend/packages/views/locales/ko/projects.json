@@ -92,6 +92,21 @@
     "issues_error_hint": "이 프로젝트의 이슈를 가져오는 중 문제가 발생했습니다.",
     "issues_error_retry": "다시 시도"
   },
+  "run_location": {
+    "title": "실행 위치",
+    "any_device": "사용 가능한 모든 기기",
+    "restrict": "실행 위치 제한",
+    "edit": "편집",
+    "loading": "기기 불러오는 중...",
+    "search_placeholder": "기기 검색...",
+    "no_devices": "이 워크스페이스에 사용 가능한 기기가 없습니다.",
+    "help": "기기를 선택하면 이 프로젝트의 작업은 선택한 기기에서만 실행됩니다.",
+    "all_offline": "허용된 기기가 모두 오프라인입니다. 새 작업은 기기가 다시 연결될 때까지 대기합니다.",
+    "save": "저장",
+    "cancel": "취소",
+    "toast_saved": "실행 위치가 업데이트되었습니다",
+    "toast_failed": "실행 위치를 업데이트하지 못했습니다"
+  },
   "instructions": {
     "title": "프로젝트 지침",
     "summary": "워크스페이스 Bootstrap 및 Delta Prompt 뒤에 추가되는 프로젝트 지침입니다.",

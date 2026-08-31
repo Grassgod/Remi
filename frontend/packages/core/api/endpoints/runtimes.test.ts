@@ -73,6 +73,31 @@ describe("RuntimesEndpoints runtime response schema", () => {
       display_name: "Workstation",
     });
   });
+
+  it("degrades malformed daemon routing metadata without hiding the device", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      workspace_id: "ws-1",
+      daemon_id: "daemon-1",
+      display_name: "Personal Mac",
+      display_name_customized: false,
+      dedicated: "yes",
+      updated_by: null,
+      updated_at: 42,
+      projects: null,
+    })));
+    const endpoints = new RuntimesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.getDaemonRouting("ws-1", "daemon-1")).resolves.toEqual({
+      workspace_id: "ws-1",
+      daemon_id: "daemon-1",
+      display_name: "Personal Mac",
+      display_name_customized: false,
+      dedicated: false,
+      updated_by: null,
+      updated_at: null,
+      projects: [],
+    });
+  });
 });
 
 describe("RuntimesEndpoints daemon inventory", () => {

@@ -182,6 +182,12 @@ vi.mock("./project-resources-section", () => ({
   ),
 }));
 
+vi.mock("./project-run-location-section", () => ({
+  ProjectRunLocationSection: ({ editable = true }: { editable?: boolean }) => (
+    <div data-testid="run-location" data-editable={String(editable)} />
+  ),
+}));
+
 vi.mock("./project-instructions-section", () => ({
   ProjectInstructionsSection: ({
     onSave,

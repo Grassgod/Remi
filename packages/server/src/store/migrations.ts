@@ -8,6 +8,7 @@ import {
   resolveSessionArchiveUploadStallMs,
 } from "@multiremi/session-archive/retry-policy.js";
 import { createLogger } from "@shared/logger.js";
+import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -23,6 +24,7 @@ const AUTOPILOT_ISSUE_PROPOSAL_POLICY_MIGRATION = "20260826_autopilot_issue_prop
 const DAEMON_PROFILES_MIGRATION = "20260827_daemon_profiles";
 const MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION = "20260827_markdown_attachment_ownership";
 const AGENT_ROLE_MIGRATION = "20260827_agent_roles";
+const PROJECT_DEVICE_DAEMON_CANONICALIZATION_MIGRATION = "20260831_project_device_daemon_canonicalization";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -1082,6 +1084,19 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_project_resources_project ON multiremi_project_resources(project_id, position);
 
+    CREATE TABLE IF NOT EXISTS multiremi_project_devices (
+      project_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      PRIMARY KEY(project_id, daemon_id),
+      FOREIGN KEY(project_id) REFERENCES multiremi_projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_project_devices_daemon
+      ON multiremi_project_devices(workspace_id, daemon_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_project_docs (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -2098,6 +2113,10 @@ export function runMigrations(db: SqlDatabase): void {
   runMigrationOnce(db, DAEMON_PROFILES_MIGRATION, () => {
     createDaemonProfilesAndBackfill(db);
   });
+  addColumnIfMissing(db, "multiremi_daemon_profiles", "dedicated INTEGER NOT NULL DEFAULT 0");
+  runMigrationOnce(db, PROJECT_DEVICE_DAEMON_CANONICALIZATION_MIGRATION, () => {
+    backfillCanonicalDaemonRouting(db);
+  });
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_generation INTEGER");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_ack_at TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "drain_reported_active_tasks INTEGER");
@@ -2742,6 +2761,55 @@ function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): voi
   })();
 }
 
+function backfillCanonicalDaemonRouting(db: SqlDatabase): void {
+  const rows = db.query(
+    `SELECT DISTINCT COALESCE(workspace_id, 'local') AS workspace_id,
+            legacy_daemon_id, daemon_id, metadata
+     FROM multiremi_runtimes
+     WHERE daemon_id IS NOT NULL AND daemon_id != ''
+       AND (
+         (legacy_daemon_id IS NOT NULL AND legacy_daemon_id != '')
+         OR metadata LIKE '%legacy_runtime_merges%'
+       )`,
+  ).all() as Array<{
+    workspace_id: string;
+    legacy_daemon_id: string | null;
+    daemon_id: string;
+    metadata: string | null;
+  }>;
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const legacyDaemonIds = new Set<string>();
+    if (row.legacy_daemon_id?.trim()) legacyDaemonIds.add(row.legacy_daemon_id.trim());
+    try {
+      const metadata = JSON.parse(row.metadata ?? "{}");
+      const merges = metadata && typeof metadata === "object"
+        ? (metadata as Record<string, unknown>).legacy_runtime_merges
+        : null;
+      if (Array.isArray(merges)) {
+        for (const merge of merges) {
+          if (!merge || typeof merge !== "object") continue;
+          const legacyDaemonId = (merge as Record<string, unknown>).legacy_daemon_id;
+          if (typeof legacyDaemonId === "string" && legacyDaemonId.trim()) {
+            legacyDaemonIds.add(legacyDaemonId.trim());
+          }
+        }
+      }
+    } catch {
+      // Runtime metadata is best-effort; the dedicated legacy column still migrates.
+    }
+    for (const legacyDaemonId of legacyDaemonIds) {
+      canonicalizeDaemonRoutingWithinTransaction(
+        db,
+        String(row.workspace_id ?? "local"),
+        legacyDaemonId,
+        String(row.daemon_id),
+        now,
+      );
+    }
+  }
+}
+
 function createDaemonProfilesAndBackfill(db: SqlDatabase): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS multiremi_daemon_profiles (
@@ -2749,6 +2817,7 @@ function createDaemonProfilesAndBackfill(db: SqlDatabase): void {
       daemon_id TEXT NOT NULL,
       display_name TEXT NOT NULL,
       display_name_customized INTEGER NOT NULL DEFAULT 0,
+      dedicated INTEGER NOT NULL DEFAULT 0,
       updated_by TEXT,
       updated_at TEXT NOT NULL,
       PRIMARY KEY(workspace_id, daemon_id)

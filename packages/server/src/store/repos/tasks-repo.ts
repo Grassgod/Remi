@@ -92,6 +92,32 @@ const TASK_PROMPT_MAX_BYTES = 2 * 1024 * 1024;
 const DELEGATION_RETURN_BODY_MAX_LENGTH = 16_000;
 const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
 
+const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = `(
+  (
+    project_issue.project_id IS NULL
+    OR NOT EXISTS (
+      SELECT 1 FROM multiremi_project_devices project_device
+      WHERE project_device.project_id = project_issue.project_id
+    )
+    OR EXISTS (
+      SELECT 1 FROM multiremi_project_devices project_device
+      WHERE project_device.project_id = project_issue.project_id
+        AND project_device.daemon_id = ?
+    )
+  )
+  AND (
+    ? = 0
+    OR (
+      project_issue.project_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM multiremi_project_devices project_device
+        WHERE project_device.project_id = project_issue.project_id
+          AND project_device.daemon_id = ?
+      )
+    )
+  )
+)`;
+
 interface DelegationWakeupInput {
   sourceTaskId: string;
   requiredEventSeq: number;
@@ -1045,6 +1071,45 @@ export class TasksRepo {
     return true;
   }
 
+  private runtimeDeviceRoutingContext(runtime: MultiremiRuntime): {
+    daemonId: string;
+    dedicated: boolean;
+    params: [string, number, string];
+  } {
+    const daemonId = runtime.daemonId?.trim() ?? "";
+    const profile = daemonId
+      ? this.ctx.db.query(
+        `SELECT dedicated FROM multiremi_daemon_profiles
+         WHERE workspace_id = ? AND daemon_id = ?`,
+      ).get(runtime.workspaceId ?? "local", daemonId) as { dedicated?: unknown } | null
+      : null;
+    const dedicated = Number(profile?.dedicated ?? 0) === 1;
+    return { daemonId, dedicated, params: [daemonId, dedicated ? 1 : 0, daemonId] };
+  }
+
+  private runtimePassesProjectDeviceRouting(runtime: MultiremiRuntime, taskId: string): boolean {
+    const routing = this.runtimeDeviceRoutingContext(runtime);
+    const row = this.ctx.db.query(
+      `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible
+       FROM multiremi_tasks t
+       LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
+       WHERE t.id = ?`,
+    ).get(...routing.params, taskId) as { eligible?: unknown } | null;
+    return Number(row?.eligible ?? 0) === 1;
+  }
+
+  private runtimeMeetsTaskClaimEligibility(
+    runtime: MultiremiRuntime,
+    task: MultiremiTaskWithAgent,
+  ): boolean {
+    return task.agent != null
+      && !task.agent.archivedAt
+      && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
+      && this.runtimeHasReadyTaskPlugins(runtime, task)
+      && (!task.issueId || runtimeSupportsIssueWorkspaces(runtime))
+      && this.runtimePassesProjectDeviceRouting(runtime, task.id);
+  }
+
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string): MultiremiTaskWithAgent | null {
     const cutoff = new Date(Date.now() - CLAIM_RESPONSE_RECOVERY_MS).toISOString();
     const now = nowIso();
@@ -1074,12 +1139,9 @@ export class TasksRepo {
     // enforces — the agent must still exist, be unarchived, and be runnable by
     // this runtime. If not, don't return it here.
     const runtime = this.ctx.runtimes().getRuntime(runtimeId);
-    const eligible = task?.agent != null
-      && !task.agent.archivedAt
+    const eligible = task != null
       && runtime != null
-      && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
-      && this.runtimeHasReadyTaskPlugins(runtime, task)
-      && (!task.issueId || runtimeSupportsIssueWorkspaces(runtime));
+      && this.runtimeMeetsTaskClaimEligibility(runtime, task);
     if (task && !eligible) {
       const now = nowIso();
       const repool = () =>
@@ -1119,6 +1181,7 @@ export class TasksRepo {
 
   private claimNextTaskForRuntime(runtime: MultiremiRuntime): MultiremiTaskWithAgent | null {
     const now = nowIso();
+    const deviceRouting = this.runtimeDeviceRoutingContext(runtime);
     // Always constrain by workspace, COALESCE(...,'local') so a runtime with
     // NULL workspace only claims local-workspace tasks instead of every
     // workspace's (the old `runtime.workspaceId ? ... : ""` dropped the filter
@@ -1137,6 +1200,7 @@ export class TasksRepo {
       ...daemonAliases,
       ...daemonAliases,
       ...daemonAliases,
+      ...deviceRouting.params,
       runtime.id,
       runtime.id,
       runtime.provider,
@@ -1162,6 +1226,7 @@ export class TasksRepo {
          SELECT t.id
          FROM multiremi_tasks t
          JOIN multiremi_agents a ON a.id = t.agent_id
+         LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
          WHERE t.status = 'queued'
            AND a.archived_at IS NULL
            AND a.workspace_id = t.workspace_id
@@ -1193,6 +1258,7 @@ export class TasksRepo {
                  )
              )
            )
+           AND ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL}
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)

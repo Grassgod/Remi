@@ -46,6 +46,8 @@ export const runtimeKeys = {
     ["runtimes", "daemons", "inventory", wsId] as const,
   daemonRetirementPlan: (wsId: string, daemonId: string) =>
     ["runtimes", wsId, "daemons", daemonId, "retirement-plan"] as const,
+  daemonRouting: (wsId: string, daemonId: string) =>
+    ["runtimes", wsId, "daemons", daemonId, "routing"] as const,
   sshMesh: (wsId: string) =>
     ["runtimes", wsId, "ssh-mesh"] as const,
   provisions: (wsId: string) =>
@@ -67,6 +69,14 @@ export function daemonRetirementPlanOptions(wsId: string, daemonId: string) {
     queryKey: runtimeKeys.daemonRetirementPlan(wsId, daemonId),
     queryFn: () => api.getDaemonRetirementPlan(wsId, daemonId),
     staleTime: 0,
+  });
+}
+
+export function daemonRoutingOptions(wsId: string, daemonId: string) {
+  return queryOptions({
+    queryKey: runtimeKeys.daemonRouting(wsId, daemonId),
+    queryFn: () => api.getDaemonRouting(wsId, daemonId),
+    staleTime: 10_000,
   });
 }
 

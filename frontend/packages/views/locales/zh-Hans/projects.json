@@ -92,6 +92,21 @@
     "issues_error_hint": "获取该项目的 issue 时出错。",
     "issues_error_retry": "重试"
   },
+  "run_location": {
+    "title": "运行位置",
+    "any_device": "任意可用设备",
+    "restrict": "限制运行位置",
+    "edit": "编辑",
+    "loading": "正在加载设备...",
+    "search_placeholder": "搜索设备...",
+    "no_devices": "当前工作区没有可用设备。",
+    "help": "选择设备后，此项目的任务只会在这些设备上运行。",
+    "all_offline": "允许的设备目前全部离线，新任务会等待其中一台重新连接。",
+    "save": "保存",
+    "cancel": "取消",
+    "toast_saved": "运行位置已更新",
+    "toast_failed": "更新运行位置失败"
+  },
   "instructions": {
     "title": "项目指令",
     "summary": "追加到工作区 Bootstrap 与 Delta Prompt 后的项目级指令。",

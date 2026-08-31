@@ -6,6 +6,7 @@ import type {
 } from "../../types";
 import type {
   DaemonProfileResponse,
+  DaemonRoutingResponse,
   DaemonInventoryResponse,
   DaemonRetirementPlanResponse,
   RetireDaemonResponse,
@@ -46,6 +47,7 @@ export const DaemonProfileResponseSchema = z.object({
   daemon_id: z.string(),
   display_name: z.string().min(1).max(100),
   display_name_customized: z.boolean(),
+  dedicated: z.boolean().optional().catch(false).transform((value) => value ?? false),
   updated_by: z.string().nullable(),
   updated_at: z.string(),
 }).loose();
@@ -55,8 +57,35 @@ export const EMPTY_DAEMON_PROFILE_RESPONSE: DaemonProfileResponse = {
   daemon_id: "",
   display_name: "",
   display_name_customized: false,
+  dedicated: false,
   updated_by: null,
   updated_at: "",
+};
+
+const DaemonRoutingProjectSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string(),
+  icon: z.string().nullable().catch(null),
+  status: z.string().catch("in_progress"),
+  archived_at: z.string().nullable().catch(null),
+}).loose();
+
+export const DaemonRoutingResponseSchema = z.object({
+  workspace_id: z.string(),
+  daemon_id: z.string(),
+  display_name: z.string().min(1),
+  display_name_customized: z.boolean().catch(false),
+  dedicated: z.boolean().catch(false),
+  updated_by: z.string().nullable().catch(null),
+  updated_at: z.string().nullable().catch(null),
+  projects: z.array(DaemonRoutingProjectSchema).catch([]),
+}).loose();
+
+export const EMPTY_DAEMON_ROUTING_RESPONSE: DaemonRoutingResponse = {
+  ...EMPTY_DAEMON_PROFILE_RESPONSE,
+  updated_at: null,
+  projects: [],
 };
 
 export const CloudRuntimeNodeSchema = z.object({

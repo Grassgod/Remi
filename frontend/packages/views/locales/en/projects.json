@@ -92,6 +92,21 @@
     "issues_error_hint": "Something went wrong fetching this project's issues.",
     "issues_error_retry": "Try again"
   },
+  "run_location": {
+    "title": "Run location",
+    "any_device": "Any available device",
+    "restrict": "Restrict run location",
+    "edit": "Edit",
+    "loading": "Loading devices...",
+    "search_placeholder": "Search devices...",
+    "no_devices": "No devices are available in this workspace.",
+    "help": "When devices are selected, this project's tasks run only on those devices.",
+    "all_offline": "All allowed devices are offline. New tasks will wait until one reconnects.",
+    "save": "Save",
+    "cancel": "Cancel",
+    "toast_saved": "Run location updated",
+    "toast_failed": "Failed to update run location"
+  },
   "instructions": {
     "title": "Project instructions",
     "summary": "Project additions to the workspace Bootstrap and Delta prompts.",

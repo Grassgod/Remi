@@ -49,6 +49,7 @@ import type {
   MultiremiAutopilot,
   MultiremiAutopilotTrigger,
   MultiremiProject,
+  MultiremiProjectDevice,
   MultiremiProjectDoc,
   MultiremiProjectResource,
   MultiremiRuntime,
@@ -277,6 +278,7 @@ export interface ProjectsSurface {
   getProjectDocsIndex(projectId: string): MultiremiProjectDocsIndex;
   listProjectDocs(projectId: string, input?: { kind?: string | null }): MultiremiProjectDoc[];
   listProjectResources(projectId: string): MultiremiProjectResource[];
+  listProjectDevices(projectId: string): MultiremiProjectDevice[];
 }
 
 export interface AutopilotsSurface {

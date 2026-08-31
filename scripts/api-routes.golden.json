@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 649,
+    "routeCount": 658,
     "routeCountByPrefix": {
-      "native": 205,
-      "compat": 431,
+      "native": 209,
+      "compat": 436,
       "root": 13
     },
-    "getRoutes": 279,
-    "getRoutesWithBody": 276,
+    "getRoutes": 282,
+    "getRoutesWithBody": 279,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 370,
+    "mutationRoutes": 376,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -99,6 +99,7 @@
     "DELETE /api/multiremi/notification-channels/:id",
     "DELETE /api/multiremi/pins/:itemType/:itemId",
     "DELETE /api/multiremi/projects/:id",
+    "DELETE /api/multiremi/projects/:id/devices/:daemonId",
     "DELETE /api/multiremi/projects/:id/resources/:resourceId",
     "DELETE /api/multiremi/skills/:id",
     "DELETE /api/multiremi/squads/:id",
@@ -106,6 +107,7 @@
     "DELETE /api/multiremi/tokens/:id",
     "DELETE /api/pins/:itemType/:itemId",
     "DELETE /api/projects/:id",
+    "DELETE /api/projects/:id/devices/:daemonId",
     "DELETE /api/projects/:id/docs/:ref",
     "DELETE /api/projects/:id/resources/:resourceId",
     "DELETE /api/runtimes/:id",
@@ -181,6 +183,7 @@
     "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
     "GET /api/daemon/ws",
+    "GET /api/daemons/:daemonId",
     "GET /api/dashboard/agent-runtime",
     "GET /api/dashboard/runtime/daily",
     "GET /api/dashboard/usage/by-agent",
@@ -283,6 +286,7 @@
     "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
+    "GET /api/multiremi/projects/:id/devices",
     "GET /api/multiremi/projects/:id/resources",
     "GET /api/multiremi/projects/search",
     "GET /api/multiremi/runtimes",
@@ -318,6 +322,7 @@
     "GET /api/project-knowledge/migration",
     "GET /api/projects",
     "GET /api/projects/:id",
+    "GET /api/projects/:id/devices",
     "GET /api/projects/:id/docs",
     "GET /api/projects/:id/docs/:ref",
     "GET /api/projects/:id/docs/:ref/backlinks",
@@ -588,6 +593,7 @@
     "POST /api/multiremi/platform/operations",
     "POST /api/multiremi/platform/operations/:id/cancel",
     "POST /api/multiremi/projects",
+    "POST /api/multiremi/projects/:id/devices",
     "POST /api/multiremi/projects/:id/resources",
     "POST /api/multiremi/projects/:id/restore",
     "POST /api/multiremi/runtimes",
@@ -618,6 +624,7 @@
     "POST /api/project-knowledge/migration/retry-failed",
     "POST /api/project-knowledge/migration/verify",
     "POST /api/projects",
+    "POST /api/projects/:id/devices",
     "POST /api/projects/:id/docs",
     "POST /api/projects/:id/resources",
     "POST /api/projects/:id/restore",
@@ -690,11 +697,13 @@
     "PUT /api/multiremi/labels/:id",
     "PUT /api/multiremi/notification-preferences",
     "PUT /api/multiremi/pins/reorder",
+    "PUT /api/multiremi/projects/:id/devices",
     "PUT /api/multiremi/runtimes/:id/models",
     "PUT /api/multiremi/skills/:id",
     "PUT /api/notification-preferences",
     "PUT /api/pins/reorder",
     "PUT /api/projects/:id",
+    "PUT /api/projects/:id/devices",
     "PUT /api/projects/:id/docs/:ref",
     "PUT /api/projects/:id/resources/:resourceId",
     "PUT /api/runtimes/:id/models",
@@ -822,6 +831,7 @@
     "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
     "GET /api/daemon/ws",
+    "GET /api/daemons/:daemonId",
     "GET /api/dashboard/agent-runtime",
     "GET /api/dashboard/runtime/daily",
     "GET /api/dashboard/usage/by-agent",
@@ -924,6 +934,7 @@
     "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
+    "GET /api/multiremi/projects/:id/devices",
     "GET /api/multiremi/projects/:id/resources",
     "GET /api/multiremi/projects/search",
     "GET /api/multiremi/runtimes",
@@ -959,6 +970,7 @@
     "GET /api/project-knowledge/migration",
     "GET /api/projects",
     "GET /api/projects/:id",
+    "GET /api/projects/:id/devices",
     "GET /api/projects/:id/docs",
     "GET /api/projects/:id/docs/:ref",
     "GET /api/projects/:id/docs/:ref/backlinks",
@@ -7823,6 +7835,28 @@
             "allowed": true
           },
           {
+            "id": "daemon.dedicated.set",
+            "command": "remi daemon dedicated set",
+            "capability": "daemon.dedicated.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.get",
+            "command": "remi daemon get",
+            "capability": "daemon.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "daemon.list",
             "command": "remi daemon list",
             "capability": "daemon.list",
@@ -9641,6 +9675,50 @@
             "id": "project.defaults",
             "command": "remi project defaults",
             "capability": "project.defaults",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.add",
+            "command": "remi project device add",
+            "capability": "project.device.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.list",
+            "command": "remi project device list",
+            "capability": "project.device.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.remove",
+            "command": "remi project device remove",
+            "capability": "project.device.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.set",
+            "command": "remi project device set",
+            "capability": "project.device.set",
             "outputs": [
               "table",
               "json",
@@ -12153,6 +12231,22 @@
         "__body__": {
           "omitted": "websocket-upgrade route; status recorded only"
         }
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemons/:daemonId",
+      "route": "GET /api/daemons/:daemonId",
+      "path": "/api/daemons/dmn_snapshot",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "daemon_id": "dmn_snapshot",
+        "display_name": "dmn_snapshot",
+        "display_name_customized": false,
+        "dedicated": false,
+        "updated_by": null,
+        "updated_at": null,
+        "projects": []
       }
     },
     {
@@ -18010,6 +18104,17 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/projects/:id/devices",
+      "route": "GET /api/multiremi/projects/:id/devices",
+      "path": "/api/multiremi/projects/prj_snapshot/devices",
+      "status": 200,
+      "body": {
+        "devices": [],
+        "total": 0,
+        "warning": null
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/projects/:id/resources",
       "route": "GET /api/multiremi/projects/:id/resources",
       "path": "/api/multiremi/projects/prj_snapshot/resources",
@@ -19441,6 +19546,17 @@
         "instructions_revision": 0,
         "instructions_updated_at": null,
         "instructions_updated_by": null
+      }
+    },
+    {
+      "key": "get-sweep GET /api/projects/:id/devices",
+      "route": "GET /api/projects/:id/devices",
+      "path": "/api/projects/prj_snapshot/devices",
+      "status": 200,
+      "body": {
+        "devices": [],
+        "total": 0,
+        "warning": null
       }
     },
     {
