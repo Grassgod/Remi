@@ -19,11 +19,43 @@ import type { RouterDeps } from "./deps.js";
 export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
+  app.get("/api/daemons/:daemonId", (c) => {
+    const workspaceId = requestedWorkspaceId(c);
+    const daemonId = String(c.req.param("daemonId") ?? "").trim();
+    if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
+    const access = loadHumanWorkspaceAccess(c, deps, workspaceId);
+    if (access instanceof Response) return access;
+    const plan = store.getDaemonRetirementPlan(workspaceId, daemonId);
+    if (!plan.exists) return c.json({ error: "daemon not found", code: "daemon_not_found" }, 404);
+    const profile = store.getDaemonProfile(workspaceId, daemonId);
+    const runtime = store.listRuntimes().find((candidate) => (
+      (candidate.workspaceId ?? "local") === workspaceId && candidate.daemonId === daemonId
+    ));
+    return c.json({
+      workspace_id: workspaceId,
+      daemon_id: daemonId,
+      display_name: profile?.displayName ?? runtime?.daemonDisplayName ?? daemonId,
+      display_name_customized: profile?.displayNameCustomized ?? false,
+      dedicated: profile?.dedicated ?? false,
+      updated_by: profile?.updatedBy ?? null,
+      updated_at: profile?.updatedAt ?? null,
+      projects: store.listProjectsForDaemon(workspaceId, daemonId).map((project) => ({
+        id: project.id,
+        workspace_id: project.workspaceId,
+        title: project.title,
+        icon: project.icon,
+        status: project.status,
+        archived_at: project.archivedAt,
+      })),
+    });
+  });
+
   app.patch("/api/daemons/:daemonId", async (c) => {
     const body = await readJsonStrict<{
       workspaceId?: string | null;
       workspace_id?: string | null;
       display_name?: unknown;
+      dedicated?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = requestedWorkspaceId(c, body);
@@ -33,25 +65,35 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
     if (access instanceof Response) return access;
     const plan = store.getDaemonRetirementPlan(workspaceId, daemonId);
     if (!plan.exists) return c.json({ error: "daemon not found", code: "daemon_not_found" }, 404);
-    const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
-    if (!displayName) return c.json({ error: "display_name must be a non-empty string" }, 400);
-    if (displayName.length > 100) {
-      return c.json({ error: "display_name must be at most 100 characters" }, 400);
+    const writesDisplayName = Object.prototype.hasOwnProperty.call(body, "display_name");
+    const writesDedicated = Object.prototype.hasOwnProperty.call(body, "dedicated");
+    if (!writesDisplayName && !writesDedicated) {
+      return c.json({ error: "display_name or dedicated is required" }, 400);
     }
-    const profile = store.updateDaemonDisplayName(
-      workspaceId,
-      daemonId,
-      displayName,
-      currentRequestUserId(c),
-    );
-    return c.json({
-      workspace_id: profile.workspaceId,
-      daemon_id: profile.daemonId,
-      display_name: profile.displayName,
-      display_name_customized: profile.displayNameCustomized,
-      updated_by: profile.updatedBy,
-      updated_at: profile.updatedAt,
-    });
+    let profile = store.getDaemonProfile(workspaceId, daemonId);
+    if (writesDisplayName) {
+      const displayName = typeof body.display_name === "string" ? body.display_name.trim() : "";
+      if (!displayName) return c.json({ error: "display_name must be a non-empty string" }, 400);
+      if (displayName.length > 100) {
+        return c.json({ error: "display_name must be at most 100 characters" }, 400);
+      }
+      profile = store.updateDaemonDisplayName(
+        workspaceId,
+        daemonId,
+        displayName,
+        currentRequestUserId(c),
+      );
+    }
+    if (writesDedicated) {
+      if (typeof body.dedicated !== "boolean") return c.json({ error: "dedicated must be a boolean" }, 400);
+      profile = store.updateDaemonDedicated(
+        workspaceId,
+        daemonId,
+        body.dedicated,
+        currentRequestUserId(c),
+      );
+    }
+    return c.json(daemonProfileResponse(profile!));
   });
 
   app.get("/api/multiremi/daemons", (c) => {
@@ -165,6 +207,20 @@ export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): voi
       ssh_mesh_key_rotation: sshMeshRotation,
     });
   });
+}
+
+function daemonProfileResponse(
+  profile: NonNullable<ReturnType<RouterDeps["store"]["getDaemonProfile"]>>,
+): Record<string, unknown> {
+  return {
+    workspace_id: profile.workspaceId,
+    daemon_id: profile.daemonId,
+    display_name: profile.displayName,
+    display_name_customized: profile.displayNameCustomized,
+    dedicated: profile.dedicated,
+    updated_by: profile.updatedBy,
+    updated_at: profile.updatedAt,
+  };
 }
 
 async function reconcileRetirementSshMeshKey(

@@ -43,8 +43,10 @@ import {
 } from "../wire/index.js";
 import type {
   CreateProjectDocInput,
+  CreateProjectDeviceInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  MultiremiProjectDevice,
   UpdateProjectDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
@@ -207,6 +209,43 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const resources = store.listProjectResources(c.req.param("id"));
     return c.json({ resources, total: resources.length });
   });
+  app.get("/api/multiremi/projects/:id/devices", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    return c.json(projectDevicesResponse(store.listProjectDevices(project.id), false));
+  });
+  app.post("/api/multiremi/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<CreateProjectDeviceInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const device = store.createProjectDevice(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const devices = store.listProjectDevices(project.id);
+      publishProjectUpdated(c, store, store.getProject(project.id)!, projectCompatibilityResponse(store.getProject(project.id)!));
+      return c.json({ device, warning: projectDevicesWarning(devices) }, 201);
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.delete("/api/multiremi/projects/:id/devices/:daemonId", (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    try {
+      store.deleteProjectDevice(project.id, c.req.param("daemonId"));
+      publishProjectUpdated(c, store, store.getProject(project.id)!, projectCompatibilityResponse(store.getProject(project.id)!));
+      return c.json({ ok: true });
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
   app.post("/api/multiremi/projects/:id/resources", async (c) => {
     const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
@@ -290,6 +329,48 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (project instanceof Response) return project;
     const resources = store.listProjectResources(c.req.param("id")).map(projectResourceCompatibilityResponse);
     return c.json({ resources, total: resources.length });
+  });
+  app.get("/api/projects/:id/devices", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    return c.json(projectDevicesResponse(store.listProjectDevices(project.id), true));
+  });
+  app.post("/api/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<CreateProjectDeviceInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const device = store.createProjectDevice(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const devices = store.listProjectDevices(project.id);
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.json({
+        device: projectDeviceCompatibilityResponse(device),
+        warning: projectDevicesWarning(devices),
+      }, 201);
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.delete("/api/projects/:id/devices/:daemonId", (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    try {
+      store.deleteProjectDevice(project.id, c.req.param("daemonId"));
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.body(null, 204);
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.post("/api/projects/:id/resources", async (c) => {
     const project = loadProjectForMutation(c, store, c.req.param("id"));
@@ -547,6 +628,43 @@ function projectKnowledgeErrorResponse(c: any, err: unknown): Response | null {
   if (err instanceof Error && err.message === "a doc with this slug already exists") {
     return c.json({ error: err.message }, 409);
   }
+  return null;
+}
+
+function projectDevicesResponse(devices: MultiremiProjectDevice[], compatibility: boolean): Record<string, unknown> {
+  return {
+    devices: compatibility ? devices.map(projectDeviceCompatibilityResponse) : devices,
+    total: devices.length,
+    warning: projectDevicesWarning(devices),
+  };
+}
+
+function projectDeviceCompatibilityResponse(device: MultiremiProjectDevice): Record<string, unknown> {
+  return {
+    project_id: device.projectId,
+    workspace_id: device.workspaceId,
+    daemon_id: device.daemonId,
+    display_name: device.displayName,
+    online: device.online,
+    providers: device.providers,
+    created_at: device.createdAt,
+    created_by: device.createdBy,
+  };
+}
+
+function projectDevicesWarning(devices: MultiremiProjectDevice[]): string | null {
+  if (devices.length === 0 || devices.some((device) => device.online)) return null;
+  return "All devices allowed for this project are currently offline.";
+}
+
+function projectDeviceErrorResponse(c: any, err: unknown): Response | null {
+  if (!(err instanceof Error)) return null;
+  if (err.message.includes("UNIQUE constraint") || err.message.includes("duplicate key")) {
+    return c.json({ error: "device is already bound to this project" }, 409);
+  }
+  if (err.message.startsWith("Daemon not found:")) return c.json({ error: err.message }, 404);
+  if (err.message.startsWith("Project device not found:")) return c.json({ error: err.message }, 404);
+  if (err.message === "daemon_id is required") return c.json({ error: err.message }, 400);
   return null;
 }
 

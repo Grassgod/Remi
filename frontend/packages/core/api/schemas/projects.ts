@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { ListProjectsResponse, Project } from "../../types";
+import type {
+  ListProjectDevicesResponse,
+  ListProjectsResponse,
+  Project,
+  ProjectDeviceMutationResponse,
+} from "../../types";
 
 export const ProjectSchema = z.object({
   id: z.string(),
@@ -67,4 +72,46 @@ export const EMPTY_PROJECT: Project = {
 export const EMPTY_PROJECT_LIST: ListProjectsResponse = {
   projects: [],
   total: 0,
+};
+
+export const ProjectDeviceSchema = z.object({
+  project_id: z.string(),
+  workspace_id: z.string(),
+  daemon_id: z.string().min(1),
+  display_name: z.string().min(1),
+  online: z.boolean().catch(false),
+  providers: z.array(z.string()).catch([]),
+  created_at: z.string().catch(""),
+  created_by: z.string().nullable().catch(null),
+}).loose();
+
+export const ListProjectDevicesResponseSchema = z.object({
+  devices: z.array(ProjectDeviceSchema).catch([]),
+  total: z.number().int().nonnegative().catch(0),
+  warning: z.string().nullable().catch(null),
+}).loose();
+
+export const ProjectDeviceMutationResponseSchema = z.object({
+  device: ProjectDeviceSchema,
+  warning: z.string().nullable().catch(null),
+}).loose();
+
+export const EMPTY_PROJECT_DEVICE_LIST: ListProjectDevicesResponse = {
+  devices: [],
+  total: 0,
+  warning: null,
+};
+
+export const EMPTY_PROJECT_DEVICE_MUTATION: ProjectDeviceMutationResponse = {
+  device: {
+    project_id: "",
+    workspace_id: "",
+    daemon_id: "",
+    display_name: "",
+    online: false,
+    providers: [],
+    created_at: "",
+    created_by: null,
+  },
+  warning: null,
 };

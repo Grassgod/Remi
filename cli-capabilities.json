@@ -1184,6 +1184,57 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "project.device.list": {
+      "command": "remi project device list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.device.add": {
+      "command": "remi project device add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.device.remove": {
+      "command": "remi project device remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "repo": {
       "command": "remi repo",
       "aliases": [],
@@ -5485,6 +5536,40 @@
       ],
       "capability": "daemon.list",
       "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "daemon.get": {
+      "command": "remi daemon get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "daemon.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "daemon.dedicated.set": {
+      "command": "remi daemon dedicated set",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "daemon.dedicated.set",
+      "mutation": "write",
       "output": [
         "table",
         "json",

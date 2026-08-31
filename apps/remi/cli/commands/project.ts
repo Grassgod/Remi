@@ -114,6 +114,32 @@ export function projectCommandSpecs(): CommandSpec[] {
       const response = await client.request({ method: "DELETE", path: `/api/projects/${encodePath(projectId)}/resources/${encodePath(resource)}` });
       renderResource(invocation, response.data);
     }, true),
+    spec("project.device.list", ["project", "device", "list"], "List devices allowed to run a project", "read", ["human", "task"], [refPositional("project")], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
+      const response = await client.request({ method: "GET", path: `/api/projects/${encodePath(String(project.id))}/devices` });
+      renderResource(invocation, response.data, ["devices"]);
+    }),
+    spec("project.device.add", ["project", "device", "add"], "Allow a device to run a project", "write", ["human"], [refPositional("project"), refPositional("daemon")], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
+      const response = await client.request({
+        method: "POST",
+        path: `/api/projects/${encodePath(String(project.id))}/devices`,
+        body: { daemon_id: positional(invocation, 1, "daemon") },
+      });
+      renderResource(invocation, response.data);
+    }),
+    spec("project.device.remove", ["project", "device", "remove"], "Remove a project device restriction", "destructive", ["human"], [refPositional("project"), refPositional("daemon")], [YES_OPTION], async (invocation) => {
+      requireConfirmation(invocation);
+      const client = await clientFor(invocation);
+      const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
+      const response = await client.request({
+        method: "DELETE",
+        path: `/api/projects/${encodePath(String(project.id))}/devices/${encodePath(positional(invocation, 1, "daemon"))}`,
+      });
+      renderResource(invocation, response.data);
+    }),
   ];
 }
 

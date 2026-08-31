@@ -10,7 +10,9 @@ import {
   Copy,
   Check,
   Gauge,
+  Loader2,
   Puzzle,
+  ShieldCheck,
 } from "lucide-react";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { toast } from "sonner";
@@ -19,7 +21,11 @@ import type { AgentRuntime, Agent, MemberWithUser } from "@multiremi/core/types"
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
-import { useUpdateRuntime } from "@multiremi/core/runtimes/mutations";
+import {
+  useUpdateDaemonDedicated,
+  useUpdateRuntime,
+} from "@multiremi/core/runtimes/mutations";
+import { daemonRoutingOptions } from "@multiremi/core/runtimes/queries";
 import { deriveRuntimeHealth } from "@multiremi/core/runtimes";
 import {
   type AgentPresenceDetail,
@@ -27,6 +33,7 @@ import {
 } from "@multiremi/core/agents";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { Button } from "@multiremi/ui/components/ui/button";
+import { Switch } from "@multiremi/ui/components/ui/switch";
 import {
   Tabs,
   TabsContent,
@@ -232,6 +239,12 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
                 presenceMap={presenceMap}
                 agentHref={(id) => paths.agentDetail(id)}
               />
+              {runtime.daemon_id ? (
+                <DedicatedDeviceCard
+                  daemonId={runtime.daemon_id}
+                  canEdit={!!canDelete}
+                />
+              ) : null}
               <DiagnosticsCard
                 runtime={runtime}
                 health={health}
@@ -278,6 +291,91 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function DedicatedDeviceCard({
+  daemonId,
+  canEdit,
+}: {
+  daemonId: string;
+  canEdit: boolean;
+}) {
+  const { t } = useT("runtimes");
+  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const { data, isLoading, isError } = useQuery(daemonRoutingOptions(wsId, daemonId));
+  const updateDedicated = useUpdateDaemonDedicated(wsId);
+  const dedicated = data?.dedicated ?? false;
+  const projects = data?.projects ?? [];
+
+  const setDedicated = (next: boolean) => {
+    updateDedicated.mutate(
+      { daemonId, dedicated: next },
+      {
+        onSuccess: () => toast.success(t(($) => $.detail.dedicated_toast_updated)),
+        onError: (error) => toast.error(
+          error instanceof Error && error.message
+            ? error.message
+            : t(($) => $.detail.dedicated_toast_failed),
+        ),
+      },
+    );
+  };
+
+  return (
+    <div className="rounded-lg border">
+      <div className="flex items-start justify-between gap-3 border-b px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-semibold">
+            <ShieldCheck className="size-3.5 text-muted-foreground" />
+            {t(($) => $.detail.dedicated_title)}
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {t(($) => $.detail.dedicated_description)}
+          </p>
+        </div>
+        <Switch
+          checked={dedicated}
+          disabled={!canEdit || isLoading || isError || updateDedicated.isPending}
+          onCheckedChange={setDedicated}
+          aria-label={t(($) => $.detail.dedicated_title)}
+        />
+      </div>
+      <div className="px-4 py-3">
+        <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+          {t(($) => $.detail.dedicated_projects)}
+        </div>
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            {t(($) => $.detail.dedicated_loading)}
+          </div>
+        ) : isError ? (
+          <p className="text-xs text-destructive">{t(($) => $.detail.dedicated_load_failed)}</p>
+        ) : projects.length === 0 ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {dedicated
+              ? t(($) => $.detail.dedicated_empty_warning)
+              : t(($) => $.detail.dedicated_empty)}
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {projects.map((project) => (
+              <AppLink
+                key={project.id}
+                href={paths.projectDetail(project.id)}
+                className="group flex items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
+              >
+                <span aria-hidden className="shrink-0">{project.icon ?? "#"}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">{project.title}</span>
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground" />
+              </AppLink>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
