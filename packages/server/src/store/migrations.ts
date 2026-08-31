@@ -1123,6 +1123,7 @@ export function runMigrations(db: SqlDatabase): void {
       sync_status TEXT NOT NULL DEFAULT 'sql',
       sync_error TEXT,
       snapshot_oid TEXT,
+      compilation_run_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(project_id, slug),
@@ -1145,6 +1146,7 @@ export function runMigrations(db: SqlDatabase): void {
       content_uri TEXT,
       content_sha256 TEXT,
       snapshot_oid TEXT,
+      compilation_run_id TEXT,
       created_at TEXT NOT NULL,
       UNIQUE(doc_id, version),
       FOREIGN KEY(doc_id) REFERENCES multiremi_project_docs(id) ON DELETE CASCADE
@@ -1178,6 +1180,7 @@ export function runMigrations(db: SqlDatabase): void {
       sync_status TEXT NOT NULL DEFAULT 'sql',
       sync_error TEXT,
       snapshot_oid TEXT,
+      compilation_run_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(workspace_id, repository_id, path)
@@ -1200,6 +1203,7 @@ export function runMigrations(db: SqlDatabase): void {
       content_uri TEXT,
       content_sha256 TEXT,
       snapshot_oid TEXT,
+      compilation_run_id TEXT,
       created_at TEXT NOT NULL,
       UNIQUE(doc_id, version),
       FOREIGN KEY(doc_id) REFERENCES multiremi_repository_wiki_docs(id) ON DELETE CASCADE
@@ -1207,6 +1211,93 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_repository_wiki_revisions_doc
       ON multiremi_repository_wiki_doc_revisions(doc_id, version);
+
+    CREATE TABLE IF NOT EXISTS multiremi_knowledge_submissions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      project_id TEXT,
+      repository_id TEXT,
+      scope TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      proposed_path TEXT,
+      proposed_slug TEXT,
+      body TEXT NOT NULL DEFAULT '',
+      patch TEXT,
+      base_revision TEXT,
+      source_task_id TEXT,
+      source_issue_id TEXT,
+      source_revision TEXT,
+      author_agent_id TEXT,
+      content_sha256 TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_knowledge_submissions_scope
+      ON multiremi_knowledge_submissions(workspace_id, scope, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_knowledge_submissions_target_hash
+      ON multiremi_knowledge_submissions(workspace_id, scope, project_id, repository_id, content_sha256, status);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_knowledge_submissions_issue
+      ON multiremi_knowledge_submissions(source_issue_id, source_type);
+
+    CREATE TABLE IF NOT EXISTS multiremi_knowledge_compilation_runs (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      project_id TEXT,
+      repository_id TEXT,
+      task_id TEXT,
+      agent_id TEXT,
+      autopilot_run_id TEXT,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'preparing',
+      result_summary TEXT,
+      dedupe_key TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_knowledge_runs_scope
+      ON multiremi_knowledge_compilation_runs(workspace_id, status, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_knowledge_runs_dedupe
+      ON multiremi_knowledge_compilation_runs(workspace_id, dedupe_key)
+      WHERE dedupe_key IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS multiremi_knowledge_compilation_run_sources (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      submission_id TEXT,
+      source_type TEXT NOT NULL,
+      source_ref TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(run_id) REFERENCES multiremi_knowledge_compilation_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY(submission_id) REFERENCES multiremi_knowledge_submissions(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_knowledge_run_sources_run
+      ON multiremi_knowledge_compilation_run_sources(run_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_knowledge_run_sources_submission
+      ON multiremi_knowledge_compilation_run_sources(run_id, submission_id)
+      WHERE submission_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS multiremi_knowledge_compilation_outputs (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      artifact_scope TEXT NOT NULL,
+      doc_id TEXT,
+      revision_id TEXT,
+      version INTEGER,
+      action TEXT NOT NULL,
+      content_sha256 TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(run_id) REFERENCES multiremi_knowledge_compilation_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_knowledge_outputs_run
+      ON multiremi_knowledge_compilation_outputs(run_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_knowledge_outputs_doc
+      ON multiremi_knowledge_compilation_outputs(artifact_scope, doc_id, version);
 
     CREATE TABLE IF NOT EXISTS multiremi_pinned_items (
       id TEXT PRIMARY KEY,
@@ -2369,6 +2460,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_project_doc_revisions", "content_sha256 TEXT");
   addColumnIfMissing(db, "multiremi_project_doc_revisions", "snapshot_oid TEXT");
   addColumnIfMissing(db, "multiremi_project_doc_revisions", "content_uri TEXT");
+  addColumnIfMissing(db, "multiremi_project_docs", "compilation_run_id TEXT");
+  addColumnIfMissing(db, "multiremi_project_doc_revisions", "compilation_run_id TEXT");
+  addColumnIfMissing(db, "multiremi_repository_wiki_docs", "compilation_run_id TEXT");
+  addColumnIfMissing(db, "multiremi_repository_wiki_doc_revisions", "compilation_run_id TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_sync ON multiremi_project_docs(workspace_id, sync_status, updated_at)");
   addColumnIfMissing(db, "multiremi_projects", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_projects", "instructions TEXT NOT NULL DEFAULT ''");

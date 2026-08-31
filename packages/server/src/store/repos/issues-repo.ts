@@ -959,6 +959,9 @@ export class IssuesRepo {
     });
     if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
     if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
+    if (previous!.status !== "done" && updated.status === "done") {
+      this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
+    }
     this.notifyParentOfChildDone(
       previous!,
       updated,
