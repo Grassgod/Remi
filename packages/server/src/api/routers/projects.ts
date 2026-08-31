@@ -47,6 +47,7 @@ import type {
   CreateProjectInput,
   CreateProjectResourceInput,
   MultiremiProjectDevice,
+  ReplaceProjectDevicesInput,
   UpdateProjectDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
@@ -214,6 +215,25 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (project instanceof Response) return project;
     return c.json(projectDevicesResponse(store.listProjectDevices(project.id), false));
   });
+  app.put("/api/multiremi/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<ReplaceProjectDevicesInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const devices = store.replaceProjectDevices(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.json(projectDevicesResponse(devices, false));
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
   app.post("/api/multiremi/projects/:id/devices", async (c) => {
     const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
@@ -334,6 +354,25 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
     return c.json(projectDevicesResponse(store.listProjectDevices(project.id), true));
+  });
+  app.put("/api/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<ReplaceProjectDevicesInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const devices = store.replaceProjectDevices(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.json(projectDevicesResponse(devices, true));
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.post("/api/projects/:id/devices", async (c) => {
     const project = loadProjectForMutation(c, store, c.req.param("id"));
@@ -665,6 +704,7 @@ function projectDeviceErrorResponse(c: any, err: unknown): Response | null {
   if (err.message.startsWith("Daemon not found:")) return c.json({ error: err.message }, 404);
   if (err.message.startsWith("Project device not found:")) return c.json({ error: err.message }, 404);
   if (err.message === "daemon_id is required") return c.json({ error: err.message }, 400);
+  if (err.message.startsWith("daemon_ids must")) return c.json({ error: err.message }, 400);
   return null;
 }
 

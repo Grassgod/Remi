@@ -18,5 +18,6 @@ export {
   projectDeviceKeys,
   projectDevicesOptions,
   useCreateProjectDevice,
+  useReplaceProjectDevices,
   useDeleteProjectDevice,
 } from "./device-queries";

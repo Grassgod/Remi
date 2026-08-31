@@ -2780,6 +2780,13 @@ export interface CreateProjectDeviceInput {
   created_by?: string | null;
 }
 
+export interface ReplaceProjectDevicesInput {
+  daemonIds?: string[];
+  daemon_ids?: string[];
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
 export interface UpdateProjectResourceInput {
   resourceRef?: Record<string, unknown>;
   resource_ref?: Record<string, unknown>;

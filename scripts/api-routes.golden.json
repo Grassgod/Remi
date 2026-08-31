@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 656,
+    "routeCount": 658,
     "routeCountByPrefix": {
-      "native": 208,
-      "compat": 435,
+      "native": 209,
+      "compat": 436,
       "root": 13
     },
     "getRoutes": 282,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 374,
+    "mutationRoutes": 376,
     "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
@@ -697,11 +697,13 @@
     "PUT /api/multiremi/labels/:id",
     "PUT /api/multiremi/notification-preferences",
     "PUT /api/multiremi/pins/reorder",
+    "PUT /api/multiremi/projects/:id/devices",
     "PUT /api/multiremi/runtimes/:id/models",
     "PUT /api/multiremi/skills/:id",
     "PUT /api/notification-preferences",
     "PUT /api/pins/reorder",
     "PUT /api/projects/:id",
+    "PUT /api/projects/:id/devices",
     "PUT /api/projects/:id/docs/:ref",
     "PUT /api/projects/:id/resources/:resourceId",
     "PUT /api/runtimes/:id/models",
@@ -9706,6 +9708,17 @@
             "id": "project.device.remove",
             "command": "remi project device remove",
             "capability": "project.device.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.set",
+            "command": "remi project device set",
+            "capability": "project.device.set",
             "outputs": [
               "table",
               "json",

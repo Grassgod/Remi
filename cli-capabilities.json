@@ -1218,6 +1218,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "project.device.set": {
+      "command": "remi project device set",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "project.device.remove": {
       "command": "remi project device remove",
       "aliases": [],
@@ -10220,6 +10237,9 @@
     "PUT /api/multiremi/pins/reorder": {
       "command": "pin.reorder"
     },
+    "PUT /api/multiremi/projects/:id/devices": {
+      "command": "project.device.set"
+    },
     "PUT /api/multiremi/runtimes/:id/models": {
       "command": "runtime.model.set"
     },
@@ -10234,6 +10254,9 @@
     },
     "PUT /api/projects/:id": {
       "command": "project.update"
+    },
+    "PUT /api/projects/:id/devices": {
+      "command": "project.device.set"
     },
     "PUT /api/projects/:id/docs/:ref": {
       "command": "memory.update"

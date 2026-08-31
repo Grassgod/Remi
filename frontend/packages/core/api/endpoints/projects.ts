@@ -141,6 +141,22 @@ export class ProjectsEndpoints {
     );
   }
 
+  async replaceProjectDevices(
+    projectId: string,
+    daemonIds: string[],
+  ): Promise<ListProjectDevicesResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/devices`,
+      { method: "PUT", body: JSON.stringify({ daemon_ids: daemonIds }) },
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectDevicesResponseSchema,
+      EMPTY_PROJECT_DEVICE_LIST,
+      { endpoint: "PUT /api/projects/:id/devices" },
+    );
+  }
+
   async deleteProjectDevice(projectId: string, daemonId: string): Promise<void> {
     await this.http.fetch(
       `/api/projects/${encodeURIComponent(projectId)}/devices/${encodeURIComponent(daemonId)}`,

@@ -58,3 +58,16 @@ export function useDeleteProjectDevice(wsId: string, projectId: string) {
     }),
   });
 }
+
+export function useReplaceProjectDevices(wsId: string, projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (daemonIds: string[]) => api.replaceProjectDevices(projectId, daemonIds),
+    onSuccess: (response) => {
+      queryClient.setQueryData(projectDeviceKeys.list(wsId, projectId), response);
+    },
+    onSettled: () => queryClient.invalidateQueries({
+      queryKey: projectDeviceKeys.list(wsId, projectId),
+    }),
+  });
+}

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import enCommon from "../../locales/en/common.json";
@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
     created_by: string | null;
   }>,
   warning: null as string | null,
+  replaceDevices: vi.fn<(daemonIds: string[]) => Promise<unknown>>(),
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -38,8 +39,7 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@multiremi/core/projects", () => ({
   projectDevicesOptions: () => ({ queryKey: ["project", "devices"] }),
-  useCreateProjectDevice: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useDeleteProjectDevice: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useReplaceProjectDevices: () => ({ mutateAsync: state.replaceDevices, isPending: false }),
 }));
 
 vi.mock("@multiremi/core/runtimes/queries", () => ({
@@ -66,6 +66,8 @@ describe("ProjectRunLocationSection", () => {
   beforeEach(() => {
     state.devices = [];
     state.warning = null;
+    state.replaceDevices.mockReset();
+    state.replaceDevices.mockResolvedValue({ devices: [], total: 0, warning: null });
   });
 
   it("keeps unrestricted projects collapsed until the user opts in", () => {
@@ -95,5 +97,25 @@ describe("ProjectRunLocationSection", () => {
     expect(screen.getByText("claude + codex")).toBeInTheDocument();
     expect(screen.getByText(/all allowed devices are offline/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  });
+
+  it("saves the complete selection through one atomic mutation", async () => {
+    state.devices = [{
+      project_id: "project-1",
+      workspace_id: "ws-1",
+      daemon_id: "daemon-1",
+      display_name: "Personal Mac",
+      online: true,
+      providers: ["codex"],
+      created_at: "2026-08-31T00:00:00Z",
+      created_by: "user-1",
+    }];
+
+    renderSection();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(state.replaceDevices).toHaveBeenCalledTimes(1));
+    expect(state.replaceDevices).toHaveBeenCalledWith(["daemon-1"]);
   });
 });

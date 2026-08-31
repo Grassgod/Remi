@@ -858,6 +858,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "project.device.set": {
+      "command": "remi project device set",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "project.device.remove": {
       "command": "remi project device remove",
       "auth": [

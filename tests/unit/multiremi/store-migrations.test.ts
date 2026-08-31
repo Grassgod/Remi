@@ -234,6 +234,76 @@ describe("store migrations", () => {
     ).get()).toEqual({ count: 2 });
   });
 
+  it("backfills project routing and dedicated profiles to canonical daemon identities", () => {
+    const database = freshDb();
+    migrate(database);
+    const timestamp = "2026-08-31T00:00:00.000Z";
+    database.run(
+      `INSERT INTO multiremi_runtimes (
+         id, name, provider, daemon_id, legacy_daemon_id, metadata,
+         workspace_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "rt_canonical",
+        "codex",
+        "codex",
+        "canonical-device",
+        "legacy-device",
+        JSON.stringify({
+          legacy_runtime_merges: [{ legacy_daemon_id: "older-legacy-device" }],
+        }),
+        "local",
+        timestamp,
+        timestamp,
+      ],
+    );
+    database.run(
+      `INSERT INTO multiremi_projects (id, title, created_at, updated_at) VALUES
+         ('prj_daemon_backfill', 'Backfill', ?, ?),
+         ('prj_audit_backfill', 'Audit backfill', ?, ?)`,
+      [timestamp, timestamp, timestamp, timestamp],
+    );
+    database.run(
+      `INSERT INTO multiremi_project_devices (
+         project_id, daemon_id, workspace_id, created_at, created_by
+       ) VALUES
+         ('prj_daemon_backfill', 'legacy-device', 'local', ?, 'local'),
+         ('prj_audit_backfill', 'older-legacy-device', 'local', ?, 'local')`,
+      [timestamp, timestamp],
+    );
+    database.run(
+      `INSERT INTO multiremi_daemon_profiles (
+         workspace_id, daemon_id, display_name, display_name_customized,
+         dedicated, updated_by, updated_at
+       ) VALUES
+         ('local', 'legacy-device', 'Custom laptop', 1, 1, 'local', ?),
+         ('local', 'canonical-device', 'Generated name', 0, 0, NULL, ?)`,
+      [timestamp, timestamp],
+    );
+    database.run(
+      "DELETE FROM multiremi_schema_migrations WHERE id = '20260831_project_device_daemon_canonicalization'",
+    );
+
+    migrate(database);
+    migrate(database);
+
+    expect(database.query(
+      "SELECT project_id, daemon_id FROM multiremi_project_devices ORDER BY project_id",
+    ).all()).toEqual([
+      { project_id: "prj_audit_backfill", daemon_id: "canonical-device" },
+      { project_id: "prj_daemon_backfill", daemon_id: "canonical-device" },
+    ]);
+    expect(database.query(
+      `SELECT daemon_id, display_name, display_name_customized, dedicated
+       FROM multiremi_daemon_profiles WHERE workspace_id = 'local'`,
+    ).all()).toEqual([{
+      daemon_id: "canonical-device",
+      display_name: "Custom laptop",
+      display_name_customized: 1,
+      dedicated: 1,
+    }]);
+  });
+
   it("backfills orphan attachments referenced by existing issue and comment Markdown", () => {
     const database = freshDb();
     migrate(database);

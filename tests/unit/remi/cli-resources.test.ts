@@ -116,7 +116,7 @@ describe("native CLI resource contracts", () => {
         return Response.json({
           protocol_version: 1,
           identity: "human",
-          commands: ["project.device.list", "project.device.add", "project.device.remove"]
+          commands: ["project.device.list", "project.device.add", "project.device.set", "project.device.remove"]
             .map((id) => ({ id, allowed: true })),
         });
       }
@@ -126,15 +126,17 @@ describe("native CLI resource contracts", () => {
       requests.push({
         method: request.method,
         path,
-        body: request.method === "POST" ? await request.json() : null,
+        body: request.method === "POST" || request.method === "PUT" ? await request.json() : null,
       });
       if (request.method === "GET") return Response.json({ devices: [{ daemon_id: "device-1" }] });
       if (request.method === "POST") return Response.json({ device: { daemon_id: "device-1" } }, { status: 201 });
+      if (request.method === "PUT") return Response.json({ devices: [{ daemon_id: "device-1" }], total: 1, warning: null });
       return new Response(null, { status: 204 });
     }) as typeof fetch;
 
     await execute(specById("project.device.list"), ["prj_1", "--output", "json"]);
     await execute(specById("project.device.add"), ["prj_1", "device-1", "--output", "json"]);
+    await execute(specById("project.device.set"), ["prj_1", "--daemon", "device-1", "--daemon", "device-2", "--output", "json"]);
     await expect(execute(specById("project.device.remove"), ["prj_1", "device-1"]))
       .rejects.toThrow("requires --yes");
     await execute(specById("project.device.remove"), ["prj_1", "device-1", "--yes", "--output", "json"]);
@@ -142,6 +144,7 @@ describe("native CLI resource contracts", () => {
     expect(requests).toEqual([
       { method: "GET", path: "/api/projects/prj_1/devices", body: null },
       { method: "POST", path: "/api/projects/prj_1/devices", body: { daemon_id: "device-1" } },
+      { method: "PUT", path: "/api/projects/prj_1/devices", body: { daemon_ids: ["device-1", "device-2"] } },
       { method: "DELETE", path: "/api/projects/prj_1/devices/device-1", body: null },
     ]);
   });

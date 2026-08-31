@@ -88,6 +88,103 @@ describe("Multiremi API — project device routing", () => {
     });
   });
 
+  it("atomically replaces the full device set and preserves it on validation failure", async () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Atomic routing" });
+    for (const daemonId of ["device-a", "device-b"]) {
+      store.registerRuntime({
+        id: `rt_${daemonId}`,
+        name: daemonId,
+        provider: "codex",
+        daemonId,
+      });
+    }
+    store.createProjectDevice(project.id, { daemonId: "device-a" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const replaced = await app.request(`/api/projects/${project.id}/devices`, {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ daemon_ids: ["device-b"] }),
+    });
+    expect(replaced.status).toBe(200);
+    expect(await replaced.json()).toMatchObject({
+      devices: [{ daemon_id: "device-b" }],
+      total: 1,
+    });
+
+    const rejected = await app.request(`/api/projects/${project.id}/devices`, {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ daemon_ids: ["device-a", "missing-device"] }),
+    });
+    expect(rejected.status).toBe(404);
+    expect(store.listProjectDevices(project.id).map((device) => device.daemonId)).toEqual(["device-b"]);
+
+    const cleared = await app.request(`/api/multiremi/projects/${project.id}/devices`, {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ daemonIds: [] }),
+    });
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toMatchObject({ devices: [], total: 0, warning: null });
+  });
+
+  it("canonicalizes project routing and dedicated profile during legacy daemon registration", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const legacy = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "legacy-personal",
+        device_name: "Legacy default",
+        runtimes: [{ type: "codex", version: "1.0.0" }],
+      }),
+    });
+    expect(legacy.status).toBe(200);
+    const legacyRuntimeId = (await legacy.json()).runtimes[0].id as string;
+    const project = store.createProject({ title: "Personal project" });
+    store.createProjectDevice(project.id, { daemonId: "legacy-personal" });
+    store.updateDaemonDisplayName("local", "legacy-personal", "My Personal Mac", "local");
+    store.updateDaemonDedicated("local", "legacy-personal", true, "local");
+
+    const migrated = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "canonical-personal",
+        device_name: "New default",
+        legacy_daemon_ids: ["legacy-personal"],
+        runtimes: [{ type: "codex", version: "1.1.0" }],
+      }),
+    });
+    expect(migrated.status).toBe(200);
+    const canonicalRuntimeId = (await migrated.json()).runtimes[0].id as string;
+    expect(store.getRuntime(legacyRuntimeId)).toBeNull();
+    expect(store.listProjectDevices(project.id).map((device) => device.daemonId)).toEqual(["canonical-personal"]);
+    expect(store.getDaemonProfile("local", "legacy-personal")).toBeNull();
+    expect(store.getDaemonProfile("local", "canonical-personal")).toMatchObject({
+      displayName: "My Personal Mac",
+      displayNameCustomized: true,
+      dedicated: true,
+    });
+
+    const agent = store.createAgent({ name: "Migrated routing", provider: "codex" });
+    const issue = store.createIssue({ title: "Bound work", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "run" });
+    expect(store.claimTask(canonicalRuntimeId)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "done" });
+
+    const ordinary = store.createProject({ title: "Ordinary" });
+    const ordinaryIssue = store.createIssue({ title: "Ordinary work", projectId: ordinary.id });
+    store.createTask({ agentId: agent.id, issueId: ordinaryIssue.id, prompt: "reject" });
+    expect(store.claimTask(canonicalRuntimeId)).toBeNull();
+  });
+
   it("reads and updates dedicated device routing without requiring an existing profile", async () => {
     const store = createStore();
     const project = store.createProject({ title: "Device-owned project" });

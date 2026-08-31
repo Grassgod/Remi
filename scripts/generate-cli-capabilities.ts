@@ -277,6 +277,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^DELETE \/api\/(?:multiremi\/)?projects\/:id\/resources\/:resourceId$/, "project.resource.delete"],
     [/^GET \/api\/(?:multiremi\/)?projects\/:id\/devices$/, "project.device.list"],
     [/^POST \/api\/(?:multiremi\/)?projects\/:id\/devices$/, "project.device.add"],
+    [/^PUT \/api\/(?:multiremi\/)?projects\/:id\/devices$/, "project.device.set"],
     [/^DELETE \/api\/(?:multiremi\/)?projects\/:id\/devices\/:daemonId$/, "project.device.remove"],
     [/^GET \/api\/projects\/:id\/docs$/, "memory.list"],
     [/^POST \/api\/projects\/:id\/docs$/, "memory.create"],

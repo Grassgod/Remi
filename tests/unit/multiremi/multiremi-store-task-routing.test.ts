@@ -109,6 +109,64 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
   });
 
+  it("re-pools a stale dispatch when the project becomes bound to another device", () => {
+    const store = createStore();
+    const devbox = store.registerRuntime({
+      id: "rt_stale_devbox",
+      name: "devbox",
+      provider: "codex",
+      daemonId: "device-stale-devbox",
+    });
+    const personal = store.registerRuntime({
+      id: "rt_stale_personal",
+      name: "personal",
+      provider: "codex",
+      daemonId: "device-stale-personal",
+    });
+    const agent = store.createAgent({ name: "Stale routing", provider: "codex" });
+    const project = store.createProject({ title: "Becomes personal" });
+    const issue = store.createIssue({ title: "Move after dispatch", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "move" });
+
+    expect(store.claimTask(devbox.id)?.id).toBe(task.id);
+    store.createProjectDevice(project.id, { daemonId: "device-stale-personal" });
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+
+    expect(store.claimTask(devbox.id)).toBeNull();
+    expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: null });
+    expect(store.claimTask(personal.id)?.id).toBe(task.id);
+  });
+
+  it("re-pools a stale dispatch when its device becomes dedicated to other projects", () => {
+    const store = createStore();
+    const personal = store.registerRuntime({
+      id: "rt_stale_dedicated",
+      name: "personal",
+      provider: "codex",
+      daemonId: "device-stale-dedicated",
+    });
+    const devbox = store.registerRuntime({
+      id: "rt_stale_fallback",
+      name: "devbox",
+      provider: "codex",
+      daemonId: "device-stale-fallback",
+    });
+    const agent = store.createAgent({ name: "Stale dedicated", provider: "codex" });
+    const ordinaryProject = store.createProject({ title: "Ordinary" });
+    const ordinaryIssue = store.createIssue({ title: "Ordinary issue", projectId: ordinaryProject.id });
+    const allowedProject = store.createProject({ title: "Allowed" });
+    store.createProjectDevice(allowedProject.id, { daemonId: "device-stale-dedicated" });
+    const task = store.createTask({ agentId: agent.id, issueId: ordinaryIssue.id, prompt: "fallback" });
+
+    expect(store.claimTask(personal.id)?.id).toBe(task.id);
+    store.updateDaemonDedicated("local", "device-stale-dedicated", true, "local");
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: null });
+    expect(store.claimTask(devbox.id)?.id).toBe(task.id);
+  });
+
   it("serializes one Issue across different agents and runtimes", () => {
     const store = createStore();
     const codex = store.registerRuntime({ id: "rt_issue_codex", name: "codex", provider: "codex" });

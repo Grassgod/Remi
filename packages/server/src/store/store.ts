@@ -164,6 +164,7 @@ import type {
   CreateRepositoryWikiDocInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  ReplaceProjectDevicesInput,
   CreateRuntimeUpdateInput,
   CreateRuntimeCommandInput,
   CreateWorkspaceRuntimeProvisionInput,
@@ -2047,18 +2048,21 @@ runMigrations(this.db);
     dedicated: boolean,
     updatedBy: string | null,
   ): DaemonProfile {
-    const runtime = this.listRuntimes().find((candidate) => (
-      (candidate.workspaceId ?? "local") === workspaceId && candidate.daemonId === daemonId
-    ));
-    if (!runtime) throw new Error(`Daemon not found: ${daemonId}`);
-    const current = this.daemonProfiles.get(workspaceId, daemonId);
-    return this.daemonProfiles.upsertDedicated(
-      workspaceId,
-      daemonId,
-      current?.displayName ?? runtime.daemonDisplayName ?? daemonId,
-      dedicated,
-      updatedBy,
-    );
+    return this.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const runtime = this.listRuntimes().find((candidate) => (
+        (candidate.workspaceId ?? "local") === workspaceId && candidate.daemonId === daemonId
+      ));
+      if (!runtime) throw new Error(`Daemon not found: ${daemonId}`);
+      const current = this.daemonProfiles.get(workspaceId, daemonId);
+      return this.daemonProfiles.upsertDedicated(
+        workspaceId,
+        daemonId,
+        current?.displayName ?? runtime.daemonDisplayName ?? daemonId,
+        dedicated,
+        updatedBy,
+      );
+    })();
   }
 
   getDaemonRetirementPlan(workspaceId: string, daemonId: string): DaemonRetirementPlan {
@@ -2247,8 +2251,20 @@ runMigrations(this.db);
     return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds);
   }
 
-  mergeRuntimeInto(oldRuntimeId: string, newRuntimeId: string): { agentsReassigned: number; tasksReassigned: number; deleted: boolean } {
-    return this.runtimes.mergeRuntimeInto(oldRuntimeId, newRuntimeId);
+  mergeRuntimeInto(
+    oldRuntimeId: string,
+    newRuntimeId: string,
+    options: { legacyDaemonIds?: string[] } = {},
+  ): { agentsReassigned: number; tasksReassigned: number; deleted: boolean } {
+    return this.runtimes.mergeRuntimeInto(oldRuntimeId, newRuntimeId, options);
+  }
+
+  canonicalizeLegacyDaemonRouting(
+    workspaceId: string,
+    legacyDaemonIds: string[],
+    canonicalDaemonId: string,
+  ): void {
+    this.runtimes.canonicalizeLegacyDaemonRouting(workspaceId, legacyDaemonIds, canonicalDaemonId);
   }
 
   recordRuntimeLegacyDaemonId(
@@ -3119,6 +3135,10 @@ runMigrations(this.db);
 
   deleteProjectDevice(projectId: string, daemonId: string): void {
     return this.projects.deleteProjectDevice(projectId, daemonId);
+  }
+
+  replaceProjectDevices(projectId: string, input: ReplaceProjectDevicesInput): MultiremiProjectDevice[] {
+    return this.projects.replaceProjectDevices(projectId, input);
   }
 
   listProjectsForDaemon(workspaceId: string, daemonId: string): MultiremiProject[] {

@@ -7,8 +7,7 @@ import { toast } from "sonner";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import {
   projectDevicesOptions,
-  useCreateProjectDevice,
-  useDeleteProjectDevice,
+  useReplaceProjectDevices,
 } from "@multiremi/core/projects";
 import { runtimeListOptions } from "@multiremi/core/runtimes/queries";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -61,8 +60,7 @@ export function ProjectRunLocationSection({
     projectDevicesOptions(wsId, projectId),
   );
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
-  const createDevice = useCreateProjectDevice(wsId, projectId);
-  const deleteDevice = useDeleteProjectDevice(wsId, projectId);
+  const replaceDevices = useReplaceProjectDevices(wsId, projectId);
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [pendingIds, setPendingIds] = useState<string[]>([]);
@@ -119,13 +117,8 @@ export function ProjectRunLocationSection({
   };
 
   const save = async () => {
-    const previous = new Set(selectedIds);
-    const next = new Set(pendingIds);
     try {
-      await Promise.all([
-        ...pendingIds.filter((id) => !previous.has(id)).map((id) => createDevice.mutateAsync(id)),
-        ...selectedIds.filter((id) => !next.has(id)).map((id) => deleteDevice.mutateAsync(id)),
-      ]);
+      await replaceDevices.mutateAsync(pendingIds);
       setEditing(false);
       if (pendingIds.length === 0) setExpanded(false);
       toast.success(t(($) => $.run_location.toast_saved));
@@ -215,7 +208,7 @@ export function ProjectRunLocationSection({
             <Button
               variant="ghost"
               size="sm"
-              disabled={createDevice.isPending || deleteDevice.isPending}
+              disabled={replaceDevices.isPending}
               onClick={() => {
                 setPendingIds(selectedIds);
                 setEditing(false);
@@ -226,7 +219,7 @@ export function ProjectRunLocationSection({
             </Button>
             <Button
               size="sm"
-              disabled={createDevice.isPending || deleteDevice.isPending}
+              disabled={replaceDevices.isPending}
               onClick={() => void save()}
             >
               {t(($) => $.run_location.save)}
