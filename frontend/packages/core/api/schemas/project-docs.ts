@@ -51,6 +51,7 @@ const ProjectDocSchema = z.object({
   author_id: z.string().nullable().default(null),
   updated_by_type: z.string().nullable().default(null),
   updated_by_id: z.string().nullable().default(null),
+  compilation_run_id: z.string().nullable().catch(null).default(null),
   version: z.number().default(1),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
@@ -107,6 +108,7 @@ export const EMPTY_PROJECT_DOC: ProjectDoc = {
   author_id: null,
   updated_by_type: null,
   updated_by_id: null,
+  compilation_run_id: null,
   version: 1,
   created_at: "",
   updated_at: "",
@@ -125,6 +127,7 @@ const ProjectDocRevisionSchema = z.object({
   body: z.string().default(""),
   author_type: z.string().nullable().default(null),
   author_id: z.string().nullable().default(null),
+  compilation_run_id: z.string().nullable().catch(null).default(null),
   created_at: z.string().default(""),
 }).loose();
 

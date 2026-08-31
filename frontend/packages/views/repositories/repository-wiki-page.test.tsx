@@ -127,6 +127,7 @@ function doc(overrides: Partial<RepositoryWikiDoc> = {}): RepositoryWikiDoc {
     version: 1,
     updated_at: "2026-08-24T00:00:00Z",
     ...overrides,
+    compilation_run_id: overrides.compilation_run_id ?? null,
   };
 }
 

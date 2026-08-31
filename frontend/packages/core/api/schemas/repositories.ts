@@ -61,6 +61,7 @@ export const repositoryWikiSummarySchema = z.object({
   repository_name: z.string(),
   status: repositoryWikiStatusSchema,
   status_message: z.string().nullable().default(null),
+  compilation_run_id: z.string().nullable().catch(null).default(null),
   source_revision: z.string().nullable().default(null),
   page_count: z.number().int().nonnegative(),
   updated_at: z.string().nullable().default(null),
@@ -99,7 +100,8 @@ export const repositoryWikiRevisionsResponseSchema = z.object({
   revisions: z.array(z.object({
     id: z.string(), doc_id: z.string(), version: z.number().int().positive(), path: z.string(),
     title: z.string(), summary: z.string().nullable().default(null), body: z.string(),
-    source_revision: z.string().nullable().default(null), created_at: z.string(),
+    source_revision: z.string().nullable().default(null),
+    compilation_run_id: z.string().nullable().catch(null).default(null), created_at: z.string(),
   }).loose()),
 }).loose();
 

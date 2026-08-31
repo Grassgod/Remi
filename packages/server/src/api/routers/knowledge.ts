@@ -29,6 +29,7 @@ import { normalizeProjectWikiPath, projectDocSlug } from "@multiremi/store/repos
 import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-wiki-repo.js";
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
+import { agentKnowledgePublishPluginNames } from "@multiremi/knowledge/capability.js";
 
 interface KnowledgeSubmitBody {
   workspace_id?: string;
@@ -116,7 +117,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
         sourceRevision: actor.sourceRevision,
         authorAgentId: actor.agent?.id,
       });
-      return c.json({ submission: submissionResponse(result.submission), deduplicated: result.deduplicated }, result.deduplicated ? 200 : 201);
+      return c.json({ submission: submissionResponse(store, result.submission), deduplicated: result.deduplicated }, result.deduplicated ? 200 : 201);
     } catch (error) {
       return knowledgeError(c, error);
     }
@@ -134,7 +135,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
         scope: clean(c.req.query("scope")),
         status: clean(c.req.query("status")),
         limit: optionalInt(c.req.query("limit")),
-      }).map(submissionResponse) });
+      }).map((submission) => submissionResponse(store, submission)) });
     } catch (error) {
       return knowledgeError(c, error);
     }
@@ -145,7 +146,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     if (!submission) return c.json({ error: "knowledge submission not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, submission.workspaceId);
     if (denied) return denied;
-    return c.json({ submission: submissionResponse(submission) });
+    return c.json({ submission: submissionResponse(store, submission) });
   });
 
   app.get("/api/knowledge/runs", (c) => {
@@ -158,7 +159,14 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       repositoryId: clean(c.req.query("repository_id")),
       status: clean(c.req.query("status")),
       limit: optionalInt(c.req.query("limit")),
-    }).map(runResponse) });
+    }).map((run) => {
+      const detail = runDetailResponse(store, run);
+      return {
+        ...runResponse(store, run),
+        sources: detail.sources,
+        outputs: detail.outputs,
+      };
+    }) });
   });
 
   app.get("/api/knowledge/runs/:id", (c) => {
@@ -166,29 +174,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     if (!run) return c.json({ error: "knowledge compilation run not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, run.workspaceId);
     if (denied) return denied;
-    return c.json({
-      run: runResponse(run),
-      sources: store.listKnowledgeRunSources(run.id).map((source) => ({
-        id: source.id,
-        run_id: source.runId,
-        submission_id: source.submissionId,
-        source_type: source.sourceType,
-        source_ref: source.sourceRef,
-        metadata: source.metadata,
-        created_at: source.createdAt,
-      })),
-      outputs: store.listKnowledgeRunOutputs(run.id).map((output) => ({
-        id: output.id,
-        run_id: output.runId,
-        artifact_scope: output.artifactScope,
-        doc_id: output.docId,
-        revision_id: output.revisionId,
-        version: output.version,
-        action: output.action,
-        content_sha256: output.contentSha256,
-        created_at: output.createdAt,
-      })),
-    });
+    return c.json(runDetailResponse(store, run));
   });
 
   app.post("/api/projects/:id/knowledge/publish", async (c) => {
@@ -262,7 +248,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       linkSeededProjectSchema({ store, projectId: project.id, runId, schemaExisted });
       finalizePublishSources(store, submissions, outputs);
       const run = store.completeKnowledgeCompilationRun(runId, "published", `published ${outputs.length} output(s)`);
-      return c.json({ run: runResponse(run), outputs: store.listKnowledgeRunOutputs(runId) });
+      return c.json({ run: runResponse(store, run), outputs: store.listKnowledgeRunOutputs(runId) });
     } catch (error) {
       if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "publish failed");
       return knowledgeError(c, error);
@@ -341,7 +327,7 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
       }
       finalizePublishSources(store, submissions, outputs);
       const run = store.completeKnowledgeCompilationRun(runId, "published", `published ${outputs.length} output(s)`);
-      return c.json({ run: runResponse(run), outputs: store.listKnowledgeRunOutputs(runId) });
+      return c.json({ run: runResponse(store, run), outputs: store.listKnowledgeRunOutputs(runId) });
     } catch (error) {
       if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "publish failed");
       return knowledgeError(c, error);
@@ -373,8 +359,8 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
         canonicalEventId: required(body.canonical_scm_event_id, "canonical_scm_event_id"),
       });
       return c.json({
-        submission: submissionResponse(result.submission),
-        run: runResponse(result.run),
+        submission: submissionResponse(store, result.submission),
+        run: runResponse(store, result.run),
         deduplicated: result.deduplicated,
       }, result.deduplicated ? 200 : 202);
     } catch (error) {
@@ -696,7 +682,13 @@ function normalizeScope(value: unknown): MultiremiKnowledgeScope {
   throw new KnowledgeWritePolicyError("scope must be project_wiki, repository_wiki, or memory", 400);
 }
 
-function submissionResponse(submission: MultiremiKnowledgeSubmission): Record<string, unknown> {
+function submissionResponse(
+  store: RouterDeps["store"],
+  submission: MultiremiKnowledgeSubmission,
+): Record<string, unknown> {
+  const issue = submission.sourceIssueId ? store.getIssue(submission.sourceIssueId) : null;
+  const agent = submission.authorAgentId ? store.getAgent(submission.authorAgentId) : null;
+  const task = submission.sourceTaskId ? store.getTask(submission.sourceTaskId) : null;
   return {
     id: submission.id,
     workspace_id: submission.workspaceId,
@@ -717,10 +709,17 @@ function submissionResponse(submission: MultiremiKnowledgeSubmission): Record<st
     status: submission.status,
     created_at: submission.createdAt,
     updated_at: submission.updatedAt,
+    source_issue: issue ? { id: issue.id, key: issue.key, title: issue.title } : null,
+    author_agent: agent ? { id: agent.id, name: agent.name } : null,
+    source_task: task ? { id: task.id, status: task.status } : null,
   };
 }
 
-function runResponse(run: NonNullable<ReturnType<RouterDeps["store"]["getKnowledgeCompilationRun"]>>): Record<string, unknown> {
+function runResponse(
+  store: RouterDeps["store"],
+  run: NonNullable<ReturnType<RouterDeps["store"]["getKnowledgeCompilationRun"]>>,
+): Record<string, unknown> {
+  const agent = run.agentId ? store.getAgent(run.agentId) : null;
   return {
     id: run.id,
     workspace_id: run.workspaceId,
@@ -735,6 +734,58 @@ function runResponse(run: NonNullable<ReturnType<RouterDeps["store"]["getKnowled
     dedupe_key: run.dedupeKey,
     created_at: run.createdAt,
     completed_at: run.completedAt,
+    agent: agent ? { id: agent.id, name: agent.name } : null,
+    skill_names: agent ? agentKnowledgePublishPluginNames(store, agent) : [],
+  };
+}
+
+function runDetailResponse(
+  store: RouterDeps["store"],
+  run: NonNullable<ReturnType<RouterDeps["store"]["getKnowledgeCompilationRun"]>>,
+): Record<string, unknown> {
+  const repositoryDocs = run.repositoryId
+    ? store.listRepositoryWikiDocs(run.workspaceId, run.repositoryId)
+    : [];
+  return {
+    run: runResponse(store, run),
+    sources: store.listKnowledgeRunSources(run.id).map((source) => {
+      const submission = source.submissionId
+        ? store.getKnowledgeSubmission(source.submissionId)
+        : null;
+      return {
+        id: source.id,
+        run_id: source.runId,
+        submission_id: source.submissionId,
+        source_type: source.sourceType,
+        source_ref: source.sourceRef,
+        metadata: source.metadata,
+        created_at: source.createdAt,
+        submission: submission ? submissionResponse(store, submission) : null,
+      };
+    }),
+    outputs: store.listKnowledgeRunOutputs(run.id).map((output) => {
+      const doc = output.docId
+        ? output.artifactScope === "repository_wiki"
+          ? repositoryDocs.find((candidate) => candidate.id === output.docId)
+          : store.getProjectDoc(output.docId)
+        : null;
+      return {
+        id: output.id,
+        run_id: output.runId,
+        artifact_scope: output.artifactScope,
+        doc_id: output.docId,
+        revision_id: output.revisionId,
+        version: output.version,
+        action: output.action,
+        content_sha256: output.contentSha256,
+        created_at: output.createdAt,
+        artifact: doc ? {
+          id: doc.id,
+          title: doc.title,
+          path: doc.path,
+        } : null,
+      };
+    }),
   };
 }
 

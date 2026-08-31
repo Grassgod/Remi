@@ -88,6 +88,7 @@ export interface RepositoryWikiDoc {
   source_revision: string | null;
   status: RepositoryWikiStatus;
   status_message: string | null;
+  compilation_run_id: string | null;
   version: number;
   updated_at: string;
 }
@@ -101,6 +102,7 @@ export interface RepositoryWikiRevision {
   summary: string | null;
   body: string;
   source_revision: string | null;
+  compilation_run_id: string | null;
   created_at: string;
 }
 

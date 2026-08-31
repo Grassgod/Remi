@@ -14078,7 +14078,11 @@
             "result_summary": null,
             "dedupe_key": "snapshot-knowledge-run",
             "created_at": "<timestamp>",
-            "completed_at": null
+            "completed_at": null,
+            "agent": null,
+            "skill_names": [],
+            "sources": [],
+            "outputs": []
           }
         ]
       }
@@ -14102,7 +14106,9 @@
           "result_summary": null,
           "dedupe_key": "snapshot-knowledge-run",
           "created_at": "<timestamp>",
-          "completed_at": null
+          "completed_at": null,
+          "agent": null,
+          "skill_names": []
         },
         "sources": [],
         "outputs": []
@@ -14134,7 +14140,10 @@
             "content_sha256": "9dab82aab85242ccb71e2f5e9709c051140d1ad25b748a2c52bb734ef1abebd3",
             "status": "pending",
             "created_at": "<timestamp>",
-            "updated_at": "<timestamp>"
+            "updated_at": "<timestamp>",
+            "source_issue": null,
+            "author_agent": null,
+            "source_task": null
           }
         ]
       }
@@ -14164,7 +14173,10 @@
           "content_sha256": "9dab82aab85242ccb71e2f5e9709c051140d1ad25b748a2c52bb734ef1abebd3",
           "status": "pending",
           "created_at": "<timestamp>",
-          "updated_at": "<timestamp>"
+          "updated_at": "<timestamp>",
+          "source_issue": null,
+          "author_agent": null,
+          "source_task": null
         }
       }
     },

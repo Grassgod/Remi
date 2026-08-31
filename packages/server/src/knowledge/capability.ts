@@ -20,18 +20,26 @@ export function agentHasKnowledgePublishCapability(
   reader: KnowledgePublishCapabilityReader,
   agent: MultiremiAgent,
 ): boolean {
-  if (!agentRoleAtLeast(agent.role, "maintainer")) return false;
+  return agentKnowledgePublishPluginNames(reader, agent).length > 0;
+}
+
+/** Enabled provider plugins that grant the Agent knowledge publish authority. */
+export function agentKnowledgePublishPluginNames(
+  reader: KnowledgePublishCapabilityReader,
+  agent: MultiremiAgent,
+): string[] {
+  if (!agentRoleAtLeast(agent.role, "maintainer")) return [];
   const allowedNames = new Set<string>(KNOWLEDGE_PUBLISH_PLUGIN_NAMES);
-  const pluginIds = new Set(
+  const pluginsById = new Map(
     reader.listAgentPlugins(agent.workspaceId, {
       provider: agent.provider,
       includeArchived: false,
     })
       .filter((plugin) => allowedNames.has(plugin.name))
-      .map((plugin) => plugin.id),
+      .map((plugin) => [plugin.id, plugin.name] as const),
   );
-  if (pluginIds.size === 0) return false;
-  return reader.listAgentPluginBindings(agent.id).some((binding) =>
-    binding.enabled && pluginIds.has(binding.pluginId)
-  );
+  if (pluginsById.size === 0) return [];
+  return [...new Set(reader.listAgentPluginBindings(agent.id)
+    .filter((binding) => binding.enabled && pluginsById.has(binding.pluginId))
+    .map((binding) => pluginsById.get(binding.pluginId)!))];
 }

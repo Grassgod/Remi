@@ -118,6 +118,7 @@ function doc(partial: Partial<ProjectDoc> & { id: string }): ProjectDoc {
     updated_at: "2026-07-01T00:00:00Z",
     ...partial,
     path: partial.path ?? `${partial.id}.md`,
+    compilation_run_id: partial.compilation_run_id ?? null,
   };
 }
 

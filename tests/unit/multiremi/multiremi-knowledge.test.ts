@@ -6,6 +6,7 @@ import { configureRepositoryWikiAutomation, createStore, db, resetMultiremiTestE
 afterEach(resetMultiremiTestEnv);
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
+const ROOT_JSON_HEADERS = { ...JSON_HEADERS, Authorization: "Bearer root-secret" };
 
 describe("knowledge compilation control plane", () => {
   it("migrates the SQLite schema additively and deduplicates only pending raw submissions", () => {
@@ -95,6 +96,15 @@ describe("knowledge compilation control plane", () => {
     const retry = await request();
     expect(retry.status).toBe(202);
     expect(await retry.json()).toMatchObject({ submission_id: submission.id, deduplicated: true });
+    const rawList = await app.request("/api/knowledge/submissions?workspace_id=local", {
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    expect((await rawList.json() as any).submissions[0]).toMatchObject({
+      id: submission.id,
+      source_issue: { id: issue.id, key: issue.key, title: issue.title },
+      author_agent: { id: agent.id, name: agent.name },
+      source_task: { id: task.id, status: task.status },
+    });
     expect((await (await app.request(`/api/projects/${project.id}/docs?q=raw-only-marker`, {
       headers: { Authorization: "Bearer root-secret" },
     })).json() as any).docs).toEqual([]);
@@ -141,6 +151,19 @@ describe("knowledge compilation control plane", () => {
     expect(store.listProjectDocRevisions(overview.id)[0]!.compilationRunId).toBe(published.run.id);
     expect(store.getKnowledgeSubmission(first.id)?.status).toBe("consumed");
     expect(store.getKnowledgeSubmission(second.id)?.status).toBe("consumed");
+    const runList = await app.request("/api/knowledge/runs?workspace_id=local", {
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    const runDetail = (await runList.json() as any).runs[0];
+    expect(runDetail).toMatchObject({
+      id: published.run.id,
+      agent: { id: agent.id, name: agent.name },
+      skill_names: ["code-to-wiki"],
+    });
+    expect(runDetail.sources).toHaveLength(2);
+    expect(runDetail.sources.map((source: any) => source.submission?.id).sort()).toEqual([first.id, second.id].sort());
+    expect(runDetail.outputs).toHaveLength(3);
+    expect(runDetail.outputs.some((output: any) => output.artifact?.title === "Overview")).toBe(true);
 
     const duplicate = await app.request(`/api/projects/${project.id}/knowledge/publish`, {
       method: "POST",
@@ -173,10 +196,10 @@ describe("knowledge compilation control plane", () => {
   it("records human edits as manual compilation runs, including the seeded schema", async () => {
     const store = createStore();
     const project = store.createProject({ title: "Manual provenance" });
-    const app = createMultiremiApp({ store });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
     const created = await app.request(`/api/projects/${project.id}/docs`, {
       method: "POST",
-      headers: JSON_HEADERS,
+      headers: ROOT_JSON_HEADERS,
       body: JSON.stringify({ kind: "wiki", title: "Manual guide", body: "v1" }),
     });
     expect(created.status).toBe(201);
@@ -189,7 +212,7 @@ describe("knowledge compilation control plane", () => {
 
     const updated = await app.request(`/api/projects/${project.id}/docs/${doc.id}`, {
       method: "PUT",
-      headers: JSON_HEADERS,
+      headers: ROOT_JSON_HEADERS,
       body: JSON.stringify({ body: "v2", expected_version: 1 }),
     });
     const updatedDoc = (await updated.json() as any).doc;
@@ -328,10 +351,10 @@ describe("knowledge compilation control plane", () => {
     const project = store.createProject({ title: "Legacy" });
     const legacyWiki = store.createProjectDoc(project.id, { kind: "wiki", title: "Legacy Wiki", body: "still readable" });
     const legacyMemory = store.createProjectDoc(project.id, { kind: "memory", title: "Legacy Memory", body: "still recalled" });
-    const app = createMultiremiApp({ store });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
     const migrate = (mode: "dry_run" | "execute") => app.request("/api/knowledge/migrate-legacy", {
       method: "POST",
-      headers: JSON_HEADERS,
+      headers: ROOT_JSON_HEADERS,
       body: JSON.stringify({ workspace_id: "local", project_id: project.id, [mode]: true, batch_size: 100 }),
     });
     const dryRun = await migrate("dry_run");
