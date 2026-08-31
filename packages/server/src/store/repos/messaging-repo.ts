@@ -724,6 +724,17 @@ export class MessagingRepo {
     })();
   }
 
+  /**
+   * Points an outcome at what it produced.
+   *
+   * Separate from {@link recordOutcome} because a proposal's Inbox item is
+   * addressed by the outcome's own id, so the outcome has to exist before the
+   * thing it refers to does.
+   */
+  attachOutcomeRef(id: string, ref: string): void {
+    this.ctx.db.run("UPDATE multiremi_message_outcomes SET ref = ? WHERE id = ?", [ref, id]);
+  }
+
   getOutcome(id: string): MessageOutcome | null {
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_message_outcomes WHERE id = ?",

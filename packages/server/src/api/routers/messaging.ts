@@ -4,20 +4,24 @@ import {
   supportsConversations,
   type MessageConnection,
   type MessageErrorCode,
+  type MessageOutcomeKind,
+  type MessageProposalStatus,
   type MessageProvider,
   type MessageSource,
 } from "@multiremi/contracts/messaging.js";
+import type { MultiremiAssigneeType } from "@multiremi/contracts/types.js";
 import { createId } from "@multiremi/ids.js";
-import type { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
+import { MessagingOutcomeError, type MessageIssueInput } from "@multiremi/messaging/outcomes.js";
 import {
   denyCurrentUserWorkspaceAccess,
   isJsonApiError,
+  publishIssueCreated,
   publishWorkspaceEvent,
   readJsonStrict,
   readJsonStrictAllowEmpty,
   requireWorkspaceAdmin,
 } from "../helpers.js";
-import { currentAccessToken } from "../wire/index.js";
+import { currentAccessToken, currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
 
 const BASE = "/api/workspaces/:workspaceId/messaging";
@@ -354,6 +358,232 @@ export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
       return errorResponse(c, error);
     }
   });
+
+  const MESSAGE = `${BASE}/connections/:connectionId/messages/:externalMessageId`;
+
+  app.get(MESSAGE, (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    const ref = messageRef(c);
+    const message = repo.getMessage(ref.connectionId, ref.externalMessageId);
+    if (!message || message.workspaceId !== c.req.param("workspaceId")) {
+      return c.json({ error: "Message not found" }, 404);
+    }
+    return c.json({ message, outcomes: repo.listOutcomes(ref.connectionId, ref.externalMessageId) });
+  });
+
+  app.post(`${MESSAGE}/resolve`, async (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    const body = await readJsonStrict<ResolveBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = c.req.param("workspaceId");
+    const token = currentAccessToken(c);
+    const ref = messageRef(c);
+    try {
+      const result = deps.store.messagingOutcomes.record(ref, {
+        workspaceId,
+        outcome: body.outcome as ResolveBody["outcome"],
+        reason: body.reason,
+        // A task token names its own task: an agent cannot attribute its work
+        // to a different task by asking.
+        taskId: token?.type === "task" ? token.taskId : body.taskId ?? null,
+      });
+      return c.json({ ...result, outcomes: repo.listOutcomes(ref.connectionId, ref.externalMessageId) });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.post(`${MESSAGE}/notify`, async (c) => {
+    const body = await readJsonStrict<NotifyBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return inboxOutcomeResponse(c, deps, "notified", body.summary ?? "");
+  });
+
+  app.post(`${MESSAGE}/draft-reply`, async (c) => {
+    const body = await readJsonStrict<DraftReplyBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return inboxOutcomeResponse(c, deps, "reply_drafted", body.draftText ?? "");
+  });
+
+  app.post(`${MESSAGE}/propose-issue`, async (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    const body = await readJsonStrict<IssueBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = c.req.param("workspaceId");
+    const token = currentAccessToken(c);
+    const taskToken = token?.type === "task" ? token : null;
+    const ref = messageRef(c);
+    try {
+      const result = deps.store.messagingOutcomes.proposeIssue(ref, {
+        ...issueDraft(body),
+        workspaceId,
+        recipientId: taskToken?.userId ?? currentRequestUserId(c),
+        taskId: taskToken?.taskId ?? null,
+        actorType: taskToken ? "agent" : "member",
+        actorId: taskToken?.agentId ?? currentRequestUserId(c),
+      });
+      if (result.inboxItem) {
+        publishWorkspaceEvent(c, deps.store, "inbox:new", workspaceId, { item: result.inboxItem });
+      }
+      return c.json(
+        { ...result, outcomes: repo.listOutcomes(ref.connectionId, ref.externalMessageId) },
+        result.delivered && result.created ? 201 : 200,
+      );
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.post(`${MESSAGE}/create-issue`, async (c) => {
+    const denied = denyWorkspace(c, deps) ?? requireHumanApprover(c, deps);
+    if (denied) return denied;
+    const body = await readJsonStrict<IssueBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const ref = messageRef(c);
+    try {
+      const result = deps.store.messagingOutcomes.createIssue(ref, {
+        ...issueDraft(body),
+        workspaceId: c.req.param("workspaceId"),
+        taskId: null,
+        createdBy: currentRequestUserId(c),
+      });
+      if (result.created) publishIssueCreated(c, deps.store, result.issue);
+      return c.json(
+        { ...result, outcomes: repo.listOutcomes(ref.connectionId, ref.externalMessageId) },
+        result.created ? 201 : 200,
+      );
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.get(`${BASE}/proposals`, (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    try {
+      const limit = parseLimit(c.req.query("limit")) ?? 100;
+      const offset = parseOffset(c.req.query("offset"));
+      const page = repo.listProposals({
+        workspaceId: c.req.param("workspaceId"),
+        status: parseProposalStatus(c.req.query("status")) ?? undefined,
+        sourceId: cleanQuery(c.req.query("source")),
+        limit,
+        offset,
+      });
+      return c.json({
+        proposals: page.proposals,
+        total: page.total,
+        limit,
+        offset,
+        hasMore: offset + page.proposals.length < page.total,
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.post(`${BASE}/proposals/:proposalId/approve`, (c) => {
+    const denied = denyWorkspace(c, deps) ?? requireHumanApprover(c, deps);
+    if (denied) return denied;
+    try {
+      const result = deps.store.messagingOutcomes.approveProposal(c.req.param("proposalId") ?? "", {
+        workspaceId: c.req.param("workspaceId"),
+        approvedBy: currentRequestUserId(c),
+      });
+      if (result.created && result.issue) publishIssueCreated(c, deps.store, result.issue);
+      return c.json(
+        { ...result, outcomes: repo.listOutcomes(result.proposal.connectionId, result.proposal.externalMessageId) },
+        result.created ? 201 : 200,
+      );
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.post(`${BASE}/proposals/:proposalId/reject`, (c) => {
+    const denied = denyWorkspace(c, deps) ?? requireHumanApprover(c, deps);
+    if (denied) return denied;
+    try {
+      const result = deps.store.messagingOutcomes.rejectProposal(c.req.param("proposalId") ?? "", {
+        workspaceId: c.req.param("workspaceId"),
+        rejectedBy: currentRequestUserId(c),
+      });
+      return c.json({
+        ...result,
+        outcomes: repo.listOutcomes(result.proposal.connectionId, result.proposal.externalMessageId),
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+}
+
+/** The notify and draft-reply paths differ only in which text they carry. */
+function inboxOutcomeResponse(
+  c: Context,
+  deps: RouterDeps,
+  kind: "notified" | "reply_drafted",
+  text: string,
+): Response {
+  const denied = denyWorkspace(c, deps);
+  if (denied) return denied;
+  const token = currentAccessToken(c);
+  const taskToken = token?.type === "task" ? token : null;
+  const workspaceId = c.req.param("workspaceId") ?? "";
+  const ref = messageRef(c);
+  try {
+    const result = deps.store.messagingOutcomes.notify(ref, kind, {
+      workspaceId,
+      recipientId: taskToken?.userId ?? currentRequestUserId(c),
+      taskId: taskToken?.taskId ?? null,
+      actorType: taskToken ? "agent" : "member",
+      actorId: taskToken?.agentId ?? currentRequestUserId(c),
+      text,
+    });
+    if (result.inboxItem) {
+      publishWorkspaceEvent(c, deps.store, "inbox:new", workspaceId, { item: result.inboxItem });
+    }
+    return c.json(
+      { ...result, outcomes: deps.store.messaging.listOutcomes(ref.connectionId, ref.externalMessageId) },
+      result.delivered ? 201 : 200,
+    );
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+}
+
+/**
+ * The composite message identity, read from the path.
+ *
+ * Both halves are in the URL because neither is unique alone: the same channel
+ * message id can be ingested by two Connections pointing at two accounts.
+ */
+function messageRef(c: Context): { connectionId: string; externalMessageId: string } {
+  return {
+    connectionId: c.req.param("connectionId") ?? "",
+    externalMessageId: c.req.param("externalMessageId") ?? "",
+  };
+}
+
+function issueDraft(body: IssueBody): MessageIssueInput {
+  return {
+    title: body.title ?? "",
+    description: body.description ?? null,
+    priority: body.priority ?? null,
+    projectId: body.projectId ?? null,
+    assigneeType: body.assigneeType ?? null,
+    assigneeId: body.assigneeId ?? null,
+  };
+}
+
+function parseProposalStatus(value: string | undefined): MessageProposalStatus | null {
+  const status = value?.trim();
+  if (!status || status === "all") return null;
+  if (status === "pending" || status === "approved" || status === "rejected") return status;
+  throw new Error("status must be pending, approved, rejected or all");
 }
 
 interface CreateConnectionBody {
@@ -377,6 +607,29 @@ interface UpsertSourceBody {
   pollIntervalSeconds?: number;
   unprocessedRetrySeconds?: number;
   unprocessedRetryLimit?: number;
+}
+
+interface ResolveBody {
+  outcome: MessageOutcomeKind;
+  reason?: string | null;
+  taskId?: string | null;
+}
+
+interface NotifyBody {
+  summary?: string;
+}
+
+interface DraftReplyBody {
+  draftText?: string;
+}
+
+interface IssueBody {
+  title?: string;
+  description?: string | null;
+  priority?: string | null;
+  projectId?: string | null;
+  assigneeType?: MultiremiAssigneeType | null;
+  assigneeId?: string | null;
 }
 
 function connectionIdentity(connection: MessageConnection): {
@@ -473,8 +726,20 @@ function requireHumanAdmin(c: Context, deps: RouterDeps): Response | null {
   return requireWorkspaceAdmin(c, deps.store, c.req.param("workspaceId") ?? "");
 }
 
+/**
+ * Approving an Issue, or creating one outright, is a human decision.
+ *
+ * An agent may propose; the point of a proposal is that somebody else says yes.
+ */
+function requireHumanApprover(c: Context, deps: RouterDeps): Response | null {
+  if (currentAccessToken(c)?.type === "task") {
+    return c.json({ error: "forbidden for task token", code: "human_approval_required" }, 403);
+  }
+  return requireWorkspaceAdmin(c, deps.store, c.req.param("workspaceId") ?? "");
+}
+
 function messageKey(connectionId: string, externalMessageId: string): string {
-  return `${connectionId} ${externalMessageId}`;
+  return `${connectionId}\u0000${externalMessageId}`;
 }
 
 function requireText(value: string | undefined, field: string): string {
@@ -519,6 +784,11 @@ function cleanQuery(value: string | undefined): string | null {
 }
 
 export function errorResponse(c: Context, error: unknown): Response {
+  if (error instanceof MessagingOutcomeError) {
+    // The service already decided whether this was a bad request, a missing
+    // message, or a decision somebody else already made.
+    return c.json({ error: error.message }, error.status);
+  }
   if (error instanceof MessageProviderError) {
     // The Provider already classified this; the status follows the code rather
     // than a guess at the message text.

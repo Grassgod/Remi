@@ -27,6 +27,7 @@ import {
   type ScmConnectionWithRepositories,
 } from "@multiremi/store/repos/scm-repo.js";
 import { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
+import { MessagingOutcomeService } from "@multiremi/messaging/outcomes.js";
 import {
   FeishuIngestRepo,
   type CreateFeishuInboxOutcomeInput,
@@ -406,6 +407,14 @@ export class MultiremiStore {
    * keep in step without adding a boundary.
    */
   readonly messaging: MessagingRepo;
+  /**
+   * What a reviewer or an agent decided about an ingested message.
+   *
+   * Separate from {@link messaging} because recording an outcome can create an
+   * Inbox item or an Issue, which belong to other subsystems; keeping it out of
+   * the repo is what lets the repo stay pure persistence.
+   */
+  readonly messagingOutcomes: MessagingOutcomeService;
   private usage: UsageRepo;
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
@@ -458,6 +467,7 @@ export class MultiremiStore {
     this.scm = new ScmRepo(this.ctx);
     this.feishuIngest = new FeishuIngestRepo(this.ctx);
     this.messaging = new MessagingRepo(this.ctx);
+    this.messagingOutcomes = new MessagingOutcomeService(this.ctx, this.messaging);
     this.usage = new UsageRepo(this.ctx);
     this.squads = new SquadsRepo(this.ctx);
     this.analytics = new AnalyticsRepo(this.ctx);
