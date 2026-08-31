@@ -3558,6 +3558,8 @@ export interface MultiremiFeishuBotConfig {
   /** Bumped on every mutation; daemons refetch when their applied revision lags. */
   revision: number;
   hasAppSecret: boolean;
+  /** Non-reversible display prefix of the stored app secret, e.g. `abcd••••`. */
+  appSecretHint: string | null;
   hasVerificationToken: boolean;
   hasEncryptKey: boolean;
   botName: string | null;
@@ -3710,6 +3712,31 @@ export interface FeishuBotTestResult {
   runtime_supports_config: boolean;
   error_code: FeishuBotErrorCode | null;
   error_message: string | null;
+}
+
+export type FeishuBotAuditAction =
+  | "configured"
+  | "updated"
+  | "deleted"
+  | "enabled"
+  | "disabled"
+  | "redeployed"
+  | "tested"
+  | "registration_started"
+  | "registration_used";
+
+/**
+ * One audited change to the concierge. `details` records which fields moved and
+ * whether a secret was replaced — never a secret's value.
+ */
+export interface MultiremiFeishuBotAuditEntry {
+  id: string;
+  workspaceId: string;
+  action: FeishuBotAuditAction;
+  actorType: string;
+  actorId: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface MultiremiPromptSettings {

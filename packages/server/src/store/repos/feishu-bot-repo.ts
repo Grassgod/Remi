@@ -17,9 +17,9 @@
  *    offline). That is the two-phase handover acceptance criterion 8 asks for.
  */
 
-import { nowIso } from "@multiremi/ids.js";
+import { createId, nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
-import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js";
+import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import {
   decryptFeishuBotSecret,
   encryptFeishuBotSecret,
@@ -28,12 +28,14 @@ import {
 import { normalizeFeishuBotErrorCode } from "@multiremi/feishu-bot/diagnostics.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
 import type {
+  FeishuBotAuditAction,
   FeishuBotDesiredState,
   FeishuBotDomain,
   FeishuBotErrorCode,
   FeishuBotRuntimeState,
   FeishuBotSecretOp,
   FeishuBotStatus,
+  MultiremiFeishuBotAuditEntry,
   MultiremiFeishuBotConfig,
   MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDirective,
@@ -405,6 +407,56 @@ export class FeishuBotRepo {
     return this.getRuntimeStatus(workspaceId, runtimeId)!;
   }
 
+  recordAudit(
+    workspaceId: string,
+    action: FeishuBotAuditAction,
+    input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> } = {},
+  ): MultiremiFeishuBotAuditEntry {
+    const id = createId("fba");
+    const createdAt = nowIso();
+    const details = input.details ?? {};
+    this.ctx.db.run(
+      `INSERT INTO multiremi_feishu_bot_audit (id, workspace_id, action, actor_type, actor_id, details, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      workspaceId,
+      action,
+      input.actorType ?? "member",
+      cleanOptionalString(input.actorId),
+      toJson(details),
+      createdAt,
+    );
+    return {
+      id,
+      workspaceId,
+      action,
+      actorType: input.actorType ?? "member",
+      actorId: cleanOptionalString(input.actorId),
+      details,
+      createdAt,
+    };
+  }
+
+  listAudit(workspaceId: string, limit = 50): MultiremiFeishuBotAuditEntry[] {
+    const rows = this.ctx.db
+      .query(
+        `SELECT * FROM multiremi_feishu_bot_audit
+          WHERE workspace_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?`,
+      )
+      .all(workspaceId, Math.max(1, Math.min(200, Math.trunc(limit) || 50))) as Row[];
+    return rows.map((row) => ({
+      id: String(row.id ?? ""),
+      workspaceId: String(row.workspace_id ?? ""),
+      action: String(row.action ?? "updated") as FeishuBotAuditAction,
+      actorType: String(row.actor_type ?? "member"),
+      actorId: nullableString(row.actor_id),
+      details: parseJson<Record<string, unknown>>(row.details, {}),
+      createdAt: String(row.created_at ?? ""),
+    }));
+  }
+
   /** Drop a Runtime's reported state — used when a Runtime is retired or deleted. */
   clearRuntimeStatus(runtimeId: string): void {
     this.ctx.db.run("DELETE FROM multiremi_feishu_bot_runtime_states WHERE runtime_id = ?", runtimeId);
@@ -416,11 +468,27 @@ export class FeishuBotRepo {
    * Returns the workspaces that were disabled.
    */
   disableConfigsReferencingAgent(agentId: string, actor?: string | null): string[] {
-    return this.disableWhere("agent_id = ? AND enabled = 1", agentId, actor);
+    const disabled = this.disableWhere("agent_id = ? AND enabled = 1", agentId, actor);
+    for (const workspaceId of disabled) {
+      this.recordAudit(workspaceId, "disabled", {
+        actorType: "system",
+        actorId: actor ?? null,
+        details: { reason: "agent_archived", agent_id: agentId },
+      });
+    }
+    return disabled;
   }
 
   disableConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[] {
-    return this.disableWhere("runtime_id = ? AND enabled = 1", runtimeId, actor);
+    const disabled = this.disableWhere("runtime_id = ? AND enabled = 1", runtimeId, actor);
+    for (const workspaceId of disabled) {
+      this.recordAudit(workspaceId, "disabled", {
+        actorType: "system",
+        actorId: actor ?? null,
+        details: { reason: "runtime_removed", runtime_id: runtimeId },
+      });
+    }
+    return disabled;
   }
 
   /** Everything the settings page and the status route need, in one read. */
@@ -587,6 +655,7 @@ function mapConfig(row: Row): MultiremiFeishuBotConfig {
     enabled: Boolean(Number(row.enabled ?? 0)),
     revision: Number(row.revision ?? 0),
     hasAppSecret: Boolean(nullableString(row.app_secret_encrypted)),
+    appSecretHint: nullableString(row.app_secret_hint),
     hasVerificationToken: Boolean(nullableString(row.verification_token_encrypted)),
     hasEncryptKey: Boolean(nullableString(row.encrypt_key_encrypted)),
     botName: nullableString(row.bot_name),

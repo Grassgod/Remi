@@ -82,7 +82,10 @@ import type {
   ReportBotMenuPublishInput,
   UpdateRuntimeInput,
 } from "@multiremi/contracts/types.js";
-import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
+import {
+  FEISHU_CONCIERGE_CONFIG_CAPABILITY,
+  MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+} from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
 
@@ -448,6 +451,10 @@ export class RuntimesRepo {
     if (this.hasInFlightTasksForRuntime(id) || this.hasUnrepoolableQueuedTasksForRuntime(id)) return false;
     const now = nowIso();
     if (options.repoolQueuedTasks !== false) this.repoolQueuedTasksForRuntime(id);
+    // A concierge whose host machine is going away must not stay enabled: an
+    // admin has to pick a new Runtime deliberately rather than have the bot
+    // silently reappear somewhere else.
+    this.ctx.feishuBot().disableFeishuBotConfigsReferencingRuntime(id);
 
     // PostgreSQL intentionally has no FK cascades, and SQLite tests may have
     // FK enforcement disabled. Keep every runtime reference explicit here so
@@ -1379,12 +1386,21 @@ export class RuntimesRepo {
     supportsDirectoryScan?: boolean;
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
+    supportsFeishuBotConfig?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     const initialRuntime = this.getRuntime(runtimeId);
     if (!initialRuntime) {
       return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
     }
     let runtime = initialRuntime;
+    // Capability flags a daemon re-advertises on every heartbeat. Collected once
+    // so the three metadata-writing branches below stay in step.
+    const metadataPatch: Record<string, unknown> = {};
+    if (options.supportsBotMenu !== undefined) metadataPatch.feishu_bot_menu = options.supportsBotMenu;
+    if (options.supportsFeishuBotConfig !== undefined) {
+      metadataPatch[FEISHU_CONCIERGE_CONFIG_CAPABILITY] = options.supportsFeishuBotConfig;
+    }
+    const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
     let previousAgentPluginProtocol = readAgentPluginProtocol(runtime.metadata);
     let agentPluginProtocol = previousAgentPluginProtocol;
     let pluginStateChanges: MultiremiAgentPluginRuntimeState[] = [];
@@ -1400,7 +1416,7 @@ export class RuntimesRepo {
         const now = nowIso();
         this.ctx.db.run(
           "UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
-          [toJson({ ...lockedRuntime.metadata, agent_plugin_protocol: protocol, ...(options.supportsBotMenu !== undefined ? { feishu_bot_menu: options.supportsBotMenu } : {}) }), now, now, runtimeId],
+          [toJson({ ...lockedRuntime.metadata, agent_plugin_protocol: protocol, ...metadataPatch }), now, now, runtimeId],
         );
         const updatedRuntime = this.getRuntime(runtimeId)!;
         const changes = this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
@@ -1448,11 +1464,11 @@ export class RuntimesRepo {
           },
         });
       }
-    } else if (options.supportsBotMenu !== undefined) {
+    } else if (hasMetadataPatch) {
       const now = nowIso();
       this.ctx.db.run(
         "UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
-        [toJson({ ...runtime.metadata, feishu_bot_menu: options.supportsBotMenu }), now, now, runtimeId],
+        [toJson({ ...runtime.metadata, ...metadataPatch }), now, now, runtimeId],
       );
       runtime = this.getRuntime(runtimeId)!;
     } else {

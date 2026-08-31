@@ -368,7 +368,17 @@ export interface RuntimesSurface {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
 }
 
-export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface {}
+/**
+ * The Feishu concierge reaches back into Agent and Runtime lifecycle: archiving
+ * the bot's Agent or removing its Runtime must take the connector down rather
+ * than leave a workspace pointing at something that no longer exists.
+ */
+export interface FeishuBotSurface {
+  disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
+  disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
+}
+
+export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -493,6 +503,10 @@ export class StoreContext {
   }
 
   issueSessions(): IssueSessionsSurface {
+    return this.resolveHost();
+  }
+
+  feishuBot(): FeishuBotSurface {
     return this.resolveHost();
   }
 

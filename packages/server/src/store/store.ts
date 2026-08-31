@@ -365,6 +365,8 @@ import type {
   MultiremiScmSyncCursor,
   MultiremiScmSyncStream,
   CreateMultiremiFeishuSourceInput,
+  FeishuBotAuditAction,
+  MultiremiFeishuBotAuditEntry,
   MultiremiFeishuBotConfig,
   MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDirective,
@@ -1663,6 +1665,26 @@ runMigrations(this.db);
     return this.feishuBot.statusSnapshot(workspaceId);
   }
 
+  recordFeishuBotAudit(
+    workspaceId: string,
+    action: FeishuBotAuditAction,
+    input?: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
+  ): MultiremiFeishuBotAuditEntry {
+    return this.feishuBot.recordAudit(workspaceId, action, input);
+  }
+
+  listFeishuBotAudit(workspaceId: string, limit?: number): MultiremiFeishuBotAuditEntry[] {
+    return this.feishuBot.listAudit(workspaceId, limit);
+  }
+
+  disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[] {
+    return this.feishuBot.disableConfigsReferencingAgent(agentId, actor);
+  }
+
+  disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[] {
+    return this.feishuBot.disableConfigsReferencingRuntime(runtimeId, actor);
+  }
+
   listScmConnections(input: {
     workspaceId?: string | null;
     provider?: MultiremiScmProvider | null;
@@ -2568,6 +2590,7 @@ runMigrations(this.db);
     supportsDirectoryScan?: boolean;
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
+    supportsFeishuBotConfig?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }

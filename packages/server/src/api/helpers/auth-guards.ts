@@ -81,7 +81,11 @@ export function taskTokenHardDenyCategory(request: Request): TaskTokenHardDenyCa
     || path === "/api/cli-token"
     || /^\/api\/issues\/[^/]+\/share(?:\/extend)?$/.test(path)
     || /^\/api\/autopilots\/[^/]+\/triggers\/[^/]+\/(?:rotate-webhook-token|signing-secret)$/.test(path)
-    || /^\/api\/workspaces\/[^/]+\/relay-config\/[^/]+\/reveal$/.test(path)) {
+    || /^\/api\/workspaces\/[^/]+\/relay-config\/[^/]+\/reveal$/.test(path)
+    // The Feishu concierge surface carries the workspace's app secret and can
+    // repoint which Agent answers Feishu messages, so the whole subtree — reads
+    // included — stays outside what a task credential may reach.
+    || /^\/api\/workspaces\/[^/]+\/feishu-bot(?:\/.*)?$/.test(path)) {
     return "access_credentials";
   }
   if (path === "/api/me" || path.startsWith("/api/me/")

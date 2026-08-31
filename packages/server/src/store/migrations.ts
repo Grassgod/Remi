@@ -535,6 +535,21 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_runtime_states_workspace
       ON multiremi_feishu_bot_runtime_states(workspace_id, state);
 
+    -- Who changed the concierge, when, and what changed. The details column
+    -- records which fields moved and whether a secret was replaced, never a value.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_audit (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      actor_type TEXT NOT NULL DEFAULT 'member',
+      actor_id TEXT,
+      details TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_audit_workspace
+      ON multiremi_feishu_bot_audit(workspace_id, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
