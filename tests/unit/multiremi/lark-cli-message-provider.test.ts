@@ -589,6 +589,10 @@ function source(allowlist: MessageSource["allowlist"]): MessageSource {
     pollIntervalSeconds: 60,
     unprocessedRetrySeconds: 60,
     unprocessedRetryLimit: 3,
+    lastSuccessfulIngestAt: null,
+    lastErrorCode: null,
+    lastErrorAt: null,
+    consecutiveFailures: 0,
     createdAt: "2026-08-31T00:00:00Z",
     updatedAt: "2026-08-31T00:00:00Z",
   };

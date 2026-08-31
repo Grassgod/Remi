@@ -5,11 +5,37 @@ import type {
   MessageErrorCode,
   MessageSource,
 } from "@multiremi/contracts/messaging.js";
-import { nowIso } from "@multiremi/ids.js";
+import type { MessageSyncCursor } from "@multiremi/contracts/messaging.js";
+import { createId, nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 
 type Row = Record<string, unknown>;
+
+export interface ClaimMessageSyncStreamInput {
+  sourceId: string;
+  stream: string;
+  owner: string;
+  now: string;
+  leaseMs: number;
+}
+
+export interface UpdateClaimedMessageSyncCursorInput {
+  sourceId: string;
+  stream: string;
+  leaseToken: string;
+  cursor?: Record<string, unknown> | null;
+  watermark?: string | null;
+  lastStartedAt?: string | null;
+  lastCompletedAt?: string | null;
+  lastError?: string | null;
+  leaseUntil?: string | null;
+}
+
+export interface ReconcileMessageUnprocessedResult {
+  retried: number;
+  dismissed: number;
+}
 
 export interface UpsertMessageConnectionInput {
   id: string;
@@ -65,6 +91,8 @@ export interface IngestCanonicalMessagesResult {
   inserted: number;
   updated: number;
   unchanged: number;
+  /** Rejected for want of consent: off the allowlist, or at/before activation. */
+  skipped: number;
 }
 
 export interface UpdateMessageProcessingStateInput {
@@ -130,11 +158,47 @@ export class MessagingRepo {
     return this.getConnection(input.id)!;
   }
 
+  listConnections(input: { workspaceId?: string | null } = {}): MessageConnection[] {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (input.workspaceId) {
+      conditions.push("workspace_id = ?");
+      values.push(input.workspaceId);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_message_connections${where} ORDER BY created_at ASC, id ASC`,
+    ).all(...values) as Row[];
+    return rows.map(toConnection);
+  }
+
   getSource(id: string): MessageSource | null {
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_message_sources WHERE id = ?",
     ).get(id) as Row | null;
     return row ? toSource(row) : null;
+  }
+
+  listSources(input: { workspaceId?: string | null; enabled?: boolean; connectionId?: string } = {}): MessageSource[] {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+    if (input.workspaceId) {
+      conditions.push("workspace_id = ?");
+      values.push(input.workspaceId);
+    }
+    if (input.connectionId) {
+      conditions.push("connection_id = ?");
+      values.push(input.connectionId);
+    }
+    if (input.enabled !== undefined) {
+      conditions.push("enabled = ?");
+      values.push(input.enabled ? 1 : 0);
+    }
+    const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_message_sources${where} ORDER BY created_at ASC, id ASC`,
+    ).all(...values) as Row[];
+    return rows.map(toSource);
   }
 
   upsertSource(input: UpsertMessageSourceInput): MessageSource {
@@ -207,12 +271,23 @@ export class MessagingRepo {
       throw new Error("Message source does not belong to the requested connection");
     }
 
+    // Consent is enforced here rather than in the Provider: the Core is the
+    // authorization boundary, so a Provider that returns more than it was asked
+    // for — or is simply wrong — still cannot widen what gets stored.
+    const activationByConversation = new Map(
+      source.allowlist.map((entry) => [entry.externalConversationId, truncateMinute(entry.addedAt)]),
+    );
+
     return this.ctx.db.transaction(() => {
-      const result: IngestCanonicalMessagesResult = { inserted: 0, updated: 0, unchanged: 0 };
+      const result: IngestCanonicalMessagesResult = { inserted: 0, updated: 0, unchanged: 0, skipped: 0 };
       const ingestedAt = input.ingestedAt ?? nowIso();
       for (const message of input.messages) {
         requireNonEmpty(message.externalMessageId, "externalMessageId");
         requireNonEmpty(message.externalConversationId, "externalConversationId");
+        if (!isConsented(activationByConversation, message)) {
+          result.skipped += 1;
+          continue;
+        }
         const fingerprint = fingerprintMessage(message);
         const existing = this.getMessage(input.connectionId, message.externalMessageId);
         if (!existing) {
@@ -270,6 +345,177 @@ export class MessagingRepo {
     return this.getMessage(input.connectionId, input.externalMessageId);
   }
 
+  getSyncCursor(sourceId: string, stream: string): MessageSyncCursor | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_message_sync_cursors WHERE source_id = ? AND stream = ?",
+    ).get(sourceId, stream) as Row | null;
+    return row ? toCursor(row) : null;
+  }
+
+  /**
+   * Take the lease on a stream, or return null when another owner holds it.
+   *
+   * The claim is conditional in SQL rather than read-then-write, so two Core
+   * instances racing for the same Source cannot both win and double-ingest.
+   */
+  claimSyncStream(input: ClaimMessageSyncStreamInput): MessageSyncCursor | null {
+    return this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `INSERT OR IGNORE INTO multiremi_message_sync_cursors (
+          source_id, stream, cursor, watermark, last_started_at, last_completed_at,
+          last_error, lease_owner, lease_until, lease_token, updated_at
+        ) VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)`,
+        [input.sourceId, input.stream, input.now],
+      );
+      const row = this.ctx.db.query(
+        `UPDATE multiremi_message_sync_cursors
+         SET lease_owner = ?, lease_until = ?, lease_token = ?, updated_at = ?
+         WHERE source_id = ? AND stream = ?
+           AND (lease_token IS NULL OR lease_until IS NULL OR lease_until <= ?)
+         RETURNING *`,
+      ).get(
+        input.owner,
+        new Date(Date.parse(input.now) + input.leaseMs).toISOString(),
+        createId("mlease"),
+        input.now,
+        input.sourceId,
+        input.stream,
+        input.now,
+      ) as Row | null;
+      return row ? toCursor(row) : null;
+    })();
+  }
+
+  /** Writes cursor progress, but only for the caller that still holds the lease. */
+  updateClaimedSyncCursor(input: UpdateClaimedMessageSyncCursorInput): MessageSyncCursor | null {
+    const current = this.getSyncCursor(input.sourceId, input.stream);
+    if (!current || current.leaseToken !== input.leaseToken) return null;
+    const row = this.ctx.db.query(
+      `UPDATE multiremi_message_sync_cursors SET
+        cursor = ?, watermark = ?, last_started_at = ?, last_completed_at = ?,
+        last_error = ?, lease_until = ?, updated_at = ?
+       WHERE source_id = ? AND stream = ? AND lease_token = ?
+       RETURNING *`,
+    ).get(
+      input.cursor === undefined ? toJson(current.cursor) : (input.cursor === null ? null : toJson(input.cursor)),
+      input.watermark === undefined ? current.watermark : input.watermark,
+      input.lastStartedAt === undefined ? current.lastStartedAt : input.lastStartedAt,
+      input.lastCompletedAt === undefined ? current.lastCompletedAt : input.lastCompletedAt,
+      input.lastError === undefined ? current.lastError : input.lastError,
+      input.leaseUntil === undefined ? current.leaseUntil : input.leaseUntil,
+      nowIso(),
+      input.sourceId,
+      input.stream,
+      input.leaseToken,
+    ) as Row | null;
+    return row ? toCursor(row) : null;
+  }
+
+  releaseSyncStream(sourceId: string, stream: string, leaseToken: string): boolean {
+    return this.ctx.db.run(
+      `UPDATE multiremi_message_sync_cursors
+       SET lease_owner = NULL, lease_until = NULL, lease_token = NULL, updated_at = ?
+       WHERE source_id = ? AND stream = ? AND lease_token = ?`,
+      [nowIso(), sourceId, stream, leaseToken],
+    ).changes > 0;
+  }
+
+  recordSourceSuccess(sourceId: string, completedAt: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_message_sources
+       SET last_successful_ingest_at = ?, last_error_code = NULL, last_error_at = NULL,
+           consecutive_failures = 0, connection_alerted_at = NULL, updated_at = ?
+       WHERE id = ?`,
+      [completedAt, nowIso(), sourceId],
+    );
+  }
+
+  recordSourceFailure(sourceId: string, errorCode: MessageErrorCode, failedAt: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_message_sources
+       SET last_error_code = ?, last_error_at = ?,
+           consecutive_failures = consecutive_failures + 1, updated_at = ?
+       WHERE id = ?`,
+      [errorCode, failedAt, nowIso(), sourceId],
+    );
+  }
+
+  /** True when the Source has messages whose retry backoff has elapsed. */
+  hasDueUnprocessedMessages(sourceId: string, now: Date): boolean {
+    const source = this.getSource(sourceId);
+    if (!source) return false;
+    const due = new Date(now.getTime() - source.unprocessedRetrySeconds * 1_000).toISOString();
+    const row = this.ctx.db.query(
+      `SELECT 1 FROM multiremi_message_messages
+       WHERE source_id = ? AND processed_at IS NULL AND retry_count < ?
+         AND COALESCE(last_retry_at, ingested_at) <= ?
+       LIMIT 1`,
+    ).get(sourceId, source.unprocessedRetryLimit, due) as Row | null;
+    return row !== null;
+  }
+
+  /**
+   * Advances retry bookkeeping for messages that were never processed.
+   *
+   * Messages past `unprocessedRetryLimit` are dismissed by stamping
+   * `processed_at`, which stops the retry without deleting evidence that the
+   * message arrived — retention is the only thing that removes rows.
+   */
+  reconcileUnprocessedMessages(sourceId: string, now: Date, limit = 500): ReconcileMessageUnprocessedResult {
+    const source = this.getSource(sourceId);
+    if (!source) return { retried: 0, dismissed: 0 };
+    const timestamp = now.toISOString();
+    const due = new Date(now.getTime() - source.unprocessedRetrySeconds * 1_000).toISOString();
+    return this.ctx.db.transaction(() => {
+      const rows = this.ctx.db.query(
+        `SELECT external_message_id, retry_count FROM multiremi_message_messages
+         WHERE source_id = ? AND processed_at IS NULL
+           AND COALESCE(last_retry_at, ingested_at) <= ?
+         ORDER BY sent_at ASC, external_message_id ASC
+         LIMIT ?`,
+      ).all(sourceId, due, limit) as Row[];
+
+      let retried = 0;
+      let dismissed = 0;
+      for (const row of rows) {
+        const externalMessageId = String(row.external_message_id);
+        const nextRetry = Number(row.retry_count ?? 0) + 1;
+        if (nextRetry >= source.unprocessedRetryLimit) {
+          this.ctx.db.run(
+            `UPDATE multiremi_message_messages
+             SET retry_count = ?, last_retry_at = ?, processed_at = ?
+             WHERE connection_id = ? AND external_message_id = ?`,
+            [nextRetry, timestamp, timestamp, source.connectionId, externalMessageId],
+          );
+          dismissed += 1;
+          continue;
+        }
+        this.ctx.db.run(
+          `UPDATE multiremi_message_messages
+           SET retry_count = ?, last_retry_at = ?
+           WHERE connection_id = ? AND external_message_id = ?`,
+          [nextRetry, timestamp, source.connectionId, externalMessageId],
+        );
+        retried += 1;
+      }
+      return { retried, dismissed };
+    })();
+  }
+
+  /** Drops messages past their Source's retention window. `0` days keeps forever. */
+  deleteExpiredMessages(now: Date = new Date()): number {
+    let deleted = 0;
+    for (const source of this.listSources()) {
+      if (source.retentionDays <= 0) continue;
+      const cutoff = new Date(now.getTime() - source.retentionDays * 86_400_000).toISOString();
+      deleted += this.ctx.db.run(
+        "DELETE FROM multiremi_message_messages WHERE source_id = ? AND sent_at < ?",
+        [source.id, cutoff],
+      ).changes;
+    }
+    return deleted;
+  }
+
   private insertMessage(
     source: MessageSource,
     message: CanonicalMessage,
@@ -325,6 +571,25 @@ function messageValues(
   ];
 }
 
+/**
+ * Whether the operator opted this conversation in before the message was sent.
+ *
+ * Comparison is at minute precision because some channels only expose
+ * minute-accurate timestamps on search results; the whole activation minute is
+ * therefore excluded, so a coarse timestamp can never be read as post-consent.
+ */
+function isConsented(activationByConversation: ReadonlyMap<string, number>, message: CanonicalMessage): boolean {
+  const activation = activationByConversation.get(message.externalConversationId);
+  if (activation === undefined || !Number.isFinite(activation)) return false;
+  const sentAt = truncateMinute(message.sentAt);
+  return Number.isFinite(sentAt) && sentAt > activation;
+}
+
+function truncateMinute(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.floor(timestamp / 60_000) * 60_000 : Number.NaN;
+}
+
 function fingerprintMessage(message: CanonicalMessage): string {
   return createHash("sha256").update(stableJson(message)).digest("hex");
 }
@@ -371,7 +636,27 @@ function toSource(row: Row): MessageSource {
     pollIntervalSeconds: Number(row.poll_interval_seconds),
     unprocessedRetrySeconds: Number(row.unprocessed_retry_seconds),
     unprocessedRetryLimit: Number(row.unprocessed_retry_limit),
+    lastSuccessfulIngestAt: nullableString(row.last_successful_ingest_at),
+    lastErrorCode: nullableString(row.last_error_code) as MessageErrorCode | null,
+    lastErrorAt: nullableString(row.last_error_at),
+    consecutiveFailures: Number(row.consecutive_failures ?? 0),
     createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toCursor(row: Row): MessageSyncCursor {
+  return {
+    sourceId: String(row.source_id),
+    stream: String(row.stream),
+    cursor: parseJson<Record<string, unknown> | null>(row.cursor, null),
+    watermark: nullableString(row.watermark),
+    lastStartedAt: nullableString(row.last_started_at),
+    lastCompletedAt: nullableString(row.last_completed_at),
+    lastError: nullableString(row.last_error),
+    leaseOwner: nullableString(row.lease_owner),
+    leaseUntil: nullableString(row.lease_until),
+    leaseToken: nullableString(row.lease_token),
     updatedAt: String(row.updated_at),
   };
 }

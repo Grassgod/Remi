@@ -80,6 +80,17 @@ export interface MessageSource {
   pollIntervalSeconds: number;
   unprocessedRetrySeconds: number;
   unprocessedRetryLimit: number;
+  /**
+   * Sync health, maintained by the Core.
+   *
+   * Kept on the Source rather than only in the cursor because this is what
+   * operator surfaces read: a Source can be behind for a reason that has
+   * nothing to do with where its cursor currently points.
+   */
+  lastSuccessfulIngestAt: string | null;
+  lastErrorCode: MessageErrorCode | null;
+  lastErrorAt: string | null;
+  consecutiveFailures: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -89,6 +100,31 @@ export interface MessageAllowlistEntry {
   externalConversationId: string;
   /** Activation watermark: nothing at or before this instant is ingested. */
   addedAt: string;
+}
+
+// ─── Sync state ─────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-stream sync progress for one Source, and the lease that guards it.
+ *
+ * The lease exists so that several Core instances can share one database
+ * without polling the same Source twice: a writer must hold `leaseToken` for
+ * every cursor write, and a lease that expires is reclaimed by whoever is next.
+ * `cursor` is opaque Core state (which window is in flight, plus the Provider's
+ * own page token); `watermark` is the point the Source is caught up to.
+ */
+export interface MessageSyncCursor {
+  sourceId: string;
+  stream: string;
+  cursor: Record<string, unknown> | null;
+  watermark: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+  leaseOwner: string | null;
+  leaseUntil: string | null;
+  leaseToken: string | null;
+  updatedAt: string;
 }
 
 // ─── Conversations ──────────────────────────────────────────────────────────────────────────────
