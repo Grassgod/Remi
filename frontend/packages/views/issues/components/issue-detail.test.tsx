@@ -1529,6 +1529,49 @@ describe("IssueDetail (shared)", () => {
     expect(screen.getByText("Add property")).toBeInTheDocument();
   });
 
+  it("groups the parent section directly above sub-issues in the sidebar", async () => {
+    // MUL-204: the two halves of the hierarchy used to sit on opposite sides
+    // of the code-workspace and creation-relation sections, so a link to the
+    // parent showed up in a different part of the rail than the children did.
+    const parent: Issue = {
+      ...mockIssue,
+      id: "issue-parent",
+      number: 9,
+      identifier: "TES-9",
+      title: "Authentication epic",
+      parent_issue_id: null,
+    };
+    const child: Issue = {
+      ...mockIssue,
+      id: "issue-2",
+      number: 2,
+      identifier: "TES-2",
+      title: "Add refresh tokens",
+      parent_issue_id: "issue-1",
+      status: "todo",
+    };
+    mockApiObj.getIssue.mockImplementation((id: string) =>
+      Promise.resolve(
+        id === "issue-parent" ? parent : { ...mockIssue, parent_issue_id: "issue-parent" },
+      ),
+    );
+    mockApiObj.listChildIssues.mockResolvedValue({ issues: [child] });
+
+    renderIssueDetail();
+
+    const parentToggle = await screen.findByRole("button", { name: /Parent issue/ });
+    // The main column carries a sub-issue list under the same label; only the
+    // sidebar fold reports aria-expanded, so that is what disambiguates them.
+    const subToggle = screen.getByRole("button", { name: /Sub-issues/, expanded: true });
+
+    // Parent first — the rail reads in the same direction as the tree.
+    expect(
+      parentToggle.compareDocumentPosition(subToggle) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // …and nothing is allowed between them.
+    expect(parentToggle.parentElement?.nextElementSibling).toBe(subToggle.parentElement);
+  });
+
   it("uses a non-resizable layout with the sidebar sheet closed by default on mobile", async () => {
     mockViewport.isMobile = true;
 
