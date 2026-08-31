@@ -22,8 +22,6 @@ vi.mock("@multiremi/core/issues", () => ({
 // The session bar has its own spec; stub it so this file only exercises the rail.
 vi.mock("./issue-session-bar", () => ({
   NewSessionButton: () => <button type="button">New session</button>,
-  SessionDelegateTaskDialog: () => null,
-  SessionPublishResultDialog: () => null,
 }));
 
 vi.mock("../../common/actor-avatar", () => ({
@@ -114,6 +112,17 @@ describe("IssueSessionList rail", () => {
     expect(screen.getByText("Sessions").parentElement).toContainElement(newSession[0]!);
   });
 
+  it("offers participants and nothing else in the row menu", async () => {
+    // Publishing a result and delegating a task used to sit here too. Both are
+    // agent-side actions driven from the CLI — members never used the buttons,
+    // so the page no longer shows them (MUL-204).
+    renderRail(SESSIONS);
+    fireEvent.click(screen.getAllByRole("button", { name: "Session actions" })[0]!);
+
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual(["Session participants"]);
+  });
+
   it("carries the scope as a tooltip so the narrow header can stay one word", () => {
     renderRail(SESSIONS);
 
@@ -185,7 +194,7 @@ describe("SessionParticipantsDialog", () => {
     await openParticipants([makeAgent({ archived_at: "2026-02-01T00:00:00Z" })]);
 
     expect(
-      screen.getByText("This workspace has no agents yet. Create one before delegating work."),
+      screen.getByText("This workspace has no agents yet. Create one before adding participants."),
     ).toBeInTheDocument();
   });
 

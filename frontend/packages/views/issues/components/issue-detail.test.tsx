@@ -216,8 +216,6 @@ const mockApiObj = vi.hoisted(() => ({
   listIssueSessionResults: vi.fn().mockResolvedValue([]),
   createIssueSession: vi.fn(),
   addSessionParticipant: vi.fn(),
-  createSessionTask: vi.fn(),
-  publishSessionResult: vi.fn(),
   listTimeline: vi.fn().mockResolvedValue([]),
   listComments: vi.fn().mockResolvedValue([]),
   createComment: vi.fn(),
@@ -921,9 +919,6 @@ describe("IssueDetail (shared)", () => {
     expect(newSessionControls).toHaveLength(1);
     expect(railLabel.parentElement).toContainElement(newSessionControls[0]!);
 
-    // The panel keeps the per-session actions, one copy each.
-    expect(screen.getAllByRole("button", { name: "Publish result" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Delegate task" })).toHaveLength(1);
   });
 
   it("mounts the rail in the panel's left gutter even for a single-session issue", async () => {
@@ -1115,10 +1110,6 @@ describe("IssueDetail (shared)", () => {
     // The + affordance lives in the rail header — and only there, so the
     // panel must not mount a second copy.
     expect(screen.getAllByRole("button", { name: "New session" })).toHaveLength(1);
-    // The panel carries publish / delegate for whichever session is open;
-    // every *other* session is reached through its row's ⋯ menu.
-    expect(screen.getAllByRole("button", { name: "Publish result" })).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Delegate task" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Session actions" })).toHaveLength(2);
   });
 
@@ -1211,7 +1202,7 @@ describe("IssueDetail (shared)", () => {
     // The workspace fixture has no agents at all — the empty state has to name
     // that cause rather than the "already participating" one.
     expect(
-      screen.getByText("This workspace has no agents yet. Create one before delegating work."),
+      screen.getByText("This workspace has no agents yet. Create one before adding participants."),
     ).toBeInTheDocument();
   });
 
@@ -1274,7 +1265,7 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
-  it("shows and explicitly publishes reusable Session results", async () => {
+  it("shows reusable Session results without offering to publish one", async () => {
     mockApiObj.listIssueSessionResults.mockResolvedValue([{
       id: "result-1",
       issue_id: mockIssue.id,
@@ -1282,21 +1273,10 @@ describe("IssueDetail (shared)", () => {
       title: "Architecture decision",
       body: "Use an append-only canonical event log.",
       metadata: {},
-      published_by_type: "member",
-      published_by_id: "user-1",
+      published_by_type: "agent",
+      published_by_id: "agent-1",
       created_at: "2025-01-03T00:00:00Z",
     }]);
-    mockApiObj.publishSessionResult.mockResolvedValue({
-      id: "result-2",
-      issue_id: mockIssue.id,
-      source_session_id: "session-main",
-      title: "API contract",
-      body: "Sibling sessions consume explicit results only.",
-      metadata: {},
-      published_by_type: "member",
-      published_by_id: "user-1",
-      created_at: "2025-01-04T00:00:00Z",
-    });
     renderIssueDetail();
 
     // The result itself lives in the right panel's key-results section; the
@@ -1309,26 +1289,15 @@ describe("IssueDetail (shared)", () => {
       screen.queryByText("Use an append-only canonical event log."),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Publish result" }));
-    // Scoped to the dialog: the panel card's generic kind icon is also
-    // labelled "Result".
-    const publishDialog = within(await screen.findByRole("dialog"));
-    fireEvent.change(publishDialog.getByLabelText("Title (optional)"), {
-      target: { value: "API contract" },
-    });
-    fireEvent.change(publishDialog.getByLabelText("Result"), {
-      target: { value: "Sibling sessions consume explicit results only." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
-
-    await waitFor(() => {
-      expect(mockApiObj.publishSessionResult).toHaveBeenCalledWith(
-        "issue-1",
-        "session-main",
-        "API contract",
-        "Sibling sessions consume explicit results only.",
-      );
-    });
+    // Results are written by agents through the CLI, never from the dashboard,
+    // so the panel is read-only — no publish/delegate buttons anywhere on the
+    // page. Members never used them (MUL-204).
+    expect(
+      screen.queryByRole("button", { name: "Publish result" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delegate task" }),
+    ).not.toBeInTheDocument();
   });
 
   it("points the timeline's published-result line at the key-results panel section", async () => {
@@ -1527,6 +1496,49 @@ describe("IssueDetail (shared)", () => {
     // No parent → no standalone Parent issue section either.
     expect(screen.queryByText("Parent issue")).not.toBeInTheDocument();
     expect(screen.getByText("Add property")).toBeInTheDocument();
+  });
+
+  it("groups the parent section directly above sub-issues in the sidebar", async () => {
+    // MUL-204: the two halves of the hierarchy used to sit on opposite sides
+    // of the code-workspace and creation-relation sections, so a link to the
+    // parent showed up in a different part of the rail than the children did.
+    const parent: Issue = {
+      ...mockIssue,
+      id: "issue-parent",
+      number: 9,
+      identifier: "TES-9",
+      title: "Authentication epic",
+      parent_issue_id: null,
+    };
+    const child: Issue = {
+      ...mockIssue,
+      id: "issue-2",
+      number: 2,
+      identifier: "TES-2",
+      title: "Add refresh tokens",
+      parent_issue_id: "issue-1",
+      status: "todo",
+    };
+    mockApiObj.getIssue.mockImplementation((id: string) =>
+      Promise.resolve(
+        id === "issue-parent" ? parent : { ...mockIssue, parent_issue_id: "issue-parent" },
+      ),
+    );
+    mockApiObj.listChildIssues.mockResolvedValue({ issues: [child] });
+
+    renderIssueDetail();
+
+    const parentToggle = await screen.findByRole("button", { name: /Parent issue/ });
+    // The main column carries a sub-issue list under the same label; only the
+    // sidebar fold reports aria-expanded, so that is what disambiguates them.
+    const subToggle = screen.getByRole("button", { name: /Sub-issues/, expanded: true });
+
+    // Parent first — the rail reads in the same direction as the tree.
+    expect(
+      parentToggle.compareDocumentPosition(subToggle) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // …and nothing is allowed between them.
+    expect(parentToggle.parentElement?.nextElementSibling).toBe(subToggle.parentElement);
   });
 
   it("uses a non-resizable layout with the sidebar sheet closed by default on mobile", async () => {
