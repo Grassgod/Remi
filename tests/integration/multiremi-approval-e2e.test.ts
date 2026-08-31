@@ -12,6 +12,7 @@ import type { MultiremiTaskHumanRequest, MultiremiTaskStatus } from "@multiremi/
 
 let db: Database | null = null;
 let workDir: string | null = null;
+const originalUnattendedHumanRequestTimeoutMs = process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS;
 
 afterEach(() => {
   db?.close();
@@ -19,6 +20,11 @@ afterEach(() => {
   if (workDir) {
     rmSync(workDir, { recursive: true, force: true });
     workDir = null;
+  }
+  if (originalUnattendedHumanRequestTimeoutMs === undefined) {
+    delete process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS;
+  } else {
+    process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS = originalUnattendedHumanRequestTimeoutMs;
   }
 });
 
@@ -72,6 +78,8 @@ interface Harness {
  */
 async function startHarness(options: {
   humanRequestTimeoutMs?: number;
+  unattendedHumanRequestTimeoutMs?: number;
+  unattended?: boolean;
   withElicitation?: boolean;
   approvalMode?: "ask" | "auto";
 } = {}): Promise<Harness> {
@@ -79,7 +87,18 @@ async function startHarness(options: {
   workDir = mkdtempSync(join(tmpdir(), "multiremi-approval-e2e-"));
   const store = new MultiremiStore(db);
   const agent = store.createAgent({ name: "Approval Agent", provider: "claude", cwd: workDir });
-  const task = store.createTask({ agentId: agent.id, prompt: "Do something dangerous" });
+  const task = options.unattended
+    ? (() => {
+        const autopilot = store.createAutopilot({
+          title: "Approval timeout",
+          assigneeId: agent.id,
+          executionMode: "run_only",
+        });
+        const run = store.runAutopilot(autopilot.id, { prompt: "Do something dangerous" });
+        if (!run.taskId) throw new Error("Autopilot run did not create a task");
+        return store.getTask(run.taskId)!;
+      })()
+    : store.createTask({ agentId: agent.id, prompt: "Do something dangerous" });
   const server = startMultiremiServer({ store, scheduler: null, hostname: "127.0.0.1", port: 0 });
   const baseUrl = `http://127.0.0.1:${server.port}`;
   const daemonToken = await store.createAccessToken({
@@ -136,6 +155,7 @@ async function startHarness(options: {
     repoCacheRoot: join(workDir, ".repo-cache"),
     approvalMode: options.approvalMode ?? "ask",
     humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? 60_000,
+    unattendedHumanRequestTimeoutMs: options.unattendedHumanRequestTimeoutMs,
     providerFactory,
   });
 
@@ -283,6 +303,70 @@ describe("Multiremi approval routing e2e", () => {
       expect(h.outcomes).toEqual([{ outcome: "cancelled" }]);
       expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
       // The task itself resumes and completes — a denied tool is not a failure.
+      expect(h.store.getTask(h.taskId)!.status).toBe("completed");
+    } finally {
+      h.server.stop(true);
+    }
+  });
+
+  it("uses the shorter timeout for unattended permission requests", async () => {
+    const h = await startHarness({
+      unattended: true,
+      humanRequestTimeoutMs: 5_000,
+      unattendedHumanRequestTimeoutMs: 100,
+    });
+    try {
+      const pending = await waitFor(
+        () => h.store.listTaskHumanRequests(h.taskId).find((r) => r.status === "pending"),
+        "pending unattended permission request",
+      );
+
+      await h.run;
+      expect(h.outcomes).toEqual([{ outcome: "cancelled" }]);
+      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
+    } finally {
+      h.server.stop(true);
+    }
+  });
+
+  it("keeps the attended timeout when the unattended timeout is shorter", async () => {
+    const h = await startHarness({
+      humanRequestTimeoutMs: 5_000,
+      unattendedHumanRequestTimeoutMs: 100,
+    });
+    try {
+      const pending = await waitFor(
+        () => h.store.listTaskHumanRequests(h.taskId).find((r) => r.status === "pending"),
+        "pending attended permission request",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("pending");
+
+      await respond(h.baseUrl, h.taskId, pending.id, { option_id: "opt-allow-once" });
+      await h.run;
+      expect(h.outcomes).toEqual([{ outcome: "selected", optionId: "opt-allow-once" }]);
+    } finally {
+      h.server.stop(true);
+    }
+  });
+
+  it("honors the unattended timeout environment override for questions", async () => {
+    process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS = "100";
+    const h = await startHarness({
+      unattended: true,
+      withElicitation: true,
+      approvalMode: "auto",
+      humanRequestTimeoutMs: 5_000,
+    });
+    try {
+      const pending = await waitFor(
+        () => h.store.listTaskHumanRequests(h.taskId).find((r) => r.kind === "question" && r.status === "pending"),
+        "pending unattended question request",
+      );
+
+      await h.run;
+      expect(h.elicitationResults).toEqual([{ action: "cancel" }]);
+      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
       expect(h.store.getTask(h.taskId)!.status).toBe("completed");
     } finally {
       h.server.stop(true);

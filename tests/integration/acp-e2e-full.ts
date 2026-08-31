@@ -9,7 +9,7 @@
  * 5. Bash execution
  * 6. Session resume
  *
- * Usage: bun run tests/acp-e2e-full.ts [--agent claude|codex]
+ * Usage: bun run tests/integration/acp-e2e-full.ts [--agent claude|codex] [--scenario=ask-user]
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -18,6 +18,8 @@ import { join } from "node:path";
 
 const agentIdx = process.argv.indexOf("--agent");
 const agentType = agentIdx !== -1 ? (process.argv[agentIdx + 1] ?? "claude") : "claude";
+const scenarioArg = process.argv.find((arg) => arg.startsWith("--scenario="));
+const selectedScenario = scenarioArg?.slice("--scenario=".length) || null;
 const executableMap: Record<string, string> = {
   claude: "claude-agent-acp",
   codex: process.env.REMI_CODEX_AGENT_ACP_EXECUTABLE || "codex-acp",
@@ -186,6 +188,18 @@ class AcpTestClient {
               outcome: { selected: { optionId: allowOpt?.optionId || options?.[0]?.optionId } },
             });
             console.log(`    → approved (${allowOpt?.optionId})`);
+          } else if (req.method === "elicitation/create") {
+            const params = req.params as any;
+            console.log(`    elicitation/create params: ${JSON.stringify(params)}`);
+            const properties = params?.requestedSchema?.properties ?? {};
+            const content: Record<string, unknown> = {};
+            for (const [field, schema] of Object.entries(properties) as Array<[string, any]>) {
+              if (field.endsWith("__other") || schema?._meta?.codex?.isOtherAnswer) continue;
+              const first = schema?.oneOf?.[0]?.const ?? schema?.enum?.[0];
+              if (first !== undefined) content[field] = first;
+            }
+            this.respondToAgent(req.id, { action: "accept", content });
+            console.log(`    → answered ${JSON.stringify(content)}`);
           } else if (req.method.startsWith("fs/") || req.method.startsWith("terminal/")) {
             console.log(`    → rejected (not supported)`);
             this.respondToAgentError(req.id, -32601, `${req.method} not supported by test client`);
@@ -223,6 +237,7 @@ class AcpTestClient {
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        elicitation: { form: {} },
       },
       clientInfo: { name: "remi-test", title: "Remi ACP Test", version: "0.1.0" },
     }, 30_000);
@@ -345,7 +360,7 @@ async function testBashExecution(client: AcpTestClient, label: string) {
 async function testAskUserQuestion(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: AskUserQuestion ═══");
   const result = await client.prompt(
-    "You need to ask me a clarifying question before proceeding. Use the AskUserQuestion tool to ask me 'Which database should we use?' with options: 'PostgreSQL', 'MySQL', 'SQLite'. Do NOT proceed without asking."
+    "Use request_user_input to ask exactly one single-choice question: 'Which database should this service use?' with options PostgreSQL and SQLite. After the tool returns, reply with the selected answer. Do not ask in plain text and do not choose an option yourself."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
@@ -433,7 +448,15 @@ async function main() {
     [`${prefix}enter-plan`, testEnterPlanMode],
   ];
 
-  for (const [label, fn] of scenarios) {
+  const selectedScenarios = selectedScenario
+    ? selectedScenario === "session-resume"
+      ? []
+      : scenarios.filter(([label]) => label === `${prefix}${selectedScenario}`)
+    : scenarios;
+  if (selectedScenario && selectedScenario !== "session-resume" && selectedScenarios.length === 0) {
+    throw new Error(`Unknown scenario: ${selectedScenario}`);
+  }
+  for (const [label, fn] of selectedScenarios) {
     try {
       await fn(client, label);
     } catch (e) {
@@ -442,11 +465,13 @@ async function main() {
     await new Promise(r => setTimeout(r, 2000));
   }
 
-  // Session resume test (runs last since it closes the session)
-  try {
-    await testSessionResume(client, `${prefix}session-resume`);
-  } catch (e) {
-    console.log(`  ❌ session-resume failed: ${e}`);
+  // Session resume test runs last since it closes the session.
+  if (!selectedScenario || selectedScenario === "session-resume") {
+    try {
+      await testSessionResume(client, `${prefix}session-resume`);
+    } catch (e) {
+      console.log(`  ❌ session-resume failed: ${e}`);
+    }
   }
 
   // No full-suite dump: the raw send/recv wire log it wrote was in a shape no

@@ -356,6 +356,8 @@ export interface MultiremiDaemonOptions {
   approvalMode?: "auto" | "ask";
   /** How long an "ask"-mode prompt waits for a human before expiring (default 30 min). */
   humanRequestTimeoutMs?: number;
+  /** How long an unattended task waits for human input before expiring (default 5 min). */
+  unattendedHumanRequestTimeoutMs?: number;
   /** How often a running task polls for unconsumed steer messages (default 2.5s). */
   steerPollIntervalMs?: number;
   /** How long a force-answer run may keep going before the daemon wraps it up with the output so far (default 3 min). */
@@ -699,6 +701,8 @@ export class MultiremiDaemon {
       ),
       approvalMode: options.approvalMode ?? (process.env.MULTIREMI_APPROVAL_MODE === "ask" ? "ask" : "auto"),
       humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 30 * 60 * 1000),
+      unattendedHumanRequestTimeoutMs: options.unattendedHumanRequestTimeoutMs
+        ?? numberEnv(process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS, 5 * 60 * 1000),
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
       forceAnswerGraceMs: options.forceAnswerGraceMs ?? numberEnv(process.env.MULTIREMI_FORCE_ANSWER_GRACE_MS, DEFAULT_FORCE_ANSWER_GRACE_MS),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
@@ -2761,6 +2765,9 @@ export class MultiremiDaemon {
     nextSeq: () => number,
   ): () => void {
     let elicitationContextOffset = 0;
+    const humanRequestTimeoutMs = task.autopilotRunId
+      ? this.options.unattendedHumanRequestTimeoutMs
+      : this.options.humanRequestTimeoutMs;
     if (this.options.approvalMode !== "ask") {
       provider.setPermissionHandler?.((params) => {
         const allow = params.options.find((o) => o.kind === "allow_always")
@@ -2782,7 +2789,7 @@ export class MultiremiDaemon {
             options: params.options,
             tool_call: params.toolCall ?? null,
           });
-          const settled = await this.awaitHumanDecision(task.id, request.id, signal);
+          const settled = await this.awaitHumanDecision(task.id, request.id, signal, humanRequestTimeoutMs);
           const optionId = settled?.status === "responded" ? readResponseOptionId(settled.response) : null;
           const chosen = optionId ? params.options.find((o) => o.optionId === optionId) ?? null : null;
           await this.reportHumanRequestMessage(
@@ -2835,7 +2842,7 @@ export class MultiremiDaemon {
           request_id: request.id,
           questions,
         });
-        const settled = await this.awaitHumanDecision(task.id, request.id, signal);
+        const settled = await this.awaitHumanDecision(task.id, request.id, signal, humanRequestTimeoutMs);
         const answers = settled?.status === "responded" ? readResponseAnswers(settled.response) : null;
         await this.reportHumanRequestMessage(
           task.id,
@@ -2862,8 +2869,13 @@ export class MultiremiDaemon {
    * timeout elapses. Timeout/abort expires the request server-side; if a human
    * response won that race, the server returns the responded row and we honor it.
    */
-  private async awaitHumanDecision(taskId: string, requestId: string, signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
-    const deadline = Date.now() + Math.max(0, this.options.humanRequestTimeoutMs);
+  private async awaitHumanDecision(
+    taskId: string,
+    requestId: string,
+    signal: AbortSignal,
+    timeoutMs: number,
+  ): Promise<MultiremiTaskHumanRequest | null> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
     while (!signal.aborted && Date.now() < deadline) {
       try {
         const request = await this.client.getTaskHumanRequest(taskId, requestId);
