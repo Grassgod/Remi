@@ -8272,6 +8272,9 @@
     "DELETE /api/multiremi/projects/:id": {
       "command": "project.archive"
     },
+    "DELETE /api/multiremi/projects/:id/devices/:daemonId": {
+      "command": "project.device.remove"
+    },
     "DELETE /api/multiremi/projects/:id/resources/:resourceId": {
       "command": "project.resource.delete"
     },
@@ -8292,6 +8295,9 @@
     },
     "DELETE /api/projects/:id": {
       "command": "project.archive"
+    },
+    "DELETE /api/projects/:id/devices/:daemonId": {
+      "command": "project.device.remove"
     },
     "DELETE /api/projects/:id/docs/:ref": {
       "command": "memory.delete"
@@ -8555,6 +8561,9 @@
       "cli_exempt": true,
       "category": "websocket_transport",
       "reason": "Long-lived WebSocket transport is outside the CLI command surface."
+    },
+    "GET /api/daemons/:daemonId": {
+      "command": "daemon.get"
     },
     "GET /api/dashboard/agent-runtime": {
       "command": "dashboard.agent-runtime"
@@ -8862,6 +8871,9 @@
     "GET /api/multiremi/projects/:id": {
       "command": "project.get"
     },
+    "GET /api/multiremi/projects/:id/devices": {
+      "command": "project.device.list"
+    },
     "GET /api/multiremi/projects/:id/resources": {
       "command": "project.resource.list"
     },
@@ -8966,6 +8978,9 @@
     },
     "GET /api/projects/:id": {
       "command": "project.get"
+    },
+    "GET /api/projects/:id/devices": {
+      "command": "project.device.list"
     },
     "GET /api/projects/:id/docs": {
       "command": "memory.list"
@@ -9238,9 +9253,7 @@
       "command": "chat.update"
     },
     "PATCH /api/daemons/:daemonId": {
-      "cli_exempt": true,
-      "category": "pure_ui",
-      "reason": "MUL-156 exposes daemon display-name editing in the browser; a daemon rename CLI is intentionally out of scope."
+      "command": "daemon.dedicated.set"
     },
     "PATCH /api/issues/:id": {
       "command": "issue.update"
@@ -9869,6 +9882,9 @@
     "POST /api/multiremi/projects": {
       "command": "project.create"
     },
+    "POST /api/multiremi/projects/:id/devices": {
+      "command": "project.device.add"
+    },
     "POST /api/multiremi/projects/:id/resources": {
       "command": "project.resource.create"
     },
@@ -9972,6 +9988,9 @@
     },
     "POST /api/projects": {
       "command": "project.create"
+    },
+    "POST /api/projects/:id/devices": {
+      "command": "project.device.add"
     },
     "POST /api/projects/:id/docs": {
       "command": "memory.create"
