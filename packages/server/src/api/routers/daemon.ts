@@ -45,6 +45,7 @@ import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type {
   MultiremiDaemonSshMeshStatus,
+  MultiremiFeishuBotDaemonPayload,
   ReportBotMenuPublishInput,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
@@ -454,10 +455,24 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const runtime = store.getRuntime(runtimeId);
     if (!runtime) return c.json({ error: "runtime not found" }, 404);
     try {
-      const config = store.getFeishuBotDaemonConfig(runtime.workspaceId ?? "local", runtimeId);
+      const workspaceId = runtime.workspaceId ?? "local";
+      const config = store.getFeishuBotDaemonConfig(workspaceId, runtimeId);
       if (!config) return c.json({ error: "feishu bot is not assigned to this runtime" }, 404);
+      // The Agent ships with the credentials so the daemon can boot the channel
+      // from one fetch. An archived Agent already disables the config, so a
+      // missing row here means it was deleted outright: say so with a code the
+      // daemon can report instead of a generic start failure.
+      const agent = store.getAgent(config.agent_id);
+      if (!agent || agent.workspaceId !== workspaceId || agent.archivedAt) {
+        return c.json({ error: "feishu bot agent is unavailable", code: "agent_unavailable" }, 409);
+      }
+      const payload: MultiremiFeishuBotDaemonPayload = {
+        ...config,
+        bot_agent: daemonBotAgentResponse(agent),
+        bot_projects: daemonBotProjects(store, workspaceId, runtime.daemonId ?? ""),
+      };
       c.header("Cache-Control", "no-store");
-      return c.json(config);
+      return c.json(payload);
     } catch (error) {
       if (error instanceof FeishuBotEncryptionError) {
         return c.json({ error: error.message, code: error.code }, 503);

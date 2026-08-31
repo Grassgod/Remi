@@ -3702,6 +3702,21 @@ export interface MultiremiFeishuBotDaemonConfig {
   encrypt_key: string | null;
 }
 
+/**
+ * What the daemon actually fetches before starting the connector: the
+ * credentials plus the Agent row and project list the channel needs.
+ *
+ * They travel together on purpose. The daemon could read the Agent off a
+ * heartbeat instead, but then a start would mix one revision's credentials
+ * with whatever Agent the last heartbeat happened to carry; here the whole
+ * assignment is consistent as of a single revision.
+ */
+export interface MultiremiFeishuBotDaemonPayload extends MultiremiFeishuBotDaemonConfig {
+  /** Wire-shaped Agent row (snake_case), or null when the Agent has vanished. */
+  bot_agent: Record<string, unknown> | null;
+  bot_projects: MultiremiDaemonBotProject[];
+}
+
 /** Result of validating credentials against the Feishu open platform. */
 export interface FeishuBotTestResult {
   ok: boolean;

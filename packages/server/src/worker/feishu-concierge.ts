@@ -25,9 +25,10 @@
 import type {
   FeishuBotErrorCode,
   FeishuBotRuntimeState,
-  MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDirective,
 } from "@multiremi/contracts/types.js";
+import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
+import type { MultiremiFeishuBotAssignment } from "./client.js";
 
 /** Result of a successful channel start, used to show the bot's identity. */
 export interface FeishuConciergeStartResult {
@@ -42,8 +43,20 @@ export interface FeishuConciergeStartResult {
  * testable without spawning an agent.
  */
 export interface FeishuConciergeHost {
-  start(config: MultiremiFeishuBotDaemonConfig): Promise<FeishuConciergeStartResult>;
+  start(assignment: MultiremiFeishuBotAssignment): Promise<FeishuConciergeStartResult>;
   stop(): Promise<void>;
+}
+
+/**
+ * A failure the caller could name. `fetchConfig` and the host raise it so a
+ * specific cause survives into the admin-visible status instead of collapsing
+ * into `connector_start_failed`.
+ */
+export class FeishuConciergeError extends Error {
+  constructor(message: string, readonly code: FeishuBotErrorCode) {
+    super(message);
+    this.name = "FeishuConciergeError";
+  }
 }
 
 export interface FeishuConciergeStatusReport {
@@ -57,15 +70,25 @@ export interface FeishuConciergeStatusReport {
 
 export interface FeishuConciergeSupervisorOptions {
   host: FeishuConciergeHost;
-  fetchConfig: () => Promise<MultiremiFeishuBotDaemonConfig | null>;
+  fetchConfig: () => Promise<MultiremiFeishuBotAssignment | null>;
   report: (input: FeishuConciergeStatusReport) => Promise<void>;
   /** Re-report an unchanged state at least this often to keep it from ageing out. */
   refreshIntervalMs?: number;
+  /** Backoff ladder after a failed start, indexed by consecutive failure count. */
+  retryBackoffMs?: readonly number[];
   now?: () => number;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
 }
 
 const DEFAULT_REFRESH_INTERVAL_MS = 30_000;
+
+/**
+ * Directives arrive every few seconds, so a start that fails for a lasting
+ * reason — a revoked App Secret, say — would otherwise retry against Feishu at
+ * heartbeat rate. Backing off caps that at roughly twelve attempts an hour
+ * while still recovering on its own from a transient network failure.
+ */
+const DEFAULT_RETRY_BACKOFF_MS: readonly number[] = [15_000, 30_000, 60_000, 120_000, 300_000];
 
 export class FeishuConciergeSupervisor {
   private state: FeishuBotRuntimeState = "stopped";
@@ -77,6 +100,8 @@ export class FeishuConciergeSupervisor {
   private lastReportAtMs = 0;
   private reconciling: Promise<void> | null = null;
   private queued: MultiremiFeishuBotDirective | null = null;
+  private consecutiveFailures = 0;
+  private retryAtMs = 0;
 
   constructor(private readonly options: FeishuConciergeSupervisorOptions) {}
 
@@ -116,6 +141,22 @@ export class FeishuConciergeSupervisor {
     await this.report(true);
   }
 
+  /**
+   * Record a channel that died after a successful start. The host calls this
+   * because only it can observe the connector's own run promise; moving to
+   * `failed` is what lets the next directive restart it.
+   */
+  async reportChannelFailure(error: unknown): Promise<void> {
+    if (this.state === "stopped") return;
+    await this.stopChannel();
+    this.state = "failed";
+    this.errorCode = errorCodeOf(error);
+    this.errorMessage = redactFeishuBotError(error);
+    this.noteFailure();
+    this.options.log?.warn(`Feishu concierge stopped unexpectedly: ${this.errorMessage}`);
+    await this.report(true);
+  }
+
   private async reconcile(directive: MultiremiFeishuBotDirective): Promise<void> {
     const wantsRunning = directive.desired_state === "running" && directive.config_available;
     if (!wantsRunning) {
@@ -131,7 +172,27 @@ export class FeishuConciergeSupervisor {
       await this.report(false);
       return;
     }
+    // A new revision means an admin changed something, which is the one signal
+    // worth trusting over the backoff: retry immediately rather than making
+    // them wait out a ladder earned by the credentials they just replaced.
+    if (this.appliedRevisionChanged(directive.revision)) this.clearBackoff();
+    else if (this.state === "failed" && (this.options.now?.() ?? Date.now()) < this.retryAtMs) {
+      await this.report(false);
+      return;
+    }
     await this.startChannel(directive.revision);
+  }
+
+  private noteFailure(): void {
+    const ladder = this.options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS;
+    const delay = ladder[Math.min(this.consecutiveFailures, ladder.length - 1)] ?? 0;
+    this.consecutiveFailures += 1;
+    this.retryAtMs = (this.options.now?.() ?? Date.now()) + delay;
+  }
+
+  private clearBackoff(): void {
+    this.consecutiveFailures = 0;
+    this.retryAtMs = 0;
   }
 
   private appliedRevisionChanged(revision: number): boolean {
@@ -147,25 +208,35 @@ export class FeishuConciergeSupervisor {
     this.errorCode = null;
     this.errorMessage = null;
     await this.report(true);
+    // Held only for the duration of the start so a thrown message that quotes a
+    // credential is scrubbed with the real value, not just with env lookalikes.
+    let secrets: string[] = [];
     try {
-      const config = await this.options.fetchConfig();
-      if (!config) {
+      const assignment = await this.options.fetchConfig();
+      if (!assignment) {
         // The assignment moved between the heartbeat and this fetch. Stay
         // stopped and wait for the next directive rather than guessing.
         this.state = "stopped";
         await this.report(true);
         return;
       }
-      this.appliedRevision = config.revision;
-      const result = await this.options.host.start(config);
+      this.appliedRevision = assignment.config.revision;
+      secrets = [
+        assignment.config.app_secret,
+        assignment.config.verification_token ?? "",
+        assignment.config.encrypt_key ?? "",
+      ].filter(Boolean);
+      const result = await this.options.host.start(assignment);
       this.state = "online";
       this.botName = result.botName ?? null;
       this.botOpenId = result.botOpenId ?? null;
+      this.clearBackoff();
       this.options.log?.info(`Feishu concierge online at revision ${this.appliedRevision}`);
     } catch (error) {
       this.state = "failed";
-      this.errorCode = "connector_start_failed";
-      this.errorMessage = describeError(error);
+      this.errorCode = errorCodeOf(error);
+      this.errorMessage = redactFeishuBotError(error, secrets);
+      this.noteFailure();
       this.options.log?.warn(`Feishu concierge failed to start: ${this.errorMessage}`);
       // Leave nothing half-started behind a failure.
       await this.options.host.stop().catch(() => {});
@@ -177,7 +248,7 @@ export class FeishuConciergeSupervisor {
     try {
       await this.options.host.stop();
     } catch (error) {
-      this.options.log?.warn(`Feishu concierge stop failed: ${describeError(error)}`);
+      this.options.log?.warn(`Feishu concierge stop failed: ${redactFeishuBotError(error)}`);
     }
     this.state = "stopped";
     this.botName = null;
@@ -204,13 +275,21 @@ export class FeishuConciergeSupervisor {
       // A failed report is retried by the next heartbeat. Losing the connector
       // over a transient control-plane blip would be far worse.
       this.lastReportAtMs = 0;
-      this.options.log?.warn(`Feishu concierge status report failed: ${describeError(error)}`);
+      this.options.log?.warn(`Feishu concierge status report failed: ${redactFeishuBotError(error)}`);
     }
   }
 }
 
-/** Credentials must never reach a status report, so errors are summarised. */
-function describeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.length > 300 ? `${message.slice(0, 300)}…` : message;
+/**
+ * Recover a named cause from a thrown error. Duck-typed on `code` rather than
+ * on a class so a failure raised by the API client survives the trip without
+ * this module having to import it.
+ */
+function errorCodeOf(error: unknown): FeishuBotErrorCode {
+  const code = (error as { code?: unknown } | null)?.code;
+  const normalized = typeof code === "string" ? normalizeFeishuBotErrorCode(code) : null;
+  // `normalizeFeishuBotErrorCode` answers "unknown" for any string it does not
+  // recognise, including HTTP codes like `runtime_not_found`; those say nothing
+  // useful, so an unrecognised code stays a start failure.
+  return normalized && normalized !== "unknown" ? normalized : "connector_start_failed";
 }

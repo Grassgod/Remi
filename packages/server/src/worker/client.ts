@@ -27,6 +27,7 @@ import type {
   FeishuBotErrorCode,
   FeishuBotRuntimeState,
   MultiremiFeishuBotDaemonConfig,
+  MultiremiFeishuBotDaemonPayload,
 } from "@multiremi/contracts/types.js";
 import {
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
@@ -154,6 +155,27 @@ export class MultiremiDaemonHttpError extends Error {
   ) {
     super(`${method} ${path} returned ${status}: ${responseBody}`);
     this.name = "MultiremiDaemonHttpError";
+  }
+}
+
+/**
+ * The concierge assignment as the daemon uses it: credentials, plus the Agent
+ * row and projects normalized out of the same response.
+ */
+export interface MultiremiFeishuBotAssignment {
+  config: MultiremiFeishuBotDaemonConfig;
+  agent: MultiremiAgent;
+  projects: MultiremiDaemonBotProject[];
+}
+
+/**
+ * A named reason the assignment could not be used. Carrying the code means the
+ * admin sees "agent unavailable" rather than a generic start failure.
+ */
+export class MultiremiFeishuBotAssignmentError extends Error {
+  constructor(message: string, readonly code: FeishuBotErrorCode) {
+    super(message);
+    this.name = "MultiremiFeishuBotAssignmentError";
   }
 }
 
@@ -308,14 +330,15 @@ export class MultiremiDaemonClient {
   }
 
   /**
-   * Fetch the decrypted concierge credentials for this Runtime. Returns null
+   * Fetch the decrypted concierge assignment for this Runtime. Returns null
    * when the control plane has not assigned the bot here — including on servers
    * from before MUL-206, which answer with an unstructured 404.
    */
-  async getFeishuBotConfig(runtimeId: string): Promise<MultiremiFeishuBotDaemonConfig | null> {
+  async getFeishuBotConfig(runtimeId: string): Promise<MultiremiFeishuBotAssignment | null> {
     const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot`;
+    let payload: MultiremiFeishuBotDaemonPayload;
     try {
-      return await this.get<MultiremiFeishuBotDaemonConfig>(path);
+      payload = await this.get<MultiremiFeishuBotDaemonPayload>(path);
     } catch (error) {
       if (
         error instanceof MultiremiDaemonHttpError
@@ -324,8 +347,19 @@ export class MultiremiDaemonClient {
       ) {
         return null;
       }
+      // The control plane names the failures it can name; anything else stays
+      // an ordinary transport error for the caller to classify.
+      if (error instanceof MultiremiDaemonHttpError && error.code === "agent_unavailable") {
+        throw new MultiremiFeishuBotAssignmentError("the configured bot Agent is unavailable", "agent_unavailable");
+      }
       throw error;
     }
+    const { bot_agent: rawAgent, bot_projects: rawProjects, ...config } = payload;
+    const agent = normalizeDaemonAgent(rawAgent);
+    if (!agent) {
+      throw new MultiremiFeishuBotAssignmentError("the control plane returned no bot Agent", "agent_unavailable");
+    }
+    return { config, agent, projects: Array.isArray(rawProjects) ? rawProjects : [] };
   }
 
   async reportFeishuBotRuntimeStatus(

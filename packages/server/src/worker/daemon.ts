@@ -29,6 +29,7 @@ import {
   type MultiremiRelayWire,
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
+import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import {
   buildSteerInjectionPrompt,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
@@ -647,6 +648,8 @@ export class MultiremiDaemon {
   private runtimeModelRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private runtimeModelRetryWake: (() => void) | null = null;
   private botMenuPublisher: ((config: ResolvedBotMenuConfig, dryRun: boolean) => Promise<BotMenuPublishResult>) | null = null;
+  private feishuConcierge: FeishuConciergeSupervisor | null = null;
+  private feishuConciergeReconcile: Promise<void> = Promise.resolve();
 
   constructor(options: MultiremiDaemonOptions) {
     if (options.inProcessRuntimeModelDiscoveryEnabled && !options.providerFactory) {
@@ -839,6 +842,51 @@ export class MultiremiDaemon {
     this.botMenuPublisher = publisher;
   }
 
+  /**
+   * Let this process host the workspace Feishu concierge (MUL-206). Passing a
+   * host is what advertises `feishu_concierge_protocol` on the heartbeat, so a
+   * daemon that cannot boot a Remi core never gets offered the bot.
+   */
+  setFeishuConciergeHost(host: FeishuConciergeHost | null): void {
+    if (!host) {
+      this.feishuConcierge = null;
+      return;
+    }
+    this.feishuConcierge = new FeishuConciergeSupervisor({
+      host,
+      // Both callbacks read runtimeId at call time: the daemon can re-register
+      // and get a new id while the connector is running.
+      fetchConfig: async () => this.client.getFeishuBotConfig(this.options.runtimeId!),
+      report: async (input) => {
+        await this.client.reportFeishuBotRuntimeStatus(this.options.runtimeId!, input);
+      },
+      log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
+    });
+  }
+
+  /**
+   * Report a concierge that died on its own — a websocket the connector could
+   * not recover, say. Without this the control plane keeps showing `online` for
+   * a bot that stopped answering, and no heartbeat would ever restart it.
+   */
+  async reportFeishuConciergeFailure(error: unknown): Promise<void> {
+    await this.feishuConcierge?.reportChannelFailure(error);
+  }
+
+  /**
+   * Take the concierge down and tell the control plane before the process
+   * exits. Without this the workspace waits out the 90s staleness window
+   * before another Runtime may take the bot.
+   */
+  async shutdownFeishuConcierge(): Promise<void> {
+    const supervisor = this.feishuConcierge;
+    if (!supervisor) return;
+    await this.feishuConciergeReconcile.catch(() => {});
+    await supervisor.shutdown().catch((error) => {
+      log.warn(`Feishu concierge shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
   async start(): Promise<void> {
     this.startedAt = new Date();
     this.ready = false;
@@ -902,6 +950,7 @@ export class MultiremiDaemon {
             this.botAgentId,
             Boolean(this.onBotProjectsUpdated),
             this.botMenuPublisher !== null,
+            this.feishuConcierge !== null,
           );
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
           if (!skipClaim && !this.stopped) {
@@ -1035,7 +1084,7 @@ export class MultiremiDaemon {
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
     this.options.runtimeId = runtime.runtime.id;
-    if (this.botAgentId || this.onBotProjectsUpdated || this.botMenuPublisher) {
+    if (this.botAgentId || this.onBotProjectsUpdated || this.botMenuPublisher || this.feishuConcierge) {
       const ack = await this.client.heartbeatRuntime(
         this.options.runtimeId,
         undefined,
@@ -1043,11 +1092,13 @@ export class MultiremiDaemon {
         this.botAgentId,
         Boolean(this.onBotProjectsUpdated),
         this.botMenuPublisher !== null,
+        this.feishuConcierge !== null,
       );
       if (ack.workspace_settings) this.applyWorkspaceSettings(this.options.workspaceId ?? "local", ack.workspace_settings);
       if (ack.relay) this.workspaceRelays.set(this.options.workspaceId ?? "local", ack.relay);
       this.applyBotAgent(ack.botAgent);
       this.applyBotProjects(ack.botProjects);
+      this.applyFeishuBotDirective(ack);
     }
     this.runtimeRegistrationGeneration++;
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
@@ -1154,6 +1205,7 @@ export class MultiremiDaemon {
     if (ack.pending_bot_menu) {
       await this.handleBotMenuPublish(runtimeId, ack.pending_bot_menu);
     }
+    this.applyFeishuBotDirective(ack);
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
     }
@@ -1363,6 +1415,25 @@ export class MultiremiDaemon {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Hand a heartbeat's concierge directive to the supervisor without waiting
+   * for it. Booting a Remi core takes seconds, and the heartbeat loop is also
+   * what claims tasks — blocking it on a connector start would stall unrelated
+   * work. The supervisor serializes its own reconciles, so firing on every
+   * heartbeat cannot overlap two starts.
+   */
+  private applyFeishuBotDirective(ack: MultiremiDaemonHeartbeatConfigAck): void {
+    const supervisor = this.feishuConcierge;
+    if (!supervisor || !ack.feishu_bot) return;
+    const directive = ack.feishu_bot;
+    this.feishuConciergeReconcile = this.feishuConciergeReconcile
+      .catch(() => {})
+      .then(() => supervisor.apply(directive))
+      .catch((error) => {
+        log.warn(`Feishu concierge reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
   }
 
   private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
