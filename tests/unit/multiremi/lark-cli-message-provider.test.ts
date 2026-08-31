@@ -52,19 +52,25 @@ describe("LarkCliMessageProvider", () => {
     });
   });
 
-  test("checks the structured version and returns only redacted auth health", async () => {
+  test("reads the version as text and returns only redacted auth health", async () => {
+    // Both argv shapes below are the ones real lark-cli accepts: it rejects
+    // `--format` on `--version` and on `auth status`, so neither may carry it.
     const runner = new FakeRunner([
-      { version: "1.0.90" },
+      "lark-cli version 1.0.90",
       {
+        appId: "cli_app",
         identities: {
           user: {
             status: "ready",
-            open_id: "ou_account",
-            name: "Operator",
-            access_token: "must-not-leak",
-            scopes: ["im:message"],
+            openId: "ou_account",
+            userName: "Operator",
+            tokenStatus: "valid",
+            expiresAt: "2026-09-01T00:18:21+08:00",
+            accessToken: "must-not-leak",
+            scope: "im:message search:message",
           },
         },
+        identity: "user",
       },
     ]);
     const provider = providerWith(runner);
@@ -81,39 +87,33 @@ describe("LarkCliMessageProvider", () => {
       checkedAt: "2026-08-31T00:00:00.000Z",
     });
     expect(JSON.stringify(health)).not.toContain("must-not-leak");
+    expect(JSON.stringify(health)).not.toContain("im:message");
     expect(runner.calls.map((call) => call.argv)).toEqual([
-      ["--version", "--format", "json"],
-      ["auth", "status", "--format", "json"],
+      ["--version"],
+      ["auth", "status"],
     ]);
+    expect(runner.calls[0]?.options?.text).toBe(true);
   });
 
-  test("reports old versions and explicitly declared missing capabilities", async () => {
-    const oldProvider = providerWith(new FakeRunner([{ version: "1.0.89" }]));
+  test("reports an out-of-date lark-cli as incompatible", async () => {
+    const oldProvider = providerWith(new FakeRunner(["lark-cli version 1.0.89"]));
     expect(await oldProvider.checkHealth(context())).toMatchObject({
       status: "incompatible",
       version: "1.0.89",
       errorCode: "provider_incompatible",
     });
+  });
 
-    const incompleteProvider = providerWith(new FakeRunner([{
-      version: "1.0.90",
-      capabilities: [
-        "chat-search",
-        "chat-messages-list",
-        "messages-search",
-        "messages-send",
-        "messages-reply",
-      ],
-    }]));
-    expect(await incompleteProvider.checkHealth(context())).toMatchObject({
-      status: "incompatible",
-      version: "1.0.90",
-      errorCode: "capability_unsupported",
-      detail: "lark-cli is missing required capability: messages-resources-download",
+  test("rejects version output that is not the exact lark-cli version line", async () => {
+    const noisy = providerWith(new FakeRunner(["checking for updates... 1.0.90 available"]));
+    expect(await noisy.checkHealth(context())).toMatchObject({
+      status: "unknown",
+      version: null,
+      errorCode: "malformed_response",
     });
   });
 
-  test("maps missing and expired CLI identities to clear health states", async () => {
+  test("separates a missing CLI, a signed-out identity, and an expired token", async () => {
     const unavailable = providerWith(new FakeRunner([
       new MessageProviderError("provider_unavailable", "secret command output"),
     ]));
@@ -123,15 +123,32 @@ describe("LarkCliMessageProvider", () => {
       detail: "lark-cli is not installed",
     });
 
+    const signedOut = providerWith(new FakeRunner([
+      "lark-cli version 1.2.0",
+      { identities: { user: { status: "unauthorized", available: false } } },
+    ]));
+    expect(await signedOut.checkHealth(context())).toMatchObject({
+      status: "unauthenticated",
+      errorCode: "unauthenticated",
+      detail: "lark-cli user identity needs authentication",
+    });
+
+    // A token that is still flagged `ready` but whose expiry has passed is the
+    // routine case operators hit, and it must read as expired rather than as a
+    // generic sign-in prompt.
     const expired = providerWith(new FakeRunner([
-      { version: "1.2.0" },
-      { identities: { user: { status: "needs_refresh", token: "secret" } } },
+      "lark-cli version 1.2.0",
+      {
+        identities: {
+          user: { status: "ready", tokenStatus: "valid", expiresAt: "2026-08-30T00:00:00+00:00", token: "secret" },
+        },
+      },
     ]));
     const health = await expired.checkHealth(context());
     expect(health).toMatchObject({
       status: "unauthenticated",
       errorCode: "unauthenticated",
-      detail: "lark-cli user identity needs authentication",
+      detail: "lark-cli authorization has expired; sign in again",
     });
     expect(JSON.stringify(health)).not.toContain("secret");
   });

@@ -10,6 +10,14 @@ export interface LarkCliRunOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   kind?: LarkCliCommandKind;
+  /**
+   * Return trimmed stdout instead of requiring JSON.
+   *
+   * Only `lark-cli --version` needs this: it predates the `--format` flag and
+   * rejects it, so its single `lark-cli version X.Y.Z` line is the only
+   * machine-readable version source. Every other command must stay on JSON.
+   */
+  text?: boolean;
 }
 
 /** Process boundary used by the Provider. Tests inject a fake implementation. */
@@ -83,6 +91,8 @@ export class BunLarkCliRunner implements LarkCliRunner {
       });
     }
 
+    if (options.text) return captured.stdout.trim();
+
     if (parsed === null) {
       const code = kind === "send" ? "send_result_unknown" : "malformed_response";
       log.warn("lark-cli returned no structured JSON; structured output support is required");
@@ -126,10 +136,27 @@ export function mapLarkCliErrorCode(value: unknown, kind: LarkCliCommandKind = "
   ].includes(code)) {
     return "unauthenticated";
   }
-  if (["forbidden", "permission_denied", "scope_missing", "403"].includes(code)) return "forbidden";
-  if (["rate_limited", "too_many_requests", "throttled", "429"].includes(code)) return "rate_limited";
+  // `missing_scope` and `confirmation_required` are lark-cli subtypes: the first
+  // is an un-granted OAuth scope, the second a high-risk write withheld pending
+  // `--yes`. Neither is retryable and both need an operator, so both are forbidden.
+  if ([
+    "forbidden",
+    "permission_denied",
+    "scope_missing",
+    "missing_scope",
+    "confirmation_required",
+    "authorization",
+    "403",
+  ].includes(code)) {
+    return "forbidden";
+  }
+  // `quota_exceeded` is lark-cli's throttling subtype; it must stay retryable or
+  // ingestion stalls permanently the first time a poll trips a quota.
+  if (["rate_limited", "too_many_requests", "throttled", "quota_exceeded", "429"].includes(code)) {
+    return "rate_limited";
+  }
   if (["timeout", "timed_out", "deadline_exceeded", "124"].includes(code)) return "timeout";
-  if (["unreachable", "network_error", "connection_failed", "connection_refused"].includes(code)) {
+  if (["unreachable", "network", "network_error", "connection_failed", "connection_refused"].includes(code)) {
     return "unreachable";
   }
   if (["malformed_response", "invalid_json", "invalid_response"].includes(code)) return "malformed_response";
@@ -221,12 +248,42 @@ function structuredErrorDetails(value: unknown): { code: unknown; retryAfterMs: 
   if (!root) return null;
   if (root.ok !== false && root.success !== false && root.error === undefined) return null;
   const error = record(root.error) ?? record(record(root.data)?.error) ?? root;
-  const code = error.code ?? error.error_code ?? error.type;
+
+  // lark-cli reports `{type, subtype, code}` where `subtype` carries the meaning
+  // and `code` — when present at all — is a numeric Feishu OpenAPI code, not an
+  // error name. Reading `code` first (as an earlier revision did) turned every
+  // API failure into the string "230001" and so into `unknown`, which silently
+  // disabled both auth reporting and the rate-limit retry. Prefer the names.
+  const subtype = stringValue(error.subtype);
+  const named = subtype && subtype !== "unknown"
+    ? subtype
+    : stringValue(error.error_code) || stringValue(error.type);
+
+  // An unknown subcommand is `validation/invalid_argument`, indistinguishable
+  // from a bad flag by code alone, so the missing-command case is recognised by
+  // the parameter lark-cli rejected.
+  if (named === "invalid_argument" && mentionsUnknownCommand(error)) {
+    return { code: "capability_unsupported", retryAfterMs: null };
+  }
+
+  const code = named || error.code;
   if (code === undefined || code === null || stringValue(code) === "") return null;
   return {
     code,
     retryAfterMs: nonNegativeInteger(error.retry_after_ms ?? error.retryAfterMs),
   };
+}
+
+/** True when lark-cli rejected the command name itself rather than a flag value. */
+function mentionsUnknownCommand(error: Record<string, unknown>): boolean {
+  const reasons = Array.isArray(error.params)
+    ? error.params.map((entry) => stringValue(record(entry)?.reason).toLowerCase())
+    : [];
+  if (reasons.some((reason) => reason.includes("unknown subcommand") || reason.includes("unknown command"))) {
+    return true;
+  }
+  const message = stringValue(error.message).toLowerCase();
+  return message.startsWith("unknown subcommand") || message.startsWith("unknown command");
 }
 
 function mapExitCode(exitCode: number, kind: LarkCliCommandKind): MessageErrorCode {

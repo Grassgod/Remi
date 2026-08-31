@@ -34,13 +34,21 @@ const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_READ_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 100;
-const REQUIRED_CAPABILITIES = [
-  "chat-search",
-  "chat-messages-list",
-  "messages-search",
-  "messages-send",
-  "messages-reply",
-  "messages-resources-download",
+/**
+ * The lark-cli commands this Provider drives.
+ *
+ * lark-cli exposes no capability manifest, so this list is not probed: the
+ * version floor above is the guarantee that all of them exist, and a release
+ * that dropped one still fails loudly, because an unknown subcommand is
+ * reported as `capability_unsupported` on the call that needs it.
+ */
+export const REQUIRED_LARK_CLI_COMMANDS = [
+  "im +chat-search",
+  "im +chat-messages-list",
+  "im +messages-search",
+  "im +messages-send",
+  "im +messages-reply",
+  "im +messages-resources-download",
 ] as const;
 
 export const LARK_CLI_MESSAGE_PROVIDER_MANIFEST: MessageProviderManifest = {
@@ -100,38 +108,31 @@ export class LarkCliMessageProvider implements
   }
 
   async checkHealth(context: MessageProviderContext): Promise<MessageProviderHealth> {
-    const checkedAt = this.now().toISOString();
+    const now = this.now();
+    const checkedAt = now.toISOString();
     let version: string | null = null;
     try {
-      const versionPayload = await this.runRead(["--version", "--format", "json"], context);
-      version = versionValue(versionPayload);
+      // `--version` predates `--format` and rejects it, so it is read as text.
+      // It is the only human-formatted output this Provider parses, and its
+      // shape (`lark-cli version X.Y.Z`) is matched strictly rather than scanned.
+      version = versionValue(await this.runVersion(context));
       if (!version) throw new MessageProviderError("malformed_response", "lark-cli version response is malformed");
       if (compareVersions(version, LARK_CLI_MINIMUM_VERSION) < 0) {
         return health("incompatible", version, "provider_incompatible", "lark-cli must be upgraded", checkedAt);
       }
-      const missingCapability = firstMissingCapability(versionPayload);
-      if (missingCapability) {
-        return health(
-          "incompatible",
-          version,
-          "capability_unsupported",
-          `lark-cli is missing required capability: ${missingCapability}`,
-          checkedAt,
-        );
-      }
 
-      const authPayload = await this.runRead(["auth", "status", "--format", "json"], context);
-      const user = authUser(authPayload);
+      // `auth status` takes no `--format` either, but already emits JSON.
+      const user = authUser(await this.runRead(["auth", "status"], context));
       if (!user) throw new MessageProviderError("malformed_response", "lark-cli auth status is malformed");
-      const status = stringValue(user.status).toLowerCase();
-      if (status !== "ready") {
-        return health("unauthenticated", version, "unauthenticated", "lark-cli user identity needs authentication", checkedAt);
+      const unauthenticated = authFailure(user, now);
+      if (unauthenticated) {
+        return health("unauthenticated", version, "unauthenticated", unauthenticated, checkedAt);
       }
       return {
         status: "ready",
         version,
         externalAccountId: firstString(user, ["open_id", "openId", "user_id", "userId", "id"]) || null,
-        externalAccountName: firstString(user, ["name", "display_name", "displayName"]) || null,
+        externalAccountName: firstString(user, ["user_name", "userName", "name", "display_name", "displayName"]) || null,
         errorCode: null,
         detail: null,
         checkedAt,
@@ -354,6 +355,10 @@ export class LarkCliMessageProvider implements
     throw lastError ?? new MessageProviderError("unknown", "lark-cli read failed");
   }
 
+  private async runVersion(context: MessageProviderContext): Promise<unknown> {
+    return await this.runner.run(["--version"], { ...this.runOptions(context, "read"), text: true });
+  }
+
   private async runSend(argv: readonly string[], context: MessageProviderContext): Promise<unknown> {
     try {
       return await this.runner.run(argv, this.runOptions(context, "send"));
@@ -564,8 +569,37 @@ function versionValue(payload: unknown): string | null {
 }
 
 function normalizedVersion(value: unknown): string | null {
-  const match = stringValue(value).match(/^v?(\d+\.\d+\.\d+)(?:[-+][0-9A-Za-z.-]+)?$/u);
+  // Accepts the bare version a JSON field would carry and the exact line
+  // `lark-cli --version` prints. The prefix is anchored so that an unrelated
+  // line containing digits can never be mistaken for a version.
+  const match = stringValue(value).match(/^(?:lark-cli\s+version\s+)?v?(\d+\.\d+\.\d+)(?:[-+][0-9A-Za-z.-]+)?$/u);
   return match?.[1] ?? null;
+}
+
+/**
+ * Human-readable reason the CLI identity cannot be used, or null when it can.
+ *
+ * The two states an operator has to tell apart are "never logged in" and "the
+ * token ran out", because only the second is routine, so they get distinct text.
+ */
+function authFailure(user: Record<string, unknown>, now: Date): string | null {
+  const status = stringValue(user.status).toLowerCase();
+  const tokenStatus = stringValue(user.token_status ?? user.tokenStatus).toLowerCase();
+  const expired = tokenStatus === "expired"
+    || status === "expired"
+    || status === "needs_refresh"
+    || isPast(user.expires_at ?? user.expiresAt, now);
+
+  if (expired) return "lark-cli authorization has expired; sign in again";
+  if (status !== "ready" || (tokenStatus && tokenStatus !== "valid")) {
+    return "lark-cli user identity needs authentication";
+  }
+  return null;
+}
+
+function isPast(value: unknown, now: Date): boolean {
+  const timestamp = Date.parse(stringValue(value));
+  return Number.isFinite(timestamp) && timestamp <= now.getTime();
 }
 
 function compareVersions(left: string, right: string): number {
@@ -578,28 +612,7 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-function firstMissingCapability(payload: unknown): string | null {
-  const data = payloadRecord(payload);
-  if (!data) return null;
-  const declared = data.capabilities ?? data.commands;
-  const declaredList = Array.isArray(declared)
-    ? declared
-    : Object.entries(record(declared) ?? {})
-      .filter(([, available]) => available === true)
-      .map(([name]) => name);
-  if (declared === undefined || declared === null) return null;
-  const capabilities = new Set(declaredList.flatMap((entry) => {
-    if (typeof entry === "string") return [capabilityKey(entry)];
-    const item = record(entry);
-    return item ? [capabilityKey(firstString(item, ["name", "command", "id"]))] : [];
-  }).filter(Boolean));
-  return REQUIRED_CAPABILITIES.find((required) => !capabilities.has(capabilityKey(required))) ?? null;
-}
 
-function capabilityKey(value: string): string {
-  const segments = value.toLowerCase().trim().split(/[\s./:]+/u);
-  return (segments.at(-1) ?? "").replace(/^\+/u, "").replace(/_/gu, "-");
-}
 
 function payloadRecord(payload: unknown): Record<string, unknown> | null {
   const root = record(payload);
