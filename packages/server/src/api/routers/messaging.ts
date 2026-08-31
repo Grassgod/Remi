@@ -1,0 +1,565 @@
+import type { Context, Hono } from "hono";
+import {
+  MessageProviderError,
+  supportsConversations,
+  type MessageConnection,
+  type MessageErrorCode,
+  type MessageProvider,
+  type MessageSource,
+} from "@multiremi/contracts/messaging.js";
+import { createId } from "@multiremi/ids.js";
+import type { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
+import {
+  denyCurrentUserWorkspaceAccess,
+  isJsonApiError,
+  publishWorkspaceEvent,
+  readJsonStrict,
+  readJsonStrictAllowEmpty,
+  requireWorkspaceAdmin,
+} from "../helpers.js";
+import { currentAccessToken } from "../wire/index.js";
+import type { RouterDeps } from "./deps.js";
+
+const BASE = "/api/workspaces/:workspaceId/messaging";
+
+/**
+ * The channel-independent messaging API.
+ *
+ * Nothing here names a channel. A route reaches a channel only through the
+ * Provider registered for a Connection, so a new channel adds routes to
+ * nobody's file.
+ */
+export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
+  const repo = deps.store.messaging;
+
+  app.get(`${BASE}/providers`, (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    return c.json({
+      providers: deps.messagingProviders.list().map((provider) => provider.manifest),
+      channels: deps.messagingProviders.channels(),
+    });
+  });
+
+  app.get(`${BASE}/connections`, (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    const workspaceId = c.req.param("workspaceId");
+    const sourceCounts = new Map<string, number>();
+    for (const source of repo.listSources({ workspaceId })) {
+      sourceCounts.set(source.connectionId, (sourceCounts.get(source.connectionId) ?? 0) + 1);
+    }
+    const connections = repo.listConnections({ workspaceId }).map((connection) => ({
+      ...connection,
+      sourceCount: sourceCounts.get(connection.id) ?? 0,
+      // Whether a Provider is registered at all is a different problem from
+      // whether its credential works, and the UI has to tell them apart.
+      providerRegistered: deps.messagingProviders.has(connection.provider),
+    }));
+    return c.json({ connections, total: connections.length });
+  });
+
+  app.post(`${BASE}/connections`, async (c) => {
+    const denied = denyWorkspace(c, deps) ?? requireHumanAdmin(c, deps);
+    if (denied) return denied;
+    const body = await readJsonStrict<CreateConnectionBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = c.req.param("workspaceId");
+    try {
+      const provider = resolveProvider(deps, body.provider ?? "");
+      const connection = repo.upsertConnection({
+        id: createId("mconn"),
+        workspaceId,
+        provider: provider.manifest.provider,
+        channel: resolveChannel(provider, body.channel),
+        name: requireText(body.name, "name"),
+        config: body.config ?? {},
+        status: "unknown",
+      });
+      publishWorkspaceEvent(c, deps.store, "messaging:connection_created", workspaceId, { connection });
+      return c.json({ connection }, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.get(`${BASE}/connections/:connectionId`, (c) => {
+    const loaded = loadConnection(c, deps);
+    if (loaded instanceof Response) return loaded;
+    return c.json({ connection: loaded });
+  });
+
+  app.patch(`${BASE}/connections/:connectionId`, async (c) => {
+    const loaded = loadConnection(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    const body = await readJsonStrictAllowEmpty<UpdateConnectionBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const connection = repo.upsertConnection({
+        id: loaded.id,
+        workspaceId: loaded.workspaceId,
+        // Provider and channel are identity, not settings: changing either
+        // would silently reinterpret every message already stored under this
+        // Connection. Rebinding means a new Connection.
+        provider: loaded.provider,
+        channel: loaded.channel,
+        name: body.name === undefined ? loaded.name : requireText(body.name, "name"),
+        config: body.config ?? loaded.config,
+      });
+      publishWorkspaceEvent(c, deps.store, "messaging:connection_updated", connection.workspaceId, { connection });
+      return c.json({ connection });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.delete(`${BASE}/connections/:connectionId`, (c) => {
+    const loaded = loadConnection(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    if (!repo.deleteConnection(loaded.id)) return c.json({ error: "Message connection not found" }, 404);
+    publishWorkspaceEvent(c, deps.store, "messaging:connection_deleted", loaded.workspaceId, {
+      connectionId: loaded.id,
+      name: loaded.name,
+    });
+    return c.json({ deleted: true });
+  });
+
+  /** Probes the Provider now and stores the verdict, so the UI can retry on demand. */
+  app.post(`${BASE}/connections/:connectionId/check`, async (c) => {
+    const loaded = loadConnection(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    const provider = deps.messagingProviders.get(loaded.provider);
+    if (!provider) {
+      const connection = repo.upsertConnection({
+        ...connectionIdentity(loaded),
+        status: "unavailable",
+        lastCheckedAt: new Date().toISOString(),
+        lastErrorCode: "provider_unavailable",
+        lastErrorAt: new Date().toISOString(),
+      });
+      return c.json({ connection, health: null });
+    }
+    // checkHealth is contracted not to throw for expected failures, but a
+    // Provider bug must not take the endpoint down with it.
+    let health;
+    try {
+      health = await provider.checkHealth({ connection: loaded });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+    const connection = repo.upsertConnection({
+      ...connectionIdentity(loaded),
+      externalAccountId: health.externalAccountId,
+      externalAccountName: health.externalAccountName,
+      status: health.status,
+      lastCheckedAt: health.checkedAt,
+      lastErrorCode: health.errorCode,
+      lastErrorAt: health.errorCode ? health.checkedAt : null,
+    });
+    return c.json({ connection, health });
+  });
+
+  app.get(`${BASE}/sources`, (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    const sources = repo.listSources({ workspaceId: c.req.param("workspaceId") });
+    return c.json({ sources, total: sources.length });
+  });
+
+  app.post(`${BASE}/sources`, async (c) => {
+    const denied = denyWorkspace(c, deps) ?? requireHumanAdmin(c, deps);
+    if (denied) return denied;
+    const body = await readJsonStrict<UpsertSourceBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = c.req.param("workspaceId");
+    try {
+      const connection = repo.getConnection(body.connectionId ?? "");
+      if (!connection || connection.workspaceId !== workspaceId) {
+        return c.json({ error: "Message connection not found" }, 404);
+      }
+      if (workspaceId === "local") deps.store.ensureLocalWorkspace();
+      const source = repo.upsertSource({
+        id: createId("msrc"),
+        workspaceId,
+        connectionId: connection.id,
+        name: requireText(body.name, "name"),
+        allowlist: normalizeAllowlist(body.allowlist),
+        enabled: body.enabled,
+        retentionDays: body.retentionDays,
+        pollIntervalSeconds: body.pollIntervalSeconds,
+        unprocessedRetrySeconds: body.unprocessedRetrySeconds,
+        unprocessedRetryLimit: body.unprocessedRetryLimit,
+      });
+      publishWorkspaceEvent(c, deps.store, "messaging:source_created", workspaceId, { source });
+      return c.json({ source }, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.get(`${BASE}/sources/:sourceId`, (c) => {
+    const loaded = loadSource(c, deps);
+    if (loaded instanceof Response) return loaded;
+    return c.json({ source: loaded });
+  });
+
+  app.patch(`${BASE}/sources/:sourceId`, async (c) => {
+    const loaded = loadSource(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    const body = await readJsonStrictAllowEmpty<UpsertSourceBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const source = repo.upsertSource({
+        id: loaded.id,
+        workspaceId: loaded.workspaceId,
+        connectionId: loaded.connectionId,
+        name: body.name === undefined ? loaded.name : requireText(body.name, "name"),
+        allowlist: body.allowlist === undefined ? loaded.allowlist : normalizeAllowlist(body.allowlist),
+        enabled: body.enabled,
+        retentionDays: body.retentionDays,
+        pollIntervalSeconds: body.pollIntervalSeconds,
+        unprocessedRetrySeconds: body.unprocessedRetrySeconds,
+        unprocessedRetryLimit: body.unprocessedRetryLimit,
+      });
+      publishWorkspaceEvent(c, deps.store, "messaging:source_updated", source.workspaceId, { source });
+      return c.json({ source });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.delete(`${BASE}/sources/:sourceId`, (c) => {
+    const loaded = loadSource(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    if (!repo.deleteSource(loaded.id)) return c.json({ error: "Message source not found" }, 404);
+    publishWorkspaceEvent(c, deps.store, "messaging:source_deleted", loaded.workspaceId, {
+      sourceId: loaded.id,
+      connectionId: loaded.connectionId,
+      name: loaded.name,
+    });
+    return c.json({ deleted: true });
+  });
+
+  app.get(`${BASE}/sources/:sourceId/status`, (c) => {
+    const loaded = loadSource(c, deps);
+    if (loaded instanceof Response) return loaded;
+    const cursor = repo.getSyncCursor(loaded.id, "messages");
+    const messages = repo.listMessages({ sourceId: loaded.id, limit: 1 });
+    const unprocessed = repo.listMessages({ sourceId: loaded.id, processed: false, limit: 1 });
+    return c.json({
+      status: {
+        sourceId: loaded.id,
+        connectionId: loaded.connectionId,
+        enabled: loaded.enabled,
+        allowlistCount: loaded.allowlist.length,
+        lastSuccessfulIngestAt: loaded.lastSuccessfulIngestAt,
+        lastErrorCode: loaded.lastErrorCode,
+        lastErrorAt: loaded.lastErrorAt,
+        consecutiveFailures: loaded.consecutiveFailures,
+        messageCount: messages.total,
+        unprocessedCount: unprocessed.total,
+        watermark: cursor?.watermark ?? null,
+        lastStartedAt: cursor?.lastStartedAt ?? null,
+        lastCompletedAt: cursor?.lastCompletedAt ?? null,
+        syncing: Boolean(cursor?.leaseToken),
+      },
+    });
+  });
+
+  /**
+   * Candidate conversations for the allowlist picker.
+   *
+   * An empty allowlist ingests nothing, so this cannot be bootstrapped from
+   * stored messages — it has to ask the channel. It goes through the
+   * Connection's registered Provider, never a caller-supplied address.
+   */
+  app.get(`${BASE}/sources/:sourceId/available-conversations`, async (c) => {
+    const loaded = loadSource(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    const connection = repo.getConnection(loaded.connectionId);
+    if (!connection) return c.json({ error: "Message connection not found" }, 404);
+    const provider = deps.messagingProviders.get(connection.provider);
+    if (!provider || !supportsConversations(provider)) {
+      return c.json({ error: "Provider cannot search conversations", code: "capability_unsupported" }, 400);
+    }
+    try {
+      const limit = parseLimit(c.req.query("limit")) ?? 20;
+      const result = await provider.searchConversations({ connection }, {
+        query: c.req.query("q")?.trim() || undefined,
+        limit,
+        cursor: c.req.query("cursor")?.trim() || null,
+      });
+      const allowed = new Set(loaded.allowlist.map((entry) => entry.externalConversationId));
+      return c.json({
+        conversations: result.conversations.map((conversation) => ({
+          ...conversation,
+          inAllowlist: allowed.has(conversation.externalConversationId),
+        })),
+        total: result.conversations.length,
+        cursor: result.cursor,
+        done: result.done,
+        limit,
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.get(`${BASE}/conversations`, (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    const conversations = repo.listConversations(c.req.param("workspaceId"));
+    return c.json({ conversations, total: conversations.length });
+  });
+
+  app.get(`${BASE}/messages`, (c) => {
+    const denied = denyWorkspace(c, deps);
+    if (denied) return denied;
+    try {
+      const limit = parseLimit(c.req.query("limit")) ?? 100;
+      const offset = parseOffset(c.req.query("offset"));
+      const page = repo.listMessages({
+        workspaceId: c.req.param("workspaceId"),
+        sourceId: cleanQuery(c.req.query("source")),
+        connectionId: cleanQuery(c.req.query("connection")),
+        externalConversationId: cleanQuery(c.req.query("conversation")),
+        query: cleanQuery(c.req.query("q")),
+        processed: resolveProcessedFilter(
+          parseBooleanQuery(c.req.query("processed"), "processed"),
+          parseBooleanQuery(c.req.query("unprocessed"), "unprocessed"),
+        ),
+        since: cleanQuery(c.req.query("since")),
+        until: cleanQuery(c.req.query("until")),
+        limit,
+        offset,
+      });
+      const outcomes = repo.listOutcomesForMessages(page.messages);
+      const byMessage = new Map<string, typeof outcomes>();
+      for (const outcome of outcomes) {
+        const key = messageKey(outcome.connectionId, outcome.externalMessageId);
+        byMessage.set(key, [...byMessage.get(key) ?? [], outcome]);
+      }
+      const messages = page.messages.map((message) => ({
+        ...message,
+        outcomes: byMessage.get(messageKey(message.connectionId, message.externalMessageId)) ?? [],
+      }));
+      return c.json({
+        messages,
+        total: page.total,
+        limit,
+        offset,
+        hasMore: offset + messages.length < page.total,
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+}
+
+interface CreateConnectionBody {
+  provider?: string;
+  channel?: string;
+  name?: string;
+  config?: Record<string, unknown>;
+}
+
+interface UpdateConnectionBody {
+  name?: string;
+  config?: Record<string, unknown>;
+}
+
+interface UpsertSourceBody {
+  connectionId?: string;
+  name?: string;
+  allowlist?: unknown;
+  enabled?: boolean;
+  retentionDays?: number;
+  pollIntervalSeconds?: number;
+  unprocessedRetrySeconds?: number;
+  unprocessedRetryLimit?: number;
+}
+
+function connectionIdentity(connection: MessageConnection): {
+  id: string; workspaceId: string; provider: string; channel: string; name: string;
+} {
+  return {
+    id: connection.id,
+    workspaceId: connection.workspaceId,
+    provider: connection.provider,
+    channel: connection.channel,
+    name: connection.name,
+  };
+}
+
+function resolveProvider(deps: RouterDeps, provider: string): MessageProvider {
+  const resolved = deps.messagingProviders.get(provider.trim());
+  if (!resolved) throw new Error(`provider is not registered: ${provider.trim() || "(empty)"}`);
+  return resolved;
+}
+
+function resolveChannel(provider: MessageProvider, channel: string | undefined): string {
+  const requested = channel?.trim();
+  const channels = provider.manifest.channels;
+  if (!requested) {
+    // Only defaulted when there is no choice to make; otherwise the caller must say.
+    if (channels.length === 1) return channels[0]!;
+    throw new Error(`channel is required for provider ${provider.manifest.provider}`);
+  }
+  if (!channels.includes(requested)) {
+    throw new Error(`provider ${provider.manifest.provider} does not serve channel ${requested}`);
+  }
+  return requested;
+}
+
+function normalizeAllowlist(value: unknown): MessageSource["allowlist"] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("allowlist must be an array");
+  const now = new Date().toISOString();
+  const seen = new Set<string>();
+  const entries: MessageSource["allowlist"] = [];
+  for (const raw of value) {
+    const entry = typeof raw === "string" ? { externalConversationId: raw } : raw;
+    if (!entry || typeof entry !== "object") throw new Error("allowlist entries must be objects");
+    const record = entry as Record<string, unknown>;
+    const id = String(record.externalConversationId ?? record.external_conversation_id ?? "").trim();
+    if (!id) throw new Error("allowlist entries must reference a conversation");
+    if (seen.has(id)) continue;
+    seen.add(id);
+    // A caller cannot backdate consent: an entry without a timestamp starts now,
+    // and a supplied one is only honoured if it parses.
+    const addedAt = String(record.addedAt ?? record.added_at ?? "").trim();
+    entries.push({
+      externalConversationId: id,
+      addedAt: Number.isFinite(Date.parse(addedAt)) ? new Date(addedAt).toISOString() : now,
+    });
+  }
+  return entries;
+}
+
+function loadConnection(c: Context, deps: RouterDeps, requireAdmin = false): MessageConnection | Response {
+  const denied = denyWorkspace(c, deps) ?? (requireAdmin ? requireHumanAdmin(c, deps) : null);
+  if (denied) return denied;
+  const connection = deps.store.messaging.getConnection(c.req.param("connectionId") ?? "");
+  if (!connection || connection.workspaceId !== c.req.param("workspaceId")) {
+    return c.json({ error: "Message connection not found" }, 404);
+  }
+  return connection;
+}
+
+function loadSource(c: Context, deps: RouterDeps, requireAdmin = false): MessageSource | Response {
+  const denied = denyWorkspace(c, deps) ?? (requireAdmin ? requireHumanAdmin(c, deps) : null);
+  if (denied) return denied;
+  const source = deps.store.messaging.getSource(c.req.param("sourceId") ?? "");
+  if (!source || source.workspaceId !== c.req.param("workspaceId")) {
+    return c.json({ error: "Message source not found" }, 404);
+  }
+  return source;
+}
+
+function denyWorkspace(c: Context, deps: RouterDeps): Response | null {
+  return denyCurrentUserWorkspaceAccess(c, deps.store, c.req.param("workspaceId") ?? "");
+}
+
+/**
+ * Administering a Connection or Source is a consent decision.
+ *
+ * A task token is an agent acting on someone's behalf, so it may read and it
+ * may record outcomes, but it may not widen what the platform ingests.
+ */
+function requireHumanAdmin(c: Context, deps: RouterDeps): Response | null {
+  if (currentAccessToken(c)?.type === "task") {
+    return c.json({ error: "forbidden for task token", code: "human_admin_required" }, 403);
+  }
+  return requireWorkspaceAdmin(c, deps.store, c.req.param("workspaceId") ?? "");
+}
+
+function messageKey(connectionId: string, externalMessageId: string): string {
+  return `${connectionId} ${externalMessageId}`;
+}
+
+function requireText(value: string | undefined, field: string): string {
+  const text = value?.trim();
+  if (!text) throw new Error(`${field} is required`);
+  return text;
+}
+
+function parseBooleanQuery(value: string | undefined, name: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+function parseLimit(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 500) throw new Error("limit must be between 1 and 500");
+  return parsed;
+}
+
+function parseOffset(value: string | undefined): number {
+  if (value === undefined) return 0;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error("offset must be a non-negative integer");
+  return parsed;
+}
+
+function resolveProcessedFilter(processed: boolean | undefined, unprocessed: boolean | undefined): boolean | undefined {
+  if (processed !== undefined && unprocessed !== undefined && processed === unprocessed) {
+    throw new Error("processed and unprocessed filters conflict");
+  }
+  if (processed !== undefined) return processed;
+  if (unprocessed !== undefined) return !unprocessed;
+  return undefined;
+}
+
+function cleanQuery(value: string | undefined): string | null {
+  const cleaned = value?.trim();
+  return cleaned ? cleaned : null;
+}
+
+export function errorResponse(c: Context, error: unknown): Response {
+  if (error instanceof MessageProviderError) {
+    // The Provider already classified this; the status follows the code rather
+    // than a guess at the message text.
+    return c.json({ error: "Messaging provider request failed", code: error.code }, statusForCode(error.code));
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.endsWith("not found")) return c.json({ error: message }, 404);
+  if (
+    message.includes("required")
+    || message.includes("must be")
+    || message.includes("must not")
+    || message.includes("must reference")
+    || message.includes("filters conflict")
+    || message.includes("not registered")
+    || message.includes("does not serve")
+    || message.includes("cannot be rebound")
+  ) {
+    return c.json({ error: message }, 400);
+  }
+  return c.json({ error: "Messaging request failed" }, 500);
+}
+
+function statusForCode(code: MessageErrorCode): 400 | 403 | 404 | 429 | 502 | 503 | 504 {
+  switch (code) {
+    // 403, not 401: the caller authenticated with Multiremi fine — it is the
+    // channel credential behind the Connection that is not usable.
+    case "unauthenticated":
+    case "forbidden":
+      return 403;
+    case "not_found":
+      return 404;
+    case "rate_limited":
+      return 429;
+    case "capability_unsupported":
+      return 400;
+    case "timeout":
+      return 504;
+    case "provider_unavailable":
+    case "provider_incompatible":
+      return 503;
+    default:
+      return 502;
+  }
+}
