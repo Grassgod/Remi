@@ -25,12 +25,15 @@ const state = vi.hoisted(() => ({
   summaries: [] as unknown[],
   submissions: [] as unknown[],
   runs: [] as unknown[],
+  runDetail: null as unknown,
   basePending: false,
   submissionsPending: false,
   runsPending: false,
+  runDetailPending: false,
   baseError: null as unknown,
   submissionsError: null as unknown,
   runsError: null as unknown,
+  observedQueries: [] as Array<{ key: readonly unknown[]; enabled: boolean | undefined }>,
 }));
 const refetchBase = vi.hoisted(() => vi.fn());
 const refetchSubmissions = vi.hoisted(() => vi.fn());
@@ -40,11 +43,13 @@ vi.mock("@tanstack/react-query", () => ({
   queryOptions: <T,>(options: T) => options,
   useQuery: (options: { queryKey: readonly unknown[] }) => {
     const key = options.queryKey;
+    state.observedQueries.push({ key, enabled: (options as { enabled?: boolean }).enabled });
     if (key[0] === "knowledge") {
       const submissions = key[2] === "submissions";
+      const runDetail = key[2] === "runs" && key.length > 3;
       return {
-        data: submissions ? state.submissions : state.runs,
-        isPending: submissions ? state.submissionsPending : state.runsPending,
+        data: submissions ? state.submissions : runDetail ? state.runDetail : state.runs,
+        isPending: submissions ? state.submissionsPending : runDetail ? state.runDetailPending : state.runsPending,
         isError: (submissions ? state.submissionsError : state.runsError) !== null,
         error: submissions ? state.submissionsError : state.runsError,
         refetch: submissions ? refetchSubmissions : refetchRuns,
@@ -77,6 +82,10 @@ vi.mock("@multiremi/core/project-docs", () => ({
 vi.mock("@multiremi/core/knowledge", () => ({
   knowledgeSubmissionsOptions: () => ({ queryKey: ["knowledge", "ws-1", "submissions"] }),
   knowledgeRunsOptions: () => ({ queryKey: ["knowledge", "ws-1", "runs"] }),
+  knowledgeRunOptions: (_workspaceId: string, runId: string | null | undefined) => ({
+    queryKey: ["knowledge", "ws-1", "runs", runId ?? ""],
+    enabled: Boolean(runId),
+  }),
 }));
 vi.mock("@multiremi/core/projects/queries", () => ({
   projectListOptions: () => ({ queryKey: ["projects"] }),
@@ -89,6 +98,7 @@ vi.mock("@multiremi/core/paths", () => ({
     projectWikiPage: (id: string, ref: string) => `/ws/projects/${id}/wiki/${ref}`,
     repositoryWiki: (id: string) => `/ws/repos/${id}/wiki`,
     repositoryWikiPage: (id: string, path: string) => `/ws/repos/${id}/wiki/${path}`,
+    autopilotDetail: (id: string) => `/ws/autopilots/${id}`,
   }),
 }));
 vi.mock("@multiremi/core/workspace/hooks", () => ({
@@ -99,6 +109,9 @@ vi.mock("@multiremi/core/workspace/hooks", () => ({
 }));
 vi.mock("../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid="actor-avatar">{actorId}</span>,
+}));
+vi.mock("../common/task-transcript", () => ({
+  TranscriptButton: ({ title }: { title: string }) => <button type="button">{title}</button>,
 }));
 vi.mock("../projects/components/project-icon", () => ({
   ProjectIcon: ({ project }: { project: Project }) => <span>{project.icon ?? "folder"}</span>,
@@ -111,6 +124,12 @@ vi.mock("../projects/components/wiki/project-wiki-section", () => ({
 }));
 vi.mock("../navigation", () => ({
   AppLink: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
+}));
+vi.mock("@multiremi/ui/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ render }: { render: ReactNode }) => <>{render}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <div role="tooltip">{children}</div>,
 }));
 
 import { KnowledgePage } from "./knowledge-page";
@@ -170,7 +189,7 @@ function runDetail(partial: Partial<KnowledgeRunDetail> = {}): KnowledgeRunDetai
       task_id: "task-atlas", agent_id: "agent-atlas", autopilot_run_id: null,
       mode: "issue_ingest", status: "published", result_summary: "Merged two Raw inputs",
       dedupe_key: "batch-1", created_at: "2026-08-31T01:00:00Z", completed_at: "2026-08-31T01:01:00Z",
-      agent: { id: "agent-atlas", name: "Atlas" }, skill_names: ["code-to-wiki"],
+      agent: { id: "agent-atlas", name: "Atlas" }, skill_names: ["code-to-wiki"], provenance: null,
     },
     sources: [],
     outputs: [],
@@ -185,13 +204,14 @@ function renderPage() {
 describe("KnowledgePage", () => {
   beforeEach(() => {
     Object.assign(state, {
-      projects: [], docs: [], repositories: [], summaries: [], submissions: [], runs: [],
-      basePending: false, submissionsPending: false, runsPending: false,
+      projects: [], docs: [], repositories: [], summaries: [], submissions: [], runs: [], runDetail: null,
+      basePending: false, submissionsPending: false, runsPending: false, runDetailPending: false,
       baseError: null, submissionsError: null, runsError: null,
     });
     refetchBase.mockClear();
     refetchSubmissions.mockClear();
     refetchRuns.mockClear();
+    state.observedQueries.length = 0;
   });
 
   it("renders four peer knowledge views", () => {
@@ -200,6 +220,12 @@ describe("KnowledgePage", () => {
     expect(screen.getByRole("tab", { name: /Raw/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Memory/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Compilation runs/ })).toBeInTheDocument();
+  });
+
+  it("does not request Raw or compilation data on the Wiki landing view", () => {
+    renderPage();
+    expect(state.observedQueries.find(({ key }) => key[0] === "knowledge" && key[2] === "submissions")?.enabled).toBe(false);
+    expect(state.observedQueries.find(({ key }) => key[0] === "knowledge" && key[2] === "runs")?.enabled).toBe(false);
   });
 
   it("keeps the Wiki pane loading until its formal sources resolve", () => {
@@ -240,7 +266,7 @@ describe("KnowledgePage", () => {
     expect(screen.queryByText("Memory waiting for Atlas")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /Raw/ }));
-    expect(screen.getByText("Memory waiting for Atlas")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Memory waiting for Atlas" })).toBeInTheDocument();
     expect(screen.queryByText("Formal memory")).not.toBeInTheDocument();
   });
 
@@ -260,8 +286,37 @@ describe("KnowledgePage", () => {
     expect(screen.getByText("processing")).toBeInTheDocument();
   });
 
+  it("pairs the truncated Raw preview with its complete tooltip content", () => {
+    const body = "A complete Raw submission body that is intentionally longer than the table preview.";
+    state.submissions = [submission({ id: "ksub-long", body })];
+    renderPage();
+    fireEvent.click(screen.getByRole("tab", { name: /Raw/ }));
+
+    const preview = screen.getByRole("button", { name: body });
+    expect(preview).toHaveClass("truncate");
+    expect(screen.getByRole("tooltip")).toHaveTextContent(body);
+  });
+
   it("renders a compilation run with multiple Raw inputs and multiple outputs", () => {
-    state.runs = [runDetail({
+    const detail = runDetail({
+      run: {
+        ...runDetail().run,
+        provenance: {
+          automation_id: "auto-wiki",
+          automation_title: "Repository Wiki maintenance",
+          automation_run_id: "run-auto-1",
+          automation_source: "scm_event",
+          event_type: "change.merged",
+          repository_id: "repo-1",
+          repository_name: "web",
+          change_number: 42,
+          change_title: "Refresh architecture docs",
+          change_url: "https://example.com/pull/42",
+          target_branch: "main",
+          source_revision: "abcdef123456",
+          occurred_at: "2026-08-31T00:59:00Z",
+        },
+      },
       sources: [
         { id: "src-1", run_id: "krun-1", submission_id: "raw-1", source_type: "submission", source_ref: null, metadata: {}, created_at: "", submission: null },
         { id: "src-2", run_id: "krun-1", submission_id: "raw-2", source_type: "submission", source_ref: null, metadata: {}, created_at: "", submission: null },
@@ -270,17 +325,36 @@ describe("KnowledgePage", () => {
         { id: "out-1", run_id: "krun-1", artifact_scope: "project_wiki", doc_id: "doc-1", revision_id: "rev-1", version: 2, action: "merge", content_sha256: null, created_at: "", artifact: { id: "doc-1", title: "Overview", path: "overview.md" } },
         { id: "out-2", run_id: "krun-1", artifact_scope: "memory", doc_id: "doc-2", revision_id: "rev-2", version: 1, action: "split", content_sha256: null, created_at: "", artifact: { id: "doc-2", title: "Runtime fact", path: "runtime-fact.md" } },
       ],
-    })];
+    });
+    state.runs = [detail];
+    state.runDetail = {
+      ...detail,
+      sources: detail.sources.map((source, index) => ({
+        ...source,
+        submission: submission({ id: source.submission_id ?? `raw-${index}`, body: `Complete Raw input ${index + 1}` }),
+      })),
+    };
     renderPage();
     fireEvent.click(screen.getByRole("tab", { name: /Compilation runs/ }));
 
     expect(screen.getByText("Atlas")).toBeInTheDocument();
     expect(screen.getByText("code-to-wiki")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Repository Wiki maintenance" })).toHaveAttribute("href", "/ws/autopilots/auto-wiki");
+    expect(screen.getByRole("link", { name: "#42 Refresh architecture docs" })).toHaveAttribute("href", "https://example.com/pull/42");
+    expect(screen.getByText("PR/MR merged")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View run log" })).toBeInTheDocument();
     expect(screen.getByText("raw-1")).toBeInTheDocument();
     expect(screen.getByText("raw-2")).toBeInTheDocument();
     expect(screen.getByText("Overview")).toBeInTheDocument();
     expect(screen.getByText("Runtime fact")).toBeInTheDocument();
     expect(screen.getByText("Merged two Raw inputs")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View run log" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Run details");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Repository Wiki maintenance");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Complete Raw input 1");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Agent transcript");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Formal outputs · 2");
   });
 
   it("searches within the active formal view", async () => {

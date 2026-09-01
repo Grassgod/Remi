@@ -30,6 +30,7 @@ import { normalizeRepositoryWikiPath } from "@multiremi/store/repos/repository-w
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 import { resolveTaskRepositoryWikiRepositories } from "@multiremi/repository-wiki/task-scope.js";
 import { agentKnowledgePublishPluginNames } from "@multiremi/knowledge/capability.js";
+import { autopilotRunTriggerSummary } from "../wire/autopilots.js";
 
 interface KnowledgeSubmitBody {
   workspace_id?: string;
@@ -153,16 +154,26 @@ export function registerKnowledgeRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = knowledgeWorkspaceId(c, c.req.query("workspace_id"));
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    return c.json({ runs: store.listKnowledgeCompilationRuns({
+    const runs = store.listKnowledgeCompilationRuns({
       workspaceId,
       projectId: clean(c.req.query("project_id")),
       repositoryId: clean(c.req.query("repository_id")),
       status: clean(c.req.query("status")),
       limit: optionalInt(c.req.query("limit")),
-    }).map((run) => {
-      const detail = runDetailResponse(store, run);
+    });
+    const repositories = new Map(
+      listWorkspaceRepositories(store, workspaceId).map((repository) => [repository.id, repository]),
+    );
+    const repositoryDocs = new Map<string, ReturnType<typeof store.listRepositoryWikiDocs>>();
+    return c.json({ runs: runs.map((run) => {
+      const docs = run.repositoryId
+        ? repositoryDocs.get(run.repositoryId)
+          ?? store.listRepositoryWikiDocs(run.workspaceId, run.repositoryId)
+        : [];
+      if (run.repositoryId && !repositoryDocs.has(run.repositoryId)) repositoryDocs.set(run.repositoryId, docs);
+      const detail = runRelationshipsResponse(store, run, { repositoryDocs: docs, includeSubmissions: false });
       return {
-        ...runResponse(store, run),
+        ...runResponse(store, run, (repositoryId) => repositories.get(repositoryId)?.name ?? null),
         sources: detail.sources,
         outputs: detail.outputs,
       };
@@ -718,8 +729,14 @@ function submissionResponse(
 function runResponse(
   store: RouterDeps["store"],
   run: NonNullable<ReturnType<RouterDeps["store"]["getKnowledgeCompilationRun"]>>,
+  resolveRepositoryName?: (repositoryId: string) => string | null,
 ): Record<string, unknown> {
   const agent = run.agentId ? store.getAgent(run.agentId) : null;
+  const autopilotRun = run.autopilotRunId ? store.getAutopilotRun(run.autopilotRunId) : null;
+  const autopilot = autopilotRun ? store.getAutopilot(autopilotRun.autopilotId) : null;
+  const triggerSummary = autopilotRun
+    ? autopilotRunTriggerSummary(autopilotRun, resolveRepositoryName)
+    : null;
   return {
     id: run.id,
     workspace_id: run.workspaceId,
@@ -736,20 +753,39 @@ function runResponse(
     completed_at: run.completedAt,
     agent: agent ? { id: agent.id, name: agent.name } : null,
     skill_names: agent ? agentKnowledgePublishPluginNames(store, agent) : [],
+    provenance: autopilotRun ? {
+      automation_id: autopilotRun.autopilotId,
+      automation_title: autopilot?.title ?? null,
+      automation_run_id: autopilotRun.id,
+      automation_source: autopilotRun.source,
+      event_type: triggerSummary?.event_type ?? null,
+      repository_id: triggerSummary?.repository_id ?? run.repositoryId,
+      repository_name: triggerSummary?.repository_name
+        ?? (run.repositoryId ? resolveRepositoryName?.(run.repositoryId) ?? null : null),
+      change_number: triggerSummary?.change_number ?? null,
+      change_title: triggerSummary?.change_title ?? null,
+      change_url: knowledgeChangeUrl(autopilotRun.payload),
+      target_branch: triggerSummary?.target_branch ?? null,
+      source_revision: triggerSummary?.source_revision ?? null,
+      occurred_at: triggerSummary?.occurred_at ?? null,
+    } : null,
   };
 }
 
-function runDetailResponse(
+function runRelationshipsResponse(
   store: RouterDeps["store"],
   run: NonNullable<ReturnType<RouterDeps["store"]["getKnowledgeCompilationRun"]>>,
-): Record<string, unknown> {
-  const repositoryDocs = run.repositoryId
+  options: {
+    repositoryDocs?: ReturnType<RouterDeps["store"]["listRepositoryWikiDocs"]>;
+    includeSubmissions?: boolean;
+  } = {},
+): { sources: Record<string, unknown>[]; outputs: Record<string, unknown>[] } {
+  const repositoryDocs = options.repositoryDocs ?? (run.repositoryId
     ? store.listRepositoryWikiDocs(run.workspaceId, run.repositoryId)
-    : [];
+    : []);
   return {
-    run: runResponse(store, run),
     sources: store.listKnowledgeRunSources(run.id).map((source) => {
-      const submission = source.submissionId
+      const submission = options.includeSubmissions !== false && source.submissionId
         ? store.getKnowledgeSubmission(source.submissionId)
         : null;
       return {
@@ -787,6 +823,28 @@ function runDetailResponse(
       };
     }),
   };
+}
+
+function runDetailResponse(
+  store: RouterDeps["store"],
+  run: NonNullable<ReturnType<RouterDeps["store"]["getKnowledgeCompilationRun"]>>,
+): Record<string, unknown> {
+  const repositories = new Map(
+    listWorkspaceRepositories(store, run.workspaceId).map((repository) => [repository.id, repository]),
+  );
+  return {
+    run: runResponse(store, run, (repositoryId) => repositories.get(repositoryId)?.name ?? null),
+    ...runRelationshipsResponse(store, run),
+  };
+}
+
+function knowledgeChangeUrl(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const data = (payload as Record<string, unknown>).data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  const value = record.url ?? record.web_url ?? record.html_url ?? record.change_url;
+  return typeof value === "string" && /^https?:\/\//.test(value) ? value : null;
 }
 
 function knowledgeWorkspaceId(c: Parameters<typeof currentAccessToken>[0], requested: unknown): string {

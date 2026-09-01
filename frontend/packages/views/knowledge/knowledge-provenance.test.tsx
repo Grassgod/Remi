@@ -66,7 +66,7 @@ describe("KnowledgeProvenance", () => {
         task_id: "atlas-task", agent_id: "atlas-agent", autopilot_run_id: null,
         mode: "issue_ingest", status: "published", result_summary: "Merged related facts",
         dedupe_key: "batch", created_at: "", completed_at: "", agent: { id: "atlas-agent", name: "Atlas" },
-        skill_names: ["code-to-wiki"],
+        skill_names: ["code-to-wiki"], provenance: null,
       },
       sources: [
         {

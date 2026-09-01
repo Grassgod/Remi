@@ -31,11 +31,19 @@ export function projectDocListOptions(
   });
 }
 
-/** Every doc in the workspace — the Knowledge page groups them by project. */
-export function workspaceDocListOptions(wsId: string) {
+/** Workspace docs; aggregated views default to metadata and opt into bodies for content search. */
+export function workspaceDocListOptions(
+  wsId: string,
+  input: { kind?: string; includeBody?: boolean } = {},
+) {
+  const includeBody = input.includeBody === true;
   return queryOptions({
-    queryKey: projectDocKeys.workspaceList(wsId),
-    queryFn: () => api.listWorkspaceDocs({ workspaceId: wsId }),
+    queryKey: [...projectDocKeys.workspaceList(wsId), input.kind ?? "all", includeBody ? "body" : "metadata"] as const,
+    queryFn: () => api.listWorkspaceDocs({
+      workspaceId: wsId,
+      kind: input.kind,
+      includeBody,
+    }),
     select: (data) => data.docs,
   });
 }

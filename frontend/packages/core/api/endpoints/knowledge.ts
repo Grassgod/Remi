@@ -21,7 +21,7 @@ export class KnowledgeEndpoints {
   constructor(readonly http: HttpClient) {}
 
   async listKnowledgeSubmissions(workspaceId: string): Promise<ListKnowledgeSubmissionsResponse> {
-    const search = new URLSearchParams({ workspace_id: workspaceId });
+    const search = new URLSearchParams({ workspace_id: workspaceId, limit: "50" });
     const raw = await this.http.fetch<unknown>(`/api/knowledge/submissions?${search}`);
     return parseWithFallback(
       raw,
@@ -42,7 +42,7 @@ export class KnowledgeEndpoints {
   }
 
   async listKnowledgeRuns(workspaceId: string): Promise<ListKnowledgeRunsResponse> {
-    const search = new URLSearchParams({ workspace_id: workspaceId });
+    const search = new URLSearchParams({ workspace_id: workspaceId, limit: "30" });
     const raw = await this.http.fetch<unknown>(`/api/knowledge/runs?${search}`);
     return parseWithFallback(
       raw,

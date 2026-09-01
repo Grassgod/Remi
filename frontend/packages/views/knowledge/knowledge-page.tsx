@@ -7,13 +7,18 @@ import {
   ArrowDownUp,
   BookOpen,
   Brain,
+  Check,
   ChevronRight,
   Clock3,
+  ExternalLink,
   FileInput,
   Files,
   FolderKanban,
+  GitBranch,
   GitFork,
+  GitPullRequest,
   Library,
+  Loader2,
   Search,
   Sparkles,
 } from "lucide-react";
@@ -21,9 +26,17 @@ import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@multiremi/ui/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { workspaceDocListOptions } from "@multiremi/core/project-docs";
-import { knowledgeRunsOptions, knowledgeSubmissionsOptions } from "@multiremi/core/knowledge";
+import { knowledgeRunOptions, knowledgeRunsOptions, knowledgeSubmissionsOptions } from "@multiremi/core/knowledge";
 import { projectListOptions } from "@multiremi/core/projects/queries";
 import { repositoryListOptions, repositoryWikiSummariesOptions } from "@multiremi/core/repositories";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -36,10 +49,12 @@ import type {
   WorkspaceDoc,
   WorkspaceRepository,
 } from "@multiremi/core/types";
+import type { AgentTask } from "@multiremi/core/types/agent";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { AppLink } from "../navigation";
 import { ActorAvatar } from "../common/actor-avatar";
 import { EmptyState } from "../common/empty-state";
+import { TranscriptButton } from "../common/task-transcript";
 import { PageHeader } from "../layout/page-header";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { MemoryCard } from "../projects/components/wiki/project-wiki-section";
@@ -279,6 +294,259 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
   return "outline";
 }
 
+function syntheticKnowledgeTask(detail: KnowledgeRunDetail): AgentTask | null {
+  const { run } = detail;
+  if (!run.task_id) return null;
+  return {
+    id: run.task_id,
+    agent_id: run.agent_id ?? "",
+    runtime_id: "",
+    issue_id: "",
+    status: run.status === "processing" || run.status === "validating"
+      ? "running"
+      : run.status === "failed" ? "failed" : "completed",
+    priority: 0,
+    dispatched_at: null,
+    started_at: run.created_at || null,
+    completed_at: run.completed_at,
+    result: null,
+    error: run.status === "failed" ? run.result_summary : null,
+    created_at: run.created_at,
+  };
+}
+
+function runDuration(createdAt: string, completedAt: string | null): string | null {
+  if (!createdAt || !completedAt) return null;
+  const durationMs = Date.parse(completedAt) - Date.parse(createdAt);
+  if (!Number.isFinite(durationMs) || durationMs < 0) return null;
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function KnowledgeRunSheet({
+  selected,
+  onOpenChange,
+}: {
+  selected: KnowledgeRunDetail | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useT("projects");
+  const workspaceId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const { getAgentName } = useActorName();
+  const formatRelativeDate = useFormatRelativeDate();
+  const detailQuery = useQuery(knowledgeRunOptions(workspaceId, selected?.run.id));
+  const detail = detailQuery.data ?? selected;
+  const run = detail?.run;
+  const sources = detail?.sources ?? [];
+  const outputs = detail?.outputs ?? [];
+  const provenance = run?.provenance;
+  const agentName = run
+    ? run.agent?.name || (run.agent_id ? getAgentName(run.agent_id) : t(($) => $.knowledge.provenance_manual))
+    : t(($) => $.knowledge.provenance_unknown);
+  const task = detail ? syntheticKnowledgeTask(detail) : null;
+  const duration = run ? runDuration(run.created_at, run.completed_at) : null;
+
+  const modeLabel = (() => {
+    switch (run?.mode) {
+      case "repository_update": return t(($) => $.knowledge.run_mode_repository_update);
+      case "issue_ingest": return t(($) => $.knowledge.run_mode_issue_ingest);
+      case "memory_curate": return t(($) => $.knowledge.run_mode_memory_curate);
+      default: return run?.mode || t(($) => $.knowledge.provenance_unknown);
+    }
+  })();
+  const triggerLabel = (() => {
+    switch (provenance?.event_type ?? provenance?.automation_source) {
+      case "change.merged": return t(($) => $.knowledge.run_trigger_change_merged);
+      case "default_branch.updated": return t(($) => $.knowledge.run_trigger_default_branch);
+      case "schedule": return t(($) => $.knowledge.run_trigger_schedule);
+      case "manual": return t(($) => $.knowledge.run_trigger_manual);
+      default: return provenance?.event_type || provenance?.automation_source || t(($) => $.knowledge.run_trigger_unknown);
+    }
+  })();
+
+  return (
+    <Sheet open={Boolean(selected)} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-[min(440px,100vw)] gap-0 p-0 sm:max-w-[440px]">
+        <SheetHeader className="border-b pr-12">
+          <SheetTitle>{t(($) => $.knowledge.run_details_title)}</SheetTitle>
+          <SheetDescription className="truncate font-mono text-xs">
+            {provenance?.automation_title || run?.id || t(($) => $.knowledge.run_details_description)}
+          </SheetDescription>
+        </SheetHeader>
+
+        {!detail && detailQuery.isPending ? (
+          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />{t(($) => $.knowledge.run_details_loading)}
+          </div>
+        ) : !detail ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+            <AlertCircle className="size-5 text-destructive" />
+            <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_unavailable)}</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => void detailQuery.refetch()}>
+              {t(($) => $.knowledge.load_error_retry)}
+            </Button>
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="flex flex-wrap gap-1.5 border-b px-4 py-3">
+              <Badge variant="outline" className="font-normal">{modeLabel}</Badge>
+              <Badge variant="secondary" className="font-normal">{triggerLabel}</Badge>
+              <Badge variant={statusVariant(detail.run.status)} className="font-normal">{detail.run.status}</Badge>
+              {duration && <Badge variant="outline" className="font-normal">{duration}</Badge>}
+            </div>
+
+            <section className="border-b px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.run_stage_trigger)}</h3>
+              <div className="mt-3 space-y-2 text-sm">
+                {provenance ? (
+                  <>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Sparkles className="size-4 shrink-0 text-muted-foreground" />
+                      <AppLink href={paths.autopilotDetail(provenance.automation_id)} className="truncate hover:underline">
+                        {provenance.automation_title || provenance.automation_id}
+                      </AppLink>
+                    </div>
+                    {provenance.change_number !== null ? (
+                      <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+                        <GitPullRequest className="size-4 shrink-0" />
+                        {provenance.change_url ? (
+                          <a href={provenance.change_url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-1 hover:text-foreground hover:underline">
+                            <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>
+                            <ExternalLink className="size-3 shrink-0" />
+                          </a>
+                        ) : <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>}
+                      </div>
+                    ) : null}
+                    {(provenance.repository_name || provenance.target_branch || provenance.source_revision) && (
+                      <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+                        <GitBranch className="size-4 shrink-0" />
+                        <span className="truncate font-mono text-xs">
+                          {[provenance.repository_name, provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : <p className="text-muted-foreground">{t(($) => $.knowledge.run_trigger_unknown)}</p>}
+              </div>
+            </section>
+
+            <section className="border-b px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">
+                {t(($) => $.knowledge.run_stage_inputs)} · {sources.length}
+              </h3>
+              <div className="mt-3 divide-y">
+                {sources.length > 0 ? sources.map((source) => (
+                  <div key={source.id} className="py-2 first:pt-0 last:pb-0">
+                    <div className="flex min-w-0 items-center gap-2 text-sm">
+                      <FileInput className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate font-mono text-xs">{source.submission_id || source.source_ref || source.source_type}</span>
+                    </div>
+                    {source.submission?.body && (
+                      <p className="mt-1.5 line-clamp-3 whitespace-pre-wrap break-words pl-6 text-xs leading-relaxed text-muted-foreground">
+                        {source.submission.body}
+                      </p>
+                    )}
+                  </div>
+                )) : <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_no_sources)}</p>}
+              </div>
+            </section>
+
+            <section className="border-b px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.run_stage_agent)}</h3>
+              <div className="mt-3 flex items-start gap-2">
+                <ActorAvatar actorType={detail.run.agent_id ? "agent" : "system"} actorId={detail.run.agent_id ?? "manual"} size={20} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm">{agentName}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {detail.run.skill_names.length > 0
+                      ? detail.run.skill_names.map((skill) => <Badge key={skill} variant="outline" className="font-mono font-normal">{skill}</Badge>)
+                      : <span className="text-xs text-muted-foreground">{modeLabel}</span>}
+                  </div>
+                </div>
+                {task && (
+                  <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                    <span>{t(($) => $.knowledge.run_task_transcript)}</span>
+                    <TranscriptButton
+                      task={task}
+                      agentName={agentName}
+                      isLive={task.status === "running"}
+                      title={t(($) => $.knowledge.run_task_transcript)}
+                    />
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="px-4 py-4">
+              <h3 className="text-xs font-medium text-muted-foreground">
+                {t(($) => $.knowledge.run_stage_outputs)} · {outputs.length}
+              </h3>
+              <div className="mt-3 divide-y">
+                {outputs.length > 0 ? outputs.map((output) => (
+                  <div key={output.id} className="flex min-w-0 items-start gap-2 py-2 first:pt-0 last:pb-0">
+                    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                      <Check className="size-3" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-1.5 text-sm">
+                        <Badge variant="outline" className="shrink-0 font-normal">{output.action}</Badge>
+                        <span className="truncate">{output.artifact?.title || output.artifact?.path || output.doc_id || output.artifact_scope}</span>
+                        {output.version !== null && <span className="shrink-0 text-xs text-muted-foreground">{t(($) => $.knowledge.version_short, { version: output.version })}</span>}
+                      </div>
+                      {output.artifact?.path && <div className="mt-1 truncate font-mono text-xs text-muted-foreground">{output.artifact.path}</div>}
+                    </div>
+                  </div>
+                )) : <p className="text-sm text-muted-foreground">{t(($) => $.knowledge.provenance_no_outputs)}</p>}
+              </div>
+              {detail.run.result_summary && (
+                <div className="mt-4 border-t pt-3">
+                  <div className="text-xs font-medium text-muted-foreground">{t(($) => $.knowledge.run_result)}</div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{detail.run.result_summary}</p>
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {run && (
+          <div className="border-t px-4 py-3 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate font-mono" title={run.id}>{run.id}</span>
+              <span className="shrink-0">{run.created_at ? formatRelativeDate(run.created_at) : "--"}</span>
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function RawBodyPreview({ body, fallback }: { body: string; fallback: string }) {
+  const content = body || fallback;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button type="button" className="mt-1 block w-full truncate text-left text-xs text-muted-foreground">
+            {content}
+          </button>
+        }
+      />
+      <TooltipContent
+        side="bottom"
+        align="start"
+        className="max-h-80 w-[min(32rem,calc(100vw-2rem))] max-w-none items-start overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 leading-relaxed"
+      >
+        {content}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; search: string }) {
   const { t } = useT("projects");
   const paths = useWorkspacePaths();
@@ -293,50 +561,56 @@ function RawPane({ submissions, search }: { submissions: KnowledgeSubmission[]; 
   ].some((value) => value.toLowerCase().includes(query)));
   if (rows.length === 0) return <EmptyState icon={FileInput} title={query ? t(($) => $.knowledge.no_results) : t(($) => $.knowledge.raw_empty)} />;
   return (
-    <div className="p-4">
-      <div className="overflow-hidden rounded-md border">
-        <div className="hidden h-8 grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
-          <span>{t(($) => $.knowledge.raw_source)}</span><span>{t(($) => $.knowledge.raw_issue)}</span><span>{t(($) => $.knowledge.raw_agent)}</span><span>{t(($) => $.knowledge.raw_target)}</span><span>{t(($) => $.knowledge.raw_status)}</span><span>{t(($) => $.knowledge.raw_created)}</span>
+    <TooltipProvider delay={100}>
+      <div className="p-4">
+        <div className="overflow-hidden rounded-md border">
+          <div className="hidden h-8 grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
+            <span>{t(($) => $.knowledge.raw_source)}</span><span>{t(($) => $.knowledge.raw_issue)}</span><span>{t(($) => $.knowledge.raw_agent)}</span><span>{t(($) => $.knowledge.raw_target)}</span><span>{t(($) => $.knowledge.raw_status)}</span><span>{t(($) => $.knowledge.raw_created)}</span>
+          </div>
+          {rows.map((submission) => {
+            const issueLabel = submission.source_issue?.key || submission.source_issue?.title || submission.source_issue_id;
+            const agentLabel = submission.author_agent?.name
+              || (submission.author_agent_id ? getAgentName(submission.author_agent_id) : null);
+            const target = submission.proposed_path || submission.proposed_slug || t(($) => $.knowledge.raw_unspecified_target);
+            return (
+              <article key={submission.id} className="grid gap-2 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] lg:items-center lg:gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5"><FileInput className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate text-xs font-medium">{submission.source_type}</span></div>
+                  <RawBodyPreview body={submission.body} fallback={submission.id} />
+                </div>
+                <div className="min-w-0 text-xs">
+                  {issueLabel && submission.source_issue_id ? <AppLink href={paths.issueDetail(submission.source_issue_id)} className="block truncate hover:underline">{issueLabel}</AppLink> : <span className="text-muted-foreground">--</span>}
+                </div>
+                <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                  {submission.author_agent_id && <ActorAvatar actorType="agent" actorId={submission.author_agent_id} size={16} />}
+                  <span className="truncate">{agentLabel || t(($) => $.knowledge.provenance_unknown)}</span>
+                </div>
+                <div className="min-w-0 text-xs">
+                  <Badge variant="outline" className="mr-1.5 font-normal">{submission.scope}</Badge>
+                  <span className="break-all font-mono text-muted-foreground">{target}</span>
+                </div>
+                <Badge variant={statusVariant(submission.status)} className="w-fit font-normal">{submission.status}</Badge>
+                <span className="text-xs text-muted-foreground">{submission.created_at ? formatRelativeDate(submission.created_at) : "--"}</span>
+              </article>
+            );
+          })}
         </div>
-        {rows.map((submission) => {
-          const issueLabel = submission.source_issue?.key || submission.source_issue?.title || submission.source_issue_id;
-          const agentLabel = submission.author_agent?.name
-            || (submission.author_agent_id ? getAgentName(submission.author_agent_id) : null);
-          const target = submission.proposed_path || submission.proposed_slug || t(($) => $.knowledge.raw_unspecified_target);
-          return (
-            <article key={submission.id} className="grid gap-2 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(160px,1fr)_120px_130px_minmax(180px,1.2fr)_110px_96px] lg:items-center lg:gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5"><FileInput className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate text-xs font-medium">{submission.source_type}</span></div>
-                <p className="mt-1 truncate text-xs text-muted-foreground" title={submission.body}>{submission.body || submission.id}</p>
-              </div>
-              <div className="min-w-0 text-xs">
-                {issueLabel && submission.source_issue_id ? <AppLink href={paths.issueDetail(submission.source_issue_id)} className="block truncate hover:underline">{issueLabel}</AppLink> : <span className="text-muted-foreground">--</span>}
-              </div>
-              <div className="flex min-w-0 items-center gap-1.5 text-xs">
-                {submission.author_agent_id && <ActorAvatar actorType="agent" actorId={submission.author_agent_id} size={16} />}
-                <span className="truncate">{agentLabel || t(($) => $.knowledge.provenance_unknown)}</span>
-              </div>
-              <div className="min-w-0 text-xs">
-                <Badge variant="outline" className="mr-1.5 font-normal">{submission.scope}</Badge>
-                <span className="break-all font-mono text-muted-foreground">{target}</span>
-              </div>
-              <Badge variant={statusVariant(submission.status)} className="w-fit font-normal">{submission.status}</Badge>
-              <span className="text-xs text-muted-foreground">{submission.created_at ? formatRelativeDate(submission.created_at) : "--"}</span>
-            </article>
-          );
-        })}
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
 function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string }) {
   const { t } = useT("projects");
+  const paths = useWorkspacePaths();
   const { getAgentName } = useActorName();
   const formatRelativeDate = useFormatRelativeDate();
+  const [selected, setSelected] = useState<KnowledgeRunDetail | null>(null);
   const query = search.trim().toLowerCase();
   const rows = runs.filter(({ run, sources, outputs }) => !query || [
     run.id, run.mode, run.status, run.result_summary ?? "", run.agent?.name ?? run.agent_id ?? "",
+    run.provenance?.automation_title ?? "", run.provenance?.event_type ?? "",
+    run.provenance?.repository_name ?? "", run.provenance?.change_title ?? "",
     ...run.skill_names, ...sources.flatMap((source) => [source.submission_id ?? "", source.source_ref ?? ""]),
     ...outputs.flatMap((output) => [output.doc_id ?? "", output.artifact?.title ?? "", output.artifact?.path ?? ""]),
   ].some((value) => value.toLowerCase().includes(query)));
@@ -344,18 +618,73 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
   return (
     <div className="p-4">
       <div className="overflow-hidden rounded-md border">
+        <div className="hidden h-8 grid-cols-[minmax(230px,1.2fr)_minmax(145px,.7fr)_minmax(150px,.8fr)_minmax(220px,1.3fr)_120px] items-center gap-3 border-b bg-muted/20 px-4 text-xs text-muted-foreground lg:grid">
+          <span>{t(($) => $.knowledge.run_origin)}</span>
+          <span>{t(($) => $.knowledge.raw_agent)}</span>
+          <span>{t(($) => $.knowledge.run_inputs)}</span>
+          <span>{t(($) => $.knowledge.run_outputs)}</span>
+          <span className="text-right">{t(($) => $.knowledge.raw_status)}</span>
+        </div>
         {rows.map(({ run, sources, outputs }) => {
           const agentName = run.agent?.name || (run.agent_id ? getAgentName(run.agent_id) : t(($) => $.knowledge.provenance_manual));
+          const provenance = run.provenance;
+          const modeLabel = (() => {
+            switch (run.mode) {
+              case "repository_update": return t(($) => $.knowledge.run_mode_repository_update);
+              case "issue_ingest": return t(($) => $.knowledge.run_mode_issue_ingest);
+              case "memory_curate": return t(($) => $.knowledge.run_mode_memory_curate);
+              default: return run.mode;
+            }
+          })();
+          const triggerLabel = (() => {
+            switch (provenance?.event_type ?? provenance?.automation_source) {
+              case "change.merged": return t(($) => $.knowledge.run_trigger_change_merged);
+              case "default_branch.updated": return t(($) => $.knowledge.run_trigger_default_branch);
+              case "schedule": return t(($) => $.knowledge.run_trigger_schedule);
+              case "manual": return t(($) => $.knowledge.run_trigger_manual);
+              default: return provenance?.event_type || provenance?.automation_source || t(($) => $.knowledge.run_trigger_unknown);
+            }
+          })();
           return (
             <article key={run.id} className="border-b px-4 py-3 last:border-b-0">
-              <div className="grid gap-3 lg:grid-cols-[minmax(170px,.8fr)_minmax(150px,.7fr)_minmax(160px,1fr)_minmax(220px,1.4fr)_110px] lg:items-start">
+              <div className="grid gap-3 lg:grid-cols-[minmax(230px,1.2fr)_minmax(145px,.7fr)_minmax(150px,.8fr)_minmax(220px,1.3fr)_120px] lg:items-start">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-xs font-medium"><Sparkles className="size-3.5 text-muted-foreground" /><span className="truncate" title={run.id}>{run.id}</span></div>
-                  <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><Clock3 className="size-3" />{run.created_at ? formatRelativeDate(run.created_at) : "--"}</div>
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
+                    <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
+                    {provenance ? (
+                      <AppLink href={paths.autopilotDetail(provenance.automation_id)} className="truncate hover:underline">
+                        {provenance.automation_title || provenance.automation_id}
+                      </AppLink>
+                    ) : <span className="truncate" title={run.id}>{run.id}</span>}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    <Badge variant="outline" className="font-normal">{modeLabel}</Badge>
+                    <Badge variant="secondary" className="font-normal">{triggerLabel}</Badge>
+                  </div>
+                  <div className="mt-1.5 min-w-0 text-xs text-muted-foreground">
+                    {provenance?.change_number !== null && provenance?.change_number !== undefined ? (
+                      <span className="flex min-w-0 items-center gap-1">
+                        <GitPullRequest className="size-3 shrink-0" />
+                        {provenance.change_url ? (
+                          <a href={provenance.change_url} target="_blank" rel="noreferrer" className="truncate hover:underline">
+                            #{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}
+                          </a>
+                        ) : <span className="truncate">#{provenance.change_number}{provenance.change_title ? ` ${provenance.change_title}` : ""}</span>}
+                      </span>
+                    ) : provenance?.repository_name || provenance?.target_branch || provenance?.source_revision ? (
+                      <span className="flex min-w-0 items-center gap-1">
+                        <GitBranch className="size-3 shrink-0" />
+                        <span className="truncate">
+                          {[provenance.repository_name, provenance.target_branch, provenance.source_revision?.slice(0, 7)].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="min-w-0 text-xs">
                   <div className="flex items-center gap-1.5"><ActorAvatar actorType={run.agent_id ? "agent" : "system"} actorId={run.agent_id ?? "manual"} size={16} /><span className="truncate">{agentName}</span></div>
-                  <div className="mt-1 truncate text-muted-foreground">{run.skill_names.join(", ") || run.mode}</div>
+                  <div className="mt-1 truncate text-muted-foreground">{run.skill_names.join(", ") || modeLabel}</div>
+                  <div className="mt-1 flex items-center gap-1 text-muted-foreground"><Clock3 className="size-3" />{run.created_at ? formatRelativeDate(run.created_at) : "--"}</div>
                 </div>
                 <div className="min-w-0">
                   <div className="text-xs text-muted-foreground">{t(($) => $.knowledge.run_inputs)} · {sources.length}</div>
@@ -376,12 +705,23 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
                   </div>
                   <p className="mt-1 truncate text-xs text-muted-foreground" title={run.result_summary ?? undefined}>{run.result_summary || run.mode}</p>
                 </div>
-                <Badge variant={statusVariant(run.status)} className="w-fit font-normal">{run.status}</Badge>
+                <div className="flex items-center gap-2 lg:justify-end">
+                  <Badge variant={statusVariant(run.status)} className="w-fit font-normal">{run.status}</Badge>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => setSelected({ run, sources, outputs })}
+                  >
+                    <span className="hidden xl:inline">{t(($) => $.knowledge.run_view_log)}</span>
+                    <ChevronRight className="size-3.5" />
+                  </button>
+                </div>
               </div>
             </article>
           );
         })}
       </div>
+      <KnowledgeRunSheet selected={selected} onOpenChange={(open) => { if (!open) setSelected(null); }} />
     </div>
   );
 }
@@ -389,34 +729,53 @@ function RunPane({ runs, search }: { runs: KnowledgeRunDetail[]; search: string 
 export function KnowledgePage() {
   const { t } = useT("projects");
   const workspaceId = useWorkspaceId();
-  const projectsQuery = useQuery(projectListOptions(workspaceId));
-  const docsQuery = useQuery(workspaceDocListOptions(workspaceId));
-  const repositoriesQuery = useQuery(repositoryListOptions(workspaceId));
-  const repositoryWikiQuery = useQuery(repositoryWikiSummariesOptions(workspaceId));
-  const submissionsQuery = useQuery(knowledgeSubmissionsOptions(workspaceId));
-  const runsQuery = useQuery(knowledgeRunsOptions(workspaceId));
   const [activeTab, setActiveTab] = useState<KnowledgeTab>("wiki");
   const [search, setSearch] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+  const needsProjects = activeTab === "wiki" || activeTab === "memory";
+  const projectsQuery = useQuery({ ...projectListOptions(workspaceId), enabled: Boolean(workspaceId) && needsProjects });
+  const docsQuery = useQuery({
+    ...workspaceDocListOptions(workspaceId, { includeBody: Boolean(search.trim()) }),
+    enabled: Boolean(workspaceId) && activeTab === "wiki",
+  });
+  const memoryDocsQuery = useQuery({
+    ...workspaceDocListOptions(workspaceId, { kind: "memory", includeBody: true }),
+    enabled: Boolean(workspaceId) && activeTab === "memory",
+  });
+  const repositoriesQuery = useQuery({ ...repositoryListOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "wiki" });
+  const repositoryWikiQuery = useQuery({ ...repositoryWikiSummariesOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "wiki" });
+  const submissionsQuery = useQuery({ ...knowledgeSubmissionsOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "raw" });
+  const runsQuery = useQuery({ ...knowledgeRunsOptions(workspaceId), enabled: Boolean(workspaceId) && activeTab === "runs" });
   const projects = projectsQuery.data ?? [];
   const docs = docsQuery.data ?? [];
+  const memoryDocs = memoryDocsQuery.data ?? [];
   const repositories = repositoriesQuery.data?.repositories ?? [];
   const summaries = repositoryWikiQuery.data ?? [];
   const submissions = submissionsQuery.data ?? [];
   const runs = runsQuery.data ?? [];
-  const formalMemoryCount = docs.filter((doc) => doc.kind === "memory").length;
+  const formalMemoryCount = memoryDocs.length;
   const formalWikiCount = docs.filter((doc) => doc.kind === "wiki" && doc.slug !== "_schema").length
     + summaries.reduce((total, summary) => total + summary.page_count, 0);
-  const counts = { wiki: formalWikiCount, raw: submissions.length, memory: formalMemoryCount, runs: runs.length };
+  const counts: Record<KnowledgeTab, number | undefined> = {
+    wiki: docsQuery.data && repositoryWikiQuery.data ? formalWikiCount : undefined,
+    raw: submissionsQuery.data ? submissions.length : undefined,
+    memory: memoryDocsQuery.data ? formalMemoryCount : undefined,
+    runs: runsQuery.data ? runs.length : undefined,
+  };
   const total = counts[activeTab];
-  const basePending = projectsQuery.isPending || docsQuery.isPending || repositoriesQuery.isPending || repositoryWikiQuery.isPending;
-  const baseError = projectsQuery.error ?? docsQuery.error ?? repositoriesQuery.error ?? repositoryWikiQuery.error;
-  const panelPending = activeTab === "raw" ? submissionsQuery.isPending : activeTab === "runs" ? runsQuery.isPending : basePending;
-  const panelError = activeTab === "raw" ? submissionsQuery.error : activeTab === "runs" ? runsQuery.error : baseError;
+  const wikiPending = projectsQuery.isPending || docsQuery.isPending || repositoriesQuery.isPending || repositoryWikiQuery.isPending;
+  const wikiError = projectsQuery.error ?? docsQuery.error ?? repositoriesQuery.error ?? repositoryWikiQuery.error;
+  const memoryPending = projectsQuery.isPending || memoryDocsQuery.isPending;
+  const memoryError = projectsQuery.error ?? memoryDocsQuery.error;
+  const panelPending = activeTab === "raw" ? submissionsQuery.isPending : activeTab === "runs" ? runsQuery.isPending : activeTab === "memory" ? memoryPending : wikiPending;
+  const panelError = activeTab === "raw" ? submissionsQuery.error : activeTab === "runs" ? runsQuery.error : activeTab === "memory" ? memoryError : wikiError;
   const retry = () => {
     if (activeTab === "raw") void submissionsQuery.refetch();
     else if (activeTab === "runs") void runsQuery.refetch();
-    else {
+    else if (activeTab === "memory") {
+      void projectsQuery.refetch();
+      void memoryDocsQuery.refetch();
+    } else {
       void projectsQuery.refetch();
       void docsQuery.refetch();
       void repositoriesQuery.refetch();
@@ -444,10 +803,10 @@ export function KnowledgePage() {
         <div className="flex min-h-12 shrink-0 flex-col gap-2 border-b px-4 py-2 sm:flex-row sm:items-center sm:py-0">
           <div className="overflow-x-auto pb-1 sm:pb-0">
             <TabsList variant="line" aria-label={t(($) => $.knowledge.views_label)}>
-              <TabsTrigger value="wiki" className="px-3"><BookOpen />{t(($) => $.knowledge.tab_wiki)}<span className="tabular-nums text-muted-foreground">{counts.wiki}</span></TabsTrigger>
-              <TabsTrigger value="raw" className="px-3"><FileInput />{t(($) => $.knowledge.tab_raw)}<span className="tabular-nums text-muted-foreground">{counts.raw}</span></TabsTrigger>
-              <TabsTrigger value="memory" className="px-3"><Brain />{t(($) => $.knowledge.tab_memory)}<span className="tabular-nums text-muted-foreground">{counts.memory}</span></TabsTrigger>
-              <TabsTrigger value="runs" className="px-3"><Sparkles />{t(($) => $.knowledge.tab_runs)}<span className="tabular-nums text-muted-foreground">{counts.runs}</span></TabsTrigger>
+              <TabsTrigger value="wiki" className="px-3"><BookOpen />{t(($) => $.knowledge.tab_wiki)}{counts.wiki !== undefined && <span className="tabular-nums text-muted-foreground">{counts.wiki}</span>}</TabsTrigger>
+              <TabsTrigger value="raw" className="px-3"><FileInput />{t(($) => $.knowledge.tab_raw)}{counts.raw !== undefined && <span className="tabular-nums text-muted-foreground">{counts.raw}</span>}</TabsTrigger>
+              <TabsTrigger value="memory" className="px-3"><Brain />{t(($) => $.knowledge.tab_memory)}{counts.memory !== undefined && <span className="tabular-nums text-muted-foreground">{counts.memory}</span>}</TabsTrigger>
+              <TabsTrigger value="runs" className="px-3"><Sparkles />{t(($) => $.knowledge.tab_runs)}{counts.runs !== undefined && <span className="tabular-nums text-muted-foreground">{counts.runs}</span>}</TabsTrigger>
             </TabsList>
           </div>
           <div className="relative min-w-0 flex-1 sm:ml-auto sm:max-w-72">
@@ -465,7 +824,7 @@ export function KnowledgePage() {
           <>
             <TabsContent value="wiki" className="min-h-0 overflow-y-auto"><WikiPane projects={projects} docs={docs} repositories={repositories} summaries={summaries} search={search} sortOrder={sortOrder} /></TabsContent>
             <TabsContent value="raw" className="min-h-0 overflow-y-auto"><RawPane submissions={submissions} search={search} /></TabsContent>
-            <TabsContent value="memory" className="min-h-0 overflow-y-auto"><MemoryPane projects={projects} docs={docs} search={search} /></TabsContent>
+            <TabsContent value="memory" className="min-h-0 overflow-y-auto"><MemoryPane projects={projects} docs={memoryDocs} search={search} /></TabsContent>
             <TabsContent value="runs" className="min-h-0 overflow-y-auto"><RunPane runs={runs} search={search} /></TabsContent>
           </>
         )}

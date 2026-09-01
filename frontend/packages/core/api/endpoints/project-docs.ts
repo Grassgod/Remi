@@ -41,7 +41,7 @@ export class ProjectDocsEndpoints {
 
   /** Every doc in the workspace, each carrying its project's title. */
   async listWorkspaceDocs(
-    params?: { workspaceId?: string; kind?: string; q?: string; limit?: number },
+    params?: { workspaceId?: string; kind?: string; q?: string; limit?: number; includeBody?: boolean },
   ): Promise<ListWorkspaceDocsResponse> {
     const search = new URLSearchParams();
     // Passed explicitly: the server resolves this endpoint's workspace from
@@ -51,6 +51,7 @@ export class ProjectDocsEndpoints {
     if (params?.kind) search.set("kind", params.kind);
     if (params?.q) search.set("q", params.q);
     if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.includeBody === false) search.set("include_body", "false");
     const raw = await this.http.fetch<unknown>(`/api/project-docs?${search}`);
     return parseWithFallback(
       raw,
