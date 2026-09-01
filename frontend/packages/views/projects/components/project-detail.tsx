@@ -46,6 +46,7 @@ import {
 } from "../../issues/components/pickers/property-picker";
 import { AssigneePicker } from "../../issues/components/pickers/assignee-picker";
 import { ProjectResourcesSection } from "./project-resources-section";
+import { ProjectRunLocationSection } from "./project-run-location-section";
 import { ProjectInstructionsSection } from "./project-instructions-section";
 import { ProjectContentTabs, type ProjectContentTab } from "./wiki/project-content-tabs";
 import { IssuesHeader } from "../../issues/components/issues-header";
@@ -772,6 +773,8 @@ export function ProjectDetail({
       />
 
       <ProjectResourcesSection projectId={projectId} editable={!isArchived} />
+
+      <ProjectRunLocationSection projectId={projectId} editable={!isArchived} />
 
       <div className="border-t pt-3">
         <Button

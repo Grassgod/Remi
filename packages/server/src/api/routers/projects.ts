@@ -43,8 +43,11 @@ import {
 } from "../wire/index.js";
 import type {
   CreateProjectDocInput,
+  CreateProjectDeviceInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  MultiremiProjectDevice,
+  ReplaceProjectDevicesInput,
   UpdateProjectDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
@@ -52,6 +55,16 @@ import type {
 import type { RouterDeps } from "./deps.js";
 import { ProjectKnowledgeUnavailableError } from "@multiremi/project-knowledge/service.js";
 import { OpenVikingClientError } from "@multiremi/project-knowledge/openviking-client.js";
+import {
+  assertProjectKnowledgeTarget,
+  createFormalWriteRun,
+  createProjectMutationSubmission,
+  linkSeededProjectSchema,
+  knowledgePolicyErrorResponse,
+  rawSubmissionResponse,
+  resolveKnowledgeWriteActor,
+} from "../helpers/knowledge.js";
+import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 
 export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   const { store, projectKnowledge } = deps;
@@ -207,6 +220,62 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const resources = store.listProjectResources(c.req.param("id"));
     return c.json({ resources, total: resources.length });
   });
+  app.get("/api/multiremi/projects/:id/devices", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    return c.json(projectDevicesResponse(store.listProjectDevices(project.id), false));
+  });
+  app.put("/api/multiremi/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<ReplaceProjectDevicesInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const devices = store.replaceProjectDevices(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.json(projectDevicesResponse(devices, false));
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.post("/api/multiremi/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<CreateProjectDeviceInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const device = store.createProjectDevice(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const devices = store.listProjectDevices(project.id);
+      publishProjectUpdated(c, store, store.getProject(project.id)!, projectCompatibilityResponse(store.getProject(project.id)!));
+      return c.json({ device, warning: projectDevicesWarning(devices) }, 201);
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.delete("/api/multiremi/projects/:id/devices/:daemonId", (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    try {
+      store.deleteProjectDevice(project.id, c.req.param("daemonId"));
+      publishProjectUpdated(c, store, store.getProject(project.id)!, projectCompatibilityResponse(store.getProject(project.id)!));
+      return c.json({ ok: true });
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
   app.post("/api/multiremi/projects/:id/resources", async (c) => {
     const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
@@ -291,6 +360,67 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const resources = store.listProjectResources(c.req.param("id")).map(projectResourceCompatibilityResponse);
     return c.json({ resources, total: resources.length });
   });
+  app.get("/api/projects/:id/devices", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    return c.json(projectDevicesResponse(store.listProjectDevices(project.id), true));
+  });
+  app.put("/api/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<ReplaceProjectDevicesInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const devices = store.replaceProjectDevices(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.json(projectDevicesResponse(devices, true));
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.post("/api/projects/:id/devices", async (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<CreateProjectDeviceInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const device = store.createProjectDevice(project.id, {
+        ...body,
+        createdBy: currentRequestUserId(c),
+      });
+      const devices = store.listProjectDevices(project.id);
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.json({
+        device: projectDeviceCompatibilityResponse(device),
+        warning: projectDevicesWarning(devices),
+      }, 201);
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.delete("/api/projects/:id/devices/:daemonId", (c) => {
+    const project = loadProjectForMutation(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    try {
+      store.deleteProjectDevice(project.id, c.req.param("daemonId"));
+      const updatedProject = store.getProject(project.id)!;
+      publishProjectUpdated(c, store, updatedProject, projectCompatibilityResponse(updatedProject));
+      return c.body(null, 204);
+    } catch (err) {
+      const response = projectDeviceErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
   app.post("/api/projects/:id/resources", async (c) => {
     const project = loadProjectForMutation(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
@@ -352,13 +482,42 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (project instanceof Response) return project;
     const body = await readJsonStrict<CreateProjectDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
     try {
-      const doc = await projectKnowledge.createProjectDoc(project.id, projectDocCreateInput(c, store, body));
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertProjectKnowledgeTarget(actor, project.id);
+      const input = projectDocCreateInput(c, store, body);
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createProjectMutationSubmission({
+          store, actor, projectId: project.id, operation: "create", body: input,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const scope = input.kind === "memory" ? "memory" : "project_wiki";
+      const schemaExisted = Boolean(store.getProjectDocByRef(project.id, "_schema"));
+      const run = createFormalWriteRun({
+        store, actor, workspaceId: project.workspaceId, projectId: project.id, scope,
+      });
+      runId = run.id;
+      const written = await projectKnowledge.createProjectDoc(project.id, input);
+      store.linkKnowledgeFormalVersion({
+        runId: run.id,
+        artifactScope: written.kind === "memory" ? "memory" : "project_wiki",
+        docId: written.id,
+        version: written.version,
+        action: "create",
+        contentSha256: written.contentSha256 ?? sha256Text(written.body),
+      });
+      linkSeededProjectSchema({ store, projectId: project.id, runId: run.id, schemaExisted });
+      store.completeKnowledgeCompilationRun(run.id, "published", `created ${written.id} v${written.version}`);
+      const doc = { ...written, compilationRunId: run.id };
       const response = projectDocCompatibilityResponse(doc);
       publishProjectDocCreated(c, store, doc, response);
       return c.json({ doc: response }, 201);
     } catch (err) {
-      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", err instanceof Error ? err.message : "project knowledge create failed");
+      const response = knowledgePolicyErrorResponse(c, err)
+        ?? projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
@@ -381,13 +540,45 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (project instanceof Response) return project;
     const body = await readJsonStrict<UpdateProjectDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
     try {
-      const doc = await projectKnowledge.updateProjectDoc(project.id, c.req.param("ref"), projectDocUpdateInput(c, body));
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertProjectKnowledgeTarget(actor, project.id);
+      const current = store.getProjectDocByRef(project.id, c.req.param("ref"));
+      if (!current) return c.json({ error: "project doc not found" }, 404);
+      const input = projectDocUpdateInput(c, body);
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createProjectMutationSubmission({
+          store, actor, projectId: project.id, operation: "update", body: input, current,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const run = createFormalWriteRun({
+        store,
+        actor,
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        scope: current.kind === "memory" ? "memory" : "project_wiki",
+      });
+      runId = run.id;
+      const written = await projectKnowledge.updateProjectDoc(project.id, c.req.param("ref"), input);
+      store.linkKnowledgeFormalVersion({
+        runId: run.id,
+        artifactScope: written.kind === "memory" ? "memory" : "project_wiki",
+        docId: written.id,
+        version: written.version,
+        action: "update",
+        contentSha256: written.contentSha256 ?? sha256Text(written.body),
+      });
+      store.completeKnowledgeCompilationRun(run.id, "published", `updated ${written.id} v${written.version}`);
+      const doc = { ...written, compilationRunId: run.id };
       const response = projectDocCompatibilityResponse(doc);
       publishProjectDocUpdated(c, store, doc, response);
       return c.json({ doc: response });
     } catch (err) {
-      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", err instanceof Error ? err.message : "project knowledge update failed");
+      const response = knowledgePolicyErrorResponse(c, err)
+        ?? projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
@@ -395,14 +586,45 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/projects/:id/docs/:ref", async (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
+    let runId: string | null = null;
     try {
-      const doc = await projectKnowledge.deleteProjectDoc(project.id, c.req.param("ref"), {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertProjectKnowledgeTarget(actor, project.id);
+      const current = store.getProjectDocByRef(project.id, c.req.param("ref"));
+      if (!current) return c.json({ error: "project doc not found" }, 404);
+      const input = {
         expectedVersion: parseOptionalInt(c.req.query("expected_version")),
+      };
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createProjectMutationSubmission({
+          store, actor, projectId: project.id, operation: "delete", body: input, current,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const run = createFormalWriteRun({
+        store,
+        actor,
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        scope: current.kind === "memory" ? "memory" : "project_wiki",
       });
+      runId = run.id;
+      const doc = await projectKnowledge.deleteProjectDoc(project.id, c.req.param("ref"), input);
+      store.recordKnowledgeCompilationOutput({
+        runId: run.id,
+        artifactScope: doc.kind === "memory" ? "memory" : "project_wiki",
+        docId: doc.id,
+        version: doc.version,
+        action: "reject",
+        contentSha256: doc.contentSha256 ?? sha256Text(doc.body),
+      });
+      store.completeKnowledgeCompilationRun(run.id, "published", `deleted ${doc.id} v${doc.version}`);
       publishProjectDocDeleted(c, store, doc);
       return c.json({ deleted: true });
     } catch (err) {
-      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", err instanceof Error ? err.message : "project knowledge delete failed");
+      const response = knowledgePolicyErrorResponse(c, err)
+        ?? projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
@@ -547,6 +769,44 @@ function projectKnowledgeErrorResponse(c: any, err: unknown): Response | null {
   if (err instanceof Error && err.message === "a doc with this slug already exists") {
     return c.json({ error: err.message }, 409);
   }
+  return null;
+}
+
+function projectDevicesResponse(devices: MultiremiProjectDevice[], compatibility: boolean): Record<string, unknown> {
+  return {
+    devices: compatibility ? devices.map(projectDeviceCompatibilityResponse) : devices,
+    total: devices.length,
+    warning: projectDevicesWarning(devices),
+  };
+}
+
+function projectDeviceCompatibilityResponse(device: MultiremiProjectDevice): Record<string, unknown> {
+  return {
+    project_id: device.projectId,
+    workspace_id: device.workspaceId,
+    daemon_id: device.daemonId,
+    display_name: device.displayName,
+    online: device.online,
+    providers: device.providers,
+    created_at: device.createdAt,
+    created_by: device.createdBy,
+  };
+}
+
+function projectDevicesWarning(devices: MultiremiProjectDevice[]): string | null {
+  if (devices.length === 0 || devices.some((device) => device.online)) return null;
+  return "All devices allowed for this project are currently offline.";
+}
+
+function projectDeviceErrorResponse(c: any, err: unknown): Response | null {
+  if (!(err instanceof Error)) return null;
+  if (err.message.includes("UNIQUE constraint") || err.message.includes("duplicate key")) {
+    return c.json({ error: "device is already bound to this project" }, 409);
+  }
+  if (err.message.startsWith("Daemon not found:")) return c.json({ error: err.message }, 404);
+  if (err.message.startsWith("Project device not found:")) return c.json({ error: err.message }, 404);
+  if (err.message === "daemon_id is required") return c.json({ error: err.message }, 400);
+  if (err.message.startsWith("daemon_ids must")) return c.json({ error: err.message }, 400);
   return null;
 }
 

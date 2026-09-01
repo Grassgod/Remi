@@ -135,3 +135,25 @@ export interface ListProjectResourcesResponse {
   resources: ProjectResource[];
   total: number;
 }
+
+export interface ProjectDevice {
+  project_id: string;
+  workspace_id: string;
+  daemon_id: string;
+  display_name: string;
+  online: boolean;
+  providers: string[];
+  created_at: string;
+  created_by: string | null;
+}
+
+export interface ListProjectDevicesResponse {
+  devices: ProjectDevice[];
+  total: number;
+  warning: string | null;
+}
+
+export interface ProjectDeviceMutationResponse {
+  device: ProjectDevice;
+  warning: string | null;
+}

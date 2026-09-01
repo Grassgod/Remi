@@ -804,7 +804,7 @@
       "validation_summary": "기본 메뉴와 개인화 메뉴 {{count}}개를 검증했습니다.", "publish_summary": "기본 메뉴와 개인화 메뉴 {{count}}개를 게시했습니다.",
       "read_only": "Workspace Owner와 Admin만 편집하거나 게시할 수 있습니다.", "default_title": "기본 메뉴", "audiences_title": "대상별 메뉴", "audiences_description": "멤버 지정은 역할 메뉴보다 우선합니다.",
       "add_audience": "대상 추가", "no_audiences": "대상별 메뉴가 없습니다", "target_type": "대상 유형", "target_member": "Workspace 멤버", "target_role": "Workspace 역할", "target_external": "외부 ID",
-      "member": "멤버", "role": "역할", "select_member": "멤버 선택", "external_id": "Feishu 사용자 ID", "delete_audience": "대상 삭제",
+      "member": "멤버", "role": "역할", "role_owner": "소유자", "role_admin": "관리자", "role_member": "멤버", "id_type_open": "open_id", "id_type_union": "union_id", "id_type_user": "user_id", "select_member": "멤버 선택", "external_id": "Feishu 사용자 ID", "delete_audience": "대상 삭제",
       "add_item": "메뉴 항목 추가", "no_items": "메뉴 항목이 없습니다", "drag_item": "드래그하여 순서 변경", "item_name": "메뉴 이름", "delete_item": "메뉴 항목 삭제", "item_tag": "태그", "item_kind": "동작",
       "kind_message": "메시지 전송", "kind_link": "링크 열기", "kind_event": "이벤트 전송", "kind_submenu": "하위 메뉴", "children": "하위 메뉴 항목",
       "confirm_title": "Feishu에 게시할까요?", "confirm_description": "Workspace 전체의 실시간 봇 메뉴를 업데이트합니다. 먼저 드라이런을 권장합니다.", "cancel": "취소", "confirm_publish": "지금 게시"

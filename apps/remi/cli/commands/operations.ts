@@ -196,6 +196,27 @@ function daemonSpecs(): CommandSpec[] {
   return [
     group("daemon", "Manage local daemon lifecycle and machine retirement"),
     op({ id: "daemon.list", path: ["daemon", "list"], description: "List daemon machines", method: "GET", apiPath: "/api/multiremi/daemons", auth: HUMAN, query: (i) => ({ workspace_id: requiredWorkspace(i) }), collections: ["daemons"] }),
+    op({ id: "daemon.get", path: ["daemon", "get"], description: "Get daemon routing settings", method: "GET", apiPath: (i) => `/api/daemons/${encodePath(positional(i, 0, "daemon"))}`, auth: HUMAN, positionals: [ref("daemon")], query: (i) => ({ workspace_id: requiredWorkspace(i) }) }),
+    op({
+      id: "daemon.dedicated.set",
+      path: ["daemon", "dedicated", "set"],
+      description: "Enable or disable project-only scheduling on a daemon",
+      method: "PATCH",
+      apiPath: (i) => `/api/daemons/${encodePath(positional(i, 0, "daemon"))}`,
+      mutation: "write",
+      auth: HUMAN,
+      positionals: [ref("daemon")],
+      options: [
+        { name: "enabled", type: "boolean", description: "Only run bound projects", conflictsWith: ["disabled"] },
+        { name: "disabled", type: "boolean", description: "Accept unrestricted work", conflictsWith: ["enabled"] },
+      ],
+      query: (i) => ({ workspace_id: requiredWorkspace(i) }),
+      body: (i) => {
+        const dedicated = i.options.enabled === true ? true : i.options.disabled === true ? false : null;
+        if (dedicated === null) throw new CliError("usage", "daemon dedicated set requires --enabled or --disabled");
+        return { dedicated };
+      },
+    }),
     op({ id: "daemon.retirement-plan", path: ["daemon", "retirement-plan"], description: "Review a daemon retirement plan", method: "GET", apiPath: (i) => `/api/multiremi/daemons/${encodePath(positional(i, 0, "daemon"))}/retirement-plan`, auth: HUMAN, positionals: [ref("daemon")], query: (i) => ({ workspace_id: requiredWorkspace(i) }) }),
     daemonRetireSpec(),
     ...["start", "stop", "restart", "status", "logs", "service"].map(localDaemonSpec),

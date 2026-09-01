@@ -18,6 +18,7 @@ remi token
 
 remi project
 remi repo
+remi knowledge
 remi memory
 remi wiki
 
@@ -73,6 +74,9 @@ remi issue restore
 remi workspace prompt get|update
 remi workspace issue-archive get|update
 remi wiki repository list|get|create|update|delete|revisions|build
+remi knowledge submit|submissions|inspect|runs|run show|migrate-legacy
+remi wiki publish
+remi memory publish
 remi platform operation cancel <operation> --yes
 ```
 

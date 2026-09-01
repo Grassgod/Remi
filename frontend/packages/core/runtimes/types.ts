@@ -27,8 +27,23 @@ export interface DaemonProfileResponse {
   daemon_id: string;
   display_name: string;
   display_name_customized: boolean;
+  dedicated: boolean;
   updated_by: string | null;
   updated_at: string;
+}
+
+export interface DaemonRoutingProject {
+  id: string;
+  workspace_id: string;
+  title: string;
+  icon: string | null;
+  status: string;
+  archived_at: string | null;
+}
+
+export interface DaemonRoutingResponse extends Omit<DaemonProfileResponse, "updated_at"> {
+  updated_at: string | null;
+  projects: DaemonRoutingProject[];
 }
 
 export type RuntimeProvisionKind = "npm-global" | "command";

@@ -337,9 +337,9 @@ function TargetEditor({ target, members, disabled, onChange }: {
         <Select disabled={disabled} value={target.role} onValueChange={(role) => role && onChange({ type: "role", role: role as MemberRole })}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="owner">Owner</SelectItem>
-            <SelectItem value="admin">Admin</SelectItem>
-            <SelectItem value="member">Member</SelectItem>
+            <SelectItem value="owner">{t(($) => $.feishu.botMenu.role_owner)}</SelectItem>
+            <SelectItem value="admin">{t(($) => $.feishu.botMenu.role_admin)}</SelectItem>
+            <SelectItem value="member">{t(($) => $.feishu.botMenu.role_member)}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -350,9 +350,9 @@ function TargetEditor({ target, members, disabled, onChange }: {
       <Select disabled={disabled} value={target.userIdType} onValueChange={(userIdType) => userIdType && onChange({ ...target, userIdType: userIdType as typeof target.userIdType })}>
         <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent>
-          <SelectItem value="open_id">open_id</SelectItem>
-          <SelectItem value="union_id">union_id</SelectItem>
-          <SelectItem value="user_id">user_id</SelectItem>
+          <SelectItem value="open_id">{t(($) => $.feishu.botMenu.id_type_open)}</SelectItem>
+          <SelectItem value="union_id">{t(($) => $.feishu.botMenu.id_type_union)}</SelectItem>
+          <SelectItem value="user_id">{t(($) => $.feishu.botMenu.id_type_user)}</SelectItem>
         </SelectContent>
       </Select>
       <Input disabled={disabled} value={target.userId} placeholder={t(($) => $.feishu.botMenu.external_id)} onChange={(event) => onChange({ ...target, userId: event.target.value })} />

@@ -358,7 +358,7 @@ describe("Multiremi API - workspace repositories", () => {
       .toEqual([2, 1]);
   });
 
-  it("preserves same-workspace task Wiki access with composed automation", async () => {
+  it("preserves scoped task reads while routing repository Wiki writes to Raw", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.updateWorkspaceRepositories(workspace.id, [{
@@ -384,27 +384,38 @@ describe("Multiremi API - workspace repositories", () => {
       default_branch: "main",
     }]);
     const agent = store.createAgent({ name: "Wiki task", provider: "claude", workspaceId: workspace.id });
-    const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "Publish repository Wiki" });
+    const project = store.createProject({
+      title: "Task Wiki project",
+      workspaceId: workspace.id,
+      resources: [{ resourceType: "github_repo", resourceRef: { url: "git@github.com:acme/task-wiki.git" } }],
+    });
+    const issue = store.createIssue({ title: "Publish repository Wiki", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: workspace.id, prompt: "Publish repository Wiki" });
     const credential = await store.createTaskAccessToken(task, "local");
     const auth = { Authorization: `Bearer ${credential.token}` };
     const jsonAuth = { ...auth, "Content-Type": "application/json" };
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const root = `/api/workspaces/${workspace.id}/repos/repo_task_wiki/wiki`;
+    const created = store.createRepositoryWikiDoc(workspace.id, "repo_task_wiki", {
+      path: "overview.md", title: "Overview", body: "formal v1",
+    });
     const createdResponse = await app.request(root, {
       method: "POST",
       headers: jsonAuth,
       body: JSON.stringify({ path: "overview.md", title: "Overview", body: "v1" }),
     });
-    expect(createdResponse.status).toBe(201);
-    const created = (await createdResponse.json() as any).doc;
+    expect(createdResponse.status).toBe(202);
+    const createSubmission = store.getKnowledgeSubmission((await createdResponse.json() as any).submission_id)!;
+    expect(createSubmission).toMatchObject({ repositoryId: "repo_task_wiki", sourceTaskId: task.id, sourceIssueId: issue.id });
 
     expect((await app.request(root, { headers: auth })).status).toBe(200);
     expect((await app.request(`${root}/${created.id}`, { headers: auth })).status).toBe(200);
-    expect((await app.request(`${root}/${created.id}`, {
+    const updatedResponse = await app.request(`${root}/${created.id}`, {
       method: "PUT",
       headers: jsonAuth,
       body: JSON.stringify({ body: "v2", expected_version: 1 }),
-    })).status).toBe(200);
+    });
+    expect(updatedResponse.status).toBe(202);
 
     for (const path of [
       `/api/workspaces/${workspace.id}/repository-wikis`,
@@ -427,10 +438,11 @@ describe("Multiremi API - workspace repositories", () => {
       body: JSON.stringify({ path: "planted.md", title: "Planted", body: "no" }),
     })).status).toBe(404);
 
-    expect((await app.request(`${root}/${created.id}?expected_version=2`, {
+    expect((await app.request(`${root}/${created.id}?expected_version=1`, {
       method: "DELETE",
       headers: auth,
-    })).status).toBe(200);
+    })).status).toBe(202);
+    expect(store.getRepositoryWikiDocByRef(workspace.id, "repo_task_wiki", created.id)).toMatchObject({ body: "formal v1", version: 1 });
   });
 
   it("rejects repository writes through generic workspace update routes", async () => {

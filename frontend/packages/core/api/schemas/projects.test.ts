@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ListProjectsResponseSchema, ProjectSchema } from "./projects";
+import {
+  ListProjectDevicesResponseSchema,
+  ListProjectsResponseSchema,
+  ProjectSchema,
+} from "./projects";
 
 const project = {
   id: "project-1",
@@ -109,5 +113,40 @@ describe("ListProjectsResponseSchema", () => {
       total: 1,
     });
     expect(parsed.projects[0]?.archived_at).toBe("2026-08-10T01:00:00.000Z");
+  });
+});
+
+describe("ListProjectDevicesResponseSchema", () => {
+  it("keeps valid devices and degrades malformed optional metadata", () => {
+    const parsed = ListProjectDevicesResponseSchema.parse({
+      devices: [{
+        project_id: "prj_1",
+        workspace_id: "ws_1",
+        daemon_id: "daemon_1",
+        display_name: "Personal Mac",
+        online: "yes",
+        providers: null,
+        created_at: 42,
+        created_by: [],
+      }],
+      total: 1,
+      warning: 42,
+    });
+    expect(parsed.devices[0]).toMatchObject({
+      daemon_id: "daemon_1",
+      online: false,
+      providers: [],
+      created_at: "",
+      created_by: null,
+    });
+    expect(parsed.warning).toBeNull();
+  });
+
+  it("falls back to an empty list when the collection is malformed", () => {
+    expect(ListProjectDevicesResponseSchema.parse({ devices: null, total: -1 })).toEqual({
+      devices: [],
+      total: 0,
+      warning: null,
+    });
   });
 });

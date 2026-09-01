@@ -95,6 +95,26 @@ describe("operations CLI contracts", () => {
     }
   });
 
+  it("updates dedicated daemon scheduling explicitly", async () => {
+    useCliEnv();
+    const spec = specById("daemon.dedicated.set");
+    let body: unknown;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      expect(request.method).toBe("PATCH");
+      expect(new URL(request.url).pathname).toBe("/api/daemons/device-1");
+      expect(new URL(request.url).searchParams.get("workspace_id")).toBe("ws_1");
+      body = await request.json();
+      return Response.json({ daemon_id: "device-1", dedicated: true });
+    });
+
+    await expect(registryFor([spec]).execute(["daemon", "dedicated", "set", "device-1"]))
+      .rejects.toThrow("requires --enabled or --disabled");
+    await capture(() => registryFor([spec]).execute([
+      "daemon", "dedicated", "set", "device-1", "--enabled", "--output", "json",
+    ]));
+    expect(body).toEqual({ dedicated: true });
+  });
+
   it("reports runtime impact and refuses deletion without --yes", async () => {
     useCliEnv();
     const spec = specById("runtime.delete");

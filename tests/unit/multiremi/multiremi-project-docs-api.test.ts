@@ -199,7 +199,7 @@ describe("Bun Multiremi project docs API", () => {
     expect(await duplicate.json()).toEqual({ error: "a doc with this path already exists" });
   });
 
-  it("stamps agent provenance and backfills the issue behind the task", async () => {
+  it("routes agent writes to Raw and backfills the issue behind the task", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const project = store.createProject({ title: "Agent writes" });
@@ -220,15 +220,15 @@ describe("Bun Multiremi project docs API", () => {
         author_id: "forged-member",
       }),
     });
-    expect(created.status).toBe(201);
-    expect((await created.json()).doc).toMatchObject({
-      kind: "memory",
-      pinned: true,
-      author_type: "agent",
-      author_id: agent.id,
-      source_task_id: task.id,
-      source_issue_id: issue.id,
+    expect(created.status).toBe(202);
+    const result = await created.json();
+    expect(result).toMatchObject({ status: "pending", scope: "memory" });
+    expect(store.getKnowledgeSubmission(result.submission_id)).toMatchObject({
+      sourceTaskId: task.id,
+      sourceIssueId: issue.id,
+      authorAgentId: agent.id,
     });
+    expect(store.getProjectDocByRef(project.id, "node-18-breaks-the-build")).toBeNull();
   });
 
   it("ignores a caller-supplied id and mints its own", async () => {
@@ -281,14 +281,15 @@ describe("Bun Multiremi project docs API", () => {
         source_issue_id: foreignIssue.id,
       }),
     });
-    expect(created.status).toBe(201);
-    expect((await created.json()).doc).toMatchObject({
-      source_task_id: task.id,
-      source_issue_id: issue.id,
+    expect(created.status).toBe(202);
+    const result = await created.json();
+    expect(store.getKnowledgeSubmission(result.submission_id)).toMatchObject({
+      sourceTaskId: task.id,
+      sourceIssueId: issue.id,
     });
   });
 
-  it("gives an owner task token parity across projects in its workspace", async () => {
+  it("keeps task reads workspace-wide but rejects knowledge writes outside the issue project", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
@@ -312,19 +313,19 @@ describe("Bun Multiremi project docs API", () => {
       headers: { ...JSON_HEADERS, ...auth },
       body: JSON.stringify({ kind: "memory", title: "Planted", body: "same workspace" }),
     });
-    expect(foreignCreate.status).toBe(201);
+    expect(foreignCreate.status).toBe(403);
     const foreignUpdate = await app.request(`/api/projects/${otherProject.id}/docs/other-secret`, {
       method: "PUT",
       headers: { ...JSON_HEADERS, ...auth },
       body: JSON.stringify({ body: "overwritten" }),
     });
-    expect(foreignUpdate.status).toBe(200);
+    expect(foreignUpdate.status).toBe(403);
     const foreignDelete = await app.request(`/api/projects/${otherProject.id}/docs/other-secret`, {
       method: "DELETE",
       headers: auth,
     });
-    expect(foreignDelete.status).toBe(200);
-    expect(store.getProjectDocByRef(otherProject.id, "other-secret")).toBeNull();
+    expect(foreignDelete.status).toBe(403);
+    expect(store.getProjectDocByRef(otherProject.id, "other-secret")).toMatchObject({ body: "" });
   });
 
   it("lets owner task tokens without a current project read workspace projects", async () => {

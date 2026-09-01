@@ -110,6 +110,27 @@ export function useUpdateDaemonDisplayName(wsId: string) {
   });
 }
 
+export function useUpdateDaemonDedicated(wsId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ daemonId, dedicated }: { daemonId: string; dedicated: boolean }) =>
+      api.updateDaemonDedicated(wsId, daemonId, dedicated),
+    onSuccess: (profile) => {
+      queryClient.setQueryData(
+        runtimeKeys.daemonRouting(wsId, profile.daemon_id),
+        (current: Record<string, unknown> | undefined) => current
+          ? { ...current, dedicated: profile.dedicated, updated_at: profile.updated_at }
+          : current,
+      );
+    },
+    onSettled: (_data, _error, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: runtimeKeys.daemonRouting(wsId, variables.daemonId),
+      });
+    },
+  });
+}
+
 export function useRetireDaemon(wsId: string) {
   const qc = useQueryClient();
   return useMutation({
