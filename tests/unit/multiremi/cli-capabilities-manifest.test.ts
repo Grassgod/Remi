@@ -56,6 +56,8 @@ describe("CLI capabilities manifest", () => {
     // refactor moved the routes, not that boundary.
     const humanOnly = [
       "messaging.connection.add",
+      "messaging.connection.authorization.get",
+      "messaging.connection.authorization.start",
       "messaging.connection.update",
       "messaging.connection.delete",
       "messaging.connection.check",
@@ -137,10 +139,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 626,
-      exempt: 80,
+      mapped: 628,
+      exempt: 85,
       missing: 0,
-      total: 706,
+      total: 713,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);

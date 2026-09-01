@@ -6725,6 +6725,38 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "messaging.connection.authorization.start": {
+      "command": "remi messaging connection authorization start",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.authorization.start",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "messaging.connection.authorization.get": {
+      "command": "remi messaging connection authorization get",
+      "aliases": [],
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.authorization.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "messaging.connection.update": {
       "command": "remi messaging connection update",
       "aliases": [],
@@ -10035,6 +10067,9 @@
     "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId": {
       "command": "messaging.connection.get"
     },
+    "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId": {
+      "command": "messaging.connection.authorization.get"
+    },
     "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId": {
       "command": "messaging.message.get"
     },
@@ -10337,6 +10372,26 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/messages": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/inspect": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/reset": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/status": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -10433,6 +10488,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11034,6 +11094,9 @@
     },
     "POST /api/workspaces/:workspaceId/messaging/connections": {
       "command": "messaging.connection.add"
+    },
+    "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions": {
+      "command": "messaging.connection.authorization.start"
     },
     "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/check": {
       "command": "messaging.connection.check"

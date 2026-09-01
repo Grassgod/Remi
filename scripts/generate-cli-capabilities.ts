@@ -612,6 +612,8 @@ function mappedOperationsCommand(route: string): string | null {
     [/^GET \/api\/workspaces\/:workspaceId\/messaging\/connections$/, "messaging.connection.list"],
     [/^POST \/api\/workspaces\/:workspaceId\/messaging\/connections$/, "messaging.connection.add"],
     [/^GET \/api\/workspaces\/:workspaceId\/messaging\/connections\/:connectionId$/, "messaging.connection.get"],
+    [/^POST \/api\/workspaces\/:workspaceId\/messaging\/connections\/:connectionId\/authorization-sessions$/, "messaging.connection.authorization.start"],
+    [/^GET \/api\/workspaces\/:workspaceId\/messaging\/connections\/:connectionId\/authorization-sessions\/:sessionId$/, "messaging.connection.authorization.get"],
     [/^PATCH \/api\/workspaces\/:workspaceId\/messaging\/connections\/:connectionId$/, "messaging.connection.update"],
     [/^DELETE \/api\/workspaces\/:workspaceId\/messaging\/connections\/:connectionId$/, "messaging.connection.delete"],
     [/^POST \/api\/workspaces\/:workspaceId\/messaging\/connections\/:connectionId\/check$/, "messaging.connection.check"],

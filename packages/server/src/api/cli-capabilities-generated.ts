@@ -4771,6 +4771,30 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "messaging.connection.authorization.start": {
+      "command": "remi messaging connection authorization start",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.authorization.start",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "messaging.connection.authorization.get": {
+      "command": "remi messaging connection authorization get",
+      "auth": [
+        "human"
+      ],
+      "capability": "messaging.connection.authorization.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "messaging.connection.update": {
       "command": "remi messaging connection update",
       "auth": [
