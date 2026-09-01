@@ -755,6 +755,60 @@ describe("store migrations", () => {
     });
   });
 
+  it("drops the retired product name the legacy default left on unnamed sources", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_feishu_sources (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'personal_automation',
+        endpoint_name TEXT NOT NULL,
+        allowlist TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        retention_days INTEGER NOT NULL DEFAULT 90,
+        poll_interval_seconds INTEGER NOT NULL DEFAULT 15,
+        unprocessed_retry_seconds INTEGER NOT NULL DEFAULT 900,
+        unprocessed_retry_limit INTEGER NOT NULL DEFAULT 3,
+        last_successful_ingest_at TEXT,
+        last_error_code TEXT,
+        last_error_at TEXT,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        connection_alerted_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO multiremi_feishu_sources (id, name, endpoint_name, created_at, updated_at)
+      VALUES
+        ('fsrc_unnamed', 'Personal Automation', '',
+         '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
+        ('fsrc_named', 'Personal Automation (staging)', 'legacy_endpoint',
+         '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z');
+    `);
+
+    migrate(database);
+
+    // The legacy repo substituted this string whenever a source was created
+    // without a name, so it is the old code's default rather than the
+    // operator's wording. Carrying it over would put the retired product name
+    // back in the new panel on every upgraded install.
+    expect(database.query(
+      "SELECT name FROM multiremi_message_sources WHERE id = 'fsrc_unnamed'",
+    ).get()).toEqual({ name: "飞书消息" });
+    // The connection is named after the legacy endpoint, which an earlier
+    // migration has already backfilled to `legacy_<id>` for rows that had none.
+    // Asserted so the retired name cannot reach the panel by this route either.
+    expect(database.query(
+      "SELECT name FROM multiremi_message_connections WHERE id = 'mconn_fsrc_unnamed'",
+    ).get()).toEqual({ name: "legacy_fsrc_unnamed" });
+
+    // A name an operator chose is their data, even when it contains the retired
+    // words. Only the exact default is replaced.
+    expect(database.query(
+      "SELECT name FROM multiremi_message_sources WHERE id = 'fsrc_named'",
+    ).get()).toEqual({ name: "Personal Automation (staging)" });
+  });
+
   it("refuses to stamp the messaging migration when legacy rows are orphaned", () => {
     const database = freshDb();
     database.exec(`

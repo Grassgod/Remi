@@ -2869,6 +2869,24 @@ function ensureFeishuIssueProposalsV4Schema(db: SqlDatabase): void {
   `);
 }
 
+/**
+ * The retired product name the legacy repo filled in for an unnamed source.
+ *
+ * It was never something an operator typed: `createSource` substituted it
+ * whenever `name` was omitted, so carrying it over verbatim would put
+ * "Personal Automation" back on screen in the new panel on every upgraded
+ * install. Only this exact string is replaced — a name an operator did choose,
+ * including one that merely contains these words, is their data and is left
+ * alone.
+ */
+const LEGACY_DEFAULT_SOURCE_NAME = "Personal Automation";
+const MIGRATED_DEFAULT_SOURCE_NAME = "飞书消息";
+
+function migratedSourceName(value: unknown): string {
+  const name = String(value ?? "");
+  return name.trim() === LEGACY_DEFAULT_SOURCE_NAME ? MIGRATED_DEFAULT_SOURCE_NAME : name;
+}
+
 function migrateLegacyFeishuMessagingData(db: SqlDatabase): void {
   type LegacyRow = Record<string, unknown>;
   assertLegacyMessagingIntegrity(db);
@@ -2895,7 +2913,7 @@ function migrateLegacyFeishuMessagingData(db: SqlDatabase): void {
         [
           connectionId,
           workspaceId,
-          endpointName ?? String(source.name ?? sourceId),
+          endpointName ?? migratedSourceName(source.name ?? sourceId),
           JSON.stringify({
             migrated_from: "multiremi_feishu_sources",
             ...(endpointName ? { legacy_endpoint_name: endpointName } : {}),
@@ -2921,7 +2939,7 @@ function migrateLegacyFeishuMessagingData(db: SqlDatabase): void {
           sourceId,
           workspaceId,
           connectionId,
-          String(source.name ?? ""),
+          migratedSourceName(source.name),
           JSON.stringify(migrateLegacyAllowlist(source.allowlist, createdAt)),
           Number(source.enabled ?? 1),
           Number(source.retention_days ?? 90),
