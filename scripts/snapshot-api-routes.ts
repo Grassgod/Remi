@@ -458,6 +458,8 @@ export interface SeedRefs {
   repositoryId: string;
   projectResourceId: string;
   projectDocRef: string;
+  knowledgeSubmissionId: string;
+  knowledgeRunId: string;
   squadId: string;
   issueId: string;
   childIssueId: string;
@@ -823,6 +825,20 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     repositoryId: "repo_snapshot",
     projectResourceId: projectResource.id,
     projectDocRef: "spec",
+    knowledgeSubmissionId: store.createKnowledgeSubmission({
+      workspaceId,
+      projectId: project.id,
+      scope: "project_wiki",
+      sourceType: "external",
+      body: "Snapshot knowledge submission",
+    }).submission.id,
+    knowledgeRunId: store.createKnowledgeCompilationRun({
+      workspaceId,
+      projectId: project.id,
+      mode: "manual_edit",
+      status: "published",
+      dedupeKey: "snapshot-knowledge-run",
+    }).run.id,
     squadId: squad.id,
     issueId: issue.id,
     childIssueId: childIssue.id,
@@ -876,6 +892,8 @@ const ID_BY_COLLECTION: Record<string, keyof SeedRefs> = {
   labels: "labelId",
   members: "memberId",
   projects: "projectId",
+  runs: "knowledgeRunId",
+  submissions: "knowledgeSubmissionId",
   runtimes: "runtimeId",
   skills: "skillId",
   squads: "squadId",

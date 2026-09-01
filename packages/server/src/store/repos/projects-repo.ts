@@ -18,12 +18,14 @@ import { DaemonRetiredError } from "@multiremi/store/repos/daemon-retirement-rep
 import type {
   CreatePinnedItemInput,
   CreateProjectDocInput,
+  CreateProjectDeviceInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   MultiremiAssigneeType,
   MultiremiPinnedItem,
   MultiremiPinnedItemType,
   MultiremiProject,
+  MultiremiProjectDevice,
   MultiremiProjectDoc,
   MultiremiProjectDocIndexEntry,
   MultiremiProjectDocKind,
@@ -34,6 +36,7 @@ import type {
   MultiremiProjectSearchResult,
   MultiremiWorkspaceProjectDoc,
   ReorderPinnedItemInput,
+  ReplaceProjectDevicesInput,
   UpdateProjectDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
@@ -387,6 +390,152 @@ export class ProjectsRepo {
       "SELECT * FROM multiremi_project_resources WHERE project_id = ? ORDER BY position ASC, created_at ASC",
     ).all(projectId) as Row[];
     return rows.map(toProjectResource);
+  }
+
+  listProjectDevices(projectId: string): MultiremiProjectDevice[] {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const rows = this.ctx.db.query(
+      `SELECT device.*, profile.display_name
+       FROM multiremi_project_devices device
+       LEFT JOIN multiremi_daemon_profiles profile
+         ON profile.workspace_id = device.workspace_id
+        AND profile.daemon_id = device.daemon_id
+       WHERE device.project_id = ?
+       ORDER BY device.created_at ASC, device.daemon_id ASC`,
+    ).all(projectId) as Row[];
+    const runtimes = this.ctx.runtimes().listRuntimes().filter((runtime) => (
+      (runtime.workspaceId ?? "local") === project.workspaceId
+    ));
+    return rows.map((row) => {
+      const daemonId = String(row.daemon_id);
+      const deviceRuntimes = runtimes.filter((runtime) => runtime.daemonId === daemonId);
+      const providers = [...new Set(deviceRuntimes.map((runtime) => runtime.provider))].sort();
+      return {
+        projectId,
+        workspaceId: project.workspaceId,
+        daemonId,
+        displayName: nullableString(row.display_name)
+          ?? deviceRuntimes.find((runtime) => runtime.daemonDisplayName)?.daemonDisplayName
+          ?? daemonId,
+        online: deviceRuntimes.some((runtime) => runtime.status === "online"),
+        providers,
+        createdAt: String(row.created_at),
+        createdBy: nullableString(row.created_by),
+      };
+    });
+  }
+
+  createProjectDevice(projectId: string, input: CreateProjectDeviceInput): MultiremiProjectDevice {
+    const initialProject = this.getProject(projectId);
+    if (!initialProject) throw new Error(`Project not found: ${projectId}`);
+    const daemonId = String(input.daemonId ?? input.daemon_id ?? "").trim();
+    if (!daemonId) throw new Error("daemon_id is required");
+    return this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initialProject.workspaceId);
+      const project = this.getProject(projectId);
+      if (!project || project.workspaceId !== initialProject.workspaceId) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      const exists = this.ctx.runtimes().listRuntimes().some((runtime) => (
+        runtime.daemonId === daemonId && (runtime.workspaceId ?? "local") === project.workspaceId
+      ));
+      if (!exists) throw new Error(`Daemon not found: ${daemonId}`);
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_project_devices (
+          project_id, daemon_id, workspace_id, created_at, created_by
+        ) VALUES (?, ?, ?, ?, ?)`,
+        [projectId, daemonId, project.workspaceId, now, input.createdBy ?? input.created_by ?? null],
+      );
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+      return this.listProjectDevices(projectId).find((device) => device.daemonId === daemonId)!;
+    })();
+  }
+
+  deleteProjectDevice(projectId: string, daemonId: string): void {
+    const initialProject = this.getProject(projectId);
+    if (!initialProject) throw new Error(`Project not found: ${projectId}`);
+    this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initialProject.workspaceId);
+      const project = this.getProject(projectId);
+      if (!project || project.workspaceId !== initialProject.workspaceId) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      const result = this.ctx.db.run(
+        "DELETE FROM multiremi_project_devices WHERE project_id = ? AND daemon_id = ?",
+        [projectId, daemonId],
+      );
+      if (result.changes === 0) throw new Error(`Project device not found: ${daemonId}`);
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [nowIso(), projectId]);
+    })();
+  }
+
+  replaceProjectDevices(
+    projectId: string,
+    input: ReplaceProjectDevicesInput,
+  ): MultiremiProjectDevice[] {
+    const rawDaemonIds = input.daemonIds ?? input.daemon_ids;
+    if (!Array.isArray(rawDaemonIds)) throw new Error("daemon_ids must be an array");
+    if (rawDaemonIds.some((value) => typeof value !== "string" || !value.trim())) {
+      throw new Error("daemon_ids must contain non-empty strings");
+    }
+    const daemonIds = [...new Set(rawDaemonIds.map((value) => value.trim()))];
+    const initialProject = this.getProject(projectId);
+    if (!initialProject) throw new Error(`Project not found: ${projectId}`);
+
+    return this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initialProject.workspaceId);
+      const project = this.getProject(projectId);
+      if (!project || project.workspaceId !== initialProject.workspaceId) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      const knownDaemonIds = new Set(
+        this.ctx.runtimes().listRuntimes()
+          .filter((runtime) => (runtime.workspaceId ?? "local") === project.workspaceId)
+          .map((runtime) => runtime.daemonId)
+          .filter((daemonId): daemonId is string => !!daemonId),
+      );
+      const missing = daemonIds.find((daemonId) => !knownDaemonIds.has(daemonId));
+      if (missing) throw new Error(`Daemon not found: ${missing}`);
+
+      if (daemonIds.length === 0) {
+        this.ctx.db.run("DELETE FROM multiremi_project_devices WHERE project_id = ?", [projectId]);
+      } else {
+        this.ctx.db.run(
+          `DELETE FROM multiremi_project_devices
+           WHERE project_id = ? AND daemon_id NOT IN (${daemonIds.map(() => "?").join(", ")})`,
+          [projectId, ...daemonIds],
+        );
+      }
+      const now = nowIso();
+      for (const daemonId of daemonIds) {
+        this.ctx.db.run(
+          `INSERT INTO multiremi_project_devices (
+             project_id, daemon_id, workspace_id, created_at, created_by
+           ) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(project_id, daemon_id) DO NOTHING`,
+          [
+            projectId,
+            daemonId,
+            project.workspaceId,
+            now,
+            input.createdBy ?? input.created_by ?? null,
+          ],
+        );
+      }
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+      return this.listProjectDevices(projectId);
+    })();
+  }
+
+  listProjectsForDaemon(workspaceId: string, daemonId: string): MultiremiProject[] {
+    const rows = this.ctx.db.query(projectSelect(
+      `JOIN multiremi_project_devices device ON device.project_id = p.id
+       WHERE device.workspace_id = ? AND device.daemon_id = ?
+       ORDER BY p.updated_at DESC`,
+    )).all(workspaceId, daemonId) as Row[];
+    return rows.map(toProject);
   }
 
   createProjectResource(projectId: string, input: CreateProjectResourceInput): MultiremiProjectResource {
@@ -1303,6 +1452,7 @@ function toProjectDoc(row: Row): MultiremiProjectDoc {
     syncStatus: normalizeProjectDocSyncStatus(row.sync_status),
     syncError: nullableString(row.sync_error),
     snapshotOid: nullableString(row.snapshot_oid),
+    compilationRunId: nullableString(row.compilation_run_id),
   };
 }
 
@@ -1320,6 +1470,7 @@ function toProjectDocRevision(row: Row): MultiremiProjectDocRevision {
     contentUri: nullableString(row.content_uri),
     contentSha256: nullableString(row.content_sha256),
     snapshotOid: nullableString(row.snapshot_oid),
+    compilationRunId: nullableString(row.compilation_run_id),
   };
 }
 

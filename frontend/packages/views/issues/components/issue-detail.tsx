@@ -282,9 +282,7 @@ export function IssueDetail({
       parentIssue={parentIssue}
       changeSidebarEnabled={scmSettings.changeSidebar}
       getActorName={getActorName}
-      agents={agents}
       issueSessions={sessions.list}
-      activeIssueSessionId={sessions.activeId}
       usage={usage}
       canManageArchives={canModerateComments}
     />

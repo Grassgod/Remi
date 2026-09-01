@@ -39,6 +39,7 @@ import type {
   MultiremiInboxItem,
   MultiremiIssueComment,
   MultiremiIssue,
+  MultiremiKnowledgeSubmission,
   MultiremiIssueSession,
   MultiremiMetricCounter,
   MultiremiNotificationGroupKey,
@@ -49,6 +50,7 @@ import type {
   MultiremiAutopilot,
   MultiremiAutopilotTrigger,
   MultiremiProject,
+  MultiremiProjectDevice,
   MultiremiProjectDoc,
   MultiremiProjectResource,
   MultiremiRuntime,
@@ -277,6 +279,7 @@ export interface ProjectsSurface {
   getProjectDocsIndex(projectId: string): MultiremiProjectDocsIndex;
   listProjectDocs(projectId: string, input?: { kind?: string | null }): MultiremiProjectDoc[];
   listProjectResources(projectId: string): MultiremiProjectResource[];
+  listProjectDevices(projectId: string): MultiremiProjectDevice[];
 }
 
 export interface AutopilotsSurface {
@@ -378,7 +381,14 @@ export interface FeishuBotSurface {
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
 }
 
-export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface {}
+export interface KnowledgeSurface {
+  createIssueCompletionKnowledgeBundle(issue: MultiremiIssue): {
+    submission: MultiremiKnowledgeSubmission;
+    deduplicated: boolean;
+  } | null;
+}
+
+export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -483,6 +493,10 @@ export class StoreContext {
   }
 
   tasks(): TasksSurface {
+    return this.resolveHost();
+  }
+
+  knowledge(): KnowledgeSurface {
     return this.resolveHost();
   }
 

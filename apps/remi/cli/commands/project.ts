@@ -3,6 +3,7 @@ import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
   YES_OPTION,
+  booleanOption,
   clientFor,
   commandOptions,
   encodePath,
@@ -114,6 +115,62 @@ export function projectCommandSpecs(): CommandSpec[] {
       const response = await client.request({ method: "DELETE", path: `/api/projects/${encodePath(projectId)}/resources/${encodePath(resource)}` });
       renderResource(invocation, response.data);
     }, true),
+    spec("project.device.list", ["project", "device", "list"], "List devices allowed to run a project", "read", ["human", "task"], [refPositional("project")], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
+      const response = await client.request({ method: "GET", path: `/api/projects/${encodePath(String(project.id))}/devices` });
+      renderResource(invocation, response.data, ["devices"]);
+    }),
+    spec("project.device.add", ["project", "device", "add"], "Allow a device to run a project", "write", ["human"], [refPositional("project"), refPositional("daemon")], [], async (invocation) => {
+      const client = await clientFor(invocation);
+      const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
+      const response = await client.request({
+        method: "POST",
+        path: `/api/projects/${encodePath(String(project.id))}/devices`,
+        body: { daemon_id: positional(invocation, 1, "daemon") },
+      });
+      renderResource(invocation, response.data);
+    }),
+    spec(
+      "project.device.set",
+      ["project", "device", "set"],
+      "Atomically replace the devices allowed to run a project",
+      "write",
+      ["human"],
+      [refPositional("project")],
+      [
+        { name: "daemon", type: "string", valueName: "daemon", repeatable: true, description: "Allowed daemon ID" },
+        { name: "clear", type: "boolean", description: "Remove all restrictions and allow any device" },
+      ],
+      async (invocation) => {
+        const daemonIds = [...new Set(stringOptions(invocation, "daemon").map((value) => value.trim()).filter(Boolean))];
+        const clear = booleanOption(invocation, "clear") === true;
+        if (clear && daemonIds.length > 0) {
+          throw new CliError("usage", "project device set accepts either --daemon or --clear, not both");
+        }
+        if (!clear && daemonIds.length === 0) {
+          throw new CliError("usage", "project device set requires at least one --daemon or --clear");
+        }
+        const client = await clientFor(invocation);
+        const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
+        const response = await client.request({
+          method: "PUT",
+          path: `/api/projects/${encodePath(String(project.id))}/devices`,
+          body: { daemon_ids: clear ? [] : daemonIds },
+        });
+        renderResource(invocation, response.data, ["devices"]);
+      },
+    ),
+    spec("project.device.remove", ["project", "device", "remove"], "Remove a project device restriction", "destructive", ["human"], [refPositional("project"), refPositional("daemon")], [YES_OPTION], async (invocation) => {
+      requireConfirmation(invocation);
+      const client = await clientFor(invocation);
+      const project = await resolveProject(client, requiredWorkspace(invocation), positional(invocation, 0, "project"));
+      const response = await client.request({
+        method: "DELETE",
+        path: `/api/projects/${encodePath(String(project.id))}/devices/${encodePath(positional(invocation, 1, "daemon"))}`,
+      });
+      renderResource(invocation, response.data);
+    }),
   ];
 }
 

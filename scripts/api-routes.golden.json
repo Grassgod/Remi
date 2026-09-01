@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 663,
+    "routeCount": 681,
     "routeCountByPrefix": {
-      "native": 205,
-      "compat": 445,
+      "native": 209,
+      "compat": 459,
       "root": 13
     },
-    "getRoutes": 285,
-    "getRoutesWithBody": 282,
+    "getRoutes": 292,
+    "getRoutesWithBody": 289,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 378,
+    "mutationRoutes": 389,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -100,6 +100,7 @@
     "DELETE /api/multiremi/notification-channels/:id",
     "DELETE /api/multiremi/pins/:itemType/:itemId",
     "DELETE /api/multiremi/projects/:id",
+    "DELETE /api/multiremi/projects/:id/devices/:daemonId",
     "DELETE /api/multiremi/projects/:id/resources/:resourceId",
     "DELETE /api/multiremi/skills/:id",
     "DELETE /api/multiremi/squads/:id",
@@ -107,6 +108,7 @@
     "DELETE /api/multiremi/tokens/:id",
     "DELETE /api/pins/:itemType/:itemId",
     "DELETE /api/projects/:id",
+    "DELETE /api/projects/:id/devices/:daemonId",
     "DELETE /api/projects/:id/docs/:ref",
     "DELETE /api/projects/:id/resources/:resourceId",
     "DELETE /api/runtimes/:id",
@@ -185,6 +187,7 @@
     "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
     "GET /api/daemon/ws",
+    "GET /api/daemons/:daemonId",
     "GET /api/dashboard/agent-runtime",
     "GET /api/dashboard/runtime/daily",
     "GET /api/dashboard/usage/by-agent",
@@ -222,6 +225,10 @@
     "GET /api/issues/children",
     "GET /api/issues/grouped",
     "GET /api/issues/search",
+    "GET /api/knowledge/runs",
+    "GET /api/knowledge/runs/:id",
+    "GET /api/knowledge/submissions",
+    "GET /api/knowledge/submissions/:id",
     "GET /api/labels",
     "GET /api/labels/:id",
     "GET /api/me",
@@ -287,6 +294,7 @@
     "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
+    "GET /api/multiremi/projects/:id/devices",
     "GET /api/multiremi/projects/:id/resources",
     "GET /api/multiremi/projects/search",
     "GET /api/multiremi/runtimes",
@@ -322,6 +330,7 @@
     "GET /api/project-knowledge/migration",
     "GET /api/projects",
     "GET /api/projects/:id",
+    "GET /api/projects/:id/devices",
     "GET /api/projects/:id/docs",
     "GET /api/projects/:id/docs/:ref",
     "GET /api/projects/:id/docs/:ref/backlinks",
@@ -544,6 +553,9 @@
     "POST /api/issues/batch-delete",
     "POST /api/issues/batch-update",
     "POST /api/issues/quick-create",
+    "POST /api/knowledge/events/repository-merged",
+    "POST /api/knowledge/migrate-legacy",
+    "POST /api/knowledge/submissions",
     "POST /api/labels",
     "POST /api/lark/binding/redeem",
     "POST /api/me/onboarding/cloud-waitlist",
@@ -598,6 +610,7 @@
     "POST /api/multiremi/platform/operations",
     "POST /api/multiremi/platform/operations/:id/cancel",
     "POST /api/multiremi/projects",
+    "POST /api/multiremi/projects/:id/devices",
     "POST /api/multiremi/projects/:id/resources",
     "POST /api/multiremi/projects/:id/restore",
     "POST /api/multiremi/runtimes",
@@ -628,7 +641,9 @@
     "POST /api/project-knowledge/migration/retry-failed",
     "POST /api/project-knowledge/migration/verify",
     "POST /api/projects",
+    "POST /api/projects/:id/devices",
     "POST /api/projects/:id/docs",
+    "POST /api/projects/:id/knowledge/publish",
     "POST /api/projects/:id/resources",
     "POST /api/projects/:id/restore",
     "POST /api/runtimes/:id/archive-agents-and-delete",
@@ -665,6 +680,7 @@
     "POST /api/workspaces/:id/repos",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki",
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish",
     "POST /api/workspaces/:id/repos/inspect",
     "POST /api/workspaces/:id/runtime-provisions",
     "POST /api/workspaces/:id/ssh-mesh/rotate",
@@ -704,11 +720,13 @@
     "PUT /api/multiremi/labels/:id",
     "PUT /api/multiremi/notification-preferences",
     "PUT /api/multiremi/pins/reorder",
+    "PUT /api/multiremi/projects/:id/devices",
     "PUT /api/multiremi/runtimes/:id/models",
     "PUT /api/multiremi/skills/:id",
     "PUT /api/notification-preferences",
     "PUT /api/pins/reorder",
     "PUT /api/projects/:id",
+    "PUT /api/projects/:id/devices",
     "PUT /api/projects/:id/docs/:ref",
     "PUT /api/projects/:id/resources/:resourceId",
     "PUT /api/runtimes/:id/models",
@@ -840,6 +858,7 @@
     "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
     "GET /api/daemon/ws",
+    "GET /api/daemons/:daemonId",
     "GET /api/dashboard/agent-runtime",
     "GET /api/dashboard/runtime/daily",
     "GET /api/dashboard/usage/by-agent",
@@ -877,6 +896,10 @@
     "GET /api/issues/children",
     "GET /api/issues/grouped",
     "GET /api/issues/search",
+    "GET /api/knowledge/runs",
+    "GET /api/knowledge/runs/:id",
+    "GET /api/knowledge/submissions",
+    "GET /api/knowledge/submissions/:id",
     "GET /api/labels",
     "GET /api/labels/:id",
     "GET /api/me",
@@ -942,6 +965,7 @@
     "GET /api/multiremi/platform/status",
     "GET /api/multiremi/projects",
     "GET /api/multiremi/projects/:id",
+    "GET /api/multiremi/projects/:id/devices",
     "GET /api/multiremi/projects/:id/resources",
     "GET /api/multiremi/projects/search",
     "GET /api/multiremi/runtimes",
@@ -977,6 +1001,7 @@
     "GET /api/project-knowledge/migration",
     "GET /api/projects",
     "GET /api/projects/:id",
+    "GET /api/projects/:id/devices",
     "GET /api/projects/:id/docs",
     "GET /api/projects/:id/docs/:ref",
     "GET /api/projects/:id/docs/:ref/backlinks",
@@ -1305,7 +1330,7 @@
       "path": "/api/agents",
       "status": 201,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_wk1mrnyfwl4x",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1339,10 +1364,10 @@
     {
       "key": "agents-compat#001 PUT /api/agents/:id",
       "route": "PUT /api/agents/:id",
-      "path": "/api/agents/agt_vfs9viv2ilj6",
+      "path": "/api/agents/agt_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_wk1mrnyfwl4x",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1376,10 +1401,10 @@
     {
       "key": "agents-compat#002 PUT /api/agents/:id/env",
       "route": "PUT /api/agents/:id/env",
-      "path": "/api/agents/agt_vfs9viv2ilj6/env",
+      "path": "/api/agents/agt_wk1mrnyfwl4x/env",
       "status": 200,
       "body": {
-        "agent_id": "agt_vfs9viv2ilj6",
+        "agent_id": "agt_wk1mrnyfwl4x",
         "custom_env": {
           "A": "1"
         }
@@ -1388,7 +1413,7 @@
     {
       "key": "agents-compat#003 PUT /api/agents/:id/skills",
       "route": "PUT /api/agents/:id/skills",
-      "path": "/api/agents/agt_vfs9viv2ilj6/skills",
+      "path": "/api/agents/agt_wk1mrnyfwl4x/skills",
       "status": 200,
       "body": [
         {
@@ -1406,7 +1431,7 @@
     {
       "key": "agents-compat#004 POST /api/agents/:id/skills/add",
       "route": "POST /api/agents/:id/skills/add",
-      "path": "/api/agents/agt_vfs9viv2ilj6/skills/add",
+      "path": "/api/agents/agt_wk1mrnyfwl4x/skills/add",
       "status": 200,
       "body": [
         {
@@ -1424,7 +1449,7 @@
     {
       "key": "agents-compat#005 POST /api/agents/:id/cancel-tasks",
       "route": "POST /api/agents/:id/cancel-tasks",
-      "path": "/api/agents/agt_vfs9viv2ilj6/cancel-tasks",
+      "path": "/api/agents/agt_wk1mrnyfwl4x/cancel-tasks",
       "status": 200,
       "body": {
         "cancelled": 0
@@ -1433,10 +1458,10 @@
     {
       "key": "agents-compat#006 POST /api/agents/:id/archive",
       "route": "POST /api/agents/:id/archive",
-      "path": "/api/agents/agt_vfs9viv2ilj6/archive",
+      "path": "/api/agents/agt_wk1mrnyfwl4x/archive",
       "status": 200,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_wk1mrnyfwl4x",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1476,10 +1501,10 @@
     {
       "key": "agents-compat#007 POST /api/agents/:id/restore",
       "route": "POST /api/agents/:id/restore",
-      "path": "/api/agents/agt_vfs9viv2ilj6/restore",
+      "path": "/api/agents/agt_wk1mrnyfwl4x/restore",
       "status": 200,
       "body": {
-        "id": "agt_vfs9viv2ilj6",
+        "id": "agt_wk1mrnyfwl4x",
         "workspace_id": "local",
         "runtime_id": "",
         "provider": "claude",
@@ -1523,7 +1548,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_wk1mrnyfwl4x",
+          "id": "agt_8dim5r24mzl2",
           "workspace_id": "local",
           "runtime_id": "",
           "provider": "claude",
@@ -1564,7 +1589,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_vfs9viv2ilj6",
+          "id": "agt_wk1mrnyfwl4x",
           "name": "Native Agent",
           "description": "",
           "avatarUrl": null,
@@ -1750,7 +1775,7 @@
       "status": 201,
       "body": {
         "agent": {
-          "id": "agt_va5q49t622xv",
+          "id": "agt_7212d1hv48ko",
           "name": "Native From Template",
           "description": "Captures an architecture decision in the standard Context / Decision / Consequences format — so future-you knows why.",
           "avatarUrl": null,
@@ -1917,7 +1942,7 @@
       "status": 201,
       "body": {
         "attachment": {
-          "id": "att_vfs9viv2ilj6",
+          "id": "att_wk1mrnyfwl4x",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -1940,7 +1965,7 @@
       "status": 201,
       "body": {
         "attachment": {
-          "id": "att_mmcj3uiam2jc",
+          "id": "att_va5q49t622xv",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -1959,12 +1984,12 @@
     {
       "key": "attachments#003 DELETE /api/attachments/:id",
       "route": "DELETE /api/attachments/:id",
-      "path": "/api/attachments/att_vfs9viv2ilj6",
+      "path": "/api/attachments/att_wk1mrnyfwl4x",
       "status": 200,
       "body": {
         "ok": true,
         "attachment": {
-          "id": "att_vfs9viv2ilj6",
+          "id": "att_wk1mrnyfwl4x",
           "workspaceId": "local",
           "issueId": "iss_snapshot",
           "commentId": null,
@@ -2098,7 +2123,7 @@
       "path": "/api/autopilots",
       "status": 201,
       "body": {
-        "id": "aut_vfs9viv2ilj6",
+        "id": "aut_wk1mrnyfwl4x",
         "workspace_id": "local",
         "title": "Compat autopilot",
         "description": null,
@@ -2123,10 +2148,10 @@
     {
       "key": "autopilots-compat#001 PATCH /api/autopilots/:id",
       "route": "PATCH /api/autopilots/:id",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "aut_vfs9viv2ilj6",
+        "id": "aut_wk1mrnyfwl4x",
         "workspace_id": "local",
         "title": "Compat autopilot patched",
         "description": null,
@@ -2151,18 +2176,18 @@
     {
       "key": "autopilots-compat#002 POST /api/autopilots/:id/triggers",
       "route": "POST /api/autopilots/:id/triggers",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x/triggers",
       "status": 201,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_8dim5r24mzl2",
+        "autopilot_id": "aut_wk1mrnyfwl4x",
         "kind": "webhook",
         "enabled": true,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_va5q49t622xv8dim5r",
-        "webhook_path": "/api/webhooks/autopilots/awt_va5q49t622xv8dim5r",
+        "webhook_token": "awt_7212d1hv48kontqjp1",
+        "webhook_path": "/api/webhooks/autopilots/awt_7212d1hv48kontqjp1",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2180,18 +2205,18 @@
     {
       "key": "autopilots-compat#003 PATCH /api/autopilots/:id/triggers/:triggerId",
       "route": "PATCH /api/autopilots/:id/triggers/:triggerId",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x/triggers/trg_8dim5r24mzl2",
       "status": 200,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_8dim5r24mzl2",
+        "autopilot_id": "aut_wk1mrnyfwl4x",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_va5q49t622xv8dim5r",
-        "webhook_path": "/api/webhooks/autopilots/awt_va5q49t622xv8dim5r",
+        "webhook_token": "awt_7212d1hv48kontqjp1",
+        "webhook_path": "/api/webhooks/autopilots/awt_7212d1hv48kontqjp1",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2209,18 +2234,18 @@
     {
       "key": "autopilots-compat#004 PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
       "route": "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x/signing-secret",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x/triggers/trg_8dim5r24mzl2/signing-secret",
       "status": 200,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_8dim5r24mzl2",
+        "autopilot_id": "aut_wk1mrnyfwl4x",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_va5q49t622xv8dim5r",
-        "webhook_path": "/api/webhooks/autopilots/awt_va5q49t622xv8dim5r",
+        "webhook_token": "awt_7212d1hv48kontqjp1",
+        "webhook_path": "/api/webhooks/autopilots/awt_7212d1hv48kontqjp1",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2238,18 +2263,18 @@
     {
       "key": "autopilots-compat#005 POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
       "route": "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x/rotate-webhook-token",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x/triggers/trg_8dim5r24mzl2/rotate-webhook-token",
       "status": 200,
       "body": {
-        "id": "trg_wk1mrnyfwl4x",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "trg_8dim5r24mzl2",
+        "autopilot_id": "aut_wk1mrnyfwl4x",
         "kind": "webhook",
         "enabled": false,
         "cron_expression": null,
         "timezone": null,
         "next_run_at": null,
-        "webhook_token": "awt_24mzl27212d1hv48ko",
-        "webhook_path": "/api/webhooks/autopilots/awt_24mzl27212d1hv48ko",
+        "webhook_token": "awt_5rt1phibk9if0740q3",
+        "webhook_path": "/api/webhooks/autopilots/awt_5rt1phibk9if0740q3",
         "webhook_url": null,
         "provider": "github",
         "has_signing_secret": false,
@@ -2267,26 +2292,26 @@
     {
       "key": "autopilots-compat#006 POST /api/autopilots/:id/trigger",
       "route": "POST /api/autopilots/:id/trigger",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/trigger",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x/trigger",
       "status": 200,
       "body": {
-        "id": "run_ntqjp15rt1ph",
-        "autopilot_id": "aut_vfs9viv2ilj6",
+        "id": "run_ic8dc9g1qpho",
+        "autopilot_id": "aut_wk1mrnyfwl4x",
         "trigger_id": null,
         "event_id": null,
         "source": "manual",
         "status": "running",
-        "issue_id": "iss_ibk9if0740q3",
-        "issue_session_id": "ises_3gq3rlr8o45b",
-        "task_id": "tsk_2ryujm2j4i6h",
+        "issue_id": "iss_3gq3rlr8o45b",
+        "issue_session_id": "ises_piqp1rpc1xal",
+        "task_id": "tsk_q5010won31uy",
         "triggered_at": "<timestamp>",
         "completed_at": null,
         "failure_reason": null,
         "trigger_payload": null,
         "result": {
-          "taskId": "tsk_2ryujm2j4i6h",
-          "issueId": "iss_ibk9if0740q3",
-          "issueSessionId": "ises_3gq3rlr8o45b"
+          "taskId": "tsk_q5010won31uy",
+          "issueId": "iss_3gq3rlr8o45b",
+          "issueSessionId": "ises_piqp1rpc1xal"
         },
         "created_at": "<timestamp>"
       }
@@ -2294,10 +2319,10 @@
     {
       "key": "autopilots-compat#007 PATCH /api/autopilots/:id",
       "route": "PATCH /api/autopilots/:id",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "aut_vfs9viv2ilj6",
+        "id": "aut_wk1mrnyfwl4x",
         "workspace_id": "local",
         "title": "Compat autopilot patched",
         "description": null,
@@ -2328,7 +2353,7 @@
         "status": "accepted",
         "duplicate": false,
         "delivery": {
-          "id": "whd_3gdnj5pggzmd",
+          "id": "whd_l30ikvaows9d",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2345,26 +2370,26 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_3gdnj5pggzmd\",\"runId\":\"run_jez2ujdp6d5n\"}",
-          "autopilotRunId": "run_jez2ujdp6d5n",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_l30ikvaows9d\",\"runId\":\"run_aw448dcq07dx\"}",
+          "autopilotRunId": "run_aw448dcq07dx",
           "replayedFromDeliveryId": "whd_ksk9u210lmg0",
           "error": null,
           "receivedAt": "<timestamp>",
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_3gdnj5pggzmd",
-        "delivery_id": "whd_3gdnj5pggzmd",
+        "deliveryId": "whd_l30ikvaows9d",
+        "delivery_id": "whd_l30ikvaows9d",
         "run": {
-          "id": "run_jez2ujdp6d5n",
+          "id": "run_aw448dcq07dx",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
           "status": "running",
-          "issueId": "iss_l30ikvaows9d",
-          "taskId": "tsk_mr804acwglzg",
+          "issueId": "iss_4it58rkbvy1m",
+          "taskId": "tsk_rmh8s6lkcse1",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_4it58rkbvy1m",
+          "issueSessionId": "ises_c77isk189u85",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2380,27 +2405,27 @@
             }
           },
           "result": {
-            "taskId": "tsk_mr804acwglzg",
-            "issueId": "iss_l30ikvaows9d",
-            "issueSessionId": "ises_4it58rkbvy1m"
+            "taskId": "tsk_rmh8s6lkcse1",
+            "issueId": "iss_4it58rkbvy1m",
+            "issueSessionId": "ises_c77isk189u85"
           },
           "createdAt": "<timestamp>"
         },
-        "runId": "run_jez2ujdp6d5n",
-        "run_id": "run_jez2ujdp6d5n"
+        "runId": "run_aw448dcq07dx",
+        "run_id": "run_aw448dcq07dx"
       }
     },
     {
       "key": "autopilots-compat#009 DELETE /api/autopilots/:id/triggers/:triggerId",
       "route": "DELETE /api/autopilots/:id/triggers/:triggerId",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6/triggers/trg_wk1mrnyfwl4x",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x/triggers/trg_8dim5r24mzl2",
       "status": 204,
       "body": ""
     },
     {
       "key": "autopilots-compat#010 DELETE /api/autopilots/:id",
       "route": "DELETE /api/autopilots/:id",
-      "path": "/api/autopilots/aut_vfs9viv2ilj6",
+      "path": "/api/autopilots/aut_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -2411,7 +2436,7 @@
       "status": 201,
       "body": {
         "autopilot": {
-          "id": "aut_vfs9viv2ilj6",
+          "id": "aut_wk1mrnyfwl4x",
           "workspaceId": "local",
           "workspace_id": "local",
           "title": "Native autopilot",
@@ -2515,15 +2540,15 @@
       "status": 201,
       "body": {
         "run": {
-          "id": "run_wk1mrnyfwl4x",
+          "id": "run_8dim5r24mzl2",
           "autopilotId": "apl_snapshot",
           "source": "manual",
           "status": "running",
-          "issueId": "iss_va5q49t622xv",
-          "taskId": "tsk_ntqjp15rt1ph",
+          "issueId": "iss_7212d1hv48ko",
+          "taskId": "tsk_ic8dc9g1qpho",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_7212d1hv48ko",
+          "issueSessionId": "ises_ibk9if0740q3",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2531,9 +2556,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_ntqjp15rt1ph",
-            "issueId": "iss_va5q49t622xv",
-            "issueSessionId": "ises_7212d1hv48ko"
+            "taskId": "tsk_ic8dc9g1qpho",
+            "issueId": "iss_7212d1hv48ko",
+            "issueSessionId": "ises_ibk9if0740q3"
           },
           "createdAt": "<timestamp>"
         }
@@ -2546,15 +2571,15 @@
       "status": 201,
       "body": {
         "run": {
-          "id": "run_2ryujm2j4i6h",
+          "id": "run_q5010won31uy",
           "autopilotId": "apl_snapshot",
           "source": "schedule",
           "status": "running",
-          "issueId": "iss_piqp1rpc1xal",
-          "taskId": "tsk_3gdnj5pggzmd",
+          "issueId": "iss_zsxpe4iu5err",
+          "taskId": "tsk_l30ikvaows9d",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_zsxpe4iu5err",
+          "issueSessionId": "ises_jez2ujdp6d5n",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2562,9 +2587,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_3gdnj5pggzmd",
-            "issueId": "iss_piqp1rpc1xal",
-            "issueSessionId": "ises_zsxpe4iu5err"
+            "taskId": "tsk_l30ikvaows9d",
+            "issueId": "iss_zsxpe4iu5err",
+            "issueSessionId": "ises_jez2ujdp6d5n"
           },
           "createdAt": "<timestamp>"
         }
@@ -2577,15 +2602,15 @@
       "status": 201,
       "body": {
         "run": {
-          "id": "run_4it58rkbvy1m",
+          "id": "run_c77isk189u85",
           "autopilotId": "apl_snapshot",
           "source": "api",
           "status": "running",
-          "issueId": "iss_mr804acwglzg",
-          "taskId": "tsk_btodjmtppou8",
+          "issueId": "iss_rmh8s6lkcse1",
+          "taskId": "tsk_ee1nx8n37scg",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_rmh8s6lkcse1",
+          "issueSessionId": "ises_q98004mis9bx",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2593,9 +2618,9 @@
           "failureReason": null,
           "payload": null,
           "result": {
-            "taskId": "tsk_btodjmtppou8",
-            "issueId": "iss_mr804acwglzg",
-            "issueSessionId": "ises_rmh8s6lkcse1"
+            "taskId": "tsk_ee1nx8n37scg",
+            "issueId": "iss_rmh8s6lkcse1",
+            "issueSessionId": "ises_q98004mis9bx"
           },
           "createdAt": "<timestamp>"
         }
@@ -2610,7 +2635,7 @@
         "status": "rejected",
         "duplicate": false,
         "delivery": {
-          "id": "whd_950jhzoom893",
+          "id": "whd_1ijxvp6uzepf",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2625,7 +2650,7 @@
           "contentType": "application/json",
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 401,
-          "responseBody": "{\"status\":\"rejected\",\"deliveryId\":\"whd_950jhzoom893\",\"reason\":\"missing_signature\"}",
+          "responseBody": "{\"status\":\"rejected\",\"deliveryId\":\"whd_1ijxvp6uzepf\",\"reason\":\"missing_signature\"}",
           "autopilotRunId": null,
           "replayedFromDeliveryId": null,
           "error": "missing_signature",
@@ -2633,8 +2658,8 @@
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_950jhzoom893",
-        "delivery_id": "whd_950jhzoom893",
+        "deliveryId": "whd_1ijxvp6uzepf",
+        "delivery_id": "whd_1ijxvp6uzepf",
         "run": null,
         "runId": null,
         "run_id": null
@@ -2649,7 +2674,7 @@
         "status": "accepted",
         "duplicate": false,
         "delivery": {
-          "id": "whd_80nhvnycarf2",
+          "id": "whd_n03hpqa2j1gs",
           "workspaceId": "local",
           "autopilotId": "apl_snapshot",
           "triggerId": "apl_snapshot",
@@ -2666,26 +2691,26 @@
           "contentType": null,
           "rawBody": "{\"action\":\"opened\"}",
           "responseStatus": 201,
-          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_80nhvnycarf2\",\"runId\":\"run_1ijxvp6uzepf\"}",
-          "autopilotRunId": "run_1ijxvp6uzepf",
+          "responseBody": "{\"status\":\"accepted\",\"deliveryId\":\"whd_n03hpqa2j1gs\",\"runId\":\"run_d9havbvj3rg3\"}",
+          "autopilotRunId": "run_d9havbvj3rg3",
           "replayedFromDeliveryId": "whd_ksk9u210lmg0",
           "error": null,
           "receivedAt": "<timestamp>",
           "lastAttemptAt": "<timestamp>",
           "createdAt": "<timestamp>"
         },
-        "deliveryId": "whd_80nhvnycarf2",
-        "delivery_id": "whd_80nhvnycarf2",
+        "deliveryId": "whd_n03hpqa2j1gs",
+        "delivery_id": "whd_n03hpqa2j1gs",
         "run": {
-          "id": "run_1ijxvp6uzepf",
+          "id": "run_d9havbvj3rg3",
           "autopilotId": "apl_snapshot",
           "source": "webhook",
           "status": "running",
-          "issueId": "iss_n03hpqa2j1gs",
-          "taskId": "tsk_m7768npxoima",
+          "issueId": "iss_z9xe80gxork5",
+          "taskId": "tsk_ugay511zmcbn",
           "triggerId": null,
           "eventId": null,
-          "issueSessionId": "ises_z9xe80gxork5",
+          "issueSessionId": "ises_8zc961lccygb",
           "repositoryId": null,
           "dedupeKey": null,
           "triggeredAt": "<timestamp>",
@@ -2701,14 +2726,14 @@
             }
           },
           "result": {
-            "taskId": "tsk_m7768npxoima",
-            "issueId": "iss_n03hpqa2j1gs",
-            "issueSessionId": "ises_z9xe80gxork5"
+            "taskId": "tsk_ugay511zmcbn",
+            "issueId": "iss_z9xe80gxork5",
+            "issueSessionId": "ises_8zc961lccygb"
           },
           "createdAt": "<timestamp>"
         },
-        "runId": "run_1ijxvp6uzepf",
-        "run_id": "run_1ijxvp6uzepf"
+        "runId": "run_d9havbvj3rg3",
+        "run_id": "run_d9havbvj3rg3"
       }
     },
     {
@@ -2769,7 +2794,7 @@
       "path": "/api/chat/sessions",
       "status": 201,
       "body": {
-        "id": "chat_vfs9viv2ilj6",
+        "id": "chat_wk1mrnyfwl4x",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
         "creator_id": "local",
@@ -2783,28 +2808,28 @@
     {
       "key": "chat#001 POST /api/chat/sessions/:sessionId/messages",
       "route": "POST /api/chat/sessions/:sessionId/messages",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6/messages",
+      "path": "/api/chat/sessions/chat_wk1mrnyfwl4x/messages",
       "status": 201,
       "body": {
-        "message_id": "msg_mmcj3uiam2jc",
-        "task_id": "tsk_wk1mrnyfwl4x",
+        "message_id": "msg_va5q49t622xv",
+        "task_id": "tsk_8dim5r24mzl2",
         "created_at": "<timestamp>"
       }
     },
     {
       "key": "chat#002 POST /api/chat/sessions/:sessionId/read",
       "route": "POST /api/chat/sessions/:sessionId/read",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6/read",
+      "path": "/api/chat/sessions/chat_wk1mrnyfwl4x/read",
       "status": 204,
       "body": ""
     },
     {
       "key": "chat#003 PATCH /api/chat/sessions/:sessionId",
       "route": "PATCH /api/chat/sessions/:sessionId",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6",
+      "path": "/api/chat/sessions/chat_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "chat_vfs9viv2ilj6",
+        "id": "chat_wk1mrnyfwl4x",
         "workspace_id": "local",
         "agent_id": "agt_snapshot",
         "creator_id": "local",
@@ -2818,7 +2843,7 @@
     {
       "key": "chat#004 DELETE /api/chat/sessions/:sessionId",
       "route": "DELETE /api/chat/sessions/:sessionId",
-      "path": "/api/chat/sessions/chat_vfs9viv2ilj6",
+      "path": "/api/chat/sessions/chat_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -2829,7 +2854,7 @@
       "status": 201,
       "body": {
         "session": {
-          "id": "chat_va5q49t622xv",
+          "id": "chat_7212d1hv48ko",
           "workspaceId": "local",
           "creatorId": "local",
           "agentId": "agt_snapshot",
@@ -2866,16 +2891,16 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_7212d1hv48ko",
+          "latestTaskId": "tsk_ibk9if0740q3",
           "unreadSince": null,
           "hasUnread": false,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
         "message": {
-          "id": "msg_8dim5r24mzl2",
+          "id": "msg_ntqjp15rt1ph",
           "chatSessionId": "cht_snapshot",
-          "taskId": "tsk_7212d1hv48ko",
+          "taskId": "tsk_ibk9if0740q3",
           "role": "user",
           "body": "native message",
           "failureReason": null,
@@ -2883,7 +2908,7 @@
           "createdAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_7212d1hv48ko",
+          "id": "tsk_ibk9if0740q3",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -2969,7 +2994,7 @@
           "sessionRuntimeId": null,
           "sessionProvider": null,
           "sessionExecutionFingerprint": null,
-          "latestTaskId": "tsk_7212d1hv48ko",
+          "latestTaskId": "tsk_ibk9if0740q3",
           "unreadSince": null,
           "hasUnread": false,
           "createdAt": "<timestamp>",
@@ -2983,11 +3008,11 @@
       "path": "/api/cloud-runtime/nodes",
       "status": 201,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_wk1mrnyfwl4x",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_wk1mrnyfwl4x",
+        "instance_id": "local-crn_wk1mrnyfwl4x",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3013,11 +3038,11 @@
       "path": "/api/cloud-runtime/nodes/status",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_wk1mrnyfwl4x",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_wk1mrnyfwl4x",
+        "instance_id": "local-crn_wk1mrnyfwl4x",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3043,11 +3068,11 @@
       "path": "/api/cloud-runtime/nodes/start",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_wk1mrnyfwl4x",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_wk1mrnyfwl4x",
+        "instance_id": "local-crn_wk1mrnyfwl4x",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3073,11 +3098,11 @@
       "path": "/api/cloud-runtime/nodes/stop",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_wk1mrnyfwl4x",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_wk1mrnyfwl4x",
+        "instance_id": "local-crn_wk1mrnyfwl4x",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3103,11 +3128,11 @@
       "path": "/api/cloud-runtime/nodes/reboot",
       "status": 200,
       "body": {
-        "id": "crn_vfs9viv2ilj6",
+        "id": "crn_wk1mrnyfwl4x",
         "ownerId": "local",
         "owner_id": "local",
-        "instanceId": "local-crn_vfs9viv2ilj6",
-        "instance_id": "local-crn_vfs9viv2ilj6",
+        "instanceId": "local-crn_wk1mrnyfwl4x",
+        "instance_id": "local-crn_wk1mrnyfwl4x",
         "region": "local",
         "instanceType": "small",
         "instance_type": "small",
@@ -3134,11 +3159,11 @@
       "status": 200,
       "body": {
         "node": {
-          "id": "crn_vfs9viv2ilj6",
+          "id": "crn_wk1mrnyfwl4x",
           "ownerId": "local",
           "owner_id": "local",
-          "instanceId": "local-crn_vfs9viv2ilj6",
-          "instance_id": "local-crn_vfs9viv2ilj6",
+          "instanceId": "local-crn_wk1mrnyfwl4x",
+          "instance_id": "local-crn_wk1mrnyfwl4x",
           "region": "local",
           "instanceType": "small",
           "instance_type": "small",
@@ -3158,7 +3183,7 @@
           "updated_at": "<timestamp>"
         },
         "exit_code": 0,
-        "stdout": "local cloud runtime node crn_vfs9viv2ilj6: uname -a",
+        "stdout": "local cloud runtime node crn_wk1mrnyfwl4x: uname -a",
         "stderr": ""
       }
     },
@@ -3202,7 +3227,7 @@
       "path": "/api/issues/iss_snapshot/comments",
       "status": 201,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_wk1mrnyfwl4x",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3223,10 +3248,10 @@
     {
       "key": "comments-compat#001 PUT /api/comments/:id",
       "route": "PUT /api/comments/:id",
-      "path": "/api/comments/cmt_vfs9viv2ilj6",
+      "path": "/api/comments/cmt_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_wk1mrnyfwl4x",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3247,11 +3272,11 @@
     {
       "key": "comments-compat#002 POST /api/comments/:id/reactions",
       "route": "POST /api/comments/:id/reactions",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/reactions",
+      "path": "/api/comments/cmt_wk1mrnyfwl4x/reactions",
       "status": 201,
       "body": {
-        "id": "rxn_q5010won31uy",
-        "comment_id": "cmt_vfs9viv2ilj6",
+        "id": "rxn_3gdnj5pggzmd",
+        "comment_id": "cmt_wk1mrnyfwl4x",
         "actor_type": "member",
         "actor_id": "local",
         "emoji": "tada",
@@ -3261,17 +3286,17 @@
     {
       "key": "comments-compat#003 DELETE /api/comments/:id/reactions",
       "route": "DELETE /api/comments/:id/reactions",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/reactions",
+      "path": "/api/comments/cmt_wk1mrnyfwl4x/reactions",
       "status": 204,
       "body": ""
     },
     {
       "key": "comments-compat#004 POST /api/comments/:id/resolve",
       "route": "POST /api/comments/:id/resolve",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/resolve",
+      "path": "/api/comments/cmt_wk1mrnyfwl4x/resolve",
       "status": 200,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_wk1mrnyfwl4x",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3292,10 +3317,10 @@
     {
       "key": "comments-compat#005 DELETE /api/comments/:id/resolve",
       "route": "DELETE /api/comments/:id/resolve",
-      "path": "/api/comments/cmt_vfs9viv2ilj6/resolve",
+      "path": "/api/comments/cmt_wk1mrnyfwl4x/resolve",
       "status": 200,
       "body": {
-        "id": "cmt_vfs9viv2ilj6",
+        "id": "cmt_wk1mrnyfwl4x",
         "issue_id": "iss_snapshot",
         "issue_session_id": "ises_cdyoy133keds",
         "author_type": "member",
@@ -3316,7 +3341,7 @@
     {
       "key": "comments-compat#006 DELETE /api/comments/:id",
       "route": "DELETE /api/comments/:id",
-      "path": "/api/comments/cmt_vfs9viv2ilj6",
+      "path": "/api/comments/cmt_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -3327,7 +3352,7 @@
       "status": 201,
       "body": {
         "comment": {
-          "id": "cmt_vfs9viv2ilj6",
+          "id": "cmt_wk1mrnyfwl4x",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "issueSessionId": "ises_cdyoy133keds",
@@ -3493,7 +3518,7 @@
       "status": 201,
       "body": {
         "reaction": {
-          "id": "rxn_jez2ujdp6d5n",
+          "id": "rxn_aw448dcq07dx",
           "commentId": "cmt_xgqkr5l2r04q",
           "workspaceId": "local",
           "actorType": "member",
@@ -3758,7 +3783,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_vfs9viv2ilj6",
+          "id": "tsk_wk1mrnyfwl4x",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -3785,8 +3810,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_wk1mrnyfwl4x",
-          "assignment_event_id": "sevt_wk1mrnyfwl4x",
+          "assignmentEventId": "sevt_8dim5r24mzl2",
+          "assignment_event_id": "sevt_8dim5r24mzl2",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -3990,7 +4015,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 5,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_vfs9viv2ilj6\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}",
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_xgqkr5l2r04q\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_wk1mrnyfwl4x\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}",
             "truncated": false,
             "omitted_events": 0,
             "estimated_tokens": 454
@@ -4064,7 +4089,7 @@
           ],
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
-          "auth_token": "mat_43764dce2875d196da4a8d8b74e55a8271cf9294"
+          "auth_token": "mat_bb4ab5920d4959679498a484831d3e7fa94971f3"
         }
       }
     },
@@ -4132,7 +4157,7 @@
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
           "chat_message": "Snapshot chat message",
-          "auth_token": "mat_9498a484831d3e7fa94971f34125617d7e9bec99"
+          "auth_token": "mat_94d8ceb7ea542cc1307558b5f2a959a8b7e83edb"
         }
       }
     },
@@ -4324,7 +4349,7 @@
           "autopilot_source": "manual",
           "autopilot_title": "Snapshot autopilot",
           "autopilot_description": "Autopilot used by the snapshot",
-          "auth_token": "mat_307558b5f2a959a8b7e83edbcfa53f2c3c04959b"
+          "auth_token": "mat_5beeb6a3701206c58536f23d011ba99c6dd52e15"
         }
       }
     },
@@ -4525,7 +4550,7 @@
           },
           "autopilot_title": "Snapshot autopilot",
           "autopilot_description": "Autopilot used by the snapshot",
-          "auth_token": "mat_8536f23d011ba99c6dd52e1586b9fcb52420cc83"
+          "auth_token": "mat_8fd0d53d56945af605e63f3fff587917a3dd8510"
         }
       }
     },
@@ -4550,7 +4575,7 @@
     {
       "key": "daemon-task-lifecycle#007 POST /api/daemon/tasks/:taskId/wait-local-directory",
       "route": "POST /api/daemon/tasks/:taskId/wait-local-directory",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/wait-local-directory",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/wait-local-directory",
       "status": 400,
       "body": {
         "error": "mark task waiting_local_directory: no rows in result set"
@@ -4559,7 +4584,7 @@
     {
       "key": "daemon-task-lifecycle#008 POST /api/daemon/tasks/:taskId/start",
       "route": "POST /api/daemon/tasks/:taskId/start",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/start",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/start",
       "status": 400,
       "body": {
         "error": "start task: no rows in result set"
@@ -4568,7 +4593,7 @@
     {
       "key": "daemon-task-lifecycle#009 POST /api/daemon/tasks/:taskId/progress",
       "route": "POST /api/daemon/tasks/:taskId/progress",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/progress",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/progress",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4577,7 +4602,7 @@
     {
       "key": "daemon-task-lifecycle#010 POST /api/daemon/tasks/:taskId/messages",
       "route": "POST /api/daemon/tasks/:taskId/messages",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/messages",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/messages",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4586,10 +4611,10 @@
     {
       "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/prompt",
       "route": "POST /api/daemon/tasks/:taskId/prompt",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/prompt",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/prompt",
       "status": 200,
       "body": {
-        "task_id": "tsk_vfs9viv2ilj6",
+        "task_id": "tsk_wk1mrnyfwl4x",
         "mode": "bootstrap",
         "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
         "assembled_at": "<timestamp>"
@@ -4598,10 +4623,10 @@
     {
       "key": "daemon-task-lifecycle#012 GET /api/tasks/:taskId/prompt",
       "route": "GET /api/tasks/:taskId/prompt",
-      "path": "/api/tasks/tsk_vfs9viv2ilj6/prompt",
+      "path": "/api/tasks/tsk_wk1mrnyfwl4x/prompt",
       "status": 200,
       "body": {
-        "task_id": "tsk_vfs9viv2ilj6",
+        "task_id": "tsk_wk1mrnyfwl4x",
         "mode": "bootstrap",
         "prompt": "# Bootstrap Prompt\n\n## Current Request\nSnapshot lifecycle task",
         "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
@@ -4611,14 +4636,14 @@
     {
       "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/session",
       "route": "POST /api/daemon/tasks/:taskId/session",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/session",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/session",
       "status": 204,
       "body": ""
     },
     {
       "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/usage",
       "route": "POST /api/daemon/tasks/:taskId/usage",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/usage",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/usage",
       "status": 200,
       "body": {
         "status": "ok"
@@ -4627,12 +4652,12 @@
     {
       "key": "daemon-task-lifecycle#015 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_gzmdjez2ujdp",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_ws9daw448dcq",
+          "taskId": "tsk_wk1mrnyfwl4x",
           "kind": "permission",
           "payload": {
             "tool": "Bash"
@@ -4648,12 +4673,12 @@
     {
       "key": "daemon-task-lifecycle#016 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/multiremi/tasks/tsk_vfs9viv2ilj6/human-requests/hrq_gzmdjez2ujdp/respond",
+      "path": "/api/multiremi/tasks/tsk_wk1mrnyfwl4x/human-requests/hrq_ws9daw448dcq/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_gzmdjez2ujdp",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_ws9daw448dcq",
+          "taskId": "tsk_wk1mrnyfwl4x",
           "kind": "permission",
           "payload": {
             "tool": "Bash"
@@ -4669,12 +4694,12 @@
     {
       "key": "daemon-task-lifecycle#017 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_6d5nl30ikvao",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_07dx4it58rkb",
+          "taskId": "tsk_wk1mrnyfwl4x",
           "kind": "permission",
           "payload": {
             "tool": "Read"
@@ -4690,12 +4715,12 @@
     {
       "key": "daemon-task-lifecycle#018 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/tasks/tsk_vfs9viv2ilj6/human-requests/hrq_6d5nl30ikvao/respond",
+      "path": "/api/tasks/tsk_wk1mrnyfwl4x/human-requests/hrq_07dx4it58rkb/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_6d5nl30ikvao",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_07dx4it58rkb",
+          "taskId": "tsk_wk1mrnyfwl4x",
           "kind": "permission",
           "payload": {
             "tool": "Read"
@@ -4711,12 +4736,12 @@
     {
       "key": "daemon-task-lifecycle#019 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_ws9daw448dcq",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_vy1mmr804acw",
+          "taskId": "tsk_wk1mrnyfwl4x",
           "kind": "permission",
           "payload": {
             "tool": "Write"
@@ -4732,12 +4757,12 @@
     {
       "key": "daemon-task-lifecycle#020 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
       "route": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/human-requests/hrq_ws9daw448dcq/expire",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/human-requests/hrq_vy1mmr804acw/expire",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_ws9daw448dcq",
-          "taskId": "tsk_vfs9viv2ilj6",
+          "id": "hrq_vy1mmr804acw",
+          "taskId": "tsk_wk1mrnyfwl4x",
           "kind": "permission",
           "payload": {
             "tool": "Write"
@@ -4753,10 +4778,10 @@
     {
       "key": "daemon-task-lifecycle#021 POST /api/daemon/tasks/:taskId/complete",
       "route": "POST /api/daemon/tasks/:taskId/complete",
-      "path": "/api/daemon/tasks/tsk_vfs9viv2ilj6/complete",
+      "path": "/api/daemon/tasks/tsk_wk1mrnyfwl4x/complete",
       "status": 200,
       "body": {
-        "id": "tsk_vfs9viv2ilj6",
+        "id": "tsk_wk1mrnyfwl4x",
         "agent_id": "agt_snapshot",
         "runtime_id": "rt_snapshot",
         "issue_id": "iss_snapshot",
@@ -5120,7 +5145,7 @@
           ],
           "workspace_bootstrap_prompt": "## Code Delivery Contract\n\nWhen a task changes code:\n- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.\n- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.\n- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.\n- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.\n- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.\n- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.",
           "requesting_user_name": "Local User",
-          "auth_token": "mat_b038d9ca1bef6a33b05d4c6943764dce2875d196"
+          "auth_token": "mat_74e55a8271cf9294a6fb5d92bb4ab5920d495967"
         }
       }
     },
@@ -8026,6 +8051,28 @@
             "allowed": true
           },
           {
+            "id": "daemon.dedicated.set",
+            "command": "remi daemon dedicated set",
+            "capability": "daemon.dedicated.set",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "daemon.get",
+            "command": "remi daemon get",
+            "capability": "daemon.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "daemon.list",
             "command": "remi daemon list",
             "capability": "daemon.list",
@@ -9016,6 +9063,72 @@
             "allowed": true
           },
           {
+            "id": "knowledge.inspect",
+            "command": "remi knowledge inspect",
+            "capability": "knowledge.inspect",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "knowledge.migrate-legacy",
+            "command": "remi knowledge migrate-legacy",
+            "capability": "knowledge.migrate-legacy",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "knowledge.run.show",
+            "command": "remi knowledge run show",
+            "capability": "knowledge.run.show",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "knowledge.runs",
+            "command": "remi knowledge runs",
+            "capability": "knowledge.runs",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "knowledge.submissions",
+            "command": "remi knowledge submissions",
+            "capability": "knowledge.submissions",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "knowledge.submit",
+            "command": "remi knowledge submit",
+            "capability": "knowledge.submit",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "label.create",
             "command": "remi label create",
             "capability": "label.create",
@@ -9355,6 +9468,17 @@
               "jsonl"
             ],
             "allowed": true
+          },
+          {
+            "id": "memory.publish",
+            "command": "remi memory publish",
+            "capability": "memory.publish",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": false
           },
           {
             "id": "memory.search",
@@ -9844,6 +9968,50 @@
             "id": "project.defaults",
             "command": "remi project defaults",
             "capability": "project.defaults",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.add",
+            "command": "remi project device add",
+            "capability": "project.device.add",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.list",
+            "command": "remi project device list",
+            "capability": "project.device.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.remove",
+            "command": "remi project device remove",
+            "capability": "project.device.remove",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "project.device.set",
+            "command": "remi project device set",
+            "capability": "project.device.set",
             "outputs": [
               "table",
               "json",
@@ -11348,6 +11516,17 @@
             "allowed": true
           },
           {
+            "id": "wiki.publish",
+            "command": "remi wiki publish",
+            "capability": "wiki.publish",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": false
+          },
+          {
             "id": "wiki.pull",
             "command": "remi wiki pull",
             "capability": "wiki.pull",
@@ -12498,6 +12677,22 @@
         "__body__": {
           "omitted": "websocket-upgrade route; status recorded only"
         }
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemons/:daemonId",
+      "route": "GET /api/daemons/:daemonId",
+      "path": "/api/daemons/dmn_snapshot",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "daemon_id": "dmn_snapshot",
+        "display_name": "dmn_snapshot",
+        "display_name_customized": false,
+        "dedicated": false,
+        "updated_by": null,
+        "updated_at": null,
+        "projects": []
       }
     },
     {
@@ -14206,6 +14401,128 @@
           }
         ],
         "total": 5
+      }
+    },
+    {
+      "key": "get-sweep GET /api/knowledge/runs",
+      "route": "GET /api/knowledge/runs",
+      "path": "/api/knowledge/runs",
+      "status": 200,
+      "body": {
+        "runs": [
+          {
+            "id": "krun_mmcj3uiam2jc",
+            "workspace_id": "local",
+            "project_id": "prj_snapshot",
+            "repository_id": null,
+            "task_id": null,
+            "agent_id": null,
+            "autopilot_run_id": null,
+            "mode": "manual_edit",
+            "status": "published",
+            "result_summary": null,
+            "dedupe_key": "snapshot-knowledge-run",
+            "created_at": "<timestamp>",
+            "completed_at": null,
+            "agent": null,
+            "skill_names": [],
+            "sources": [],
+            "outputs": []
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/knowledge/runs/:id",
+      "route": "GET /api/knowledge/runs/:id",
+      "path": "/api/knowledge/runs/krun_mmcj3uiam2jc",
+      "status": 200,
+      "body": {
+        "run": {
+          "id": "krun_mmcj3uiam2jc",
+          "workspace_id": "local",
+          "project_id": "prj_snapshot",
+          "repository_id": null,
+          "task_id": null,
+          "agent_id": null,
+          "autopilot_run_id": null,
+          "mode": "manual_edit",
+          "status": "published",
+          "result_summary": null,
+          "dedupe_key": "snapshot-knowledge-run",
+          "created_at": "<timestamp>",
+          "completed_at": null,
+          "agent": null,
+          "skill_names": []
+        },
+        "sources": [],
+        "outputs": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/knowledge/submissions",
+      "route": "GET /api/knowledge/submissions",
+      "path": "/api/knowledge/submissions",
+      "status": 200,
+      "body": {
+        "submissions": [
+          {
+            "id": "ksub_vfs9viv2ilj6",
+            "workspace_id": "local",
+            "project_id": "prj_snapshot",
+            "repository_id": null,
+            "scope": "project_wiki",
+            "source_type": "external",
+            "proposed_path": null,
+            "proposed_slug": null,
+            "body": "Snapshot knowledge submission",
+            "patch": null,
+            "base_revision": null,
+            "source_task_id": null,
+            "source_issue_id": null,
+            "source_revision": null,
+            "author_agent_id": null,
+            "content_sha256": "9dab82aab85242ccb71e2f5e9709c051140d1ad25b748a2c52bb734ef1abebd3",
+            "status": "pending",
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "source_issue": null,
+            "author_agent": null,
+            "source_task": null
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/knowledge/submissions/:id",
+      "route": "GET /api/knowledge/submissions/:id",
+      "path": "/api/knowledge/submissions/ksub_vfs9viv2ilj6",
+      "status": 200,
+      "body": {
+        "submission": {
+          "id": "ksub_vfs9viv2ilj6",
+          "workspace_id": "local",
+          "project_id": "prj_snapshot",
+          "repository_id": null,
+          "scope": "project_wiki",
+          "source_type": "external",
+          "proposed_path": null,
+          "proposed_slug": null,
+          "body": "Snapshot knowledge submission",
+          "patch": null,
+          "base_revision": null,
+          "source_task_id": null,
+          "source_issue_id": null,
+          "source_revision": null,
+          "author_agent_id": null,
+          "content_sha256": "9dab82aab85242ccb71e2f5e9709c051140d1ad25b748a2c52bb734ef1abebd3",
+          "status": "pending",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "source_issue": null,
+          "author_agent": null,
+          "source_task": null
+        }
       }
     },
     {
@@ -18355,6 +18672,17 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/projects/:id/devices",
+      "route": "GET /api/multiremi/projects/:id/devices",
+      "path": "/api/multiremi/projects/prj_snapshot/devices",
+      "status": 200,
+      "body": {
+        "devices": [],
+        "total": 0,
+        "warning": null
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/projects/:id/resources",
       "route": "GET /api/multiremi/projects/:id/resources",
       "path": "/api/multiremi/projects/prj_snapshot/resources",
@@ -19682,6 +20010,7 @@
             "version": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
+            "compilation_run_id": null,
             "project_title": "Snapshot Project"
           },
           {
@@ -19706,6 +20035,7 @@
             "version": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
+            "compilation_run_id": null,
             "project_title": "Snapshot Project"
           }
         ]
@@ -19789,6 +20119,17 @@
       }
     },
     {
+      "key": "get-sweep GET /api/projects/:id/devices",
+      "route": "GET /api/projects/:id/devices",
+      "path": "/api/projects/prj_snapshot/devices",
+      "status": 200,
+      "body": {
+        "devices": [],
+        "total": 0,
+        "warning": null
+      }
+    },
+    {
       "key": "get-sweep GET /api/projects/:id/docs",
       "route": "GET /api/projects/:id/docs",
       "path": "/api/projects/prj_snapshot/docs",
@@ -19818,7 +20159,8 @@
             "updated_by_id": null,
             "version": 1,
             "created_at": "<timestamp>",
-            "updated_at": "<timestamp>"
+            "updated_at": "<timestamp>",
+            "compilation_run_id": null
           },
           {
             "id": "pdoc_ygn27oq704pg",
@@ -19841,7 +20183,8 @@
             "updated_by_id": null,
             "version": 1,
             "created_at": "<timestamp>",
-            "updated_at": "<timestamp>"
+            "updated_at": "<timestamp>",
+            "compilation_run_id": null
           }
         ]
       }
@@ -19875,7 +20218,8 @@
           "updated_by_id": null,
           "version": 1,
           "created_at": "<timestamp>",
-          "updated_at": "<timestamp>"
+          "updated_at": "<timestamp>",
+          "compilation_run_id": null
         }
       }
     },
@@ -19904,7 +20248,8 @@
             "body": "# spec",
             "author_type": null,
             "author_id": null,
-            "created_at": "<timestamp>"
+            "created_at": "<timestamp>",
+            "compilation_run_id": null
           }
         ]
       }
@@ -21968,7 +22313,7 @@
       "path": "/api/issues/iss_snapshot/reactions",
       "status": 201,
       "body": {
-        "id": "rxn_va5q49t622xv",
+        "id": "rxn_7212d1hv48ko",
         "issue_id": "iss_snapshot",
         "actor_type": "member",
         "actor_id": "local",
@@ -22139,7 +22484,7 @@
       "status": 201,
       "body": {
         "reaction": {
-          "id": "rxn_va5q49t622xv",
+          "id": "rxn_7212d1hv48ko",
           "issueId": "iss_snapshot",
           "workspaceId": "local",
           "actorType": "member",
@@ -22165,7 +22510,7 @@
       "status": 201,
       "body": {
         "subscriber": {
-          "id": "sub_8dim5r24mzl2",
+          "id": "sub_ntqjp15rt1ph",
           "issueId": "iss_snapshot",
           "issue_id": "iss_snapshot",
           "memberId": "mem_snapshot_two",
@@ -22278,7 +22623,7 @@
       "path": "/api/issues/iss_snapshot/sessions",
       "status": 201,
       "body": {
-        "id": "ises_vfs9viv2ilj6",
+        "id": "ises_wk1mrnyfwl4x",
         "issue_id": "iss_snapshot",
         "workspace_id": "local",
         "title": "Flow session",
@@ -22292,8 +22637,8 @@
         "updated_at": "<timestamp>",
         "participants": [
           {
-            "id": "spart_mmcj3uiam2jc",
-            "session_id": "ises_vfs9viv2ilj6",
+            "id": "spart_va5q49t622xv",
+            "session_id": "ises_wk1mrnyfwl4x",
             "participant_type": "member",
             "participant_id": "local",
             "role": "owner",
@@ -22307,10 +22652,10 @@
     {
       "key": "issue-sessions#001 PATCH /api/issues/:id/sessions/:sessionId",
       "route": "PATCH /api/issues/:id/sessions/:sessionId",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6",
+      "path": "/api/issues/iss_snapshot/sessions/ises_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "ises_vfs9viv2ilj6",
+        "id": "ises_wk1mrnyfwl4x",
         "issue_id": "iss_snapshot",
         "workspace_id": "local",
         "title": "Flow session renamed",
@@ -22324,8 +22669,8 @@
         "updated_at": "<timestamp>",
         "participants": [
           {
-            "id": "spart_mmcj3uiam2jc",
-            "session_id": "ises_vfs9viv2ilj6",
+            "id": "spart_va5q49t622xv",
+            "session_id": "ises_wk1mrnyfwl4x",
             "participant_type": "member",
             "participant_id": "local",
             "role": "owner",
@@ -22339,11 +22684,11 @@
     {
       "key": "issue-sessions#002 POST /api/issues/:id/sessions/:sessionId/participants",
       "route": "POST /api/issues/:id/sessions/:sessionId/participants",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/participants",
+      "path": "/api/issues/iss_snapshot/sessions/ises_wk1mrnyfwl4x/participants",
       "status": 201,
       "body": {
-        "id": "spart_va5q49t622xv",
-        "session_id": "ises_vfs9viv2ilj6",
+        "id": "spart_7212d1hv48ko",
+        "session_id": "ises_wk1mrnyfwl4x",
         "participant_type": "agent",
         "participant_id": "agt_snapshot",
         "role": "participant",
@@ -22355,12 +22700,12 @@
     {
       "key": "issue-sessions#003 POST /api/issues/:id/sessions/:sessionId/messages",
       "route": "POST /api/issues/:id/sessions/:sessionId/messages",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/messages",
+      "path": "/api/issues/iss_snapshot/sessions/ises_wk1mrnyfwl4x/messages",
       "status": 201,
       "body": {
-        "id": "cmt_8dim5r24mzl2",
+        "id": "cmt_ntqjp15rt1ph",
         "issue_id": "iss_snapshot",
-        "issue_session_id": "ises_vfs9viv2ilj6",
+        "issue_session_id": "ises_wk1mrnyfwl4x",
         "author_type": "member",
         "author_id": null,
         "task_id": null,
@@ -22379,12 +22724,12 @@
     {
       "key": "issue-sessions#004 POST /api/issues/:id/sessions/:sessionId/results",
       "route": "POST /api/issues/:id/sessions/:sessionId/results",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/results",
+      "path": "/api/issues/iss_snapshot/sessions/ises_wk1mrnyfwl4x/results",
       "status": 201,
       "body": {
-        "id": "sres_q5010won31uy",
+        "id": "sres_3gdnj5pggzmd",
         "issue_id": "iss_snapshot",
-        "source_session_id": "ises_vfs9viv2ilj6",
+        "source_session_id": "ises_wk1mrnyfwl4x",
         "title": "result",
         "body": "session result",
         "metadata": {},
@@ -22396,10 +22741,10 @@
     {
       "key": "issue-sessions#005 POST /api/issues/:id/sessions/:sessionId/tasks",
       "route": "POST /api/issues/:id/sessions/:sessionId/tasks",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/tasks",
+      "path": "/api/issues/iss_snapshot/sessions/ises_wk1mrnyfwl4x/tasks",
       "status": 201,
       "body": {
-        "id": "tsk_jez2ujdp6d5n",
+        "id": "tsk_aw448dcq07dx",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -22409,8 +22754,8 @@
         "executionFingerprint": null,
         "execution_fingerprint": null,
         "issueId": "iss_snapshot",
-        "issueSessionId": "ises_vfs9viv2ilj6",
-        "issue_session_id": "ises_vfs9viv2ilj6",
+        "issueSessionId": "ises_wk1mrnyfwl4x",
+        "issue_session_id": "ises_wk1mrnyfwl4x",
         "issueSessionGeneration": 1,
         "issue_session_generation": 1,
         "holdsWorkspace": true,
@@ -22426,8 +22771,8 @@
         "attempt": 1,
         "maxAttempts": 3,
         "parentTaskId": null,
-        "assignmentEventId": "sevt_aw448dcq07dx",
-        "assignment_event_id": "sevt_aw448dcq07dx",
+        "assignmentEventId": "sevt_mr804acwglzg",
+        "assignment_event_id": "sevt_mr804acwglzg",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -22492,7 +22837,7 @@
     {
       "key": "issue-sessions#006 DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
       "route": "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
-      "path": "/api/issues/iss_snapshot/sessions/ises_vfs9viv2ilj6/participants/agent/agt_snapshot",
+      "path": "/api/issues/iss_snapshot/sessions/ises_wk1mrnyfwl4x/participants/agent/agt_snapshot",
       "status": 204,
       "body": ""
     },
@@ -22503,7 +22848,7 @@
       "status": 201,
       "body": {
         "share": {
-          "token": "shr_vfs9viv2ilj6mmcj._kt6155W3b5zVCKU01i9w5QGoOJA4gh6enCvZZ1HRqo",
+          "token": "shr_wk1mrnyfwl4xva5q.GKC6i8h24UPZtQmFEEhm6ZfQIoJOsrOBCymnZx1I9Vo",
           "expires_at": "<timestamp>",
           "view_count": 0,
           "last_viewed_at": null,
@@ -22518,7 +22863,7 @@
       "status": 200,
       "body": {
         "share": {
-          "token": "shr_vfs9viv2ilj6mmcj._kt6155W3b5zVCKU01i9w5QGoOJA4gh6enCvZZ1HRqo",
+          "token": "shr_wk1mrnyfwl4xva5q.GKC6i8h24UPZtQmFEEhm6ZfQIoJOsrOBCymnZx1I9Vo",
           "expires_at": "<timestamp>",
           "view_count": 0,
           "last_viewed_at": null,
@@ -22539,7 +22884,7 @@
       "path": "/api/issues",
       "status": 201,
       "body": {
-        "id": "iss_vfs9viv2ilj6",
+        "id": "iss_wk1mrnyfwl4x",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -22571,10 +22916,10 @@
     {
       "key": "issues-compat#001 PUT /api/issues/:id",
       "route": "PUT /api/issues/:id",
-      "path": "/api/issues/iss_vfs9viv2ilj6",
+      "path": "/api/issues/iss_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "iss_vfs9viv2ilj6",
+        "id": "iss_wk1mrnyfwl4x",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -22603,10 +22948,10 @@
     {
       "key": "issues-compat#002 PATCH /api/issues/:id",
       "route": "PATCH /api/issues/:id",
-      "path": "/api/issues/iss_vfs9viv2ilj6",
+      "path": "/api/issues/iss_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "iss_vfs9viv2ilj6",
+        "id": "iss_wk1mrnyfwl4x",
         "workspace_id": "local",
         "number": 6,
         "identifier": "MUL-6",
@@ -22638,9 +22983,9 @@
       "path": "/api/issues/quick-create",
       "status": 202,
       "body": {
-        "task_id": "tsk_3gdnj5pggzmd",
+        "task_id": "tsk_l30ikvaows9d",
         "issue": {
-          "id": "iss_piqp1rpc1xal",
+          "id": "iss_zsxpe4iu5err",
           "workspace_id": "local",
           "number": 7,
           "identifier": "MUL-7",
@@ -22679,11 +23024,11 @@
     {
       "key": "issues-compat#005 POST /api/issues/:id/squad-evaluated",
       "route": "POST /api/issues/:id/squad-evaluated",
-      "path": "/api/issues/iss_vfs9viv2ilj6/squad-evaluated",
+      "path": "/api/issues/iss_wk1mrnyfwl4x/squad-evaluated",
       "status": 201,
       "body": {
-        "id": "act_4it58rkbvy1m",
-        "issueId": "iss_vfs9viv2ilj6",
+        "id": "act_c77isk189u85",
+        "issueId": "iss_wk1mrnyfwl4x",
         "actorType": "agent",
         "actorId": "agt_snapshot",
         "type": "squad_leader_evaluated",
@@ -22695,7 +23040,7 @@
           "reason": "nothing to do"
         },
         "createdAt": "<timestamp>",
-        "issue_id": "iss_vfs9viv2ilj6",
+        "issue_id": "iss_wk1mrnyfwl4x",
         "actor_type": "agent",
         "actor_id": "agt_snapshot",
         "created_at": "<timestamp>"
@@ -22725,7 +23070,7 @@
       "status": 201,
       "body": {
         "issue": {
-          "id": "iss_vfs9viv2ilj6",
+          "id": "iss_wk1mrnyfwl4x",
           "key": "MUL-6",
           "number": 6,
           "title": "Native issue",
@@ -22848,7 +23193,7 @@
           "updatedAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_ntqjp15rt1ph",
+          "id": "tsk_ic8dc9g1qpho",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -22875,8 +23220,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_ic8dc9g1qpho",
-          "assignment_event_id": "sevt_ic8dc9g1qpho",
+          "assignmentEventId": "sevt_2ryujm2j4i6h",
+          "assignment_event_id": "sevt_2ryujm2j4i6h",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -22922,10 +23267,10 @@
       "path": "/api/multiremi/issues/quick-create",
       "status": 202,
       "body": {
-        "taskId": "tsk_zsxpe4iu5err",
-        "task_id": "tsk_zsxpe4iu5err",
+        "taskId": "tsk_jez2ujdp6d5n",
+        "task_id": "tsk_jez2ujdp6d5n",
         "issue": {
-          "id": "iss_2ryujm2j4i6h",
+          "id": "iss_q5010won31uy",
           "key": "MUL-7",
           "number": 7,
           "title": "do the thing",
@@ -22958,7 +23303,7 @@
           "updatedAt": "<timestamp>"
         },
         "task": {
-          "id": "tsk_zsxpe4iu5err",
+          "id": "tsk_jez2ujdp6d5n",
           "taskKind": "quick_create",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -22967,9 +23312,9 @@
           "plugin_snapshot": [],
           "executionFingerprint": null,
           "execution_fingerprint": null,
-          "issueId": "iss_2ryujm2j4i6h",
-          "issueSessionId": "ises_q5010won31uy",
-          "issue_session_id": "ises_q5010won31uy",
+          "issueId": "iss_q5010won31uy",
+          "issueSessionId": "ises_3gdnj5pggzmd",
+          "issue_session_id": "ises_3gdnj5pggzmd",
           "issueSessionGeneration": 1,
           "issue_session_generation": 1,
           "holdsWorkspace": true,
@@ -22985,8 +23330,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_jez2ujdp6d5n",
-          "assignment_event_id": "sevt_jez2ujdp6d5n",
+          "assignmentEventId": "sevt_aw448dcq07dx",
+          "assignment_event_id": "sevt_aw448dcq07dx",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -23061,7 +23406,7 @@
       "path": "/api/labels",
       "status": 201,
       "body": {
-        "id": "lbl_vfs9viv2ilj6",
+        "id": "lbl_wk1mrnyfwl4x",
         "workspace_id": "local",
         "name": "compat-label",
         "color": "#ff0000",
@@ -23072,10 +23417,10 @@
     {
       "key": "labels#001 PUT /api/labels/:id",
       "route": "PUT /api/labels/:id",
-      "path": "/api/labels/lbl_vfs9viv2ilj6",
+      "path": "/api/labels/lbl_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "lbl_vfs9viv2ilj6",
+        "id": "lbl_wk1mrnyfwl4x",
         "workspace_id": "local",
         "name": "compat-label-renamed",
         "color": "#00ff00",
@@ -23086,7 +23431,7 @@
     {
       "key": "labels#002 DELETE /api/labels/:id",
       "route": "DELETE /api/labels/:id",
-      "path": "/api/labels/lbl_vfs9viv2ilj6",
+      "path": "/api/labels/lbl_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -23097,7 +23442,7 @@
       "status": 201,
       "body": {
         "label": {
-          "id": "lbl_mmcj3uiam2jc",
+          "id": "lbl_va5q49t622xv",
           "workspaceId": "local",
           "name": "native-label",
           "color": "#0000ff",
@@ -23284,7 +23629,7 @@
       "body": {
         "workspace_id": "local",
         "agent_id": "agt_default_local_claude_local",
-        "issue_id": "iss_mmcj3uiam2jc"
+        "issue_id": "iss_va5q49t622xv"
       }
     },
     {
@@ -23294,7 +23639,7 @@
       "status": 200,
       "body": {
         "workspace_id": "local",
-        "issue_id": "iss_ic8dc9g1qpho"
+        "issue_id": "iss_2ryujm2j4i6h"
       }
     },
     {
@@ -23304,7 +23649,7 @@
       "status": 201,
       "body": {
         "member": {
-          "id": "mem_vfs9viv2ilj6",
+          "id": "mem_wk1mrnyfwl4x",
           "workspaceId": "local",
           "userId": null,
           "name": "Native member",
@@ -23378,7 +23723,7 @@
       "path": "/api/pins",
       "status": 201,
       "body": {
-        "id": "pin_vfs9viv2ilj6",
+        "id": "pin_wk1mrnyfwl4x",
         "workspace_id": "local",
         "user_id": "local",
         "item_type": "issue",
@@ -23394,7 +23739,7 @@
       "status": 200,
       "body": [
         {
-          "id": "pin_vfs9viv2ilj6",
+          "id": "pin_wk1mrnyfwl4x",
           "workspace_id": "local",
           "user_id": "local",
           "item_type": "issue",
@@ -23418,7 +23763,7 @@
       "status": 201,
       "body": {
         "pin": {
-          "id": "pin_mmcj3uiam2jc",
+          "id": "pin_va5q49t622xv",
           "workspaceId": "local",
           "userId": "local",
           "itemType": "project",
@@ -23436,7 +23781,7 @@
       "body": {
         "pins": [
           {
-            "id": "pin_mmcj3uiam2jc",
+            "id": "pin_va5q49t622xv",
             "workspaceId": "local",
             "userId": "local",
             "itemType": "project",
@@ -23464,7 +23809,7 @@
       "status": 201,
       "body": {
         "doc": {
-          "id": "pdoc_vfs9viv2ilj6",
+          "id": "pdoc_va5q49t622xv",
           "project_id": "prj_snapshot",
           "workspace_id": "local",
           "kind": "wiki",
@@ -23484,7 +23829,8 @@
           "updated_by_id": "local",
           "version": 1,
           "created_at": "<timestamp>",
-          "updated_at": "<timestamp>"
+          "updated_at": "<timestamp>",
+          "compilation_run_id": "krun_wk1mrnyfwl4x"
         }
       }
     },
@@ -23495,7 +23841,7 @@
       "status": 200,
       "body": {
         "doc": {
-          "id": "pdoc_vfs9viv2ilj6",
+          "id": "pdoc_va5q49t622xv",
           "project_id": "prj_snapshot",
           "workspace_id": "local",
           "kind": "wiki",
@@ -23515,7 +23861,8 @@
           "updated_by_id": "local",
           "version": 2,
           "created_at": "<timestamp>",
-          "updated_at": "<timestamp>"
+          "updated_at": "<timestamp>",
+          "compilation_run_id": "krun_ntqjp15rt1ph"
         }
       }
     },
@@ -23534,7 +23881,7 @@
       "path": "/api/projects",
       "status": 201,
       "body": {
-        "id": "prj_vfs9viv2ilj6",
+        "id": "prj_wk1mrnyfwl4x",
         "workspace_id": "local",
         "title": "Compat project",
         "description": "compat",
@@ -23561,10 +23908,10 @@
     {
       "key": "projects#001 PUT /api/projects/:id",
       "route": "PUT /api/projects/:id",
-      "path": "/api/projects/prj_vfs9viv2ilj6",
+      "path": "/api/projects/prj_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "prj_vfs9viv2ilj6",
+        "id": "prj_wk1mrnyfwl4x",
         "workspace_id": "local",
         "title": "Compat project renamed",
         "description": "compat",
@@ -23591,11 +23938,11 @@
     {
       "key": "projects#002 POST /api/projects/:id/resources",
       "route": "POST /api/projects/:id/resources",
-      "path": "/api/projects/prj_vfs9viv2ilj6/resources",
+      "path": "/api/projects/prj_wk1mrnyfwl4x/resources",
       "status": 201,
       "body": {
-        "id": "res_mmcj3uiam2jc",
-        "project_id": "prj_vfs9viv2ilj6",
+        "id": "res_va5q49t622xv",
+        "project_id": "prj_wk1mrnyfwl4x",
         "workspace_id": "local",
         "resource_type": "github_repo",
         "resource_ref": {
@@ -23610,11 +23957,11 @@
     {
       "key": "projects#003 PUT /api/projects/:id/resources/:resourceId",
       "route": "PUT /api/projects/:id/resources/:resourceId",
-      "path": "/api/projects/prj_vfs9viv2ilj6/resources/res_mmcj3uiam2jc",
+      "path": "/api/projects/prj_wk1mrnyfwl4x/resources/res_va5q49t622xv",
       "status": 200,
       "body": {
-        "id": "res_mmcj3uiam2jc",
-        "project_id": "prj_vfs9viv2ilj6",
+        "id": "res_va5q49t622xv",
+        "project_id": "prj_wk1mrnyfwl4x",
         "workspace_id": "local",
         "resource_type": "github_repo",
         "resource_ref": {
@@ -23629,14 +23976,14 @@
     {
       "key": "projects#004 DELETE /api/projects/:id/resources/:resourceId",
       "route": "DELETE /api/projects/:id/resources/:resourceId",
-      "path": "/api/projects/prj_vfs9viv2ilj6/resources/res_mmcj3uiam2jc",
+      "path": "/api/projects/prj_wk1mrnyfwl4x/resources/res_va5q49t622xv",
       "status": 204,
       "body": ""
     },
     {
       "key": "projects#005 DELETE /api/projects/:id",
       "route": "DELETE /api/projects/:id",
-      "path": "/api/projects/prj_vfs9viv2ilj6",
+      "path": "/api/projects/prj_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -23647,7 +23994,7 @@
       "status": 201,
       "body": {
         "project": {
-          "id": "prj_wk1mrnyfwl4x",
+          "id": "prj_8dim5r24mzl2",
           "workspaceId": "local",
           "title": "Native project",
           "description": null,
@@ -23711,7 +24058,7 @@
       "status": 201,
       "body": {
         "resource": {
-          "id": "res_va5q49t622xv",
+          "id": "res_7212d1hv48ko",
           "projectId": "prj_snapshot",
           "workspaceId": "local",
           "resourceType": "github_repo",
@@ -23794,7 +24141,7 @@
       "status": 201,
       "body": {
         "runtime": {
-          "id": "rt_vfs9viv2ilj6",
+          "id": "rt_wk1mrnyfwl4x",
           "name": "flow-runtime",
           "provider": "codex",
           "daemonId": null,
@@ -23949,7 +24296,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/models",
       "status": 200,
       "body": {
-        "id": "rml_va5q49t622xv",
+        "id": "rml_7212d1hv48ko",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "models": [],
@@ -23966,7 +24313,7 @@
       "path": "/api/runtimes/rt_snapshot/models",
       "status": 200,
       "body": {
-        "id": "rml_8dim5r24mzl2",
+        "id": "rml_ntqjp15rt1ph",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "supported": true,
@@ -23980,7 +24327,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/directory-scans",
       "status": 200,
       "body": {
-        "id": "rds_7212d1hv48ko",
+        "id": "rds_ibk9if0740q3",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -24001,7 +24348,7 @@
       "path": "/api/runtimes/rt_snapshot/directory-scans",
       "status": 200,
       "body": {
-        "id": "rds_ntqjp15rt1ph",
+        "id": "rds_ic8dc9g1qpho",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "params": {
@@ -24022,7 +24369,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/local-skills",
       "status": 200,
       "body": {
-        "id": "rls_ibk9if0740q3",
+        "id": "rls_3gq3rlr8o45b",
         "runtimeId": "rt_snapshot",
         "status": "pending",
         "skills": [],
@@ -24039,7 +24386,7 @@
       "path": "/api/runtimes/rt_snapshot/local-skills",
       "status": 200,
       "body": {
-        "id": "rls_ic8dc9g1qpho",
+        "id": "rls_2ryujm2j4i6h",
         "runtime_id": "rt_snapshot",
         "status": "pending",
         "supported": true,
@@ -24053,7 +24400,7 @@
       "path": "/api/multiremi/runtimes/rt_snapshot/local-skills/import",
       "status": 200,
       "body": {
-        "id": "rli_3gq3rlr8o45b",
+        "id": "rli_piqp1rpc1xal",
         "runtimeId": "rt_snapshot",
         "skillKey": "snapshot-skill",
         "name": null,
@@ -24074,7 +24421,7 @@
       "path": "/api/runtimes/rt_snapshot/local-skills/import",
       "status": 200,
       "body": {
-        "id": "rli_2ryujm2j4i6h",
+        "id": "rli_q5010won31uy",
         "runtime_id": "rt_snapshot",
         "skill_key": "snapshot-skill",
         "status": "pending",
@@ -24106,7 +24453,7 @@
       "path": "/api/runtimes/rt_snapshot/commands",
       "status": 202,
       "body": {
-        "id": "rcmd_piqp1rpc1xal",
+        "id": "rcmd_zsxpe4iu5err",
         "runtimeId": "rt_snapshot",
         "runtime_id": "rt_snapshot",
         "command": "printf snapshot",
@@ -24134,10 +24481,10 @@
     {
       "key": "runtimes#017 GET /api/runtimes/:id/commands/:requestId",
       "route": "GET /api/runtimes/:id/commands/:requestId",
-      "path": "/api/runtimes/rt_snapshot/commands/rcmd_piqp1rpc1xal",
+      "path": "/api/runtimes/rt_snapshot/commands/rcmd_zsxpe4iu5err",
       "status": 200,
       "body": {
-        "id": "rcmd_piqp1rpc1xal",
+        "id": "rcmd_zsxpe4iu5err",
         "runtimeId": "rt_snapshot",
         "runtime_id": "rt_snapshot",
         "command": "printf snapshot",
@@ -24338,7 +24685,7 @@
       "path": "/api/feedback",
       "status": 201,
       "body": {
-        "id": "fdb_vfs9viv2ilj6",
+        "id": "fdb_wk1mrnyfwl4x",
         "created_at": "<timestamp>"
       }
     },
@@ -24349,7 +24696,7 @@
       "status": 201,
       "body": {
         "feedback": {
-          "id": "fdb_mmcj3uiam2jc",
+          "id": "fdb_va5q49t622xv",
           "workspaceId": "local",
           "userId": "local",
           "memberId": null,
@@ -24391,7 +24738,7 @@
         "workspaceId": "local",
         "provider": "claude",
         "token": "mdt_0000000000004000800000000000000400000000000040008000000000000005",
-        "tokenId": "dtk_wk1mrnyfwl4x",
+        "tokenId": "dtk_8dim5r24mzl2",
         "daemonId": "dmn_00000000000040008000000000000003",
         "installScriptUrl": "https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh",
         "releaseArtifactPattern": "multiremi-${version}-${os}-${arch}.tar.gz",
@@ -24424,7 +24771,7 @@
       "path": "/api/skills",
       "status": 201,
       "body": {
-        "id": "skl_vfs9viv2ilj6",
+        "id": "skl_wk1mrnyfwl4x",
         "workspace_id": "local",
         "name": "compat-skill",
         "description": "compat",
@@ -24439,10 +24786,10 @@
     {
       "key": "skills-compat#001 PUT /api/skills/:id",
       "route": "PUT /api/skills/:id",
-      "path": "/api/skills/skl_vfs9viv2ilj6",
+      "path": "/api/skills/skl_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "skl_vfs9viv2ilj6",
+        "id": "skl_wk1mrnyfwl4x",
         "workspace_id": "local",
         "name": "compat-skill-renamed",
         "description": "compat",
@@ -24457,10 +24804,10 @@
     {
       "key": "skills-compat#002 PATCH /api/skills/:id",
       "route": "PATCH /api/skills/:id",
-      "path": "/api/skills/skl_vfs9viv2ilj6",
+      "path": "/api/skills/skl_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "skl_vfs9viv2ilj6",
+        "id": "skl_wk1mrnyfwl4x",
         "workspace_id": "local",
         "name": "compat-skill-patched",
         "description": "compat",
@@ -24475,11 +24822,11 @@
     {
       "key": "skills-compat#003 PUT /api/skills/:id/files",
       "route": "PUT /api/skills/:id/files",
-      "path": "/api/skills/skl_vfs9viv2ilj6/files",
+      "path": "/api/skills/skl_wk1mrnyfwl4x/files",
       "status": 200,
       "body": {
-        "id": "skf_mmcj3uiam2jc",
-        "skill_id": "skl_vfs9viv2ilj6",
+        "id": "skf_va5q49t622xv",
+        "skill_id": "skl_wk1mrnyfwl4x",
         "path": "extra.md",
         "content": "extra",
         "created_at": "<timestamp>",
@@ -24489,7 +24836,7 @@
     {
       "key": "skills-compat#004 DELETE /api/skills/:id/files/:fileId",
       "route": "DELETE /api/skills/:id/files/:fileId",
-      "path": "/api/skills/skl_vfs9viv2ilj6/files/skf_mmcj3uiam2jc",
+      "path": "/api/skills/skl_wk1mrnyfwl4x/files/skf_va5q49t622xv",
       "status": 204,
       "body": ""
     },
@@ -24505,7 +24852,7 @@
     {
       "key": "skills-compat#006 DELETE /api/skills/:id",
       "route": "DELETE /api/skills/:id",
-      "path": "/api/skills/skl_vfs9viv2ilj6",
+      "path": "/api/skills/skl_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -24516,7 +24863,7 @@
       "status": 201,
       "body": {
         "skill": {
-          "id": "skl_vfs9viv2ilj6",
+          "id": "skl_wk1mrnyfwl4x",
           "workspaceId": "local",
           "name": "native-skill",
           "description": "",
@@ -24635,7 +24982,7 @@
       "path": "/api/squads",
       "status": 201,
       "body": {
-        "id": "sqd_vfs9viv2ilj6",
+        "id": "sqd_wk1mrnyfwl4x",
         "workspace_id": "local",
         "name": "Compat squad",
         "description": "",
@@ -24650,8 +24997,8 @@
         "member_count": 1,
         "member_preview": [
           {
-            "id": "sqm_mmcj3uiam2jc",
-            "squad_id": "sqd_vfs9viv2ilj6",
+            "id": "sqm_va5q49t622xv",
+            "squad_id": "sqd_wk1mrnyfwl4x",
             "member_type": "agent",
             "member_id": "agt_snapshot",
             "role": "leader",
@@ -24663,10 +25010,10 @@
     {
       "key": "squads#001 PUT /api/squads/:id",
       "route": "PUT /api/squads/:id",
-      "path": "/api/squads/sqd_vfs9viv2ilj6",
+      "path": "/api/squads/sqd_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "sqd_vfs9viv2ilj6",
+        "id": "sqd_wk1mrnyfwl4x",
         "workspace_id": "local",
         "name": "Compat squad renamed",
         "description": "",
@@ -24681,8 +25028,8 @@
         "member_count": 1,
         "member_preview": [
           {
-            "id": "sqm_mmcj3uiam2jc",
-            "squad_id": "sqd_vfs9viv2ilj6",
+            "id": "sqm_va5q49t622xv",
+            "squad_id": "sqd_wk1mrnyfwl4x",
             "member_type": "agent",
             "member_id": "agt_snapshot",
             "role": "leader",
@@ -24694,11 +25041,11 @@
     {
       "key": "squads#002 POST /api/squads/:id/members",
       "route": "POST /api/squads/:id/members",
-      "path": "/api/squads/sqd_vfs9viv2ilj6/members",
+      "path": "/api/squads/sqd_wk1mrnyfwl4x/members",
       "status": 201,
       "body": {
-        "id": "sqm_mmcj3uiam2jc",
-        "squad_id": "sqd_vfs9viv2ilj6",
+        "id": "sqm_va5q49t622xv",
+        "squad_id": "sqd_wk1mrnyfwl4x",
         "member_type": "agent",
         "member_id": "agt_snapshot",
         "role": "leader",
@@ -24708,11 +25055,11 @@
     {
       "key": "squads#003 PATCH /api/squads/:id/members/role",
       "route": "PATCH /api/squads/:id/members/role",
-      "path": "/api/squads/sqd_vfs9viv2ilj6/members/role",
+      "path": "/api/squads/sqd_wk1mrnyfwl4x/members/role",
       "status": 200,
       "body": {
-        "id": "sqm_mmcj3uiam2jc",
-        "squad_id": "sqd_vfs9viv2ilj6",
+        "id": "sqm_va5q49t622xv",
+        "squad_id": "sqd_wk1mrnyfwl4x",
         "member_type": "agent",
         "member_id": "agt_snapshot",
         "role": "leader",
@@ -24722,14 +25069,14 @@
     {
       "key": "squads#004 DELETE /api/squads/:id/members",
       "route": "DELETE /api/squads/:id/members",
-      "path": "/api/squads/sqd_vfs9viv2ilj6/members",
+      "path": "/api/squads/sqd_wk1mrnyfwl4x/members",
       "status": 204,
       "body": ""
     },
     {
       "key": "squads#005 DELETE /api/squads/:id",
       "route": "DELETE /api/squads/:id",
-      "path": "/api/squads/sqd_vfs9viv2ilj6",
+      "path": "/api/squads/sqd_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -24740,7 +25087,7 @@
       "status": 201,
       "body": {
         "squad": {
-          "id": "sqd_wk1mrnyfwl4x",
+          "id": "sqd_8dim5r24mzl2",
           "workspaceId": "local",
           "name": "Native squad",
           "description": "",
@@ -24847,7 +25194,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_vfs9viv2ilj6",
+          "id": "tsk_wk1mrnyfwl4x",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -24918,11 +25265,11 @@
     {
       "key": "tasks#001 POST /api/multiremi/tasks/:id/cancel",
       "route": "POST /api/multiremi/tasks/:id/cancel",
-      "path": "/api/multiremi/tasks/tsk_vfs9viv2ilj6/cancel",
+      "path": "/api/multiremi/tasks/tsk_wk1mrnyfwl4x/cancel",
       "status": 200,
       "body": {
         "task": {
-          "id": "tsk_vfs9viv2ilj6",
+          "id": "tsk_wk1mrnyfwl4x",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -24997,7 +25344,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_mmcj3uiam2jc",
+          "id": "tsk_va5q49t622xv",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -25068,10 +25415,10 @@
     {
       "key": "tasks#003 POST /api/tasks/:id/cancel",
       "route": "POST /api/tasks/:id/cancel",
-      "path": "/api/tasks/tsk_mmcj3uiam2jc/cancel",
+      "path": "/api/tasks/tsk_va5q49t622xv/cancel",
       "status": 200,
       "body": {
-        "id": "tsk_mmcj3uiam2jc",
+        "id": "tsk_va5q49t622xv",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -25168,7 +25515,7 @@
       "status": 201,
       "body": {
         "task": {
-          "id": "tsk_wk1mrnyfwl4x",
+          "id": "tsk_8dim5r24mzl2",
           "taskKind": "direct",
           "agentId": "agt_snapshot",
           "runtimeId": "rt_snapshot",
@@ -25195,8 +25542,8 @@
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
-          "assignmentEventId": "sevt_8dim5r24mzl2",
-          "assignment_event_id": "sevt_8dim5r24mzl2",
+          "assignmentEventId": "sevt_ntqjp15rt1ph",
+          "assignment_event_id": "sevt_ntqjp15rt1ph",
           "assignmentSourceEventId": null,
           "assignment_source_event_id": null,
           "projectionFromSeq": null,
@@ -25239,10 +25586,10 @@
     {
       "key": "tasks#005 POST /api/issues/:id/tasks/:taskId/cancel",
       "route": "POST /api/issues/:id/tasks/:taskId/cancel",
-      "path": "/api/issues/iss_snapshot/tasks/tsk_wk1mrnyfwl4x/cancel",
+      "path": "/api/issues/iss_snapshot/tasks/tsk_8dim5r24mzl2/cancel",
       "status": 200,
       "body": {
-        "id": "tsk_wk1mrnyfwl4x",
+        "id": "tsk_8dim5r24mzl2",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -25269,8 +25616,8 @@
         "attempt": 1,
         "maxAttempts": 3,
         "parentTaskId": null,
-        "assignmentEventId": "sevt_8dim5r24mzl2",
-        "assignment_event_id": "sevt_8dim5r24mzl2",
+        "assignmentEventId": "sevt_ntqjp15rt1ph",
+        "assignment_event_id": "sevt_ntqjp15rt1ph",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -25338,7 +25685,7 @@
       "path": "/api/issues/iss_snapshot/rerun",
       "status": 202,
       "body": {
-        "id": "tsk_ibk9if0740q3",
+        "id": "tsk_3gq3rlr8o45b",
         "taskKind": "direct",
         "agentId": "agt_snapshot",
         "runtimeId": "rt_snapshot",
@@ -25365,8 +25712,8 @@
         "attempt": 1,
         "maxAttempts": 3,
         "parentTaskId": null,
-        "assignmentEventId": "sevt_3gq3rlr8o45b",
-        "assignment_event_id": "sevt_3gq3rlr8o45b",
+        "assignmentEventId": "sevt_piqp1rpc1xal",
+        "assignment_event_id": "sevt_piqp1rpc1xal",
         "assignmentSourceEventId": null,
         "assignment_source_event_id": null,
         "projectionFromSeq": null,
@@ -25434,7 +25781,7 @@
       "path": "/api/tokens",
       "status": 201,
       "body": {
-        "id": "pat_vfs9viv2ilj6",
+        "id": "pat_wk1mrnyfwl4x",
         "name": "compat token",
         "token_prefix": "mul_00000000",
         "expires_at": null,
@@ -25449,7 +25796,7 @@
       "path": "/api/tokens/current/renew",
       "status": 201,
       "body": {
-        "id": "pat_mmcj3uiam2jc",
+        "id": "pat_va5q49t622xv",
         "workspaceId": "local",
         "daemonId": null,
         "taskId": null,
@@ -25472,7 +25819,7 @@
     {
       "key": "tokens#002 DELETE /api/tokens/:id",
       "route": "DELETE /api/tokens/:id",
-      "path": "/api/tokens/pat_vfs9viv2ilj6",
+      "path": "/api/tokens/pat_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     },
@@ -25483,7 +25830,7 @@
       "status": 201,
       "body": {
         "token": {
-          "id": "pat_wk1mrnyfwl4x",
+          "id": "pat_8dim5r24mzl2",
           "workspaceId": "local",
           "daemonId": null,
           "taskId": null,
@@ -25544,8 +25891,8 @@
       "status": 200,
       "body": {
         "status": "accepted",
-        "delivery_id": "whd_vfs9viv2ilj6",
-        "run_id": "run_mmcj3uiam2jc",
+        "delivery_id": "whd_wk1mrnyfwl4x",
+        "run_id": "run_va5q49t622xv",
         "autopilot_id": "apl_snapshot",
         "trigger_id": "trg_lv85f3t6oap5"
       }
@@ -25567,7 +25914,7 @@
       "path": "/api/workspaces",
       "status": 201,
       "body": {
-        "id": "ws_vfs9viv2ilj6",
+        "id": "ws_wk1mrnyfwl4x",
         "name": "Flow workspace",
         "slug": "flow-workspace",
         "description": null,
@@ -25585,10 +25932,10 @@
     {
       "key": "workspaces#001 PUT /api/workspaces/:id",
       "route": "PUT /api/workspaces/:id",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "ws_vfs9viv2ilj6",
+        "id": "ws_wk1mrnyfwl4x",
         "name": "Flow workspace renamed",
         "slug": "flow-workspace",
         "description": null,
@@ -25606,10 +25953,10 @@
     {
       "key": "workspaces#002 PATCH /api/workspaces/:id",
       "route": "PATCH /api/workspaces/:id",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x",
       "status": 200,
       "body": {
-        "id": "ws_vfs9viv2ilj6",
+        "id": "ws_wk1mrnyfwl4x",
         "name": "Flow workspace renamed",
         "slug": "flow-workspace",
         "description": "patched",
@@ -25627,12 +25974,12 @@
     {
       "key": "workspaces#003 POST /api/workspaces/:id/members",
       "route": "POST /api/workspaces/:id/members",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/members",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/members",
       "status": 201,
       "body": {
-        "id": "inv_mmcj3uiam2jc",
-        "workspaceId": "ws_vfs9viv2ilj6",
-        "workspace_id": "ws_vfs9viv2ilj6",
+        "id": "inv_va5q49t622xv",
+        "workspaceId": "ws_wk1mrnyfwl4x",
+        "workspace_id": "ws_wk1mrnyfwl4x",
         "inviterId": "local",
         "inviter_id": "local",
         "inviteeEmail": "invitee@snapshot.invalid",
@@ -25681,14 +26028,14 @@
     {
       "key": "workspaces#006 DELETE /api/workspaces/:id/invitations/:invitationId",
       "route": "DELETE /api/workspaces/:id/invitations/:invitationId",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/invitations/inv_mmcj3uiam2jc",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/invitations/inv_va5q49t622xv",
       "status": 204,
       "body": ""
     },
     {
       "key": "workspaces#007 PUT /api/workspaces/:id/relay-config/:engine",
       "route": "PUT /api/workspaces/:id/relay-config/:engine",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/relay-config/claude",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/relay-config/claude",
       "status": 200,
       "body": {
         "claude": {
@@ -25703,7 +26050,7 @@
     {
       "key": "workspaces#008 POST /api/workspaces/:id/relay-config/:engine/reveal",
       "route": "POST /api/workspaces/:id/relay-config/:engine/reveal",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/relay-config/claude/reveal",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/relay-config/claude/reveal",
       "status": 200,
       "body": {
         "token": ""
@@ -25712,7 +26059,7 @@
     {
       "key": "workspaces#009 PUT /api/workspaces/:id/relay-config/discovery",
       "route": "PUT /api/workspaces/:id/relay-config/discovery",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/relay-config/discovery",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/relay-config/discovery",
       "status": 200,
       "body": {
         "model_discovery": true
@@ -25721,7 +26068,7 @@
     {
       "key": "workspaces#010 POST /api/workspaces/:id/lark/install/begin",
       "route": "POST /api/workspaces/:id/lark/install/begin",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/lark/install/begin",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/lark/install/begin",
       "status": 202,
       "body": {
         "session_id": "local-lark-<timestamp>",
@@ -25737,14 +26084,14 @@
     {
       "key": "workspaces#011 DELETE /api/workspaces/:id/lark/installations/:installationId",
       "route": "DELETE /api/workspaces/:id/lark/installations/:installationId",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/lark/installations/inst_snapshot",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/lark/installations/inst_snapshot",
       "status": 204,
       "body": ""
     },
     {
       "key": "workspaces#012 POST /api/workspaces/:id/leave",
       "route": "POST /api/workspaces/:id/leave",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6/leave",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x/leave",
       "status": 400,
       "body": {
         "error": "workspace must have at least one owner"
@@ -25753,7 +26100,7 @@
     {
       "key": "workspaces#013 DELETE /api/workspaces/:id",
       "route": "DELETE /api/workspaces/:id",
-      "path": "/api/workspaces/ws_vfs9viv2ilj6",
+      "path": "/api/workspaces/ws_wk1mrnyfwl4x",
       "status": 204,
       "body": ""
     }

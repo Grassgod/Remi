@@ -16,6 +16,7 @@ import type {
 import type {
   DaemonInventoryResponse,
   DaemonProfileResponse,
+  DaemonRoutingResponse,
   DaemonRetirementPlan,
   RetireDaemonResponse,
   RuntimeProvision,
@@ -44,6 +45,7 @@ import {
   DaemonInventoryResponseSchema,
   DaemonRetirementPlanResponseSchema,
   EMPTY_DAEMON_INVENTORY_RESPONSE,
+  EMPTY_DAEMON_PROFILE_RESPONSE,
   EMPTY_DAEMON_RETIREMENT_PLAN_RESPONSE,
   EMPTY_CLI_LATEST_VERSION,
   EMPTY_AGENT_RUNTIME_LIST,
@@ -58,6 +60,8 @@ import {
   EMPTY_SSH_MESH_OVERVIEW,
   FleetModelsResponseSchema,
   DaemonProfileResponseSchema,
+  DaemonRoutingResponseSchema,
+  EMPTY_DAEMON_ROUTING_RESPONSE,
   type RelayConfigResponse,
   RelayConfigResponseSchema,
   RuntimeDirectoryScanRequestSchema,
@@ -479,6 +483,39 @@ export class RuntimesEndpoints {
     return parseStrictResponse<DaemonProfileResponse>(raw, DaemonProfileResponseSchema, {
       endpoint: "PATCH /api/daemons/:daemonId",
     });
+  }
+
+  async getDaemonRouting(
+    workspaceId: string,
+    daemonId: string,
+  ): Promise<DaemonRoutingResponse> {
+    const search = new URLSearchParams({ workspace_id: workspaceId });
+    const raw = await this.http.fetch<unknown>(
+      `/api/daemons/${encodeURIComponent(daemonId)}?${search}`,
+    );
+    return parseWithFallback(
+      raw,
+      DaemonRoutingResponseSchema,
+      EMPTY_DAEMON_ROUTING_RESPONSE,
+      { endpoint: "GET /api/daemons/:daemonId" },
+    );
+  }
+
+  async updateDaemonDedicated(
+    workspaceId: string,
+    daemonId: string,
+    dedicated: boolean,
+  ): Promise<DaemonProfileResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/daemons/${encodeURIComponent(daemonId)}?workspace_id=${encodeURIComponent(workspaceId)}`,
+      { method: "PATCH", body: JSON.stringify({ dedicated }) },
+    );
+    return parseWithFallback(
+      raw,
+      DaemonProfileResponseSchema,
+      EMPTY_DAEMON_PROFILE_RESPONSE,
+      { endpoint: "PATCH /api/daemons/:daemonId" },
+    );
   }
 
   async getRuntimeUsage(

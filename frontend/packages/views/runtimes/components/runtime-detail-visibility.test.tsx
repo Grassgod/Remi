@@ -20,6 +20,7 @@ const TEST_RESOURCES = {
 };
 
 const mockUpdateRuntime = vi.hoisted(() => vi.fn());
+const mockUpdateDedicated = vi.hoisted(() => vi.fn());
 
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -54,7 +55,24 @@ vi.mock("@tanstack/react-query", async () => {
     );
   return {
     ...actual,
-    useQuery: vi.fn(() => ({ data: [], isLoading: false })),
+    useQuery: vi.fn((options: { queryKey?: readonly unknown[] }) =>
+      options.queryKey?.includes("routing")
+        ? {
+            data: {
+              workspace_id: "ws-1",
+              daemon_id: "daemon-1",
+              display_name: "Personal Mac",
+              display_name_customized: true,
+              dedicated: false,
+              updated_by: null,
+              updated_at: null,
+              projects: [],
+            },
+            isLoading: false,
+            isError: false,
+          }
+        : { data: [], isLoading: false, isError: false },
+    ),
   };
 });
 
@@ -86,6 +104,16 @@ vi.mock("@multiremi/core/runtimes/mutations", () => ({
       opts?: { onSuccess?: () => void; onError?: () => void },
     ) => {
       mockUpdateRuntime(args.runtimeId, args.patch);
+      opts?.onSuccess?.();
+    },
+    isPending: false,
+  }),
+  useUpdateDaemonDedicated: () => ({
+    mutate: (
+      args: { daemonId: string; dedicated: boolean },
+      opts?: { onSuccess?: () => void },
+    ) => {
+      mockUpdateDedicated(args);
       opts?.onSuccess?.();
     },
     isPending: false,
@@ -220,5 +248,18 @@ describe("RuntimeDetail visibility section", () => {
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update Agent" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update ACP" })).toBeInTheDocument();
+  });
+
+  it("lets the device owner enable dedicated project routing", () => {
+    renderDetail(makeRuntime({ owner_id: "user-me", daemon_id: "daemon-1" }));
+
+    const toggle = screen.getByRole("switch", { name: "Dedicated device" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(mockUpdateDedicated).toHaveBeenCalledWith({
+      daemonId: "daemon-1",
+      dedicated: true,
+    });
   });
 });

@@ -5,7 +5,7 @@ import type {
   MultiremiAutopilot,
   MultiremiAutopilotTrigger,
 } from "@multiremi/contracts/types.js";
-import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
+import { agentHasKnowledgePublishCapability } from "@multiremi/knowledge/capability.js";
 
 export interface RepositoryWikiAutomationReader {
   listAgents(): MultiremiAgent[];
@@ -27,23 +27,12 @@ export function resolveRepositoryWikiAutomation(
   reader: RepositoryWikiAutomationReader,
   workspaceId: string,
 ): MultiremiAutopilot | null {
-  const pluginIds = new Set(
-    reader.listAgentPlugins(workspaceId, { provider: "claude" })
-      .filter((plugin) => plugin.name === "code-to-wiki")
-      .map((plugin) => plugin.id),
-  );
-  if (pluginIds.size === 0) return null;
-
   const capableAgentIds = new Set(
     reader.listAgents()
       .filter((agent) =>
         agent.workspaceId === workspaceId
-        && agent.provider === "claude"
-        && agentRoleAtLeast(agent.role, "maintainer")
+        && agentHasKnowledgePublishCapability(reader, agent)
       )
-      .filter((agent) => reader.listAgentPluginBindings(agent.id).some((binding) =>
-        binding.enabled && pluginIds.has(binding.pluginId)
-      ))
       .map((agent) => agent.id),
   );
   if (capableAgentIds.size === 0) return null;

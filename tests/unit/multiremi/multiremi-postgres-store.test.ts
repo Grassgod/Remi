@@ -250,6 +250,57 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     return store.createWorkspace({ name: `PG Test ${wsCounter}`, slug }).id;
   };
 
+  it("migrates knowledge control-plane tables and nullable provenance columns", () => {
+    for (const table of [
+      "multiremi_knowledge_submissions",
+      "multiremi_knowledge_compilation_runs",
+      "multiremi_knowledge_compilation_run_sources",
+      "multiremi_knowledge_compilation_outputs",
+    ]) {
+      const count = (db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number | string }).n;
+      expect(Number(count)).toBeGreaterThanOrEqual(0);
+    }
+    for (const table of [
+      "multiremi_project_docs",
+      "multiremi_project_doc_revisions",
+      "multiremi_repository_wiki_docs",
+      "multiremi_repository_wiki_doc_revisions",
+    ]) {
+      const columns = (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name);
+      expect(columns).toContain("compilation_run_id");
+    }
+
+    const workspaceId = freshWorkspace();
+    const project = store.createProject({ title: "PG knowledge", workspaceId });
+    const doc = store.createProjectDoc(project.id, { kind: "wiki", title: "Traceable", body: "formal" });
+    expect(doc.compilationRunId).toBeNull();
+    const submission = store.createKnowledgeSubmission({
+      workspaceId,
+      projectId: project.id,
+      scope: "project_wiki",
+      sourceType: "legacy_wiki",
+      body: "raw",
+    }).submission;
+    const run = store.createKnowledgeCompilationRun({
+      workspaceId,
+      projectId: project.id,
+      mode: "legacy_migration",
+      dedupeKey: "pg-knowledge-run",
+    }).run;
+    store.addKnowledgeRunSubmissionSource(run.id, submission.id);
+    store.linkKnowledgeFormalVersion({
+      runId: run.id,
+      artifactScope: "project_wiki",
+      docId: doc.id,
+      version: doc.version,
+      action: "create",
+    });
+    expect(store.getProjectDoc(doc.id)?.compilationRunId).toBe(run.id);
+    expect(store.listProjectDocRevisions(doc.id)[0]?.compilationRunId).toBe(run.id);
+    expect(store.listKnowledgeRunSources(run.id)).toHaveLength(1);
+    expect(store.listKnowledgeRunOutputs(run.id)).toHaveLength(1);
+  });
+
   const createDelegationFixture = () => {
     const workspaceId = freshWorkspace();
     const leaderRuntime = store.registerRuntime({

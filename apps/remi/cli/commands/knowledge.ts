@@ -46,10 +46,14 @@ const KNOWLEDGE_FIELDS: readonly CliOptionSpec[] = [
 
 export function knowledgeCommandSpecs(): CommandSpec[] {
   return [
+    group("knowledge", "Submit and inspect raw knowledge compilation work"),
+    ...knowledgeControlPlaneSpecs(),
     group("memory", "Recall and maintain project memory"),
     group("wiki", "Search and maintain project wiki pages"),
     ...kindSpecs("memory"),
     ...kindSpecs("wiki"),
+    publishSpec("memory"),
+    publishSpec("wiki"),
     migrationSpec("memory.migration.status", ["memory", "migration", "status"], "Show project knowledge migration status", "GET", "/api/project-knowledge/migration", [
       { path: ["project", "knowledge", "status"], deprecatedSince: "0.3.0", replacement: "remi memory migration status" },
     ]),
@@ -68,6 +72,151 @@ export function knowledgeCommandSpecs(): CommandSpec[] {
     ...repositoryWikiSpecs(),
     ...wikiWorkingCopySpecs(),
   ];
+}
+
+function knowledgeControlPlaneSpecs(): CommandSpec[] {
+  const scopeOptions: readonly CliOptionSpec[] = [
+    PROJECT_OPTION,
+    REPOSITORY_OPTION,
+    { name: "scope", type: "string", valueName: "project_wiki|repository_wiki|memory", description: "Knowledge target scope" },
+    { name: "status", type: "string", valueName: "status", description: "Submission or run status" },
+  ];
+  return [
+    spec("knowledge.submit", ["knowledge", "submit"], "Submit raw knowledge for Atlas compilation", "write", [], [
+      ...INPUT_OPTIONS,
+      ...scopeOptions,
+      { name: "path", type: "string", valueName: "path", description: "Proposed Wiki path" },
+      { name: "slug", type: "string", valueName: "slug", description: "Proposed Memory or Wiki slug" },
+      { name: "content", type: "string", valueName: "text", description: "Raw body", conflictsWith: ["content-file", "content-stdin"] },
+      { name: "content-file", type: "string", valueName: "path|-", description: "Read raw body from a file or stdin", conflictsWith: ["content", "content-stdin"] },
+      { name: "content-stdin", type: "boolean", description: "Read raw body from stdin", conflictsWith: ["content", "content-file"] },
+      { name: "patch", type: "string", valueName: "text", description: "Optional raw patch" },
+      { name: "base-revision", type: "string", valueName: "revision", description: "Revision on which the proposal is based" },
+    ], async (invocation) => {
+      const client = await clientFor(invocation);
+      const scope = stringOption(invocation, "scope");
+      const project = await resolvedProjectOption(invocation, client);
+      const repository = await resolvedRepositoryOption(invocation, client);
+      const body = await requestBody(invocation, {
+        workspace_id: requiredWorkspace(invocation),
+        project_id: project?.id,
+        repository_id: repository?.id,
+        scope: scope ?? undefined,
+        proposed_path: rawOption(invocation, "path"),
+        proposed_slug: rawOption(invocation, "slug"),
+        body: readContentOption(invocation),
+        patch: rawOption(invocation, "patch"),
+        base_revision: rawOption(invocation, "base-revision"),
+      });
+      if (typeof body.scope !== "string" || !body.scope.trim()) throw new CliError("usage", "knowledge submit requires --scope or input JSON");
+      const response = await client.request({ method: "POST", path: "/api/knowledge/submissions", body });
+      renderResource(invocation, response.data, ["submission"]);
+    }),
+    spec("knowledge.submissions", ["knowledge", "submissions"], "List raw knowledge submissions", "read", [], [...scopeOptions, ...PAGE_OPTIONS], async (invocation) => {
+      const client = await clientFor(invocation);
+      const project = await resolvedProjectOption(invocation, client);
+      const repository = await resolvedRepositoryOption(invocation, client);
+      const response = await client.request({
+        method: "GET",
+        path: "/api/knowledge/submissions",
+        query: queryOptions(invocation, {
+          workspace_id: requiredWorkspace(invocation),
+          project_id: project?.id,
+          repository_id: repository?.id,
+          scope: stringOption(invocation, "scope"),
+          status: stringOption(invocation, "status"),
+        }),
+      });
+      renderResource(invocation, response.data, ["submissions"]);
+    }),
+    spec("knowledge.inspect", ["knowledge", "inspect"], "Inspect one raw knowledge submission", "read", [refPositional("submission")], [], async (invocation) => {
+      const response = await (await clientFor(invocation)).request({
+        method: "GET",
+        path: `/api/knowledge/submissions/${encodePath(positional(invocation, 0, "submission"))}`,
+      });
+      renderResource(invocation, response.data, ["submission"]);
+    }),
+    spec("knowledge.runs", ["knowledge", "runs"], "List knowledge compilation runs", "read", [], [PROJECT_OPTION, REPOSITORY_OPTION, { name: "status", type: "string", valueName: "status", description: "Compilation run status" }, ...PAGE_OPTIONS], async (invocation) => {
+      const client = await clientFor(invocation);
+      const project = await resolvedProjectOption(invocation, client);
+      const repository = await resolvedRepositoryOption(invocation, client);
+      const response = await client.request({
+        method: "GET",
+        path: "/api/knowledge/runs",
+        query: queryOptions(invocation, {
+          workspace_id: requiredWorkspace(invocation),
+          project_id: project?.id,
+          repository_id: repository?.id,
+          status: stringOption(invocation, "status"),
+        }),
+      });
+      renderResource(invocation, response.data, ["runs"]);
+    }),
+    spec("knowledge.run.show", ["knowledge", "run", "show"], "Show a knowledge compilation run and its provenance", "read", [refPositional("run")], [], async (invocation) => {
+      const response = await (await clientFor(invocation)).request({
+        method: "GET",
+        path: `/api/knowledge/runs/${encodePath(positional(invocation, 0, "run"))}`,
+      });
+      renderResource(invocation, response.data);
+    }),
+    spec("knowledge.migrate-legacy", ["knowledge", "migrate-legacy"], "Copy legacy Wiki and Memory into raw submissions", "write", [], [
+      PROJECT_OPTION,
+      REPOSITORY_OPTION,
+      { name: "batch-size", type: "integer", valueName: "n", description: "Maximum legacy documents to inspect" },
+      { name: "dry-run", type: "boolean", description: "Count candidates without writing" },
+      { name: "execute", type: "boolean", description: "Create idempotent raw submissions" },
+    ], async (invocation) => {
+      const dryRun = booleanOption(invocation, "dry-run") === true;
+      const execute = booleanOption(invocation, "execute") === true;
+      if (dryRun === execute) throw new CliError("usage", "knowledge migrate-legacy requires exactly one of --dry-run or --execute");
+      const client = await clientFor(invocation);
+      const project = await resolvedProjectOption(invocation, client);
+      const repository = await resolvedRepositoryOption(invocation, client);
+      const response = await client.request({
+        method: "POST",
+        path: "/api/knowledge/migrate-legacy",
+        body: {
+          workspace_id: requiredWorkspace(invocation),
+          project_id: project?.id,
+          repository_id: repository?.id,
+          batch_size: integerOption(invocation, "batch-size") ?? undefined,
+          dry_run: dryRun,
+          execute,
+        },
+      });
+      renderResource(invocation, response.data);
+    }, [], ["human", "task"]),
+  ];
+}
+
+function publishSpec(kind: KnowledgeKind): CommandSpec {
+  return spec(`${kind}.publish`, [kind, "publish"], `Publish curated ${kind} from raw submissions`, "write", [], [
+    ...INPUT_OPTIONS,
+    PROJECT_OPTION,
+    ...(kind === "wiki" ? [REPOSITORY_OPTION] : []),
+    { name: "submission", type: "string", valueName: "id", repeatable: true, description: "Raw submission ID; repeat for many inputs" },
+    { name: "dedupe-key", type: "string", valueName: "key", description: "Idempotency key for this compilation" },
+    { name: "action", type: "string", valueName: "create|update|merge|split|reject|noop", description: "Compilation output action" },
+    { name: "document", type: "string", valueName: "id|slug|path", description: "Existing document for update or merge" },
+    ...KNOWLEDGE_FIELDS,
+  ], async (invocation) => {
+    const client = await clientFor(invocation);
+    const repository = kind === "wiki" ? await resolvedRepositoryOption(invocation, client) : null;
+    const project = repository ? null : await resolvedProjectOption(invocation, client, true);
+    const body = await publishBody(invocation, kind);
+    const response = repository
+      ? await client.request({
+          method: "POST",
+          path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/repos/${encodePath(String(repository.id))}/wiki/publish`,
+          body,
+        })
+      : await client.request({
+          method: "POST",
+          path: `/api/projects/${encodePath(String(project!.id))}/knowledge/publish`,
+          body,
+        });
+    renderResource(invocation, response.data, ["outputs"]);
+  }, [], ["task"]);
 }
 
 function repositoryWikiSpecs(): CommandSpec[] {
@@ -360,14 +509,60 @@ async function projectRequest(
   });
 }
 
-async function knowledgeBody(invocation: CommandInvocation, kind: KnowledgeKind, creating: boolean) {
+async function publishBody(invocation: CommandInvocation, kind: KnowledgeKind): Promise<Record<string, unknown>> {
+  const submissionIds = stringOptions(invocation, "submission");
+  const body = await requestBody(invocation, {
+    submission_ids: submissionIds.length ? submissionIds : undefined,
+    dedupe_key: rawOption(invocation, "dedupe-key"),
+  });
+  if (Array.isArray(body.outputs) || (body.output && typeof body.output === "object")) return body;
+  body.output = {
+    action: rawOption(invocation, "action") ?? "create",
+    ref: rawOption(invocation, "document"),
+    kind,
+    title: rawOption(invocation, "title"),
+    slug: rawOption(invocation, "slug"),
+    path: rawOption(invocation, "path"),
+    summary: "summary" in invocation.options ? rawOption(invocation, "summary") || null : undefined,
+    body: readContentOption(invocation),
+    tags: "tags" in invocation.options ? csvOption(invocation, "tags") ?? [] : undefined,
+    pinned: booleanOption(invocation, "pinned") ?? (kind === "memory" ? true : undefined),
+    refs: "ref" in invocation.options ? referenceOptions(invocation) : undefined,
+    expected_version: integerOption(invocation, "expected-version") ?? undefined,
+  };
+  return body;
+}
+
+async function resolvedProjectOption(
+  invocation: CommandInvocation,
+  client: Awaited<ReturnType<typeof clientFor>>,
+  required = false,
+) {
+  const ref = projectOption(invocation);
+  if (!ref) {
+    if (required) throw new CliError("usage", `--project is required for ${invocation.spec.path.join(" ")}`);
+    return null;
+  }
+  return resolveProject(client, requiredWorkspace(invocation), ref);
+}
+
+async function resolvedRepositoryOption(
+  invocation: CommandInvocation,
+  client: Awaited<ReturnType<typeof clientFor>>,
+) {
+  const ref = stringOption(invocation, "repo");
+  return ref ? resolveRepository(client, requiredWorkspace(invocation), ref) : null;
+}
+
+function readContentOption(invocation: CommandInvocation): string | undefined {
   const contentFile = stringOption(invocation, "content-file");
-  const content = invocation.options["content-stdin"] === true
-    ? readFileSync(0, "utf8")
-    : contentFile
-    ? readFileSync(contentFile === "-" ? 0 : contentFile, "utf8")
-    : rawOption(invocation, "content");
-  const refs = stringOptions(invocation, "ref").flatMap((raw) => {
+  if (invocation.options["content-stdin"] === true) return readFileSync(0, "utf8");
+  if (contentFile) return readFileSync(contentFile === "-" ? 0 : contentFile, "utf8");
+  return rawOption(invocation, "content");
+}
+
+function referenceOptions(invocation: CommandInvocation): Array<{ type: string; value: string }> {
+  return stringOptions(invocation, "ref").flatMap((raw) => {
     const entry = raw.trim();
     if (!entry) return [];
     if (/^https?:\/\//i.test(entry)) return [{ type: "url", value: entry }];
@@ -375,43 +570,33 @@ async function knowledgeBody(invocation: CommandInvocation, kind: KnowledgeKind,
     if (separator <= 0 || separator === entry.length - 1) throw new CliError("usage", "--ref expects type:value or an http(s) URL");
     return [{ type: entry.slice(0, separator), value: entry.slice(separator + 1) }];
   });
+}
+
+async function knowledgeBody(invocation: CommandInvocation, kind: KnowledgeKind, creating: boolean) {
   return requestBody(invocation, {
     kind: creating ? kind : undefined,
     title: rawOption(invocation, "title"),
     slug: rawOption(invocation, "slug"),
     path: rawOption(invocation, "path"),
     summary: "summary" in invocation.options ? rawOption(invocation, "summary") || null : undefined,
-    body: content,
+    body: readContentOption(invocation),
     tags: "tags" in invocation.options ? csvOption(invocation, "tags") ?? [] : undefined,
     pinned: booleanOption(invocation, "pinned") ?? (creating && kind === "memory" ? true : undefined),
-    refs: "ref" in invocation.options ? refs : undefined,
+    refs: "ref" in invocation.options ? referenceOptions(invocation) : undefined,
     expected_version: integerOption(invocation, "expected-version") ?? undefined,
     source_task_id: creating && kind === "memory" ? process.env.MULTIREMI_TASK_ID?.trim() || undefined : undefined,
   });
 }
 
 async function repositoryWikiBody(invocation: CommandInvocation, creating: boolean): Promise<Record<string, unknown>> {
-  const contentFile = stringOption(invocation, "content-file");
-  const content = invocation.options["content-stdin"] === true
-    ? readFileSync(0, "utf8")
-    : contentFile
-    ? readFileSync(contentFile === "-" ? 0 : contentFile, "utf8")
-    : rawOption(invocation, "content");
-  const refs = stringOptions(invocation, "ref").map((entry) => {
-    const value = entry.trim();
-    if (/^https?:\/\//i.test(value)) return { type: "url", value };
-    const separator = value.indexOf(":");
-    if (separator <= 0 || separator === value.length - 1) throw new CliError("usage", "--ref expects type:value or an http(s) URL");
-    return { type: value.slice(0, separator), value: value.slice(separator + 1) };
-  });
   return requestBody(invocation, {
     path: rawOption(invocation, "path"),
     slug: rawOption(invocation, "slug"),
     title: rawOption(invocation, "title"),
     summary: "summary" in invocation.options ? rawOption(invocation, "summary") || null : undefined,
-    body: content,
+    body: readContentOption(invocation),
     tags: "tags" in invocation.options ? csvOption(invocation, "tags") ?? [] : undefined,
-    refs: "ref" in invocation.options ? refs : undefined,
+    refs: "ref" in invocation.options ? referenceOptions(invocation) : undefined,
     source_revision: rawOption(invocation, "source-revision"),
     source_task_id: creating ? process.env.MULTIREMI_TASK_ID?.trim() || undefined : undefined,
     source_issue_id: creating ? process.env.MULTIREMI_ISSUE_ID?.trim() || undefined : undefined,
@@ -447,8 +632,11 @@ function legacyOptions(invocation: CommandInvocation): CliOptions {
   return options;
 }
 
-function group(kind: KnowledgeKind, description: string): CommandSpec {
-  return { id: kind, path: [kind], description, parse: "passthrough", run: async () => { throw new CliError("usage", `usage: remi ${kind} list|search|get|create|update|delete|backlinks ...`); } };
+function group(kind: KnowledgeKind | "knowledge", description: string): CommandSpec {
+  const usage = kind === "knowledge"
+    ? "submit|submissions|inspect|runs|run show|migrate-legacy"
+    : "list|search|get|create|update|delete|backlinks|publish";
+  return { id: kind, path: [kind], description, parse: "passthrough", run: async () => { throw new CliError("usage", `usage: remi ${kind} ${usage} ...`); } };
 }
 
 function spec(

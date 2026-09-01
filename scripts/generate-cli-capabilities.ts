@@ -20,7 +20,7 @@ const MAX_PLANNED_ROUTES = 0;
 
 const DOMAINS = [
   "context", "workspace", "member", "invite", "token",
-  "project", "repo", "memory", "wiki",
+  "project", "repo", "knowledge", "memory", "wiki",
   "issue", "comment", "session", "share", "label", "attachment",
   "chat", "task",
   "agent", "squad", "skill", "plugin",
@@ -161,6 +161,14 @@ function mappedResourceCommand(route: string): string | null {
     "POST /api/multiremi/projects": "project.create",
     "GET /api/multiremi/projects/search": "project.search",
     "GET /api/project-docs": "memory.list",
+    "GET /api/knowledge/submissions": "knowledge.submissions",
+    "GET /api/knowledge/submissions/:id": "knowledge.inspect",
+    "POST /api/knowledge/submissions": "knowledge.submit",
+    "GET /api/knowledge/runs": "knowledge.runs",
+    "GET /api/knowledge/runs/:id": "knowledge.run.show",
+    "POST /api/knowledge/migrate-legacy": "knowledge.migrate-legacy",
+    "POST /api/projects/:id/knowledge/publish": "memory.publish",
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish": "wiki.publish",
     "GET /api/project-knowledge/migration": "memory.migration.status",
     "POST /api/project-knowledge/migration/backfill": "memory.migration.backfill",
     "POST /api/project-knowledge/migration/verify": "memory.migration.verify",
@@ -287,6 +295,10 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/(?:multiremi\/)?projects\/:id\/resources$/, "project.resource.create"],
     [/^(?:PUT|PATCH) \/api\/(?:multiremi\/)?projects\/:id\/resources\/:resourceId$/, "project.resource.update"],
     [/^DELETE \/api\/(?:multiremi\/)?projects\/:id\/resources\/:resourceId$/, "project.resource.delete"],
+    [/^GET \/api\/(?:multiremi\/)?projects\/:id\/devices$/, "project.device.list"],
+    [/^POST \/api\/(?:multiremi\/)?projects\/:id\/devices$/, "project.device.add"],
+    [/^PUT \/api\/(?:multiremi\/)?projects\/:id\/devices$/, "project.device.set"],
+    [/^DELETE \/api\/(?:multiremi\/)?projects\/:id\/devices\/:daemonId$/, "project.device.remove"],
     [/^GET \/api\/projects\/:id\/docs$/, "memory.list"],
     [/^POST \/api\/projects\/:id\/docs$/, "memory.create"],
     [/^GET \/api\/projects\/:id\/docs\/:ref$/, "memory.get"],
@@ -570,6 +582,8 @@ function mappedOperationsCommand(route: string): string | null {
     [/^GET \/api\/runtimes\/:id\/activity$/, "runtime.activity"],
     [/^GET \/api\/multiremi\/daemons\/:daemonId\/retirement-plan$/, "daemon.retirement-plan"],
     [/^POST \/api\/multiremi\/daemons\/:daemonId\/retire$/, "daemon.retire"],
+    [/^GET \/api\/daemons\/:daemonId$/, "daemon.get"],
+    [/^PATCH \/api\/daemons\/:daemonId$/, "daemon.dedicated.set"],
     [/^GET \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.get"],
     [/^PATCH \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.update"],
     [/^DELETE \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.delete"],
@@ -649,6 +663,9 @@ function exemptRoute(route: string): CliManifestRoute | null {
   if (path === "/api/multiremi/autopilots/:id/webhook") {
     return exempt("oauth_or_webhook_callback", "Autopilot webhook reception is invoked by an external system, not a user command.");
   }
+  if (path === "/api/knowledge/events/repository-merged") {
+    return exempt("daemon_internal_protocol", "SCM merge event ingestion is machine-to-server automation traffic; it is not a user command.");
+  }
   if (path.startsWith("/api/webhooks/") || /\/(oauth|google|lark)\/callback$/.test(path)) {
     return exempt("oauth_or_webhook_callback", "External provider callback is authenticated and invoked by the provider, not a user command.");
   }
@@ -660,12 +677,6 @@ function exemptRoute(route: string): CliManifestRoute | null {
   }
   if (path === "/api/config" || path === "/api/contact-sales") {
     return exempt("pure_ui", "Browser bootstrap or presentation-only action has no meaningful CLI workflow.");
-  }
-  if (route === "PATCH /api/daemons/:daemonId") {
-    return exempt(
-      "pure_ui",
-      "MUL-156 exposes daemon display-name editing in the browser; a daemon rename CLI is intentionally out of scope.",
-    );
   }
   if (path === "/" || path === "/favicon.ico") {
     return exempt("public_bootstrap_asset", "Public service bootstrap asset has no user-side CLI operation.");

@@ -119,18 +119,6 @@ export const SessionResultListSchema = z.array(SessionResultSchema);
 
 export const EMPTY_SESSION_RESULTS: SessionResult[] = [];
 
-export const EMPTY_SESSION_RESULT: SessionResult = {
-  id: "",
-  issue_id: "",
-  source_session_id: "",
-  title: "",
-  body: "",
-  metadata: {},
-  published_by_type: "member",
-  published_by_id: null,
-  created_at: "",
-};
-
 export const IssueSessionTaskSchema = z.object({
   id: z.string(),
   agent_id: z.string(),
@@ -160,20 +148,3 @@ export const IssueSessionTaskSchema = z.object({
 export const IssueSessionTaskListSchema = z.array(IssueSessionTaskSchema);
 
 export const EMPTY_ISSUE_SESSION_TASKS: IssueSessionTask[] = [];
-
-export const EMPTY_ISSUE_SESSION_TASK: IssueSessionTask = {
-  id: "",
-  agent_id: "",
-  runtime_id: "",
-  issue_id: "",
-  issue_session_id: "",
-  holds_workspace: true,
-  status: "queued",
-  priority: 0,
-  dispatched_at: null,
-  started_at: null,
-  completed_at: null,
-  result: null,
-  error: null,
-  created_at: "",
-};

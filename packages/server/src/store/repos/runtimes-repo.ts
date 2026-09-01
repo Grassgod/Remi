@@ -27,6 +27,7 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
 import {
   redactRuntimeCommandArgs,
@@ -770,7 +771,11 @@ export class RuntimesRepo {
     }
   }
 
-  mergeRuntimeInto(oldRuntimeId: string, newRuntimeId: string): { agentsReassigned: number; tasksReassigned: number; deleted: boolean } {
+  mergeRuntimeInto(
+    oldRuntimeId: string,
+    newRuntimeId: string,
+    options: { legacyDaemonIds?: string[] } = {},
+  ): { agentsReassigned: number; tasksReassigned: number; deleted: boolean } {
     if (oldRuntimeId === newRuntimeId) return { agentsReassigned: 0, tasksReassigned: 0, deleted: false };
     const oldRuntime = this.getRuntime(oldRuntimeId);
     const newRuntime = this.getRuntime(newRuntimeId);
@@ -790,6 +795,23 @@ export class RuntimesRepo {
       }
       if (lockedOldRuntime.workspaceId !== lockedNewRuntime.workspaceId || lockedOldRuntime.provider !== lockedNewRuntime.provider) {
         return { agentsReassigned: 0, tasksReassigned: 0, deleted: false };
+      }
+      const workspaceId = lockedNewRuntime.workspaceId ?? "local";
+      const canonicalDaemonId = cleanOptionalString(lockedNewRuntime.daemonId);
+      if (canonicalDaemonId) {
+        const legacyDaemonIds = new Set([
+          cleanOptionalString(lockedOldRuntime.daemonId),
+          ...(options.legacyDaemonIds ?? []).map(cleanOptionalString),
+        ].filter((value): value is string => !!value));
+        for (const legacyDaemonId of legacyDaemonIds) {
+          canonicalizeDaemonRoutingWithinTransaction(
+            this.ctx.db,
+            workspaceId,
+            legacyDaemonId,
+            canonicalDaemonId,
+            now,
+          );
+        }
       }
       const agents = this.ctx.db.run(
         "UPDATE multiremi_agents SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
@@ -849,6 +871,30 @@ export class RuntimesRepo {
       return { agentsReassigned: agents, tasksReassigned: tasks, deleted };
     });
     return tx();
+  }
+
+  canonicalizeLegacyDaemonRouting(
+    workspaceId: string,
+    legacyDaemonIds: string[],
+    canonicalDaemonId: string,
+  ): void {
+    const canonical = canonicalDaemonId.trim();
+    if (!canonical) return;
+    const aliases = [...new Set(legacyDaemonIds.map((value) => value.trim()).filter(Boolean))];
+    if (!aliases.length) return;
+    this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const now = nowIso();
+      for (const legacyDaemonId of aliases) {
+        canonicalizeDaemonRoutingWithinTransaction(
+          this.ctx.db,
+          workspaceId,
+          legacyDaemonId,
+          canonical,
+          now,
+        );
+      }
+    })();
   }
 
   recordRuntimeLegacyDaemonId(

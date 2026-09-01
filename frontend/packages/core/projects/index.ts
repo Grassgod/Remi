@@ -14,3 +14,10 @@ export {
   useUpdateProjectResource,
   useDeleteProjectResource,
 } from "./resource-queries";
+export {
+  projectDeviceKeys,
+  projectDevicesOptions,
+  useCreateProjectDevice,
+  useReplaceProjectDevices,
+  useDeleteProjectDevice,
+} from "./device-queries";

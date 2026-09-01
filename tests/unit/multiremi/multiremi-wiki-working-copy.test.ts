@@ -18,6 +18,7 @@ interface WikiServerHooks {
   afterUpdate?: (slug: string) => void;
   failUpdate?: (slug: string) => boolean;
   repositoryDocs?: Map<string, RepositoryDocState>;
+  rawSubmissions?: boolean;
 }
 
 interface RepositoryDocState {
@@ -126,6 +127,38 @@ describe("Wiki working copy", () => {
       expect(docs.has("old-page")).toBe(false);
       expect(docs.get("new-page")).toMatchObject({ title: "New page", body: "# New page\n\nCurrent guidance." });
     });
+  });
+
+  test("keeps local changes unsynced when push creates Raw submissions", async () => {
+    const docs = new Map<string, DocState>([["guide", {
+      id: "pdoc_guide",
+      slug: "guide",
+      title: "Guide",
+      body: "formal body",
+      version: 1,
+    }]]);
+    await withWikiServer(docs, async (serverUrl, requests, logs) => {
+      const root = workspaceRoot();
+      const base = ["--project", "prj_1", "--server", serverUrl, "--token", "task-token"];
+      await runMultiremi(["wiki", "pull", ...base], { programName: "multiremi" });
+      const manifestPath = join(root, ".multiremi", "wiki-base", "manifest.json");
+      const manifestBefore = readFileSync(manifestPath, "utf8");
+      writeFileSync(join(root, "wiki", "guide.md"), "local proposal\n");
+
+      await runMultiremi(["wiki", "push", ...base], { programName: "multiremi" });
+
+      expect(docs.get("guide")).toMatchObject({ body: "formal body", version: 1 });
+      expect(readFileSync(join(root, "wiki", "guide.md"), "utf8")).toBe("local proposal\n");
+      expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+      expect(requests.filter((request) => request.method === "PUT")).toHaveLength(1);
+      expect(JSON.parse(logs.at(-1)!)).toMatchObject({
+        pushed: true,
+        submitted: true,
+        submission_ids: ["ksub_test_1"],
+        status: "pending",
+        message: "等待 Atlas 加工",
+      });
+    }, { rawSubmissions: true });
   });
 
   test("moves a Project Wiki page without changing its id or slug", async () => {
@@ -405,7 +438,7 @@ describe("Wiki working copy", () => {
 
 async function withWikiServer(
   docs: Map<string, DocState>,
-  run: (serverUrl: string, requests: Array<{ method: string; path: string; body?: any }>) => Promise<void>,
+  run: (serverUrl: string, requests: Array<{ method: string; path: string; body?: any }>, logs: string[]) => Promise<void>,
   hooks: WikiServerHooks = {},
 ): Promise<void> {
   const requests: Array<{ method: string; path: string; body?: any }> = [];
@@ -420,6 +453,7 @@ async function withWikiServer(
         return Response.json({ docs: [...(hooks.repositoryDocs?.values() ?? [])].map(wireRepositoryDoc) });
       }
       if (url.pathname === "/api/workspaces/local/repos/repo_alpha/wiki" && request.method === "POST") {
+        if (hooks.rawSubmissions) return rawSubmissionResponse(1);
         const path = String(body.path);
         if (hooks.repositoryDocs?.has(path)) return Response.json({ error: "already exists" }, { status: 409 });
         const created: RepositoryDocState = {
@@ -437,6 +471,7 @@ async function withWikiServer(
         const id = decodeURIComponent(repositoryMatch[1]!);
         const current = [...(hooks.repositoryDocs?.values() ?? [])].find((doc) => doc.id === id);
         if (!current) return Response.json({ error: "not found" }, { status: 404 });
+        if (hooks.rawSubmissions && (request.method === "PUT" || request.method === "DELETE")) return rawSubmissionResponse(1);
         if (request.method === "PUT") {
           if (Number(body.expected_version) !== current.version) return Response.json({ error: "version conflict" }, { status: 409 });
           const updated = { ...current, path: String(body.path ?? current.path), body: String(body.body ?? current.body), version: current.version + 1 };
@@ -453,6 +488,7 @@ async function withWikiServer(
         return Response.json({ docs: [...docs.values()].map(wireDoc) });
       }
       if (url.pathname === "/api/projects/prj_1/docs" && request.method === "POST") {
+        if (hooks.rawSubmissions) return rawSubmissionResponse(1);
         const slug = String(body.slug);
         if (docs.has(slug)) return Response.json({ error: "already exists" }, { status: 409 });
         const created: DocState = {
@@ -471,6 +507,7 @@ async function withWikiServer(
         const slug = decodeURIComponent(match[1]!);
         const current = docs.get(slug);
         if (!current) return Response.json({ error: "not found" }, { status: 404 });
+        if (hooks.rawSubmissions && (request.method === "PUT" || request.method === "DELETE")) return rawSubmissionResponse(1);
         if (request.method === "PUT") {
           if (Number(body.expected_version) !== current.version) return Response.json({ error: "version conflict" }, { status: 409 });
           if (hooks.failUpdate?.(slug)) return Response.json({ error: "version conflict" }, { status: 409 });
@@ -490,14 +527,25 @@ async function withWikiServer(
       return Response.json({ error: "not found" }, { status: 404 });
     },
   });
+  const logs: string[] = [];
   const originalLog = console.log;
   try {
-    console.log = () => undefined;
-    await run(`http://127.0.0.1:${server.port}`, requests);
+    console.log = (value?: unknown) => { logs.push(String(value)); };
+    await run(`http://127.0.0.1:${server.port}`, requests, logs);
   } finally {
     console.log = originalLog;
     server.stop(true);
   }
+}
+
+function rawSubmissionResponse(index: number): Response {
+  return Response.json({
+    submission_id: `ksub_test_${index}`,
+    status: "pending",
+    scope: "project_wiki",
+    deduplicated: false,
+    message: "waiting for Atlas compilation",
+  }, { status: 202 });
 }
 
 function workspaceRoot(): string {

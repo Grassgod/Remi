@@ -75,6 +75,8 @@
     "./projects": "./projects/index.ts",
     "./project-docs": "./project-docs/index.ts",
     "./project-docs/queries": "./project-docs/queries.ts",
+    "./knowledge": "./knowledge/index.ts",
+    "./knowledge/queries": "./knowledge/queries.ts",
     "./projects/queries": "./projects/queries.ts",
     "./projects/mutations": "./projects/mutations.ts",
     "./projects/config": "./projects/config.ts",

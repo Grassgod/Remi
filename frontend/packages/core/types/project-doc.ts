@@ -40,6 +40,7 @@ export interface ProjectDoc {
   author_id: string | null;
   updated_by_type: ProjectDocAuthorType | null;
   updated_by_id: string | null;
+  compilation_run_id: string | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -63,6 +64,7 @@ export interface ProjectDocRevision {
   body: string;
   author_type: ProjectDocAuthorType | null;
   author_id: string | null;
+  compilation_run_id: string | null;
   created_at: string;
 }
 

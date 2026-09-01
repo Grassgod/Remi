@@ -10,6 +10,7 @@
     "token",
     "project",
     "repo",
+    "knowledge",
     "memory",
     "wiki",
     "issue",
@@ -1376,6 +1377,74 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "project.device.list": {
+      "command": "remi project device list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.device.add": {
+      "command": "remi project device add",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.add",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.device.set": {
+      "command": "remi project device set",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "project.device.remove": {
+      "command": "remi project device remove",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.remove",
+      "mutation": "destructive",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "repo": {
       "command": "remi repo",
       "aliases": [],
@@ -1498,6 +1567,118 @@
         "task"
       ],
       "capability": "repo.checkout",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge": {
+      "command": "remi knowledge",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.submit": {
+      "command": "remi knowledge submit",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submit",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.submissions": {
+      "command": "remi knowledge submissions",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submissions",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.inspect": {
+      "command": "remi knowledge inspect",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.inspect",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.runs": {
+      "command": "remi knowledge runs",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.runs",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.run.show": {
+      "command": "remi knowledge run show",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.run.show",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.migrate-legacy": {
+      "command": "remi knowledge migrate-legacy",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.migrate-legacy",
       "mutation": "write",
       "output": [
         "table",
@@ -1787,6 +1968,38 @@
       ],
       "capability": "wiki.revisions",
       "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.publish": {
+      "command": "remi memory publish",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "memory.publish",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.publish": {
+      "command": "remi wiki publish",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "wiki.publish",
+      "mutation": "write",
       "output": [
         "table",
         "json",
@@ -5685,6 +5898,40 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "daemon.get": {
+      "command": "remi daemon get",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "daemon.get",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "daemon.dedicated.set": {
+      "command": "remi daemon dedicated set",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "daemon.dedicated.set",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "daemon.retirement-plan": {
       "command": "remi daemon retirement-plan",
       "aliases": [],
@@ -8379,6 +8626,9 @@
     "DELETE /api/multiremi/projects/:id": {
       "command": "project.archive"
     },
+    "DELETE /api/multiremi/projects/:id/devices/:daemonId": {
+      "command": "project.device.remove"
+    },
     "DELETE /api/multiremi/projects/:id/resources/:resourceId": {
       "command": "project.resource.delete"
     },
@@ -8399,6 +8649,9 @@
     },
     "DELETE /api/projects/:id": {
       "command": "project.archive"
+    },
+    "DELETE /api/projects/:id/devices/:daemonId": {
+      "command": "project.device.remove"
     },
     "DELETE /api/projects/:id/docs/:ref": {
       "command": "memory.delete"
@@ -8674,6 +8927,9 @@
       "category": "websocket_transport",
       "reason": "Long-lived WebSocket transport is outside the CLI command surface."
     },
+    "GET /api/daemons/:daemonId": {
+      "command": "daemon.get"
+    },
     "GET /api/dashboard/agent-runtime": {
       "command": "dashboard.agent-runtime"
     },
@@ -8784,6 +9040,18 @@
     },
     "GET /api/issues/search": {
       "command": "issue.search"
+    },
+    "GET /api/knowledge/runs": {
+      "command": "knowledge.runs"
+    },
+    "GET /api/knowledge/runs/:id": {
+      "command": "knowledge.run.show"
+    },
+    "GET /api/knowledge/submissions": {
+      "command": "knowledge.submissions"
+    },
+    "GET /api/knowledge/submissions/:id": {
+      "command": "knowledge.inspect"
     },
     "GET /api/labels": {
       "command": "label.list"
@@ -8980,6 +9248,9 @@
     "GET /api/multiremi/projects/:id": {
       "command": "project.get"
     },
+    "GET /api/multiremi/projects/:id/devices": {
+      "command": "project.device.list"
+    },
     "GET /api/multiremi/projects/:id/resources": {
       "command": "project.resource.list"
     },
@@ -9084,6 +9355,9 @@
     },
     "GET /api/projects/:id": {
       "command": "project.get"
+    },
+    "GET /api/projects/:id/devices": {
+      "command": "project.device.list"
     },
     "GET /api/projects/:id/docs": {
       "command": "memory.list"
@@ -9371,9 +9645,7 @@
       "command": "chat.update"
     },
     "PATCH /api/daemons/:daemonId": {
-      "cli_exempt": true,
-      "category": "pure_ui",
-      "reason": "MUL-156 exposes daemon display-name editing in the browser; a daemon rename CLI is intentionally out of scope."
+      "command": "daemon.dedicated.set"
     },
     "PATCH /api/issues/:id": {
       "command": "issue.update"
@@ -9841,6 +10113,17 @@
     "POST /api/issues/quick-create": {
       "command": "issue.quick-create"
     },
+    "POST /api/knowledge/events/repository-merged": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "SCM merge event ingestion is machine-to-server automation traffic; it is not a user command."
+    },
+    "POST /api/knowledge/migrate-legacy": {
+      "command": "knowledge.migrate-legacy"
+    },
+    "POST /api/knowledge/submissions": {
+      "command": "knowledge.submit"
+    },
     "POST /api/labels": {
       "command": "label.create"
     },
@@ -10007,6 +10290,9 @@
     "POST /api/multiremi/projects": {
       "command": "project.create"
     },
+    "POST /api/multiremi/projects/:id/devices": {
+      "command": "project.device.add"
+    },
     "POST /api/multiremi/projects/:id/resources": {
       "command": "project.resource.create"
     },
@@ -10111,8 +10397,14 @@
     "POST /api/projects": {
       "command": "project.create"
     },
+    "POST /api/projects/:id/devices": {
+      "command": "project.device.add"
+    },
     "POST /api/projects/:id/docs": {
       "command": "memory.create"
+    },
+    "POST /api/projects/:id/knowledge/publish": {
+      "command": "memory.publish"
     },
     "POST /api/projects/:id/resources": {
       "command": "project.resource.create"
@@ -10227,6 +10519,9 @@
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build": {
       "command": "wiki.repository.build"
+    },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish": {
+      "command": "wiki.publish"
     },
     "POST /api/workspaces/:id/repos/inspect": {
       "command": "repo.inspect"
@@ -10351,6 +10646,9 @@
     "PUT /api/multiremi/pins/reorder": {
       "command": "pin.reorder"
     },
+    "PUT /api/multiremi/projects/:id/devices": {
+      "command": "project.device.set"
+    },
     "PUT /api/multiremi/runtimes/:id/models": {
       "command": "runtime.model.set"
     },
@@ -10365,6 +10663,9 @@
     },
     "PUT /api/projects/:id": {
       "command": "project.update"
+    },
+    "PUT /api/projects/:id/devices": {
+      "command": "project.device.set"
     },
     "PUT /api/projects/:id/docs/:ref": {
       "command": "memory.update"

@@ -976,6 +976,58 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "project.device.list": {
+      "command": "remi project device list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.device.add": {
+      "command": "remi project device add",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.device.set": {
+      "command": "remi project device set",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "project.device.remove": {
+      "command": "remi project device remove",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "project.device.remove",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "repo.list": {
       "command": "remi repo list",
       "auth": [
@@ -1061,6 +1113,84 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "repo.checkout",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.submit": {
+      "command": "remi knowledge submit",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submit",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.submissions": {
+      "command": "remi knowledge submissions",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submissions",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.inspect": {
+      "command": "remi knowledge inspect",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.inspect",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.runs": {
+      "command": "remi knowledge runs",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.runs",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.run.show": {
+      "command": "remi knowledge run show",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.run.show",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "knowledge.migrate-legacy": {
+      "command": "remi knowledge migrate-legacy",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.migrate-legacy",
       "output": [
         "table",
         "json",
@@ -1256,6 +1386,30 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "wiki.revisions",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "memory.publish": {
+      "command": "remi memory publish",
+      "auth": [
+        "task"
+      ],
+      "capability": "memory.publish",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "wiki.publish": {
+      "command": "remi wiki publish",
+      "auth": [
+        "task"
+      ],
+      "capability": "wiki.publish",
       "output": [
         "table",
         "json",
@@ -4095,6 +4249,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "daemon.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "daemon.get": {
+      "command": "remi daemon get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "daemon.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "daemon.dedicated.set": {
+      "command": "remi daemon dedicated set",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "daemon.dedicated.set",
       "output": [
         "table",
         "json",

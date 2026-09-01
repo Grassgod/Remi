@@ -314,6 +314,7 @@ export function projectDocCompatibilityResponse(doc: MultiremiProjectDoc): Recor
     version: doc.version,
     created_at: doc.createdAt,
     updated_at: doc.updatedAt,
+    compilation_run_id: doc.compilationRunId ?? null,
   };
 }
 
@@ -343,6 +344,7 @@ export function projectDocRevisionCompatibilityResponse(revision: MultiremiProje
     author_type: revision.authorType,
     author_id: revision.authorId,
     created_at: revision.createdAt,
+    compilation_run_id: revision.compilationRunId ?? null,
   };
 }
 

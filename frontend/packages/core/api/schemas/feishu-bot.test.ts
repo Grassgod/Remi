@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FeishuBotRegistrationSession } from "../../types/feishu-bot";
 import { parseWithFallback } from "../schema";
 import {
   EMPTY_FEISHU_BOT_AVAILABILITY,
@@ -162,10 +163,25 @@ describe("FeishuBotTestResultSchema", () => {
 
 describe("FeishuBotRegistrationSessionSchema", () => {
   it("defaults the poll interval so a drifted session cannot spin the dialog", () => {
+    // The fallback has to be a whole session: parseWithFallback infers its
+    // return type from this argument, so a partial one would hide the very
+    // fields this test is checking the schema fills in.
+    const fallback: FeishuBotRegistrationSession = {
+      session_id: "",
+      status: "error",
+      verification_uri: "",
+      user_code: "",
+      expires_at: "",
+      poll_interval_seconds: 5,
+      app_id: null,
+      app_secret_available: false,
+      created_by_open_id: null,
+      error_message: null,
+    };
     const result = parseWithFallback(
       { session_id: "reg_1", status: "pending", verification_uri: "https://example.test/qr" },
       FeishuBotRegistrationSessionSchema,
-      { session_id: "", status: "error", poll_interval_seconds: 5 },
+      fallback,
       { endpoint: "POST /api/workspaces/:id/feishu-bot/registration" },
     );
     expect(result.poll_interval_seconds).toBe(5);

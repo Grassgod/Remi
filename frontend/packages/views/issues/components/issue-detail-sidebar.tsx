@@ -12,7 +12,6 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multiremi/ui/components/ui/dialog";
 import type {
-  Agent,
   Issue,
   IssueSession,
   IssueUsageSummary,
@@ -38,7 +37,6 @@ import {
 } from ".";
 import { OPTIONAL_PROP_KEYS, type OptionalPropsState } from "../hooks/use-optional-props";
 import type { SidebarSectionsState } from "../hooks/use-sidebar-sections";
-import { IssueSessionActions } from "./issue-session-bar";
 import { IssueKeyResultsSection } from "./issue-key-results-section";
 import { ExecutionLogSection } from "./execution-log-section";
 import { ChangeRequestList } from "./change-request-list";
@@ -61,18 +59,17 @@ interface IssueDetailSidebarProps {
   /** Workspace-level toggle for the code changes section. */
   changeSidebarEnabled: boolean;
   getActorName: (type: string, id: string) => string;
-  agents: Agent[];
   issueSessions: IssueSession[];
-  activeIssueSessionId: string;
   usage: IssueUsageSummary | undefined;
   canManageArchives: boolean;
 }
 
 /**
- * Right-hand rail of the issue detail: properties, parent, code changes,
- * details, session actions, key results, execution log, token usage and the
- * metadata dialog. Fold state is owned by `IssueDetail` (see
- * `useSidebarSections`) so it survives the mobile sheet unmounting.
+ * Right-hand rail of the issue detail: properties, hierarchy (parent then
+ * sub-issues), code workspace, code changes, details, key results, execution
+ * log, token usage and the metadata dialog. Fold state is owned by
+ * `IssueDetail` (see `useSidebarSections`) so it survives the mobile sheet
+ * unmounting.
  */
 export function IssueDetailSidebar({
   issue,
@@ -83,9 +80,7 @@ export function IssueDetailSidebar({
   parentIssue,
   changeSidebarEnabled,
   getActorName,
-  agents,
   issueSessions,
-  activeIssueSessionId,
   usage,
   canManageArchives,
 }: IssueDetailSidebarProps) {
@@ -251,22 +246,19 @@ export function IssueDetailSidebar({
         </div>}
       </div>
 
-      <IssueSubIssuesSummary issueId={issueId} sections={sections} />
-
-      <IssueCodeWorkspaceSection issueId={issueId} issueKind={issue.issue_kind} />
-
-      <IssueCreationRelationSection issue={issue} />
-
-      {/* Parent issue — standalone section, only when the issue has a
-          parent. Setting a parent is reachable via the issue actions menu;
-          this card surfaces an existing parent without occupying sidebar
-          space for issues that don't have one. */}
+      {/* Issue hierarchy — parent above children, so the rail reads in the
+          same direction as the tree (parent → this issue → sub-issues).
+          Both halves stay adjacent; splitting them across unrelated
+          sections made the relation hard to scan (MUL-204). Each half
+          hides itself when the issue has no parent / no children, so an
+          isolated issue spends no rail space on either. */}
       {parentIssue && (
         <div>
           <button
             type="button"
             className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${parentIssueOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
             onClick={() => sections.toggle("parentIssue")}
+            aria-expanded={parentIssueOpen}
           >
             {t(($) => $.detail.section_parent_issue)}
             <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${parentIssueOpen ? "rotate-90" : ""}`} />
@@ -283,6 +275,12 @@ export function IssueDetailSidebar({
           </div>}
         </div>
       )}
+
+      <IssueSubIssuesSummary issueId={issueId} sections={sections} />
+
+      <IssueCodeWorkspaceSection issueId={issueId} issueKind={issue.issue_kind} />
+
+      <IssueCreationRelationSection issue={issue} />
 
       {changeSidebarEnabled && (
         <div>
@@ -321,19 +319,6 @@ export function IssueDetailSidebar({
           </PropRow>
         </div>}
       </div>
-
-      {/* Session actions for whichever session is open — publish a result,
-          delegate a task. Creating a session is not here on purpose: the rail
-          header is the single create-session entry point. */}
-      {activeIssueSessionId && (
-        <div className="flex flex-wrap items-center gap-2 pl-2">
-          <IssueSessionActions
-            issueId={issueId}
-            issueSessionId={activeIssueSessionId}
-            agents={agents}
-          />
-        </div>
-      )}
 
       {/* Key results — what the sessions published, typed by kind. Hides
           itself until the first result lands. */}

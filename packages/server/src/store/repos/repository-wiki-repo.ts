@@ -238,6 +238,7 @@ function toRepositoryWikiDoc(row: Row): MultiremiRepositoryWikiDoc {
     contentUri: cleanOptionalString(row.content_uri), contentSha256: cleanOptionalString(row.content_sha256),
     syncStatus: normalizeSyncStatus(row.sync_status), syncError: cleanOptionalString(row.sync_error),
     snapshotOid: cleanOptionalString(row.snapshot_oid), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+    compilationRunId: cleanOptionalString(row.compilation_run_id),
   };
 }
 
@@ -250,6 +251,7 @@ function toRepositoryWikiRevision(row: Row): MultiremiRepositoryWikiDocRevision 
     authorId: cleanOptionalString(row.author_id), contentUri: cleanOptionalString(row.content_uri),
     contentSha256: cleanOptionalString(row.content_sha256), snapshotOid: cleanOptionalString(row.snapshot_oid),
     createdAt: String(row.created_at),
+    compilationRunId: cleanOptionalString(row.compilation_run_id),
   };
 }
 

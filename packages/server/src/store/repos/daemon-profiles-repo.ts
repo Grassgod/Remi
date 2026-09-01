@@ -9,6 +9,7 @@ export interface DaemonProfile {
   daemonId: string;
   displayName: string;
   displayNameCustomized: boolean;
+  dedicated: boolean;
   updatedBy: string | null;
   updatedAt: string;
 }
@@ -61,6 +62,28 @@ export class DaemonProfilesRepo {
     );
     return this.get(workspaceId, daemonId)!;
   }
+
+  upsertDedicated(
+    workspaceId: string,
+    daemonId: string,
+    displayName: string,
+    dedicated: boolean,
+    updatedBy?: string | null,
+  ): DaemonProfile {
+    const now = nowIso();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_daemon_profiles (
+        workspace_id, daemon_id, display_name, display_name_customized,
+        dedicated, updated_by, updated_at
+      ) VALUES (?, ?, ?, 0, ?, ?, ?)
+      ON CONFLICT(workspace_id, daemon_id) DO UPDATE SET
+        dedicated = excluded.dedicated,
+        updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at`,
+      [workspaceId, daemonId, displayName, dedicated ? 1 : 0, updatedBy ?? null, now],
+    );
+    return this.get(workspaceId, daemonId)!;
+  }
 }
 
 function toDaemonProfile(row: Row): DaemonProfile {
@@ -69,6 +92,7 @@ function toDaemonProfile(row: Row): DaemonProfile {
     daemonId: String(row.daemon_id),
     displayName: String(row.display_name),
     displayNameCustomized: Number(row.display_name_customized ?? 0) === 1,
+    dedicated: Number(row.dedicated ?? 0) === 1,
     updatedBy: nullableString(row.updated_by),
     updatedAt: String(row.updated_at),
   };

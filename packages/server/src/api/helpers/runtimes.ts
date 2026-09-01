@@ -528,7 +528,9 @@ export function mergeLegacyDaemonRuntimes(
     for (const candidate of candidates) {
       if (mergedRuntimeIds.has(candidate.id)) continue;
       mergedRuntimeIds.add(candidate.id);
-      const merged = store.mergeRuntimeInto(candidate.id, newRuntime.id);
+      const merged = store.mergeRuntimeInto(candidate.id, newRuntime.id, {
+        legacyDaemonIds: uniqueStrings([legacyDaemonId, candidate.daemonId ?? ""]),
+      });
       if (merged.deleted) {
         store.recordRuntimeLegacyDaemonId(newRuntime.id, legacyDaemonId, {
           oldRuntimeId: candidate.id,
@@ -539,6 +541,11 @@ export function mergeLegacyDaemonRuntimes(
         });
       }
     }
+    store.canonicalizeLegacyDaemonRouting(
+      newRuntime.workspaceId ?? "local",
+      [legacyDaemonId],
+      newRuntime.daemonId ?? "",
+    );
   }
 }
 
