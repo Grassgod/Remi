@@ -32,14 +32,11 @@ function assignment(revision: number, overrides: Partial<MultiremiFeishuBotDaemo
     app_id: "cli_test_app",
     app_secret: APP_SECRET,
     domain: "feishu",
-    verification_token: null,
-    encrypt_key: null,
     ...overrides,
   };
   return {
     config,
     agent: { id: "agt_1", name: "Concierge", workspaceId: "ws_1" } as MultiremiFeishuBotAssignment["agent"],
-    projects: [],
   };
 }
 
@@ -219,7 +216,7 @@ describe("FeishuConciergeSupervisor", () => {
 
   it("serializes overlapping directives so two starts cannot race one bot", async () => {
     // Directives arrive faster than a channel boots. Two starts running at once
-    // would put two Remi cores on one app id, fighting over the same events.
+    // would put two connectors on one app id, fighting over the same events.
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let inStart = 0;

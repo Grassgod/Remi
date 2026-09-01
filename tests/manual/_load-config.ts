@@ -7,8 +7,6 @@ export function loadConfig(chatIdOverride?: string): {
   appSecret: string;
   domain: string;
   chatId: string;
-  verificationToken: string;
-  encryptKey: string;
 } {
   const { loadConfig: loadRemiConfig } = require("@shared/config.js");
   const config = loadRemiConfig();
@@ -22,7 +20,5 @@ export function loadConfig(chatIdOverride?: string): {
     appSecret: config.feishu.appSecret,
     domain: config.feishu.domain ?? "feishu",
     chatId: chatIdOverride || process.env.FEISHU_TEST_CHAT_ID || "",
-    verificationToken: config.feishu.verificationToken ?? "",
-    encryptKey: config.feishu.encryptKey ?? "",
   };
 }

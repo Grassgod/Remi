@@ -11,8 +11,6 @@ export const PID_FILE = join(REMI_HOME, "remi.pid");
 export interface FeishuConfig {
   appId: string;
   appSecret: string;
-  verificationToken: string;
-  encryptKey: string;
   port: number;
   domain: "feishu" | "lark" | "bytedance";
   connectionMode: "websocket";
@@ -62,8 +60,6 @@ function defaultFeishuConfig(): FeishuConfig {
   return {
     appId: "",
     appSecret: "",
-    verificationToken: "",
-    encryptKey: "",
     port: 9000,
     domain: "feishu",
     connectionMode: "websocket",
@@ -168,8 +164,6 @@ export function loadConfig(env: Environment = process.env): RemiConfig {
       ...defaults.feishu,
       appId: env.FEISHU_APP_ID || defaults.feishu.appId,
       appSecret: env.FEISHU_APP_SECRET || defaults.feishu.appSecret,
-      verificationToken: env.FEISHU_VERIFICATION_TOKEN || defaults.feishu.verificationToken,
-      encryptKey: env.FEISHU_ENCRYPT_KEY || defaults.feishu.encryptKey,
       port: parseInteger("FEISHU_PORT", env.FEISHU_PORT, defaults.feishu.port),
       domain,
       userAccessToken: env.FEISHU_USER_ACCESS_TOKEN || defaults.feishu.userAccessToken,

@@ -15,11 +15,13 @@ import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import type {
   AddSessionParticipantInput,
+  CreateChatSessionInput,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateIssueSessionInput,
   CreateSkillInput,
   CreateTaskInput,
+  CreateTaskSteerMessageInput,
   ListIssuesInput,
   UpdateIssueInput,
   MultiremiAgent,
@@ -306,6 +308,7 @@ export interface TasksSurface {
   createTask(input: CreateTaskInput): MultiremiTask;
   /** Internal primitive for a caller that already owns a database transaction. */
   createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask;
+  createTaskSteerMessage(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
   ensureDelegationWakeup(input: {
     sourceTaskId: string;
     requiredEventSeq: number;
@@ -322,8 +325,10 @@ export interface TasksSurface {
 }
 
 export interface ChatSurface {
+  createChatSession(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
   getChatMessage(id: string): MultiremiChatMessage | null;
+  getPendingChatTask(chatSessionId: string): MultiremiTask | null;
 }
 
 export interface IssueSessionsSurface {

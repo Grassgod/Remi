@@ -5,7 +5,7 @@
 import type { FeishuConfig } from "@shared/config.js";
 import type { FeishuSenderAuthorizer, GroupPolicy } from "./config.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
-import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
+import type { Connector, MessageHandler, StreamingHandler, TaskStreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 import { createLogger } from "@shared/logger.js";
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -55,6 +55,7 @@ export class FeishuConnector implements Connector {
   private _groupPolicy: GroupPolicy;
   private _handler: MessageHandler | null = null;
   private _streamHandler: StreamingHandler | null = null;
+  private _taskStreamHandler: TaskStreamingHandler | null = null;
 
   constructor(
     config: FeishuConfig & { domain?: string; connectionMode?: string },
@@ -99,10 +100,24 @@ export class FeishuConnector implements Connector {
     return this._channel.connect();
   }
 
+  /** Start in Multiremi Task mode; no Remi/Provider callback is installed. */
+  async startTask(handler: TaskStreamingHandler): Promise<void> {
+    if (!this._config.appId || !this._config.appSecret) {
+      throw new Error("Feishu connector: appId and appSecret are required");
+    }
+    this._taskStreamHandler = handler;
+    log.info("starting connector in task mode...");
+    this._channel.on("message", async (msg) => {
+      await this._handleFeishuMessage(msg);
+    });
+    return this._channel.connect();
+  }
+
   async stop(): Promise<void> {
     this._channel.disconnect();
     this._handler = null;
     this._streamHandler = null;
+    this._taskStreamHandler = null;
     log.info("connector stopped");
   }
 
@@ -130,12 +145,12 @@ export class FeishuConnector implements Connector {
   // ── Internal ──────────────────────────────────────────────
 
   private async _handleFeishuMessage(msg: ParsedFeishuMessage): Promise<void> {
-    if (!this._handler) return;
+    if (!this._handler && !this._taskStreamHandler) return;
 
     // /esc: abort active session
     if (/^\/esc$/i.test(msg.rawContent.trim())) {
       const sessionKey = this._resolveSessionKey(msg);
-      await this._channel.abortSession(sessionKey);
+      await this._channel.abortSession(sessionKey, msg.chatId);
       return;
     }
 
@@ -193,16 +208,22 @@ export class FeishuConnector implements Connector {
     } catch { /* non-critical */ }
 
     try {
-      // Cancel pending interactions if a new message arrives for the same session
+      // Legacy Remi streams treated a new message as replacing a pending form.
+      // A canonical Task owns its human request server-side, so cancelling only
+      // the local form would strand the Task in awaiting_human until timeout.
       const sessionKey = this._resolveSessionKey(msg);
-      const cancelled = this._channel.cancelPendingInteractions(msg.chatId);
-      if (cancelled > 0) _log.info(`Cancelled ${cancelled} pending action(s) for session "${sessionKey}"`);
+      if (!this._taskStreamHandler) {
+        const cancelled = this._channel.cancelPendingInteractions(msg.chatId);
+        if (cancelled > 0) _log.info(`Cancelled ${cancelled} pending action(s) for session "${sessionKey}"`);
+      }
 
       const groupConfig = this._groupPolicy.getByChatId(msg.chatId);
       const replyInThread = msg.chatType === "p2p" ? false : (groupConfig ? groupConfig.replyMode === "thread" : true);
       const replyToId = replyInThread ? msg.messageId : undefined;
 
-      if (this._streamHandler) {
+      if (this._taskStreamHandler) {
+        await this._handleTaskStreaming(incoming, msg.chatId, sessionKey, replyToId, _log);
+      } else if (this._streamHandler) {
         await this._handleStreaming(incoming, msg.chatId, sessionKey, replyToId, _log);
       } else {
         const response = await this._handler!(incoming);
@@ -254,6 +275,29 @@ export class FeishuConnector implements Connector {
           warn: (m) => slog.warn(m),
           error: (m) => slog.error(m),
           debug: (m) => slog.debug(m),
+        },
+      });
+    });
+  }
+
+  private async _handleTaskStreaming(
+    incoming: IncomingMessage,
+    chatId: string,
+    sessionKey: string,
+    replyToMessageId?: string,
+    _log?: ReturnType<typeof log.child>,
+  ): Promise<void> {
+    const slog = _log ?? log;
+    await this._taskStreamHandler!(incoming, sessionKey, async (stream, meta) => {
+      await this._channel.handleTaskStream(chatId, sessionKey, stream, meta, {
+        replyToMessageId,
+        displayName: meta.displayName,
+        subtitle: "Multiremi Task",
+        log: {
+          info: (message) => slog.info(message),
+          warn: (message) => slog.warn(message),
+          error: (message) => slog.error(message),
+          debug: (message) => slog.debug(message),
         },
       });
     });

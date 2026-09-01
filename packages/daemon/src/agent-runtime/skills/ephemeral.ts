@@ -66,7 +66,11 @@ function readTopicBinding(taskPath: string): Record<string, unknown> | null {
   }
 }
 
-export function writeTaskGcContext(workDir: string, task: AgentTask, options: { localDirectory?: boolean } = {}): void {
+export function writeTaskGcContext(
+  workDir: string,
+  task: AgentTask,
+  options: { localDirectory?: boolean; kind?: "issue_runtime" } = {},
+): void {
   const dir = join(workDir, ".multiremi");
   mkdirSync(dir, { recursive: true });
   const discussionIssue = Boolean(
@@ -81,15 +85,15 @@ export function writeTaskGcContext(workDir: string, task: AgentTask, options: { 
   // An Issue owns its stable workspace for the full lifecycle. Automation
   // tasks can carry both issueId and autopilotRunId; letting the run win here
   // would replace the Issue GC policy and bypass its dirty/unpushed Git guard.
-  const kind = discussionIssue
+  const kind = options.kind ?? (discussionIssue
     ? "discussion_issue"
     : task.issueId
       ? "issue"
-    : task.chatSessionId
-      ? "chat"
-      : task.autopilotRunId
-        ? "autopilot_run"
-        : "quick_create";
+      : task.chatSessionId
+        ? "chat"
+        : task.autopilotRunId
+          ? "autopilot_run"
+          : "quick_create");
   const payload = {
     version: task.issueId && !discussionIssue ? 2 : 1,
     kind,

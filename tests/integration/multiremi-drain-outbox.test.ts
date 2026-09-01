@@ -102,7 +102,7 @@ const RESPONSE: AgentResponse = {
 describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
   it("pauses claims while draining, acks the generation over heartbeats, and resumes on release", async () => {
     const { store, root } = testBed("multiremi-drain-claims-");
-    const agent = store.createAgent({ name: "Drain Claim Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Drain Claim Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "wait out the drain" });
     const daemonToken = await store.createAccessToken({ name: "drain daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-drain-secret", hostname: "127.0.0.1", port: 0 });
@@ -157,7 +157,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
   it("lets an already-claimed task run to completion while a drain waits for it", async () => {
     const { store, root } = testBed("multiremi-drain-running-");
-    const agent = store.createAgent({ name: "Drain Run Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Drain Run Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "keep running through the drain" });
     const daemonToken = await store.createAccessToken({ name: "drain-run daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-drain-run-secret", hostname: "127.0.0.1", port: 0 });
@@ -218,7 +218,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
   it("keeps pre-terminal report drain active so a CLI update remains blocked", async () => {
     const { store, root } = testBed("multiremi-preterminal-active-");
-    const agent = store.createAgent({ name: "Pre-terminal Active Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Pre-terminal Active Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "finish after reports catch up" });
     const daemonToken = await store.createAccessToken({ name: "pre-terminal daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-preterminal-secret", hostname: "127.0.0.1", port: 0 });
@@ -281,7 +281,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
   it("survives an API outage mid-stream: provider session lives on, messages land in order", async () => {
     const { store, root } = testBed("multiremi-outage-");
-    const agent = store.createAgent({ name: "Outage Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Outage Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "stream through the outage" });
     const daemonToken = await store.createAccessToken({ name: "outage daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-outage-secret", hostname: "127.0.0.1", port: 0 });
@@ -375,7 +375,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
   it("purges queued reports and releases active execution when the server cancels a task", async () => {
     const { store, root } = testBed("multiremi-outbox-cancel-");
-    const agent = store.createAgent({ name: "Cancelled Outbox Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Cancelled Outbox Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "wait to be cancelled" });
     const daemonToken = await store.createAccessToken({ name: "cancel daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-cancel-secret", hostname: "127.0.0.1", port: 0 });
@@ -443,7 +443,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
   it("requires a second status check before a transient watcher 404 can purge reports", async () => {
     const { store, root } = testBed("multiremi-outbox-transient-404-");
-    const agent = store.createAgent({ name: "Transient 404 Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Transient 404 Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "survive one missing response" });
     const daemonToken = await store.createAccessToken({ name: "transient 404 daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-transient-404-secret", hostname: "127.0.0.1", port: 0 });
@@ -566,7 +566,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
   it("moves a finished agent into bounded drain accounting without losing its terminal report", async () => {
     const { store, root } = testBed("multiremi-outbox-drain-accounting-");
-    const agent = store.createAgent({ name: "Drain Accounting Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Drain Accounting Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "finish while reports are offline" });
     const daemonToken = await store.createAccessToken({ name: "drain accounting daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-drain-accounting-secret", hostname: "127.0.0.1", port: 0 });
@@ -644,7 +644,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       workspaceId: "local",
       ownerId: "local",
     });
-    const agent = store.createAgent({ name: "Terminal Replay Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Terminal Replay Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "already finished locally" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -722,7 +722,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
   it("bounds startup replay while preserving reports for a non-terminal task", async () => {
     const { store, root } = testBed("multiremi-outbox-startup-timeout-");
-    const agent = store.createAgent({ name: "Startup Replay Bot", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Startup Replay Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "stay queued during startup" });
     const outboxPath = join(root, "outbox.db");
     const historical = new MultiremiTaskReportOutbox({

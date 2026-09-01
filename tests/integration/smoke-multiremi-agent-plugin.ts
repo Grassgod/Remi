@@ -35,7 +35,6 @@ try {
   const agent = store.createAgent({
     name: `Live ${PROVIDER} Plugin Proof`,
     provider: PROVIDER,
-    cwd,
   });
   const plugin = store.importAgentPlugin({
     provider: PROVIDER,

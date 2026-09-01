@@ -1,11 +1,9 @@
 // Workspace Feishu concierge bot (MUL-206) — the admin-facing shape of
 // `/api/workspaces/:id/feishu-bot`.
 //
-// The one rule that governs this whole file: **no secret has a type here.**
-// The app secret, verification token and encrypt key are write-only from the
-// browser's point of view. They go up in a request body and come back only as
-// a `*_configured` boolean plus a four-character hint, so nothing in the Query
-// cache, the Redux devtools, or a serialized error can ever hold one.
+// The one rule that governs this whole file: the App Secret is write-only from
+// the browser's point of view. It comes back only as a configured boolean and
+// a short hint, so no query cache or serialized error can hold the credential.
 
 export type FeishuBotDomain = "feishu" | "lark" | "bytedance";
 
@@ -57,8 +55,6 @@ export interface FeishuBotConfig {
   app_secret_configured: boolean;
   /** Display-only prefix such as `cli_••••••`. Never enough to authenticate. */
   app_secret_hint: string | null;
-  verification_token_configured: boolean;
-  encrypt_key_configured: boolean;
   bot_name: string | null;
   bot_open_id: string | null;
   last_tested_at: string | null;
@@ -104,6 +100,7 @@ export interface FeishuBotAgentCandidate {
 export interface FeishuBotRuntimeCandidate {
   id: string;
   name: string;
+  provider: string;
   daemon_id: string | null;
   online: boolean;
   /** False until the Runtime has advertised `feishu_concierge_config_v1`. */
@@ -189,10 +186,6 @@ export interface UpsertFeishuBotRequest {
   enabled: boolean;
   app_secret?: string;
   app_secret_op?: FeishuBotSecretOp;
-  verification_token?: string;
-  verification_token_op?: FeishuBotSecretOp;
-  encrypt_key?: string;
-  encrypt_key_op?: FeishuBotSecretOp;
   registration_session_id?: string;
 }
 

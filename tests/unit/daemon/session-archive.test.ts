@@ -73,6 +73,31 @@ describe("Issue session archive", () => {
     expect(gunzipSync(readFileSync(first.archivePath)).toString()).not.toContain("DO_NOT_ARCHIVE");
   });
 
+  supportedPlatformIt("archives canonical runtime Session roots", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-runtime-session-archive-"));
+    roots.push(root);
+    const storageRoot = join(root, "workspaces");
+    const sessionRoot = join(storageRoot, ".runtime", "ises_2");
+    const issueRoot = join(storageRoot, "issues", "MUL-2");
+    const home = join(sessionRoot, "agt_2", "4", "home");
+    mkdirSync(issueRoot, { recursive: true });
+    mkdirSync(join(home, "projects"), { recursive: true });
+    mkdirSync(join(sessionRoot, ".multiremi"), { recursive: true });
+    writeFileSync(join(home, "projects", "history.jsonl"), "{\"message\":\"runtime\"}\n");
+    writeFileSync(join(home, "settings.json"), "DO_NOT_ARCHIVE");
+    writeFileSync(join(sessionRoot, ".multiremi", "gc.json"), "DO_NOT_ARCHIVE");
+
+    const archive = await prepareIssueSessionArchive(issueRoot, {
+      sessionRoots: [{ sessionId: "ises_2", root: sessionRoot }],
+      sessionRootBoundary: storageRoot,
+    });
+    const files = readTarGzip(archive.archivePath);
+
+    expect(files.get("sessions/ises_2/agt_2/4/home/projects/history.jsonl")?.toString())
+      .toContain("runtime");
+    expect([...files.keys()].some((path) => /settings\.json|gc\.json/.test(path))).toBe(false);
+  });
+
   supportedPlatformIt("refuses unexpected symlinks", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-session-archive-link-"));
     roots.push(root);

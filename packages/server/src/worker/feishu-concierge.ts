@@ -1,9 +1,9 @@
 /**
  * Daemon-side supervisor for the workspace Feishu concierge (MUL-206).
  *
- * The daemon used to read `FEISHU_APP_ID` / `FEISHU_APP_SECRET` /
- * `MULTIREMI_BOT_AGENT_ID` once at boot and run the connector for the life of
- * the process. This drives the same connector from the control plane instead:
+ * The daemon used to read bot identity from process environment once at boot
+ * and run the connector for the life of the process. This drives the connector
+ * from the control plane instead:
  * every heartbeat carries a directive (a revision plus a desired state), and
  * this class reconciles the running channel against it.
  *
@@ -37,10 +37,9 @@ export interface FeishuConciergeStartResult {
 }
 
 /**
- * The process that actually owns the connector. Implemented by the daemon
- * foreground in `apps/remi/cli/multiremi.ts`, which is the only place that can
- * boot Remi's core; the supervisor stays free of that dependency so it is
- * testable without spawning an agent.
+ * The process that actually owns the connector transport. Implemented by the
+ * daemon foreground in `apps/remi/cli/multiremi.ts`; the supervisor stays free
+ * of connector dependencies so it is testable without starting an Agent.
  */
 export interface FeishuConciergeHost {
   start(assignment: MultiremiFeishuBotAssignment): Promise<FeishuConciergeStartResult>;
@@ -200,7 +199,7 @@ export class FeishuConciergeSupervisor {
   }
 
   private async startChannel(revision: number): Promise<void> {
-    // A restart always tears the old channel down first: two Remi cores on one
+    // A restart always tears the old channel down first: two connectors on one
     // app id would fight over the same event stream.
     if (this.state !== "stopped") await this.stopChannel();
     this.state = "starting";
@@ -221,11 +220,7 @@ export class FeishuConciergeSupervisor {
         return;
       }
       this.appliedRevision = assignment.config.revision;
-      secrets = [
-        assignment.config.app_secret,
-        assignment.config.verification_token ?? "",
-        assignment.config.encrypt_key ?? "",
-      ].filter(Boolean);
+      secrets = [assignment.config.app_secret].filter(Boolean);
       const result = await this.options.host.start(assignment);
       this.state = "online";
       this.botName = result.botName ?? null;

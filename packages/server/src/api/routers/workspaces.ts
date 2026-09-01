@@ -273,23 +273,15 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
           && entry.metadata.feishu_bot_menu === true
         )
         .sort((a, b) => String(b.lastHeartbeatAt ?? "").localeCompare(String(a.lastHeartbeatAt ?? "")));
-      // Publish to the Runtime that actually hosts the concierge (MUL-206).
-      // Any Runtime with the capability can talk to Feishu, but only the
-      // hosting one holds this workspace's app credentials — publishing from
-      // another would push this workspace's menu onto whatever bot that
-      // machine happens to run. So once a concierge is configured its Runtime
-      // is the only valid target; a workspace still on the legacy env-driven
-      // bot has no config row and keeps the "newest capable Runtime" pick.
+      // Publish only through the machine that owns this workspace's configured
+      // bot credentials. There is no environment-driven concierge fallback.
       const conciergeRuntimeId = store.getFeishuBotConfig(workspaceId)?.runtimeId ?? null;
-      const runtime = conciergeRuntimeId
-        ? publishers.find((entry) => entry.id === conciergeRuntimeId)
-        : publishers[0];
+      if (!conciergeRuntimeId) {
+        return c.json({ error: "no Feishu concierge is configured for this workspace" }, 409);
+      }
+      const runtime = publishers.find((entry) => entry.id === conciergeRuntimeId);
       if (!runtime) {
-        return c.json({
-          error: conciergeRuntimeId
-            ? "the Runtime hosting the Feishu concierge is not online"
-            : "no online Feishu bot menu publisher is available",
-        }, 503);
+        return c.json({ error: "the machine hosting the Feishu concierge is not online" }, 503);
       }
       const request = store.createBotMenuPublishRequest(runtime.id, {
         workspaceId,

@@ -16,7 +16,7 @@ afterEach(() => {
 describe("Issue workspace GC", () => {
   it("cleans discussion Session roots without archiving or reporting the shared workspace", async () => {
     const root = tempRoot();
-    const sessionRoot = join(root, ".sessions", "MUL-136", "ises_discussion");
+    const sessionRoot = join(root, "discussions", "MUL-136", "ises_discussion");
     mkdirSync(join(sessionRoot, ".multiremi"), { recursive: true });
     writeFileSync(join(sessionRoot, ".multiremi", "gc.json"), JSON.stringify({
       version: 1,
@@ -103,6 +103,15 @@ describe("Issue workspace GC", () => {
   it("cleans a v2 Issue root and reports the cleaned state", async () => {
     const root = tempRoot();
     const workspace = issueWorkspace(root, "MUL-28", "iss_clean");
+    const runtime = join(root, ".runtime", "ises_clean");
+    mkdirSync(join(runtime, ".multiremi"), { recursive: true });
+    writeFileSync(join(runtime, ".multiremi", "gc.json"), JSON.stringify({
+      version: 2,
+      kind: "issue_runtime",
+      issue_id: "iss_clean",
+      issue_session_id: "ises_clean",
+    }));
+    writeFileSync(join(runtime, "history.jsonl"), "archived history\n");
     mkdirSync(join(workspace, ".remi-runtime", "plugins", "abc"), { recursive: true });
     writeFileSync(join(workspace, ".remi-runtime", "plugins", "abc", "SKILL.md"), "# Plugin\n", { mode: 0o444 });
     const cleaned: string[] = [];
@@ -119,7 +128,40 @@ describe("Issue workspace GC", () => {
 
     expect(result).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
     expect(existsSync(workspace)).toBe(false);
+    expect(existsSync(runtime)).toBe(false);
     expect(cleaned).toEqual(["iss_clean"]);
+  });
+
+  it("fails closed when a missing Issue has canonical runtime history", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-missing-runtime", "iss_missing_runtime");
+    const runtime = join(root, ".runtime", "ises_missing", ".multiremi");
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(join(runtime, "gc.json"), JSON.stringify({
+      version: 2,
+      kind: "issue_runtime",
+      issue_id: "iss_missing_runtime",
+      issue_session_id: "ises_missing",
+    }));
+    const client = gcClient();
+    client.getIssueGcCheck = async () => { throw new Error("404 issue not found"); };
+    const errors: string[] = [];
+
+    const result = await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      client,
+      onError: (_path, error) => errors.push(error instanceof Error ? error.message : String(error)),
+      now: Date.now() + 1_000,
+    });
+
+    expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+    expect(existsSync(workspace)).toBe(true);
+    expect(existsSync(join(root, ".runtime", "ises_missing"))).toBe(true);
+    expect(errors).toEqual([
+      "Issue iss_missing_runtime is missing from the server while provider Session state remains; refusing orphan cleanup",
+    ]);
   });
 
   it("replays a durable cleaned-state receipt after a transient report failure", async () => {

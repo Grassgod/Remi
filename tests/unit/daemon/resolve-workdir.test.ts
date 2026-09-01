@@ -1,17 +1,11 @@
 /**
  * Unit tests for resolveWorkDir (persistent workspace path resolution).
  *
- * Pool scheduling makes agent.cwd machine-relative — an agent isn't bound to a
- * machine, so its configured cwd may not exist on whichever pool machine claims
- * the task. resolveWorkDir must only honour agent.cwd when the path is present
- * on this machine, otherwise fall through to the default per-task directory
- * (rather than running in — and mkdir-ing — a wrong/empty path). An explicit
- * machine-affine task.workDir always wins.
+ * Product surfaces have stable daemon-owned roots. An explicit promoted
+ * machine-affine task.workDir always wins for provider-session continuity.
  */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWorkDir } from "@daemon/agent-runtime/workspace/persistent.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
@@ -23,21 +17,19 @@ function task(partial: Record<string, unknown>): AgentTask {
 }
 
 test("explicit task.workDir wins over everything (daemon-owned, may create)", () => {
-  expect(resolveWorkDir(task({ workDir: "/explicit/dir", agent: { cwd: "/other" } }), ROOT)).toEqual({
+  expect(resolveWorkDir(task({ workDir: "/explicit/dir" }), ROOT)).toEqual({
     workDir: "/explicit/dir",
     ensureDir: true,
   });
 });
 
-test("issue key owns the stable workspace path across tasks and agent cwd", () => {
+test("issue key owns the stable Issue workspace path across tasks", () => {
   expect(resolveWorkDir(task({
     id: "tsk_second",
     issueId: "iss_1",
     issue: { id: "iss_1", key: "MUL-28" },
-    workDir: "/legacy/task/path",
-    agent: { cwd: "/legacy/agent/path" },
   }), ROOT)).toEqual({
-    workDir: join(ROOT, "MUL-28"),
+    workDir: join(ROOT, "issues", "MUL-28"),
     ensureDir: true,
   });
 });
@@ -52,10 +44,10 @@ test("discussion Issue Sessions use an isolated directory outside the Issue GC r
   }), ROOT);
 
   expect(resolved).toEqual({
-    workDir: join(ROOT, ".sessions", "MUL-136", "ises_side_chat"),
+    workDir: join(ROOT, "discussions", "MUL-136", "ises_side_chat"),
     ensureDir: true,
   });
-  expect(resolved.workDir.startsWith(join(ROOT, "MUL-136"))).toBe(false);
+  expect(resolved.workDir.startsWith(join(ROOT, "issues", "MUL-136"))).toBe(false);
 });
 
 test("discussion Session paths sanitize unsafe segments", () => {
@@ -64,7 +56,7 @@ test("discussion Session paths sanitize unsafe segments", () => {
     issueSessionId: "../../side/chat",
     holds_workspace: false,
     issue: { id: "iss_1", key: "../../MUL/136" },
-  }), ROOT).workDir).toBe(join(ROOT, ".sessions", "..-..-MUL-136", "..-..-side-chat"));
+  }), ROOT).workDir).toBe(join(ROOT, "discussions", "..-..-MUL-136", "..-..-side-chat"));
 });
 
 test("discussion Tasks fail closed when the Issue Session id is absent", () => {
@@ -75,33 +67,16 @@ test("discussion Tasks fail closed when the Issue Session id is absent", () => {
   }), ROOT)).toThrow("discussion task requires an issue session id");
 });
 
-test("uses agent.cwd when it is an existing directory, but never recreates it (ensureDir=false)", () => {
-  const real = mkdtempSync(join(tmpdir(), "cwd-real-"));
-  expect(resolveWorkDir(task({ agent: { cwd: real } }), ROOT)).toEqual({ workDir: real, ensureDir: false });
-});
-
-test("falls through to the default per-task dir when agent.cwd is absent here", () => {
-  const base = mkdtempSync(join(tmpdir(), "cwd-base-"));
-  const missing = join(base, "nope"); // parent exists, child does not
-  expect(resolveWorkDir(task({ id: "t9", workspaceId: "wsX", agent: { cwd: missing } }), ROOT)).toEqual({
-    workDir: join(ROOT, "wsX", "t9"),
+test("chat Tasks use one stable directory per Chat Session", () => {
+  expect(resolveWorkDir(task({ id: "t9", chatSessionId: "chat_1" }), ROOT)).toEqual({
+    workDir: join(ROOT, "chats", "chat_1"),
     ensureDir: true,
   });
 });
 
-test("ignores an agent.cwd that is a file (not a directory) and uses the default dir", () => {
-  const base = mkdtempSync(join(tmpdir(), "cwd-file-"));
-  const filePath = join(base, "a-file");
-  writeFileSync(filePath, "");
-  expect(resolveWorkDir(task({ id: "t7", workspaceId: "wsF", agent: { cwd: filePath } }), ROOT)).toEqual({
-    workDir: join(ROOT, "wsF", "t7"),
-    ensureDir: true,
-  });
-});
-
-test("defaults to the per-task dir when neither workDir nor agent.cwd is set", () => {
+test("one-shot work defaults to the per-Task directory", () => {
   expect(resolveWorkDir(task({ id: "t2", workspaceId: "wsY" }), ROOT)).toEqual({
-    workDir: join(ROOT, "wsY", "t2"),
+    workDir: join(ROOT, "tasks", "t2"),
     ensureDir: true,
   });
 });

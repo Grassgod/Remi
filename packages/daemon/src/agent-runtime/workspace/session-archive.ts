@@ -28,6 +28,7 @@ const EXCLUDED_FILE_NAMES = new Set([
 const EXCLUDED_DIRECTORY_NAMES = new Set([
   ".agents",
   ".cache",
+  ".multiremi",
   "cache",
   "node_modules",
   "plugins",
@@ -44,6 +45,17 @@ export interface IssueSessionArchiveEntry {
   ino: number;
 }
 
+interface IssueSessionArchiveSourceEntry extends IssueSessionArchiveEntry {
+  sourceBoundary: string;
+  sourceSegments: string[];
+}
+
+interface IssueSessionArchiveSource {
+  boundary: string;
+  segments: string[];
+  archivePrefix: string;
+}
+
 interface IssueSessionArchiveDirectorySnapshot {
   path: string;
   dev: number;
@@ -53,7 +65,7 @@ interface IssueSessionArchiveDirectorySnapshot {
 }
 
 interface IssueSessionArchiveSnapshot {
-  files: IssueSessionArchiveEntry[];
+  files: IssueSessionArchiveSourceEntry[];
   directories: IssueSessionArchiveDirectorySnapshot[];
 }
 
@@ -72,6 +84,8 @@ export interface PreparedIssueSessionArchive {
 export interface PrepareIssueSessionArchiveOptions {
   stagingRoot?: string;
   maxSourceBytes?: number;
+  sessionRoots?: Array<{ sessionId: string; root: string }>;
+  sessionRootBoundary?: string;
 }
 
 export interface IssueSessionArchiveReceipt {
@@ -90,16 +104,11 @@ export async function prepareIssueSessionArchive(
 ): Promise<PreparedIssueSessionArchive> {
   const workspaceRoot = resolve(workspaceDir);
   log.debug(`Issue Session archive started: ${workspaceRoot}`);
-  const sessionsRoot = join(workspaceRoot, ".multiremi", "sessions");
   const maxSourceBytes = positiveLimit(options.maxSourceBytes, DEFAULT_MAX_SOURCE_BYTES);
-  const sessionsExist = await assertOptionalRealDirectoryTree(
-    workspaceRoot,
-    sessionsRoot,
-    "Issue session history root",
-  );
-  log.debug(`Issue Session archive root checked: ${workspaceRoot} exists=${sessionsExist}`);
+  const sources = await resolveArchiveSources(workspaceRoot, options);
+  log.debug(`Issue Session archive roots checked: ${workspaceRoot} count=${sources.length}`);
   assertSessionArchiveTraversalSupported();
-  const sourceSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes, !sessionsExist);
+  const sourceSnapshot = await scanArchiveEntries(sources, maxSourceBytes);
   log.debug(`Issue Session archive source scanned: ${workspaceRoot} files=${sourceSnapshot.files.length}`);
   const entries = sourceSnapshot.files;
   const metadata = {
@@ -119,12 +128,12 @@ export async function prepareIssueSessionArchive(
   try {
     log.debug(`Issue Session archive compression started: ${workspaceRoot}`);
     await pipeline(
-      Readable.from(tarStream(workspaceRoot, entries, manifest)),
+      Readable.from(tarStream(entries, manifest)),
       createGzip({ level: 6 }),
       createWriteStream(partialPath, { flags: "wx", mode: 0o600 }),
     );
     log.debug(`Issue Session archive compression finished: ${workspaceRoot}`);
-    const verifiedSnapshot = await scanArchiveEntries(workspaceRoot, maxSourceBytes, !sessionsExist);
+    const verifiedSnapshot = await scanArchiveEntries(sources, maxSourceBytes);
     log.debug(`Issue Session archive verification scan finished: ${workspaceRoot}`);
     assertSameArchiveSnapshot(sourceSnapshot, verifiedSnapshot);
     await rename(partialPath, archivePath).catch(async (error) => {
@@ -228,18 +237,58 @@ export async function removePreparedIssueSessionArchive(archivePath: string): Pr
   }
 }
 
-async function scanArchiveEntries(
+async function resolveArchiveSources(
   workspaceRoot: string,
-  maxBytes: number,
-  optionalRoot: boolean,
-): Promise<IssueSessionArchiveSnapshot> {
-  const root = await openWorkspaceDirectory(workspaceRoot, [".multiremi", "sessions"], optionalRoot);
-  if (!root) return { files: [], directories: [] };
+  options: PrepareIssueSessionArchiveOptions,
+): Promise<IssueSessionArchiveSource[]> {
+  if (options.sessionRoots) {
+    const boundary = resolve(options.sessionRootBoundary ?? "");
+    if (!options.sessionRootBoundary) {
+      throw new Error("Issue session runtime roots require a storage boundary");
+    }
+    const seen = new Set<string>();
+    return options.sessionRoots.map((source) => {
+      assertArchiveRelativePath(source.sessionId);
+      if (source.sessionId.includes("/")) throw new Error(`Invalid Issue Session id: ${source.sessionId}`);
+      if (seen.has(source.sessionId)) throw new Error(`Duplicate Issue Session root: ${source.sessionId}`);
+      seen.add(source.sessionId);
+      const sourceRoot = resolve(source.root);
+      const rel = relative(boundary, sourceRoot);
+      if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        throw new Error(`Issue Session root escapes runtime storage: ${source.root}`);
+      }
+      return {
+        boundary,
+        segments: rel.split(sep),
+        archivePrefix: source.sessionId,
+      };
+    });
+  }
 
-  const files: IssueSessionArchiveEntry[] = [];
+  const sessionsRoot = join(workspaceRoot, ".multiremi", "sessions");
+  const sessionsExist = await assertOptionalRealDirectoryTree(
+    workspaceRoot,
+    sessionsRoot,
+    "Issue session history root",
+  );
+  return sessionsExist
+    ? [{ boundary: workspaceRoot, segments: [".multiremi", "sessions"], archivePrefix: "" }]
+    : [];
+}
+
+async function scanArchiveEntries(
+  sources: IssueSessionArchiveSource[],
+  maxBytes: number,
+): Promise<IssueSessionArchiveSnapshot> {
+  const files: IssueSessionArchiveSourceEntry[] = [];
   const directories: IssueSessionArchiveDirectorySnapshot[] = [];
   let totalBytes = 0;
-  const visit = async (directory: FileHandle, archiveDirectory: string): Promise<void> => {
+  const visit = async (
+    source: IssueSessionArchiveSource,
+    directory: FileHandle,
+    archiveDirectory: string,
+    sourceDirectory: string,
+  ): Promise<void> => {
     const before = await directory.stat();
     if (!before.isDirectory()) throw new Error("Issue session history contains a non-directory parent");
     const children = (await readdir(fileHandlePath(directory), { withFileTypes: true }))
@@ -247,13 +296,16 @@ async function scanArchiveEntries(
     for (const child of children) {
       if (child.name === "." || child.name === "..") throw new Error("Invalid archive entry name");
       const archivePath = archiveDirectory ? `${archiveDirectory}/${child.name}` : child.name;
+      const sourcePath = sourceDirectory ? `${sourceDirectory}/${child.name}` : child.name;
       assertArchiveRelativePath(archivePath);
       let handle: FileHandle | null = null;
       try {
         handle = await openFileHandleChild(directory, child.name);
         const info = await handle.stat();
         if (info.isDirectory()) {
-          if (!EXCLUDED_DIRECTORY_NAMES.has(child.name)) await visit(handle, archivePath);
+          if (!EXCLUDED_DIRECTORY_NAMES.has(child.name)) {
+            await visit(source, handle, archivePath, sourcePath);
+          }
           continue;
         }
         if (EXCLUDED_FILE_NAMES.has(child.name)) continue;
@@ -270,6 +322,8 @@ async function scanArchiveEntries(
           mtimeMs: inspected.stats.mtimeMs,
           dev: inspected.stats.dev,
           ino: inspected.stats.ino,
+          sourceBoundary: source.boundary,
+          sourceSegments: [...source.segments, ...sourcePath.split("/")],
         });
       } catch (error) {
         if (isSymlinkOpenError(error)) throw new Error(`Refusing to archive symlink: ${archivePath}`);
@@ -290,10 +344,14 @@ async function scanArchiveEntries(
       ctimeMs: before.ctimeMs,
     });
   };
-  try {
-    await visit(root, "");
-  } finally {
-    await root.close().catch(() => {});
+  for (const source of sources) {
+    const root = await openWorkspaceDirectory(source.boundary, source.segments);
+    if (!root) throw new Error(`Issue Session root does not exist: ${source.archivePrefix}`);
+    try {
+      await visit(source, root, source.archivePrefix, "");
+    } finally {
+      await root.close().catch(() => {});
+    }
   }
   return {
     files: files.sort((left, right) => stableTextCompare(left.path, right.path)),
@@ -302,8 +360,7 @@ async function scanArchiveEntries(
 }
 
 async function* tarStream(
-  workspaceRoot: string,
-  entries: IssueSessionArchiveEntry[],
+  entries: IssueSessionArchiveSourceEntry[],
   manifest: string,
 ): AsyncGenerator<Buffer> {
   const manifestBytes = Buffer.from(manifest, "utf8");
@@ -318,8 +375,8 @@ async function* tarStream(
     let handle: FileHandle | null = null;
     try {
       handle = await openWorkspaceFile(
-        workspaceRoot,
-        [".multiremi", "sessions", ...entry.path.split("/")],
+        entry.sourceBoundary,
+        entry.sourceSegments,
       );
       const before = await handle.stat();
       if (!matchesArchiveEntry(before, entry)) throw archiveEntryChanged(entry.path);

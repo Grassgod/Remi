@@ -39,13 +39,14 @@ describe("Issue Session provider home", () => {
     const workspace = join(root, "MUL-1");
     const workspaces = join(root, "daemon-workspaces");
     expect(resolveIssueSessionProviderHome(task("claude"), workspace, workspaces)).toEqual({
-      storageRoot: workspace,
-      root: join(workspace, ".multiremi", "sessions", "ises_1", "agt_1", "3"),
-      home: join(workspace, ".multiremi", "sessions", "ises_1", "agt_1", "3", "home"),
+      storageRoot: workspaces,
+      root: join(workspaces, ".runtime", "ises_1", "agt_1", "3"),
+      home: join(workspaces, ".runtime", "ises_1", "agt_1", "3", "home"),
       sessionId: "ises_1",
       agentId: "agt_1",
       generation: 3,
       provider: "claude",
+      runtimeStateRoot: join(workspaces, ".runtime", "ises_1"),
     });
   });
 
@@ -62,14 +63,14 @@ describe("Issue Session provider home", () => {
 
     expect(resolveTaskProviderHome(nonIssueTask, join(root, "user-cwd"), workspaces)).toEqual({
       storageRoot: workspaces,
-      root: join(workspaces, ".task-runtime", "tsk_quick_1", "provider-home", "agt_1", "claude"),
-      home: join(workspaces, ".task-runtime", "tsk_quick_1", "provider-home", "agt_1", "claude", "home"),
+      root: join(workspaces, ".runtime", "tsk_quick_1", "agt_1", "1"),
+      home: join(workspaces, ".runtime", "tsk_quick_1", "agt_1", "1", "home"),
       sessionId: "tsk_quick_1",
       agentId: "agt_1",
       generation: 1,
       provider: "claude",
-      runtimeStateRoot: join(workspaces, ".task-runtime", "tsk_quick_1"),
-      temporaryTaskRoot: join(workspaces, ".task-runtime", "tsk_quick_1"),
+      runtimeStateRoot: join(workspaces, ".runtime", "tsk_quick_1"),
+      temporaryTaskRoot: join(workspaces, ".runtime", "tsk_quick_1"),
     });
 
     const automationTask = {
@@ -79,9 +80,9 @@ describe("Issue Session provider home", () => {
     } as AgentTask;
     expect(resolveTaskProviderHome(automationTask, join(root, "user-cwd"), workspaces))
       .toMatchObject({
-        root: join(workspaces, ".task-runtime", "tsk_automation_1", "provider-home", "agt_1", "claude"),
-        runtimeStateRoot: join(workspaces, ".task-runtime", "tsk_automation_1"),
-        temporaryTaskRoot: join(workspaces, ".task-runtime", "tsk_automation_1"),
+        root: join(workspaces, ".runtime", "tsk_automation_1", "agt_1", "1"),
+        runtimeStateRoot: join(workspaces, ".runtime", "tsk_automation_1"),
+        temporaryTaskRoot: join(workspaces, ".runtime", "tsk_automation_1"),
       });
   });
 
@@ -103,9 +104,9 @@ describe("Issue Session provider home", () => {
     expect(secondHome).toEqual(firstHome);
     expect(firstHome).toMatchObject({
       storageRoot: workspaces,
-      root: join(workspaces, ".session-runtime", "chat_1", "provider-home", "agt_1", "claude"),
+      root: join(workspaces, ".runtime", "chat_1", "agt_1", "1"),
       sessionId: "chat_1",
-      runtimeStateRoot: join(workspaces, ".session-runtime", "chat_1"),
+      runtimeStateRoot: join(workspaces, ".runtime", "chat_1"),
     });
     expect(firstHome.temporaryTaskRoot).toBeUndefined();
 
@@ -149,13 +150,14 @@ describe("Issue Session provider home", () => {
     const missingSession = { ...task("claude"), issueSessionId: null } as AgentTask;
     expect(resolveTaskProviderHome(missingSession, join(root, "MUL-1"), join(root, "workspaces")))
       .toEqual({
-        storageRoot: join(root, "MUL-1"),
-        root: join(root, "MUL-1", ".multiremi", "sessions", "legacy-iss_1", "agt_1", "1"),
-        home: join(root, "MUL-1", ".multiremi", "sessions", "legacy-iss_1", "agt_1", "1", "home"),
+        storageRoot: join(root, "workspaces"),
+        root: join(root, "workspaces", ".runtime", "legacy-iss_1", "agt_1", "1"),
+        home: join(root, "workspaces", ".runtime", "legacy-iss_1", "agt_1", "1", "home"),
         sessionId: "legacy-iss_1",
         agentId: "agt_1",
         generation: 1,
         provider: "claude",
+        runtimeStateRoot: join(root, "workspaces", ".runtime", "legacy-iss_1"),
       });
   });
 
@@ -186,11 +188,10 @@ describe("Issue Session provider home", () => {
     expect(changedHome.home).not.toBe(firstHome.home);
     expect(firstHome.root).toBe(join(
       workspaces,
-      ".session-runtime",
+      ".runtime",
       "chat_1",
-      "provider-home",
       "agt_1",
-      "codex",
+      "1",
       "executions",
       "a".repeat(64),
     ));
@@ -213,26 +214,28 @@ describe("Issue Session provider home", () => {
 
     expect(changedHome.home).not.toBe(firstHome.home);
     expect(resetHome.home).not.toBe(firstHome.home);
-    expect(firstHome.root).toStartWith(join(workspace, ".multiremi", "sessions", "ises_1", "agt_1", "3"));
-    expect(changedHome.root).toStartWith(join(workspace, ".multiremi", "sessions", "ises_1", "agt_1", "3"));
-    expect(resetHome.root).toStartWith(join(workspace, ".multiremi", "sessions", "ises_1", "agt_1", "4"));
+    expect(firstHome.root).toStartWith(join(root, "workspaces", ".runtime", "ises_1", "agt_1", "3"));
+    expect(changedHome.root).toStartWith(join(root, "workspaces", ".runtime", "ises_1", "agt_1", "3"));
+    expect(resetHome.root).toStartWith(join(root, "workspaces", ".runtime", "ises_1", "agt_1", "4"));
   });
 
   it("rejects a symlinked Issue Provider Home parent without writing outside", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-issue-home-symlink-"));
     roots.push(root);
     const workspace = join(root, "MUL-1");
+    const workspaces = join(root, "workspaces");
     const outside = join(root, "outside");
     mkdirSync(workspace, { recursive: true });
+    mkdirSync(workspaces, { recursive: true });
     mkdirSync(outside, { recursive: true });
-    symlinkSync(outside, join(workspace, ".multiremi"), "dir");
-    const resolved = resolveIssueSessionProviderHome(task("codex"), workspace, join(root, "workspaces"))!;
+    symlinkSync(outside, join(workspaces, ".runtime"), "dir");
+    const resolved = resolveIssueSessionProviderHome(task("codex"), workspace, workspaces)!;
 
     await expect(prepareIssueSessionProviderHome(resolved, {
       baseCodexHome: join(root, "missing-base"),
       linkCodexAuth: false,
     })).rejects.toThrow("must be a real directory");
-    expect(existsSync(join(outside, "sessions"))).toBe(false);
+    expect(existsSync(join(outside, "ises_1"))).toBe(false);
   });
 
   it("rejects a symlinked Chat Provider Home parent without writing outside", async () => {
@@ -242,7 +245,7 @@ describe("Issue Session provider home", () => {
     const outside = join(root, "outside");
     mkdirSync(workspaces, { recursive: true });
     mkdirSync(outside, { recursive: true });
-    symlinkSync(outside, join(workspaces, ".session-runtime"), "dir");
+    symlinkSync(outside, join(workspaces, ".runtime"), "dir");
     const chatTask = {
       ...task("claude"),
       issueId: null,
@@ -267,7 +270,7 @@ describe("Issue Session provider home", () => {
     mkdirSync(join(outside, "tsk_quick_1"), { recursive: true });
     const victim = join(outside, "tsk_quick_1", "victim.txt");
     writeFileSync(victim, "keep\n");
-    symlinkSync(outside, join(workspaces, ".task-runtime"), "dir");
+    symlinkSync(outside, join(workspaces, ".runtime"), "dir");
     const quickTask = {
       ...task("codex"),
       id: "tsk_quick_1",
@@ -641,7 +644,7 @@ describe("Issue Session provider home", () => {
     const workspaces = join(root, "workspaces");
 
     expect(resolveIssueRuntimeStateRoot(task("claude"), source, workspaces, true)).toBe(
-      join(workspaces, ".issue-runtime", "iss_1"),
+      join(workspaces, "issues", "legacy-iss_1"),
     );
     expect(resolveIssueRuntimeStateRoot(task("claude"), source, workspaces, false)).toBe(source);
   });

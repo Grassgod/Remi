@@ -31,7 +31,6 @@ function ephemeralContext(agent: Partial<NonNullable<AgentTask["agent"]>>, task:
         model: null,
         instructions: "",
         skills: [],
-        cwd: null,
         executable: null,
         allowedTools: [],
         customEnv: {},
@@ -51,7 +50,6 @@ function persistentContext(overrides: {
   sessionProvider?: string;
   sessionCwd?: string | null;
   topicCwd?: string | null;
-  cwd?: string | null;
 } = {}): PersistentContext {
   const provider = overrides.provider ?? "claude";
   return {
@@ -71,7 +69,6 @@ function persistentContext(overrides: {
       instructions: "agent row rules",
       skills: [],
       maxConcurrentTasks: 4,
-      cwd: overrides.cwd === undefined ? "/agent/work" : overrides.cwd,
       executable: "/bin/agent-acp",
       model: overrides.model ?? (provider === "codex" ? "gpt-codex-agent" : "claude-agent"),
       allowedTools: ["Read"],
@@ -92,7 +89,7 @@ function persistentContext(overrides: {
       ? ({ provider: overrides.sessionProvider ?? null, cwd: overrides.sessionCwd ?? null } as any)
       : null,
     sessionKey: "c1",
-    topicCwd: overrides.topicCwd,
+    topicCwd: overrides.topicCwd === undefined ? "/topics/thread" : overrides.topicCwd,
   };
 }
 
@@ -158,11 +155,11 @@ test("AgentSession forwards model and effort to the provider", async () => {
 test("ephemeral Agent Plugin preparation reaches ACP without changing cwd", async () => {
   const ctx = ephemeralContext({ provider: "codex" });
   ctx.pluginRuntime = {
-    runtimeRoot: "/daemon/workspaces/.task-runtime/tsk_1/.remi-runtime",
+    runtimeRoot: "/daemon/workspaces/.runtime/tsk_1/.remi-runtime",
     pluginPaths: ["/daemon/cache/plugin-v1"],
     pluginFingerprint: "sha256:plugin-v1",
     executionFingerprint: "sha256:execution-v1",
-    codexHome: "/daemon/workspaces/.task-runtime/tsk_1/.remi-runtime/codex-home/execution-v1",
+    codexHome: "/daemon/workspaces/.runtime/tsk_1/.remi-runtime/codex-home/execution-v1",
   };
   const config = new AgentRuntime().assemble(ctx);
   const options = await runOnce(config) as SendOptions & {
@@ -247,22 +244,16 @@ test("persistent prompts use agent instructions and the Multiremi memory CLI", a
 });
 
 test("persistent workspace fails loudly instead of falling back to the home directory", () => {
-  expect(() => new AgentRuntime().assemble(persistentContext({ cwd: null })))
-    .toThrow("Bot agent agt_bot has no cwd configured");
+  expect(() => new AgentRuntime().assemble(persistentContext({ topicCwd: null })))
+    .toThrow("Persistent session for Agent agt_bot has no workspace");
 });
 
-test("persistent cwd priority is session, then agent, then topic", () => {
+test("persistent cwd priority is session, then topic", () => {
   expect(new AgentRuntime().assemble(persistentContext({
     sessionCwd: "/session/issue",
-    cwd: "/agent/default",
     topicCwd: "/topics/thread",
   })).cwd).toBe("/session/issue");
   expect(new AgentRuntime().assemble(persistentContext({
-    cwd: "/agent/default",
-    topicCwd: "/topics/thread",
-  })).cwd).toBe("/agent/default");
-  expect(new AgentRuntime().assemble(persistentContext({
-    cwd: null,
     topicCwd: "/topics/thread",
   })).cwd).toBe("/topics/thread");
 });

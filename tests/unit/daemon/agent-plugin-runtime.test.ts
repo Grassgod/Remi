@@ -605,7 +605,7 @@ describe("task-private Agent Plugin runtime", () => {
     const runtimeBase = resolveTaskPluginRuntimeBase(task, userRepo, join(root, "workspaces"));
     const prepared = await materializeTaskPlugins(task, userRepo, cache, { runtimeBase });
     expect(prepared.runtimeRoot).toBe(
-      join(root, "workspaces", ".task-runtime", task.id, ".remi-runtime", "executions", task.id),
+      join(root, "workspaces", ".runtime", task.id, ".remi-runtime", "executions", task.id),
     );
     expect(existsSync(join(userRepo, ".remi-runtime"))).toBe(false);
     await cleanupNonIssueTaskPluginRuntime(task, join(root, "workspaces"));
@@ -641,7 +641,7 @@ describe("task-private Agent Plugin runtime", () => {
     const second = await materializeTaskPlugins(secondTask, userRepo, cache, { runtimeBase: secondBase });
     const changed = await materializeTaskPlugins(changedTask, userRepo, cache, { runtimeBase: changedBase });
 
-    expect(firstBase).toBe(join(workspacesRoot, ".session-runtime", "chat_1"));
+    expect(firstBase).toBe(join(workspacesRoot, ".runtime", "chat_1"));
     expect(secondBase).toBe(firstBase);
     expect(changedBase).toBe(firstBase);
     expect(second.codexHome).toBe(first.codexHome);
@@ -959,7 +959,6 @@ function makeTask(
       model: null,
       instructions: "",
       skills: [],
-      cwd: null,
       executable: null,
       allowedTools: [],
       customEnv: {},

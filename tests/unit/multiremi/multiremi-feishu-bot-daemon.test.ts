@@ -20,7 +20,6 @@ import type { MultiremiStore } from "@multiremi/store.js";
 
 const MASTER = { Authorization: "Bearer MASTER", "content-type": "application/json" };
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
-const ENCRYPT_KEY = "encrypt-key-abcdefghijklmnopqrstu";
 
 let previousEncryptionKey: string | undefined;
 
@@ -79,7 +78,6 @@ async function scaffold(): Promise<Scaffold> {
       domain: "feishu",
       enabled: true,
       app_secret: APP_SECRET,
-      encrypt_key: ENCRYPT_KEY,
     }),
   });
   if (saved.status !== 200) throw new Error(`scaffold config failed: ${saved.status}`);
@@ -122,7 +120,6 @@ describe("Feishu bot control-plane delivery", () => {
     // The whole ack, not just the directive: a credential must not ride along
     // in `workspace_settings` or any other field either.
     expect(JSON.stringify(body)).not.toContain(APP_SECRET);
-    expect(JSON.stringify(body)).not.toContain(ENCRYPT_KEY);
   });
 
   it("withholds the directive from a daemon that cannot host the bot", async () => {
@@ -146,17 +143,8 @@ describe("Feishu bot control-plane delivery", () => {
     expect(listed.find((entry) => entry.id === "rt_a")?.supports_config).toBe(false);
   });
 
-  it("serves the credentials with the Agent and projects the channel needs", async () => {
+  it("serves the credentials with the Agent the channel needs", async () => {
     const test = await scaffold();
-    const project = test.store.createProject({
-      title: "Concierge project",
-      workspaceId: "local",
-      resources: [{
-        resourceType: "local_directory",
-        resourceRef: { localPath: "/tmp/concierge", daemonId: "daemon-a" },
-        label: "local",
-      }],
-    });
 
     const response = await test.app.request("/api/daemon/runtimes/rt_a/feishu-bot", {
       headers: daemonHeaders(test.tokens.rt_a!),
@@ -176,14 +164,11 @@ describe("Feishu bot control-plane delivery", () => {
       app_id: "cli_a1b2c3d4e5f6g7h8",
       app_secret: APP_SECRET,
       domain: "feishu",
-      encrypt_key: ENCRYPT_KEY,
     });
     // The Agent travels with the credentials so a start is consistent as of one
     // revision rather than mixing in whatever the last heartbeat carried.
     expect(payload.bot_agent).toMatchObject({ id: test.agentId, name: "Concierge" });
-    // Scoped to this daemon's own directories, the same as the heartbeat's
-    // project list, so the channel can resolve a topic to a working copy.
-    expect(payload.bot_projects).toEqual([{ id: project.id, title: "Concierge project", cwd: "/tmp/concierge" }]);
+    expect(payload).not.toHaveProperty("bot_projects");
   });
 
   it("refuses a daemon token bound to a different Runtime", async () => {
@@ -211,6 +196,42 @@ describe("Feishu bot control-plane delivery", () => {
 
     expect(asAdmin.status).toBe(403);
     expect(await asAdmin.json()).toMatchObject({ code: "daemon_token_required" });
+  });
+
+  it("bridges messages and session inspection only for the selected Runtime", async () => {
+    const test = await scaffold();
+    const submitted = await test.app.request("/api/daemon/runtimes/rt_a/feishu-bot/messages", {
+      method: "POST",
+      headers: daemonHeaders(test.tokens.rt_a!),
+      body: JSON.stringify({
+        revision: 1,
+        external_session_key: "oc_chat_1",
+        external_message_id: "om_1",
+        sender_open_id: "ou_member",
+        text: "hello",
+      }),
+    });
+    expect(submitted.status).toBe(202);
+    const lineage = await submitted.json();
+    expect(lineage).toMatchObject({ status: "queued", duplicate: false, steered: false });
+
+    const inspected = await test.app.request("/api/daemon/runtimes/rt_a/feishu-bot/session/inspect", {
+      method: "POST",
+      headers: daemonHeaders(test.tokens.rt_a!),
+      body: JSON.stringify({ revision: 1, external_session_key: "oc_chat_1" }),
+    });
+    expect(inspected.status).toBe(200);
+    expect(await inspected.json()).toMatchObject({
+      chat_session_id: lineage.chatSessionId,
+      task: { task_id: lineage.taskId, status: "queued" },
+    });
+
+    const crossRuntime = await test.app.request("/api/daemon/runtimes/rt_a/feishu-bot/session/inspect", {
+      method: "POST",
+      headers: daemonHeaders(test.tokens.rt_b!),
+      body: JSON.stringify({ revision: 1, external_session_key: "oc_chat_1" }),
+    });
+    expect(crossRuntime.status).toBe(403);
   });
 
   it("names a deleted Agent instead of failing the start generically", async () => {

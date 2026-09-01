@@ -21,7 +21,7 @@ const FALLBACK_KEY_ENVS = [
   "MULTIREMI_TOKEN",
 ] as const;
 
-export type FeishuBotSecretField = "app_secret" | "verification_token" | "encrypt_key";
+export type FeishuBotSecretField = "app_secret";
 
 export type FeishuBotEncryptionErrorCode =
   | "encryption_key_missing"

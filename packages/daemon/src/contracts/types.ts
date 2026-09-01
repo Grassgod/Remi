@@ -40,8 +40,7 @@ export interface AgentTaskAgent {
   instructions: string;
   skills: AgentTaskSkill[];
 
-  // Spawn-context fields (workspace/ephemeral.ts cwd, env/injector.ts).
-  cwd: string | null;
+  // Spawn-context fields; workspace resolution owns the working directory.
   executable: string | null;
   allowedTools: string[];
   customEnv: Record<string, string>;

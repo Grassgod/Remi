@@ -237,7 +237,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
   it("runs production tasks without starting in-process Runtime model discovery", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-model-probe-disabled-task-");
-    const agent = store.createAgent({ name: "Probe-disabled Claude", provider: "claude", cwd: workDir });
+    const agent = store.createAgent({ name: "Probe-disabled Claude", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Run without a model probe" });
     const daemonToken = await store.createAccessToken({
       name: "Probe-disabled daemon",
@@ -558,7 +558,6 @@ describe("Bun Multiremi daemon smoke", () => {
       model: "claude-smoke",
       allowedTools: ["Read"],
       customEnv: { SMOKE_ENV: "1" },
-      cwd: workDir,
     });
     const task = store.createTask({ agentId: agent.id, prompt: "Say smoke from the daemon" });
     const daemonToken = await store.createAccessToken({
@@ -660,14 +659,15 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(completed.runtimeId).toBe(expectedRuntimeId);
       expect(completed.result).toBe("Smoke completed");
       expect(completed.sessionId).toBe("sess-smoke");
-      expect(completed.workDir).toBe(workDir);
+      const expectedWorkDir = join(workspacesRoot, "tasks", task.id);
+      expect(completed.workDir).toBe(expectedWorkDir);
       expect(store.getRuntime(expectedRuntimeId)?.daemonId).toBe("daemon-smoke");
       expect(providerOptions).toHaveLength(1);
       expect(providerOptions[0]).toMatchObject({
         agentType: "claude",
         model: "claude-smoke",
         allowedTools: ["Read"],
-        cwd: workDir,
+        cwd: expectedWorkDir,
         env: {
           SMOKE_ENV: "1",
           ANTHROPIC_API_KEY: "",
@@ -677,11 +677,10 @@ describe("Bun Multiremi daemon smoke", () => {
       });
       const temporaryProviderHome = join(
         workspacesRoot,
-        ".task-runtime",
+        ".runtime",
         task.id,
-        "provider-home",
         agent.id,
-        "claude",
+        "1",
         "home",
       );
       expect(providerOptions[0]?.env?.CLAUDE_CONFIG_DIR).toBe(temporaryProviderHome);
@@ -691,7 +690,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(injectedToken).not.toBe(daemonToken.token);
       expect(await store.verifyAccessToken(injectedToken!)).toBeNull();
       expect(prompts[0]).toContain("Say smoke from the daemon");
-      expect(JSON.parse(readFileSync(join(workDir, ".multiremi", "task.json"), "utf-8"))).toMatchObject({
+      expect(JSON.parse(readFileSync(join(expectedWorkDir, ".multiremi", "task.json"), "utf-8"))).toMatchObject({
         task_id: task.id,
         workspace_id: "local",
         agent: {
@@ -702,7 +701,7 @@ describe("Bun Multiremi daemon smoke", () => {
         repos: [],
       });
       expect(sendOptions[0]).toMatchObject({
-        cwd: workDir,
+        cwd: expectedWorkDir,
         chatId: task.id,
         allowedTools: ["Read"],
         permissionMode: "bypassPermissions",
@@ -836,7 +835,7 @@ describe("Bun Multiremi daemon smoke", () => {
     const userRepo = join(root, "user-repo");
     const workspacesRoot = join(root, "workspaces");
     mkdirSync(userRepo, { recursive: true });
-    const agent = store.createAgent({ name: "Plugin Claude", provider: "claude", cwd: userRepo });
+    const agent = store.createAgent({ name: "Plugin Claude", provider: "claude" });
     const plugin = store.importAgentPlugin({
       provider: "claude",
       manifest: { name: "runtime-proof", version: "1.0.0" },
@@ -913,7 +912,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(sendPluginFingerprint).toBe(store.getTask(task.id)?.executionFingerprint!);
       expect(pluginBody).toBe("# Runtime proof\n");
       expect(existsSync(join(userRepo, ".remi-runtime"))).toBe(false);
-      expect(existsSync(join(workspacesRoot, ".task-runtime", task.id))).toBe(false);
+      expect(existsSync(join(workspacesRoot, ".runtime", task.id))).toBe(false);
       expect(existsSync(join(root, ".plugin-cache", plugin.activeVersion!.artifactDigest, "payload"))).toBe(true);
     } finally {
       server.stop(true);
@@ -924,7 +923,7 @@ describe("Bun Multiremi daemon smoke", () => {
     const { store, workDir: root } = daemonTestBed("multiremi-daemon-plugin-preflight-");
     const userRepo = join(root, "user-repo");
     mkdirSync(userRepo, { recursive: true });
-    const agent = store.createAgent({ name: "Preflight Claude", provider: "claude", cwd: userRepo });
+    const agent = store.createAgent({ name: "Preflight Claude", provider: "claude" });
     const plugin = store.importAgentPlugin({
       provider: "claude",
       manifest: { name: "preflight-proof", version: "1.0.0" },
@@ -983,8 +982,8 @@ describe("Bun Multiremi daemon smoke", () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-concurrency-");
     // Two distinct agents → no shared issue/chat, so the server's per-context
     // serialization does not force these to run one at a time.
-    const agentA = store.createAgent({ name: "Concurrent A", provider: "claude", cwd: workDir });
-    const agentB = store.createAgent({ name: "Concurrent B", provider: "claude", cwd: workDir });
+    const agentA = store.createAgent({ name: "Concurrent A", provider: "claude" });
+    const agentB = store.createAgent({ name: "Concurrent B", provider: "claude" });
     const taskA = store.createTask({ agentId: agentA.id, prompt: "Task A" });
     const taskB = store.createTask({ agentId: agentB.id, prompt: "Task B" });
     const daemonToken = await store.createAccessToken({ name: "Concurrency daemon", type: "daemon", workspaceId: "local" });
@@ -1122,7 +1121,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
   it("retries a failed startup model report without blocking task claims", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-model-retry-");
-    const agent = store.createAgent({ name: "Retry Claude", provider: "claude", cwd: workDir });
+    const agent = store.createAgent({ name: "Retry Claude", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Run while model reporting retries" });
     const daemonToken = await store.createAccessToken({
       name: "Model retry daemon",
@@ -1260,7 +1259,6 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({
       name: "Repo Claude",
       provider: "claude",
-      cwd: workDir,
     });
     const task = store.createTask({ agentId: agent.id, prompt: "Check out the workspace repo" });
     const daemonToken = await store.createAccessToken({
@@ -1457,8 +1455,7 @@ describe("Bun Multiremi daemon smoke", () => {
       settings: { github_enabled: false, co_authored_by_enabled: false },
       repos: [{ url: sourceRepo, description: "local source repo" }],
     });
-    // No cwd: the task must land in the daemon-owned per-task dir, which is
-    // the only place auto-checkout is allowed to materialize worktrees.
+    // Issue work is always materialized in the canonical Issue workspace.
     const agent = store.createAgent({ name: "Repo Claude", provider: "claude" });
     const issue = store.createIssue({ title: "Auto checkout issue" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work in the repo" });
@@ -1500,7 +1497,7 @@ describe("Bun Multiremi daemon smoke", () => {
       await daemon.start();
 
       expect(store.getTask(task.id)?.status).toBe("completed");
-      const worktree = join(workDir, "workspaces", issue.key, "repo");
+      const worktree = join(workDir, "workspaces", "issues", issue.key, "repo");
       expect(existsSync(join(worktree, "README.md"))).toBe(true);
       const branch = gitOutput(worktree, ["branch", "--show-current"]);
       expect(branch).toBe(`agent/${issue.key}`);
@@ -1511,7 +1508,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(store.listIssueSessionResults(issue.id)).toHaveLength(0);
       expect(store.getIssueWorkspace(issue.id)).toMatchObject({
         issueId: issue.id,
-        rootPath: join(workDir, "workspaces", issue.key),
+        rootPath: join(workDir, "workspaces", "issues", issue.key),
         branchName: branch,
         status: "ready",
         repos: [{ repoName: "repo", worktreePath: worktree, branchName: branch }],
@@ -1677,7 +1674,6 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({
       name: "Chat Claude",
       provider: "claude",
-      cwd: workDir,
       model: "claude-chat",
       thinkingLevel: "xhigh",
       mcpConfig: { mcpServers: { recall: { command: "/bin/recall", env: { TOKEN: "t" } } } },
@@ -1747,17 +1743,18 @@ describe("Bun Multiremi daemon smoke", () => {
 
     try {
       await runDaemonOnce();
+      const chatWorkDir = join(workspacesRoot, "chats", session.id);
 
       expect(store.getTask(first.task.id)?.status).toBe("completed");
       expect(store.getChatSession(session.id)).toMatchObject({
         sessionId: "sess-chat-1",
-        workDir,
+        workDir: chatWorkDir,
         latestTaskId: first.task.id,
       });
 
       const second = store.sendChatMessage(session.id, { body: "Continue with the same provider session" });
       expect(second.task.sessionId).toBe("sess-chat-1");
-      expect(second.task.workDir).toBe(workDir);
+      expect(second.task.workDir).toBe(chatWorkDir);
 
       await runDaemonOnce();
 
@@ -1765,33 +1762,32 @@ describe("Bun Multiremi daemon smoke", () => {
         status: "completed",
         result: "Second answer",
         sessionId: "sess-chat-2",
-        workDir,
+        workDir: chatWorkDir,
       });
       expect(sendOptions).toHaveLength(2);
       expect(sendOptions[0].sessionId ?? null).toBeNull();
       expect(sendOptions[0]).toMatchObject({
-        cwd: workDir,
+        cwd: chatWorkDir,
         chatId: first.task.id,
       });
       expect(sendOptions[1]).toMatchObject({
-        cwd: workDir,
+        cwd: chatWorkDir,
         sessionId: "sess-chat-1",
         chatId: second.task.id,
       });
-      expect(providerCwds).toEqual([workDir, workDir]);
+      expect(providerCwds).toEqual([chatWorkDir, chatWorkDir]);
       const chatProviderHome = join(
         workspacesRoot,
-        ".session-runtime",
+        ".runtime",
         session.id,
-        "provider-home",
         agent.id,
-        "claude",
+        "1",
         "home",
       );
       expect(providerHomes).toEqual([chatProviderHome, chatProviderHome]);
       expect(existsSync(chatProviderHome)).toBe(true);
       expect(JSON.parse(readFileSync(
-        join(workspacesRoot, ".session-runtime", session.id, ".multiremi", "gc.json"),
+        join(workspacesRoot, ".runtime", session.id, ".multiremi", "gc.json"),
         "utf8",
       ))).toMatchObject({
         kind: "chat",
@@ -1819,7 +1815,7 @@ describe("Bun Multiremi daemon smoke", () => {
       ]);
       expect(store.getChatSession(session.id)).toMatchObject({
         sessionId: "sess-chat-2",
-        workDir,
+        workDir: chatWorkDir,
         latestTaskId: second.task.id,
       });
 
@@ -1942,7 +1938,7 @@ describe("Bun Multiremi daemon smoke", () => {
       await daemon.start();
 
       const completed = store.getTask(task.id)!;
-      const issueWorkDir = join(workDir, "workspaces", issue.key);
+      const issueWorkDir = join(workDir, "workspaces", "issues", issue.key);
       expect(providerCwd).toBe(issueWorkDir);
       expect(workspaceAtProviderStart).toMatchObject({
         issueId: issue.id,
@@ -1954,9 +1950,9 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(completed.workDir).toBe(issueWorkDir);
       const laneGeneration = completed.issueSessionGeneration ?? completed.issue_session_generation;
       const expectedProviderHome = join(
-        issueWorkDir,
-        ".multiremi",
-        "sessions",
+        workDir,
+        "workspaces",
+        ".runtime",
         completed.issueSessionId!,
         agent.id,
         String(laneGeneration),
@@ -2049,9 +2045,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(completed.status).toBe("completed");
       const expectedHome = join(
         workspacesRoot,
-        issue.key,
-        ".multiremi",
-        "sessions",
+        ".runtime",
         completed.issueSessionId!,
         agent.id,
         String(completed.issueSessionGeneration ?? completed.issue_session_generation),
@@ -2122,7 +2116,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
       await daemon.start();
 
-      const completedDir = join(workspacesRoot, completedIssue.key);
+      const completedDir = join(workspacesRoot, "issues", completedIssue.key);
       expect(existsSync(completedDir)).toBe(true);
       expect(JSON.parse(readFileSync(join(completedDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
         kind: "issue",
@@ -2134,7 +2128,7 @@ describe("Bun Multiremi daemon smoke", () => {
       const oldIso = new Date(Date.now() - 10_000).toISOString();
       db!.run("UPDATE multiremi_issues SET status = 'done', updated_at = ? WHERE id = ?", [oldIso, completedIssue.id]);
 
-      const activeDir = join(workspacesRoot, "local", "active-issue");
+      const activeDir = join(workspacesRoot, "issues", "active-issue");
       writeGcFixture(activeDir, {
         kind: "issue",
         task_id: "task-active",
@@ -2142,7 +2136,7 @@ describe("Bun Multiremi daemon smoke", () => {
         workspace_id: "local",
       });
 
-      const chatDir = join(workspacesRoot, "local", "deleted-chat");
+      const chatDir = join(workspacesRoot, "chats", "deleted-chat");
       writeGcFixture(chatDir, {
         kind: "chat",
         task_id: "task-chat",
@@ -2151,7 +2145,7 @@ describe("Bun Multiremi daemon smoke", () => {
       });
       db!.run("DELETE FROM multiremi_chat_sessions WHERE id = ?", [deletedChat.id]);
 
-      const orphanDir = join(workspacesRoot, "local", "old-orphan");
+      const orphanDir = join(workspacesRoot, "tasks", "old-orphan");
       mkdirSync(orphanDir, { recursive: true });
       writeFileSync(join(orphanDir, "note.txt"), "stale orphan\n");
       const oldDate = new Date(Date.now() - 10_000);
@@ -2215,7 +2209,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
       await daemon.start();
 
-      const taskDir = join(workspacesRoot, "local", run.taskId!);
+      const taskDir = join(workspacesRoot, "tasks", run.taskId!);
       expect(existsSync(taskDir)).toBe(true);
       expect(JSON.parse(readFileSync(join(taskDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
         kind: "autopilot_run",
@@ -2260,7 +2254,6 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({
       name: "Maintenance Claude",
       provider: "claude",
-      cwd: workDir,
     });
     const queuedTask = store.createTask({ agentId: agent.id, prompt: "Do not claim before restart" });
     const updateRequest = store.createRuntimeUpdateRequest(runtimeId, { target_version: "v9.9.9" });
@@ -2722,7 +2715,6 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({
       name: "Recovered Claude",
       provider: "claude",
-      cwd: workDir,
     });
     const task = store.createTask({ agentId: agent.id, prompt: "Recover and continue" });
     const daemonToken = await store.createAccessToken({
@@ -3056,7 +3048,6 @@ describe("Bun Multiremi daemon smoke", () => {
     const agent = store.createAgent({
       name: "Timeout Claude",
       provider: "claude",
-      cwd: workDir,
     });
     const task = store.createTask({ agentId: agent.id, prompt: "Hang forever" });
     const daemonToken = await store.createAccessToken({
@@ -3127,7 +3118,6 @@ async function runCompactionFinalizeCase(spec: {
   const agent = store.createAgent({
     name: `Claude ${spec.id}`,
     provider: "claude",
-    cwd: root,
   });
   const issue = store.createIssue({ title: `Compaction finalize ${spec.id}`, workspaceId: "local" });
   const task = store.createTask({
@@ -3192,28 +3182,24 @@ async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Pr
   const outside = join(root, "outside");
   mkdirSync(workspacesRoot, { recursive: true });
   mkdirSync(outside, { recursive: true });
-  const agent = store.createAgent({ name: `${kind} symlink proof`, provider: "claude", cwd: root });
+  symlinkSync(outside, join(workspacesRoot, ".runtime"), "dir");
+  const agent = store.createAgent({ name: `${kind} symlink proof`, provider: "claude" });
   let task: ReturnType<typeof store.createTask>;
   let externalGc: string;
   let receipt: string | null = null;
   if (kind === "quick") {
-    symlinkSync(outside, join(workspacesRoot, ".task-runtime"), "dir");
     task = store.createTask({ agentId: agent.id, prompt: "must fail before GC" });
-    externalGc = join(outside, task.id, ".multiremi", "gc.json");
+    externalGc = join(workspacesRoot, "tasks", task.id, ".multiremi", "gc.json");
   } else if (kind === "chat") {
     const session = store.createChatSession({ agentId: agent.id, title: "Symlink proof" });
-    symlinkSync(outside, join(workspacesRoot, ".session-runtime"), "dir");
     task = store.sendChatMessage(session.id, { body: "must fail before GC" }).task;
-    externalGc = join(outside, session.id, ".multiremi", "gc.json");
+    externalGc = join(workspacesRoot, "chats", session.id, ".multiremi", "gc.json");
   } else {
     const issue = store.createIssue({ title: "Issue symlink proof", workspaceId: "local" });
-    const issueRoot = join(workspacesRoot, issue.key);
-    mkdirSync(issueRoot, { recursive: true });
     receipt = join(outside, "session-archive-receipt.json");
     writeFileSync(receipt, "keep-receipt\n");
-    symlinkSync(outside, join(issueRoot, ".multiremi"), "dir");
     task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "must fail before GC" });
-    externalGc = join(outside, "gc.json");
+    externalGc = join(workspacesRoot, "issues", issue.key, ".multiremi", "gc.json");
   }
   const daemonId = `daemon-${kind}-provider-symlink`;
   const daemonToken = await store.createAccessToken({

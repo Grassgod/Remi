@@ -1686,6 +1686,41 @@ runMigrations(this.db);
     return this.feishuBot.getDaemonConfig(workspaceId, runtimeId);
   }
 
+  submitFeishuBotMessage(
+    workspaceId: string,
+    runtimeId: string,
+    input: Parameters<FeishuBotRepo["submitMessage"]>[2],
+  ): ReturnType<FeishuBotRepo["submitMessage"]> {
+    return this.feishuBot.submitMessage(workspaceId, runtimeId, input);
+  }
+
+  resetFeishuBotSession(
+    workspaceId: string,
+    runtimeId: string,
+    revision: number,
+    externalSessionKey: string,
+  ): boolean {
+    return this.feishuBot.resetSession(workspaceId, runtimeId, revision, externalSessionKey);
+  }
+
+  cancelFeishuBotSessionTask(
+    workspaceId: string,
+    runtimeId: string,
+    revision: number,
+    externalSessionKey: string,
+  ): string | null {
+    return this.feishuBot.cancelSessionTask(workspaceId, runtimeId, revision, externalSessionKey);
+  }
+
+  inspectFeishuBotSession(
+    workspaceId: string,
+    runtimeId: string,
+    revision: number,
+    externalSessionKey: string,
+  ): ReturnType<FeishuBotRepo["inspectSession"]> {
+    return this.feishuBot.inspectSession(workspaceId, runtimeId, revision, externalSessionKey);
+  }
+
   feishuBotDirectiveForRuntime(workspaceId: string, runtimeId: string): MultiremiFeishuBotDirective | null {
     return this.feishuBot.directiveForRuntime(workspaceId, runtimeId);
   }

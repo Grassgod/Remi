@@ -55,7 +55,6 @@ export function runMigrations(db: SqlDatabase): void {
       instructions TEXT NOT NULL DEFAULT '',
       skills TEXT NOT NULL DEFAULT '[]',
       max_concurrent_tasks INTEGER NOT NULL DEFAULT 6,
-      cwd TEXT,
       executable TEXT,
       model TEXT,
       allowed_tools TEXT NOT NULL DEFAULT '[]',
@@ -503,8 +502,6 @@ export function runMigrations(db: SqlDatabase): void {
       app_id TEXT NOT NULL,
       app_secret_encrypted TEXT NOT NULL,
       app_secret_hint TEXT,
-      verification_token_encrypted TEXT,
-      encrypt_key_encrypted TEXT,
       domain TEXT NOT NULL DEFAULT 'feishu',
       enabled INTEGER NOT NULL DEFAULT 0,
       revision INTEGER NOT NULL DEFAULT 1,
@@ -2177,6 +2174,43 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_messages_task ON multiremi_task_messages(task_id, seq);
 
+    -- Feishu events join the same Chat/Task lineage as the browser chat. The
+    -- bot app and Agent own the binding: host changes, credential rotations
+    -- and redeploys keep context, while changing the bot or Agent starts fresh.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_chat_bindings (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      external_session_key TEXT NOT NULL,
+      chat_session_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, app_id, agent_id, external_session_key),
+      FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_chat_bindings_chat
+      ON multiremi_feishu_bot_chat_bindings(chat_session_id);
+
+    -- Feishu can redeliver one event. Persist the event id before returning so
+    -- retries resolve to the original Task instead of starting duplicate work.
+    CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_deliveries (
+      workspace_id TEXT NOT NULL,
+      external_message_id TEXT NOT NULL,
+      binding_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      reply_to_message_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(workspace_id, external_message_id),
+      FOREIGN KEY(binding_id) REFERENCES multiremi_feishu_bot_chat_bindings(id) ON DELETE CASCADE,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_deliveries_task
+      ON multiremi_feishu_bot_deliveries(task_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_task_prompts (
       task_id TEXT PRIMARY KEY,
       mode TEXT NOT NULL,
@@ -2345,6 +2379,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_agents", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_agents", "runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_agents", "max_concurrent_tasks INTEGER NOT NULL DEFAULT 6");
+  dropColumnIfExists(db, "multiremi_agents", "cwd");
+  dropColumnIfExists(db, "multiremi_feishu_bot_configs", "verification_token_encrypted");
+  dropColumnIfExists(db, "multiremi_feishu_bot_configs", "encrypt_key_encrypted");
   runMigrationOnce(db, AGENT_ISSUE_PROPOSAL_POLICY_MIGRATION, () => {
     addColumnIfMissing(db, "multiremi_agents", "issue_creation_requires_proposal INTEGER NOT NULL DEFAULT 0");
   });
@@ -2993,6 +3030,16 @@ function addColumnIfMissing(db: SqlDatabase, table: string, definition: string):
     }
     return false;
   }
+}
+
+function dropColumnIfExists(db: SqlDatabase, table: string, columnName: string): boolean {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(table) || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(columnName)) {
+    throw new Error(`Invalid table or column name: ${table}.${columnName}`);
+  }
+  const columns = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === columnName)) return false;
+  db.run(`ALTER TABLE ${table} DROP COLUMN ${columnName}`);
+  return true;
 }
 
 function ensureFeishuIngestV2Schema(db: SqlDatabase): void {

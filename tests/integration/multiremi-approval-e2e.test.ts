@@ -86,7 +86,7 @@ async function startHarness(options: {
   db = new Database(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-approval-e2e-"));
   const store = new MultiremiStore(db);
-  const agent = store.createAgent({ name: "Approval Agent", provider: "claude", cwd: workDir });
+  const agent = store.createAgent({ name: "Approval Agent", provider: "claude" });
   const task = options.unattended
     ? (() => {
         const autopilot = store.createAutopilot({

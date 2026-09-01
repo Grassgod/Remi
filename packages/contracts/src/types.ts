@@ -79,7 +79,6 @@ export interface MultiremiAgent {
   skills: MultiremiSkill[];
   maxConcurrentTasks: number;
   max_concurrent_tasks?: number;
-  cwd: string | null;
   executable: string | null;
   model: string | null;
   allowedTools: string[];
@@ -115,7 +114,6 @@ export interface CreateAgentInput {
   skills?: MultiremiSkill[];
   maxConcurrentTasks?: number;
   max_concurrent_tasks?: number;
-  cwd?: string | null;
   executable?: string | null;
   model?: string | null;
   allowedTools?: string[];
@@ -150,7 +148,6 @@ export interface UpdateAgentInput {
   skills?: MultiremiSkill[];
   maxConcurrentTasks?: number;
   max_concurrent_tasks?: number;
-  cwd?: string | null;
   executable?: string | null;
   model?: string | null;
   allowedTools?: string[];
@@ -3721,8 +3718,6 @@ export interface MultiremiFeishuBotConfig {
   hasAppSecret: boolean;
   /** Non-reversible display prefix of the stored app secret, e.g. `abcd••••`. */
   appSecretHint: string | null;
-  hasVerificationToken: boolean;
-  hasEncryptKey: boolean;
   botName: string | null;
   botOpenId: string | null;
   lastTestedAt: string | null;
@@ -3753,8 +3748,6 @@ export interface FeishuBotConfigView {
   revision: number;
   app_secret_configured: boolean;
   app_secret_hint: string | null;
-  verification_token_configured: boolean;
-  encrypt_key_configured: boolean;
   bot_name: string | null;
   bot_open_id: string | null;
   last_tested_at: string | null;
@@ -3808,10 +3801,6 @@ export interface UpsertFeishuBotConfigInput {
   enabled: boolean;
   appSecretOp: FeishuBotSecretOp;
   appSecret?: string;
-  verificationTokenOp: FeishuBotSecretOp;
-  verificationToken?: string;
-  encryptKeyOp: FeishuBotSecretOp;
-  encryptKey?: string;
   actor?: string | null;
 }
 
@@ -3859,13 +3848,11 @@ export interface MultiremiFeishuBotDaemonConfig {
   app_id: string;
   app_secret: string;
   domain: FeishuBotDomain;
-  verification_token: string | null;
-  encrypt_key: string | null;
 }
 
 /**
  * What the daemon actually fetches before starting the connector: the
- * credentials plus the Agent row and project list the channel needs.
+ * credentials plus the Agent row the Task bridge needs.
  *
  * They travel together on purpose. The daemon could read the Agent off a
  * heartbeat instead, but then a start would mix one revision's credentials
@@ -3875,7 +3862,44 @@ export interface MultiremiFeishuBotDaemonConfig {
 export interface MultiremiFeishuBotDaemonPayload extends MultiremiFeishuBotDaemonConfig {
   /** Wire-shaped Agent row (snake_case), or null when the Agent has vanished. */
   bot_agent: Record<string, unknown> | null;
-  bot_projects: MultiremiDaemonBotProject[];
+}
+
+/** One inbound Feishu event submitted by the Runtime hosting the connector. */
+export interface SubmitFeishuBotMessageInput {
+  revision: number;
+  externalSessionKey: string;
+  externalMessageId: string;
+  replyToMessageId?: string | null;
+  senderOpenId?: string | null;
+  chatId?: string | null;
+  threadId?: string | null;
+  text: string;
+}
+
+/** The canonical Chat/Task lineage selected for an inbound Feishu event. */
+export interface SubmitFeishuBotMessageResult {
+  chatSessionId: string;
+  taskId: string;
+  status: MultiremiTaskStatus;
+  duplicate: boolean;
+  steered: boolean;
+}
+
+/** Runtime-facing Task snapshot used by connector delivery polling. */
+export interface FeishuBotTaskSnapshot {
+  taskId: string;
+  status: MultiremiTaskStatus;
+  result: string | null;
+  error: string | null;
+  sessionId: string | null;
+  workDir: string | null;
+  usage: TaskUsageEntry[];
+}
+
+/** Current canonical Chat/Task lineage bound to one Feishu conversation. */
+export interface FeishuBotSessionSnapshot {
+  chatSessionId: string | null;
+  task: FeishuBotTaskSnapshot | null;
 }
 
 /** Result of validating credentials against the Feishu open platform. */

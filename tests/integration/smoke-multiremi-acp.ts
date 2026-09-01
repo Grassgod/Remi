@@ -140,7 +140,6 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
     const agent = store.createAgent({
       name: `${provider} ACP Smoke`,
       provider,
-      cwd: workDir,
       model: options.model,
       allowedTools: [],
       customEnv: options.codexConfig ? { CODEX_CONFIG: options.codexConfig } : {},

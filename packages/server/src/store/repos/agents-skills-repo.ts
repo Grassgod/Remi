@@ -45,10 +45,10 @@ export class AgentsSkillsRepo {
       if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId);
       this.ctx.db.run(
         `INSERT INTO multiremi_agents (
-          id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, cwd, executable, model,
+          id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, executable, model,
           max_concurrent_tasks, allowed_tools, custom_env, custom_args, mcp_config, thinking_level,
           issue_creation_requires_proposal, role, supervisor, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           workspaceId,
@@ -61,7 +61,6 @@ export class AgentsSkillsRepo {
           runtimeId,
           input.instructions ?? "",
           toJson(input.skills ?? []),
-          input.cwd ?? null,
           input.executable ?? null,
           input.model ?? null,
           normalizeRuntimeConcurrency(input.maxConcurrentTasks ?? input.max_concurrent_tasks ?? 6),
@@ -160,7 +159,6 @@ export class AgentsSkillsRepo {
         runtime_id = ?,
         instructions = ?,
         skills = ?,
-        cwd = ?,
         executable = ?,
         model = ?,
         max_concurrent_tasks = ?,
@@ -187,7 +185,6 @@ export class AgentsSkillsRepo {
         runtimeId,
         input.instructions ?? current.instructions,
         input.skills === undefined ? toJson(current.skills) : toJson(input.skills),
-        input.cwd === undefined ? current.cwd : input.cwd,
         input.executable === undefined ? current.executable : input.executable,
         input.model === undefined ? current.model : input.model,
         hasAnyField(input, "maxConcurrentTasks", "max_concurrent_tasks")
@@ -808,7 +805,6 @@ export function toAgent(row: Row): MultiremiAgent {
     skills: parseJson(row.skills, []),
     maxConcurrentTasks: Number(row.max_concurrent_tasks ?? 6),
     max_concurrent_tasks: Number(row.max_concurrent_tasks ?? 6),
-    cwd: nullableString(row.cwd),
     executable: nullableString(row.executable),
     model: nullableString(row.model),
     allowedTools: parseJson(row.allowed_tools, []),

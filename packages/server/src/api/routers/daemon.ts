@@ -44,14 +44,17 @@ import { FEISHU_CONCIERGE_PROTOCOL_VERSION } from "@multiremi/contracts/types.js
 import { FeishuBotEncryptionError } from "@multiremi/feishu-bot/credentials.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type {
+  FeishuBotTaskSnapshot,
   MultiremiDaemonSshMeshStatus,
   MultiremiFeishuBotDaemonPayload,
   ReportBotMenuPublishInput,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
   MultiremiTask,
+  SubmitFeishuBotMessageInput,
 } from "@multiremi/contracts/types.js";
 import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
+import { FeishuBotConfigError } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
@@ -287,8 +290,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyDaemonTokenWorkspace(c, body.workspace_id);
     if (denied) return denied;
     const registerWorkspace = String(body.workspace_id ?? "").trim() || "local";
-    const botAgent = resolveBotAgent(store, registerWorkspace, body.bot_agent_id);
-    if ("error" in botAgent) return c.json({ error: botAgent.error }, botAgent.status);
     const registerDaemonId = String(body.daemon_id ?? "").trim();
     if (registerDaemonId && store.isDaemonRetired(registerWorkspace, registerDaemonId)) {
       return c.json({ error: "daemon has been retired", code: "daemon_retired" }, 410);
@@ -323,14 +324,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         currentAccessToken(c)?.type !== "daemon" && (!authToken || usesMasterToken),
     });
     if ("error" in result) return c.json({ error: result.error }, result.status);
-    if (botAgent.agent || body.include_bot_projects) c.header("Cache-Control", "no-store");
-    return c.json({
-      ...result,
-      ...(botAgent.agent ? { bot_agent: daemonBotAgentResponse(botAgent.agent) } : {}),
-      ...(body.include_bot_projects
-        ? { bot_projects: daemonBotProjects(store, registerWorkspace, registerDaemonId) }
-        : {}),
-    });
+    return c.json(result);
   });
   app.post("/api/daemon/deregister", async (c) => {
     const body = await readJsonStrict<{ runtime_ids?: string[] }>(c);
@@ -350,8 +344,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
       drain_ack_generation?: number;
       active_task_count?: number;
-      bot_agent_id?: string;
-      include_bot_projects?: boolean;
       supports_bot_menu?: boolean;
       feishu_concierge_protocol?: number;
     }>(c);
@@ -375,10 +367,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
     }
     // A daemon that can host the concierge says so on every heartbeat, so
-    // silence is an answer: the build is older, or this process is already
-    // running the bot from its own environment (the legacy MUL-190 path) and
-    // must not be offered a second one. Letting the flag stay true from an
-    // earlier run is how a Runtime ends up hosting two connectors at once.
+    // silence is an answer: the build is older and must not be assigned the
+    // connector. Letting the flag stay true from an earlier run could assign a
+    // bot to code that cannot host it.
     const feishuConciergeProtocol = normalizeDaemonProtocolVersion(body.feishu_concierge_protocol);
     const supportsFeishuBotConfig = feishuConciergeProtocol >= FEISHU_CONCIERGE_PROTOCOL_VERSION;
     const ack = store.heartbeatRuntime(runtimeId, {
@@ -412,8 +403,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const response = daemonHeartbeatHttpResponse(ack);
     const runtime = store.getRuntime(runtimeId);
     const workspaceId = runtime?.workspaceId ?? "local";
-    const botAgent = resolveBotAgent(store, workspaceId, body.bot_agent_id);
-    if ("error" in botAgent) return c.json({ error: botAgent.error }, botAgent.status);
     const workspaceConfig = workspaceReposResponse(
       store,
       workspaceId,
@@ -423,20 +412,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       response.workspace_settings = workspaceConfig.settings ?? {};
       if (callerCanReceiveRelay(c, store, workspaceId)) response.relay = workspaceConfig.relay;
     }
-    if (botAgent.agent) {
-      response.bot_agent = daemonBotAgentResponse(botAgent.agent);
-    }
-    if (body.include_bot_projects) {
-      response.bot_projects = daemonBotProjects(store, workspaceId, runtime?.daemonId ?? "");
-    }
     if (supportsFeishuBotConfig) {
       // Carries a revision and a desired state, never a credential — the daemon
       // fetches the payload itself over its own runtime-scoped route.
       const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
       if (directive) response.feishu_bot = directive;
-    }
-    if (botAgent.agent || body.include_bot_projects) {
-      c.header("Cache-Control", "no-store");
     }
     return c.json(response);
   });
@@ -470,7 +450,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       const payload: MultiremiFeishuBotDaemonPayload = {
         ...config,
         bot_agent: daemonBotAgentResponse(agent),
-        bot_projects: daemonBotProjects(store, workspaceId, runtime.daemonId ?? ""),
       };
       c.header("Cache-Control", "no-store");
       return c.json(payload);
@@ -519,6 +498,108 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({
       status: "ok",
       directive: store.feishuBotDirectiveForRuntime(workspaceId, runtimeId),
+    });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/messages", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
+    const body = await readJsonStrict<{
+      revision?: unknown;
+      external_session_key?: unknown;
+      external_message_id?: unknown;
+      reply_to_message_id?: unknown;
+      sender_open_id?: unknown;
+      chat_id?: unknown;
+      thread_id?: unknown;
+      text?: unknown;
+    }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const revision = Number(body.revision);
+    const input: SubmitFeishuBotMessageInput = {
+      revision: Number.isSafeInteger(revision) ? revision : -1,
+      externalSessionKey: cleanString(typeof body.external_session_key === "string" ? body.external_session_key : null) ?? "",
+      externalMessageId: cleanString(typeof body.external_message_id === "string" ? body.external_message_id : null) ?? "",
+      replyToMessageId: cleanString(typeof body.reply_to_message_id === "string" ? body.reply_to_message_id : null),
+      senderOpenId: cleanString(typeof body.sender_open_id === "string" ? body.sender_open_id : null),
+      chatId: cleanString(typeof body.chat_id === "string" ? body.chat_id : null),
+      threadId: cleanString(typeof body.thread_id === "string" ? body.thread_id : null),
+      text: typeof body.text === "string" ? body.text : "",
+    };
+    try {
+      return c.json(store.submitFeishuBotMessage(runtime.workspaceId ?? "local", runtimeId, input), 202);
+    } catch (error) {
+      if (error instanceof FeishuBotConfigError) {
+        return c.json(
+          { error: error.message, code: error.code },
+          error.status as 400 | 403 | 409,
+        );
+      }
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/session/reset", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const body = await readJsonStrict<{ revision?: unknown; external_session_key?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return c.json({
+      reset: store.resetFeishuBotSession(
+        runtime.workspaceId ?? "local",
+        runtimeId,
+        Number(body.revision),
+        cleanString(typeof body.external_session_key === "string" ? body.external_session_key : null) ?? "",
+      ),
+    });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const body = await readJsonStrict<{ revision?: unknown; external_session_key?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const taskId = store.cancelFeishuBotSessionTask(
+      runtime.workspaceId ?? "local",
+      runtimeId,
+      Number(body.revision),
+      cleanString(typeof body.external_session_key === "string" ? body.external_session_key : null) ?? "",
+    );
+    return c.json({ cancelled: Boolean(taskId), task_id: taskId });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/session/inspect", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const body = await readJsonStrict<{ revision?: unknown; external_session_key?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const snapshot = store.inspectFeishuBotSession(
+      runtime.workspaceId ?? "local",
+      runtimeId,
+      Number(body.revision),
+      cleanString(typeof body.external_session_key === "string" ? body.external_session_key : null) ?? "",
+    );
+    return c.json({
+      chat_session_id: snapshot.chatSessionId,
+      task: snapshot.task
+        ? {
+            task_id: snapshot.task.taskId,
+            status: snapshot.task.status,
+            result: snapshot.task.result,
+            error: snapshot.task.error,
+            session_id: snapshot.task.sessionId,
+            work_dir: snapshot.task.workDir,
+            usage: snapshot.task.usage,
+          }
+        : null,
     });
   });
   app.post("/api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result", async (c) => {
@@ -684,6 +765,21 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const expired = store.expireTaskHumanRequest(request.id, status);
     // Lost the race to a human response: return the current row so the worker honors it.
     return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
+  });
+  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/respond", async (c) => {
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (identityDenied) return identityDenied;
+    const body = await readJsonStrict<{ response?: Record<string, unknown>; responded_by?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const request = store.getTaskHumanRequest(c.req.param("requestId"));
+    if (!request || request.taskId !== taskId) return c.json({ error: "request not found" }, 404);
+    const responded = store.respondTaskHumanRequest(request.id, {
+      response: body.response ?? {},
+      respondedBy: cleanString(typeof body.responded_by === "string" ? body.responded_by : null) ?? "feishu",
+    });
+    if (!responded) return c.json({ error: "request is no longer pending" }, 409);
+    return c.json({ request: responded });
   });
   app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
     const body = await readJsonStrict<{ summary?: string; step?: number; total?: number; final?: boolean }>(c);
@@ -890,7 +986,24 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (identityDenied) return identityDenied;
     const task = store.getTask(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
-    return c.json({ status: task.status });
+    const snapshot: FeishuBotTaskSnapshot = {
+      taskId: task.id,
+      status: task.status,
+      result: task.result,
+      error: task.error,
+      sessionId: task.sessionId,
+      workDir: task.workDir,
+      usage: task.usage,
+    };
+    return c.json({
+      task_id: snapshot.taskId,
+      status: snapshot.status,
+      result: snapshot.result,
+      error: snapshot.error,
+      session_id: snapshot.sessionId,
+      work_dir: snapshot.workDir,
+      usage: snapshot.usage,
+    });
   });
   app.get("/api/daemon/tasks/:taskId/steer", (c) => {
     const taskId = c.req.param("taskId");
@@ -1010,40 +1123,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const task = store.getTask(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ status: task.status, completed_at: task.completedAt });
-  });
-}
-
-function resolveBotAgent(
-  store: RouterDeps["store"],
-  workspaceId: string,
-  requestedAgentId?: string,
-): { agent: NonNullable<ReturnType<RouterDeps["store"]["getAgent"]>> | null } | { error: string; status: 404 } {
-  const agentId = String(requestedAgentId ?? "").trim();
-  if (!agentId) return { agent: null };
-  const agent = store.getAgent(agentId);
-  if (!agent || agent.archivedAt || agent.workspaceId !== workspaceId) {
-    return { error: "bot agent not found in runtime workspace", status: 404 };
-  }
-  return { agent };
-}
-
-function daemonBotProjects(
-  store: RouterDeps["store"],
-  workspaceId: string,
-  daemonId: string,
-): Array<{ id: string; title: string; cwd: string }> {
-  if (!daemonId) return [];
-  return store.listProjects(workspaceId).flatMap((project) => {
-    if (project.archivedAt) return [];
-    const directory = store.listProjectResources(project.id).find((resource) => {
-      if (resource.workspaceId !== workspaceId || resource.resourceType !== "local_directory") return false;
-      const owner = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
-      const cwd = String(resource.resourceRef.localPath ?? resource.resourceRef.local_path ?? "").trim();
-      return owner === daemonId && Boolean(cwd);
-    });
-    if (!directory) return [];
-    const cwd = String(directory.resourceRef.localPath ?? directory.resourceRef.local_path).trim();
-    return [{ id: project.id, title: project.title, cwd }];
   });
 }
 

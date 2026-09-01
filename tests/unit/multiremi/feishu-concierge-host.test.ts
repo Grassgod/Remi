@@ -32,12 +32,9 @@ function assignment(overrides: Partial<MultiremiFeishuBotDaemonConfig> = {}): Mu
       app_id: "cli_a1b2c3d4e5f6g7h8",
       app_secret: APP_SECRET,
       domain: "feishu",
-      verification_token: null,
-      encrypt_key: null,
       ...overrides,
     },
     agent: { id: "agt_1", name: "Concierge" } as MultiremiAgent,
-    projects: [{ id: "prj_1", title: "Project", cwd: "/tmp/project" }],
   };
 }
 
@@ -68,10 +65,8 @@ function fakeDaemon(options: { isMember?: boolean } = {}): FakeDaemon {
 type BootArgs = Parameters<typeof bootFeishuChannel>;
 
 interface BootCall {
-  agent: BootArgs[0];
-  projects: BootArgs[1];
-  authorize: BootArgs[2];
-  options: NonNullable<BootArgs[3]>;
+  authorize: BootArgs[0];
+  options: BootArgs[1];
 }
 
 /** A channel handle whose run promise the test controls. */
@@ -83,7 +78,6 @@ function fakeChannel(): { handle: FeishuChannelHandle; fail: (error: unknown) =>
     handle: {
       start,
       stop: async () => { stops += 1; },
-      updateProjects: () => {},
       publishBotMenu: async () => ({ dryRun: true, defaultPublished: false, userMenuCount: 0 }),
     } as unknown as FeishuChannelHandle,
     fail,
@@ -98,8 +92,8 @@ function host(input: {
   const calls: BootCall[] = [];
   let current: FeishuChannelHandle | null = null;
   const channel = fakeChannel();
-  const boot: typeof bootFeishuChannel = async (agent, projects, authorize, options) => {
-    calls.push({ agent, projects, authorize, options: options ?? {} });
+  const boot: typeof bootFeishuChannel = async (authorize, options) => {
+    calls.push({ authorize, options });
     return channel.handle;
   };
   const conciergeHost = controlPlaneConciergeHost({
@@ -160,8 +154,6 @@ describe("control-plane Feishu concierge host", () => {
 
     await test.conciergeHost.start(assignment({
       domain: "lark",
-      verification_token: "vt_value",
-      encrypt_key: "ek_value",
     }));
 
     expect(test.calls[0]!.options).toMatchObject({
@@ -171,11 +163,8 @@ describe("control-plane Feishu concierge host", () => {
         appId: "cli_a1b2c3d4e5f6g7h8",
         appSecret: APP_SECRET,
         domain: "lark",
-        verificationToken: "vt_value",
-        encryptKey: "ek_value",
       },
     });
-    expect(test.calls[0]!.projects).toEqual([{ id: "prj_1", title: "Project", cwd: "/tmp/project" }]);
     // The menu publisher follows the live channel, so a publish from Workspace
     // settings reaches the bot that is actually running.
     expect(fake.botMenuPublishers.at(-1)).toBeFunction();

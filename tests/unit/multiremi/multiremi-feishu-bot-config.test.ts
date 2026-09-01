@@ -17,8 +17,6 @@ import type { MultiremiStore } from "@multiremi/store.js";
 const MASTER = { Authorization: "Bearer MASTER", "content-type": "application/json" };
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const OTHER_SECRET = "aA1bB2cC3dD4eE5fF6gG7hH8iI9jJ0kK";
-const VERIFICATION_TOKEN = "verification-token-abcdefghijklmno";
-const ENCRYPT_KEY = "encrypt-key-abcdefghijklmnopqrstu";
 
 let previousEncryptionKey: string | undefined;
 
@@ -79,10 +77,7 @@ describe("workspace Feishu bot config API", () => {
   it("stores the app secret encrypted and never returns it", async () => {
     const { store, app, agentId } = scaffold();
 
-    const saved = await save(app, agentId, {
-      verification_token: VERIFICATION_TOKEN,
-      encrypt_key: ENCRYPT_KEY,
-    });
+    const saved = await save(app, agentId);
 
     expect(saved.status).toBe(200);
     const view = await saved.json();
@@ -90,16 +85,12 @@ describe("workspace Feishu bot config API", () => {
       configured: true,
       app_id: "cli_a1b2c3d4e5f6g7h8",
       app_secret_configured: true,
-      verification_token_configured: true,
-      encrypt_key_configured: true,
       revision: 1,
     });
     // A hint exists so an admin can recognise which credential is stored, but
     // it is a prefix, not the credential.
     expect(view.app_secret_hint).toBe(`${APP_SECRET.slice(0, 4)}••••••`);
     expect(JSON.stringify(view)).not.toContain(APP_SECRET);
-    expect(JSON.stringify(view)).not.toContain(VERIFICATION_TOKEN);
-    expect(JSON.stringify(view)).not.toContain(ENCRYPT_KEY);
 
     // And the column itself is ciphertext, not just a masked response.
     const row = db!
@@ -107,13 +98,9 @@ describe("workspace Feishu bot config API", () => {
       .get("local") as Record<string, unknown>;
     expect(String(row.app_secret_encrypted)).toStartWith("v1.");
     expect(JSON.stringify(row)).not.toContain(APP_SECRET);
-    expect(JSON.stringify(row)).not.toContain(VERIFICATION_TOKEN);
-    expect(JSON.stringify(row)).not.toContain(ENCRYPT_KEY);
     // The server can still read it back for the Runtime that needs it.
     expect(store.revealFeishuBotSecrets("local")).toMatchObject({
       appSecret: APP_SECRET,
-      verificationToken: VERIFICATION_TOKEN,
-      encryptKey: ENCRYPT_KEY,
     });
   });
 
@@ -121,26 +108,22 @@ describe("workspace Feishu bot config API", () => {
     // The browser cannot render the secret, so an admin changing the domain
     // submits a blank secret field. That must not disarm the bot.
     const { store, app, agentId } = scaffold();
-    await save(app, agentId, { verification_token: VERIFICATION_TOKEN });
+    await save(app, agentId);
 
     const updated = await save(app, agentId, {
       domain: "lark",
       app_secret: "",
       app_secret_op: "keep",
-      verification_token: "",
-      verification_token_op: "keep",
     });
 
     expect(updated.status).toBe(200);
     expect(await updated.json()).toMatchObject({
       domain: "lark",
       app_secret_configured: true,
-      verification_token_configured: true,
       revision: 2,
     });
     expect(store.revealFeishuBotSecrets("local")).toMatchObject({
       appSecret: APP_SECRET,
-      verificationToken: VERIFICATION_TOKEN,
     });
   });
 
@@ -167,25 +150,9 @@ describe("workspace Feishu bot config API", () => {
     expect(store.revealFeishuBotSecrets("local")?.appSecret).toBe(APP_SECRET);
   });
 
-  it("clears an optional secret on request but refuses to clear the app secret", async () => {
+  it("refuses to clear the required app secret", async () => {
     const { store, app, agentId } = scaffold();
-    await save(app, agentId, { verification_token: VERIFICATION_TOKEN, encrypt_key: ENCRYPT_KEY });
-
-    const cleared = await save(app, agentId, {
-      app_secret_op: "keep",
-      verification_token_op: "clear",
-      encrypt_key_op: "clear",
-    });
-    expect(cleared.status).toBe(200);
-    expect(await cleared.json()).toMatchObject({
-      app_secret_configured: true,
-      verification_token_configured: false,
-      encrypt_key_configured: false,
-    });
-    expect(store.revealFeishuBotSecrets("local")).toMatchObject({
-      verificationToken: null,
-      encryptKey: null,
-    });
+    await save(app, agentId);
 
     // Clearing the app secret would leave a config that cannot authenticate.
     // Deleting or stopping the bot is the supported way to take it down.
@@ -227,6 +194,16 @@ describe("workspace Feishu bot config API", () => {
     const wrongRuntime = await save(app, agentId, { runtime_id: "rt_foreign" });
     expect(wrongRuntime.status).toBe(400);
     expect(await wrongRuntime.json()).toMatchObject({ code: "runtime_not_in_workspace" });
+
+    store.registerRuntime({
+      id: "rt_claude",
+      name: "Claude-only host",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const incompatibleRuntime = await save(app, agentId, { runtime_id: "rt_claude" });
+    expect(incompatibleRuntime.status).toBe(400);
+    expect(await incompatibleRuntime.json()).toMatchObject({ code: "runtime_agent_incompatible" });
 
     const archivedAgent = store.createAgent({ name: "Archived", provider: "codex", workspaceId: "local" });
     store.archiveAgent(archivedAgent.id);
@@ -352,7 +329,7 @@ describe("workspace Feishu bot config API", () => {
 
   it("writes an audit trail that names what moved but never what it became", async () => {
     const { app, agentId } = scaffold();
-    await save(app, agentId, { verification_token: VERIFICATION_TOKEN });
+    await save(app, agentId);
     await save(app, agentId, { app_secret_op: "keep", domain: "lark" });
     await app.request("/api/workspaces/local/feishu-bot/stop", { method: "POST", headers: MASTER, body: "{}" });
     await app.request("/api/workspaces/local/feishu-bot/deploy", { method: "POST", headers: MASTER, body: "{}" });
@@ -365,7 +342,6 @@ describe("workspace Feishu bot config API", () => {
     expect(entries.map((entry) => entry.action)).toEqual(["enabled", "disabled", "updated", "configured"]);
     const serialized = JSON.stringify(entries);
     expect(serialized).not.toContain(APP_SECRET);
-    expect(serialized).not.toContain(VERIFICATION_TOKEN);
     // The op is recorded, which is what an auditor needs: it says a secret was
     // written without saying anything about the value.
     expect(entries.at(-1)?.details).toMatchObject({ app_secret_op: "set", domain: "feishu" });

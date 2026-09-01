@@ -62,10 +62,6 @@ const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
   { name: "domain", type: "string", valueName: "feishu|lark|bytedance", description: "Open platform domain" },
   { name: "enabled", type: "boolean", description: "Run the concierge after saving" },
   { name: "disabled", type: "boolean", description: "Save the configuration without running it" },
-  { name: "verification-token", type: "string", valueName: "token", description: "Event verification token" },
-  { name: "encrypt-key", type: "string", valueName: "key", description: "Event encrypt key" },
-  { name: "verification-token-op", type: "string", valueName: "keep|set|clear", description: "Verification token update mode" },
-  { name: "encrypt-key-op", type: "string", valueName: "keep|set|clear", description: "Encrypt key update mode" },
 ];
 
 export function workspaceCommandSpecs(): CommandSpec[] {
@@ -481,10 +477,6 @@ async function feishuBotBody(invocation: CommandInvocation): Promise<Record<stri
     app_secret: rawStringOption(invocation, "app-secret"),
     domain: stringOption(invocation, "domain") ?? undefined,
     enabled: booleanOption(invocation, "disabled") === true ? false : booleanOption(invocation, "enabled") ?? undefined,
-    verification_token: rawStringOption(invocation, "verification-token"),
-    encrypt_key: rawStringOption(invocation, "encrypt-key"),
-    verification_token_op: stringOption(invocation, "verification-token-op") ?? undefined,
-    encrypt_key_op: stringOption(invocation, "encrypt-key-op") ?? undefined,
   });
   // The API requires an explicit boolean so a save can never flip the bot on or
   // off by accident; the CLI asks rather than guessing.

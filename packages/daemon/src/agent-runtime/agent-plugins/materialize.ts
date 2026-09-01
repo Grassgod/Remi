@@ -232,15 +232,15 @@ export async function cleanupNonIssueTaskPluginRuntime(
       "blocked",
     );
   }
-  const owner = resolve(workspacesRoot, ".task-runtime");
+  const owner = resolve(workspacesRoot, ".runtime");
   const taskRoot = resolveTaskPluginRuntimeBase(task, workspacesRoot, workspacesRoot);
   assertDirectChild(owner, taskRoot, safePathSegment(task.id));
   removeOwnedDirectorySync(workspacesRoot, taskRoot, { assertRootOwner });
 }
 
 /**
- * Worker helper: Issue state lives beside repo worktrees; chat/direct tasks use
- * a daemon-owned task runtime and keep ACP cwd untouched.
+ * Worker helper: all Plugin materialization shares the canonical product
+ * Session runtime root while ACP cwd remains independent.
  */
 export function resolveTaskPluginRuntimeBase(
   task: AgentTask,
@@ -249,9 +249,9 @@ export function resolveTaskPluginRuntimeBase(
 ): string {
   if (task.issueId ?? task.issue_id) return resolve(issueWorkDir);
   if (task.chatSessionId) {
-    return join(resolve(workspacesRoot), ".session-runtime", safePathSegment(task.chatSessionId));
+    return join(resolve(workspacesRoot), ".runtime", safePathSegment(task.chatSessionId));
   }
-  return join(resolve(workspacesRoot), ".task-runtime", safePathSegment(task.id));
+  return join(resolve(workspacesRoot), ".runtime", safePathSegment(task.id));
 }
 
 async function materializeOne(source: string, destination: string, digest: string): Promise<void> {

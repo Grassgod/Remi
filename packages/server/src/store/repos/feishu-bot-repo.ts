@@ -33,6 +33,7 @@ import type {
   FeishuBotDomain,
   FeishuBotErrorCode,
   FeishuBotRuntimeState,
+  FeishuBotSessionSnapshot,
   FeishuBotSecretOp,
   FeishuBotStatus,
   MultiremiFeishuBotAuditEntry,
@@ -40,6 +41,9 @@ import type {
   MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDirective,
   MultiremiFeishuBotRuntimeStatus,
+  MultiremiTask,
+  SubmitFeishuBotMessageInput,
+  SubmitFeishuBotMessageResult,
   ReportFeishuBotRuntimeStatusInput,
   UpsertFeishuBotConfigInput,
 } from "@multiremi/contracts/types.js";
@@ -116,6 +120,13 @@ export class FeishuBotRepo {
     if (!runtime || runtime.workspaceId !== workspaceId) {
       throw new FeishuBotConfigError("runtime does not belong to this workspace", 400, "runtime_not_in_workspace");
     }
+    if (!this.ctx.runtimes().runtimeCanRunAgent(runtime, agent)) {
+      throw new FeishuBotConfigError(
+        "runtime cannot run the selected agent provider",
+        400,
+        "runtime_agent_incompatible",
+      );
+    }
 
     const existing = this.rawConfigRow(workspaceId);
     const appSecret = resolveSecretColumn(
@@ -128,21 +139,6 @@ export class FeishuBotRepo {
     if (!appSecret.ciphertext) {
       throw new FeishuBotConfigError("app_secret is required", 400, "app_secret_required");
     }
-    const verificationToken = resolveSecretColumn(
-      workspaceId,
-      "verification_token",
-      input.verificationTokenOp,
-      input.verificationToken,
-      nullableString(existing?.verification_token_encrypted),
-    );
-    const encryptKey = resolveSecretColumn(
-      workspaceId,
-      "encrypt_key",
-      input.encryptKeyOp,
-      input.encryptKey,
-      nullableString(existing?.encrypt_key_encrypted),
-    );
-
     const now = nowIso();
     const previousRevision = Number(existing?.revision ?? 0);
     const revision = previousRevision + 1;
@@ -159,19 +155,16 @@ export class FeishuBotRepo {
       `INSERT INTO multiremi_feishu_bot_configs (
          workspace_id, agent_id, runtime_id, app_id,
          app_secret_encrypted, app_secret_hint,
-         verification_token_encrypted, encrypt_key_encrypted,
          domain, enabled, revision,
          bot_name, bot_open_id, last_tested_at, last_test_error, last_test_error_code,
          created_at, updated_at, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(workspace_id) DO UPDATE SET
          agent_id = excluded.agent_id,
          runtime_id = excluded.runtime_id,
          app_id = excluded.app_id,
          app_secret_encrypted = excluded.app_secret_encrypted,
          app_secret_hint = excluded.app_secret_hint,
-         verification_token_encrypted = excluded.verification_token_encrypted,
-         encrypt_key_encrypted = excluded.encrypt_key_encrypted,
          domain = excluded.domain,
          enabled = excluded.enabled,
          revision = excluded.revision,
@@ -188,8 +181,6 @@ export class FeishuBotRepo {
       appId,
       appSecret.ciphertext,
       hint,
-      verificationToken.ciphertext,
-      encryptKey.ciphertext,
       domain,
       input.enabled ? 1 : 0,
       revision,
@@ -283,8 +274,6 @@ export class FeishuBotRepo {
     appId: string;
     appSecret: string;
     domain: FeishuBotDomain;
-    verificationToken: string | null;
-    encryptKey: string | null;
   } | null {
     const row = this.rawConfigRow(workspaceId);
     if (!row) return null;
@@ -295,8 +284,6 @@ export class FeishuBotRepo {
         field: "app_secret",
       }),
       domain: normalizeDomain(row.domain),
-      verificationToken: decryptOptional(workspaceId, "verification_token", row.verification_token_encrypted),
-      encryptKey: decryptOptional(workspaceId, "encrypt_key", row.encrypt_key_encrypted),
     };
   }
 
@@ -323,8 +310,216 @@ export class FeishuBotRepo {
         field: "app_secret",
       }),
       domain: normalizeDomain(row.domain),
-      verification_token: decryptOptional(workspaceId, "verification_token", row.verification_token_encrypted),
-      encrypt_key: decryptOptional(workspaceId, "encrypt_key", row.encrypt_key_encrypted),
+    };
+  }
+
+  /**
+   * Join one Feishu event to the canonical browser Chat/Task execution path.
+   * The event id is the idempotency key; an active Task receives a steer,
+   * otherwise a new Task resumes the Chat Session's promoted provider lineage.
+   */
+  submitMessage(
+    workspaceId: string,
+    runtimeId: string,
+    input: SubmitFeishuBotMessageInput,
+  ): SubmitFeishuBotMessageResult {
+    const config = this.getConfig(workspaceId);
+    if (!config || !config.enabled) {
+      throw new FeishuBotConfigError("feishu bot is not running", 409, "bot_not_running");
+    }
+    if (config.runtimeId !== runtimeId) {
+      throw new FeishuBotConfigError("runtime does not host this feishu bot", 403, "runtime_not_selected");
+    }
+    if (config.revision !== input.revision) {
+      throw new FeishuBotConfigError("feishu bot assignment is stale", 409, "stale_revision");
+    }
+    const externalSessionKey = requiredBoundedString(input.externalSessionKey, "external_session_key", 1_024);
+    const externalMessageId = requiredBoundedString(input.externalMessageId, "external_message_id", 512);
+    const text = requiredBoundedString(input.text, "text", 200_000);
+    let enqueuedTask: MultiremiTask | null = null;
+
+    const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
+      const duplicate = this.ctx.db.query(
+        `SELECT d.task_id, b.chat_session_id, t.status
+           FROM multiremi_feishu_bot_deliveries d
+           JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id
+           JOIN multiremi_tasks t ON t.id = d.task_id
+          WHERE d.workspace_id = ? AND d.external_message_id = ?`,
+      ).get(workspaceId, externalMessageId) as Row | null;
+      if (duplicate) {
+        return {
+          chatSessionId: String(duplicate.chat_session_id),
+          taskId: String(duplicate.task_id),
+          status: String(duplicate.status) as SubmitFeishuBotMessageResult["status"],
+          duplicate: true,
+          steered: false,
+        };
+      }
+
+      let binding = this.ctx.db.query(
+        `SELECT * FROM multiremi_feishu_bot_chat_bindings
+          WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
+      ).get(workspaceId, config.appId, config.agentId, externalSessionKey) as Row | null;
+      if (!binding) {
+        const chat = this.ctx.chat().createChatSession({
+          workspaceId,
+          agentId: config.agentId,
+          creatorId: cleanOptionalString(input.senderOpenId) ?? "feishu",
+          title: "Feishu conversation",
+        });
+        const bindingId = createId("fcb");
+        const now = nowIso();
+        this.ctx.db.run(
+          `INSERT INTO multiremi_feishu_bot_chat_bindings (
+             id, workspace_id, app_id, agent_id, external_session_key,
+             chat_session_id, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          bindingId,
+          workspaceId,
+          config.appId,
+          config.agentId,
+          externalSessionKey,
+          chat.id,
+          now,
+          now,
+        );
+        binding = { id: bindingId, chat_session_id: chat.id };
+      }
+
+      const chatSessionId = String(binding.chat_session_id);
+      const activeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
+      let task;
+      let steered = false;
+      if (activeTask) {
+        this.ctx.tasks().createTaskSteerMessage({
+          taskId: activeTask.id,
+          kind: "steer",
+          content: text,
+          authorType: "member",
+          authorId: cleanOptionalString(input.senderOpenId),
+        });
+        task = activeTask;
+        steered = true;
+      } else {
+        task = this.ctx.tasks().createTaskWithinTransaction({
+          agentId: config.agentId,
+          runtimeId,
+          chatSessionId,
+          workspaceId,
+          prompt: text,
+        });
+        enqueuedTask = task;
+      }
+
+      const now = nowIso();
+      const messageId = createId("msg");
+      this.ctx.db.run(
+        `INSERT INTO multiremi_chat_messages (id, chat_session_id, task_id, role, body, created_at)
+         VALUES (?, ?, ?, 'user', ?, ?)`,
+        messageId,
+        chatSessionId,
+        task.id,
+        text,
+        now,
+      );
+      this.ctx.db.run(
+        "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
+        task.id,
+        now,
+        chatSessionId,
+      );
+      this.ctx.db.run(
+        `INSERT INTO multiremi_feishu_bot_deliveries (
+           workspace_id, external_message_id, binding_id, task_id,
+           reply_to_message_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        workspaceId,
+        externalMessageId,
+        String(binding.id),
+        task.id,
+        cleanOptionalString(input.replyToMessageId),
+        now,
+        now,
+      );
+      return {
+        chatSessionId,
+        taskId: task.id,
+        status: task.status,
+        duplicate: false,
+        steered,
+      };
+    })();
+    if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
+    return result;
+  }
+
+  resetSession(workspaceId: string, runtimeId: string, revision: number, externalSessionKey: string): boolean {
+    const config = this.getConfig(workspaceId);
+    if (!config || config.runtimeId !== runtimeId || config.revision !== revision) return false;
+    const key = requiredBoundedString(externalSessionKey, "external_session_key", 1_024);
+    const row = this.ctx.db.query(
+      `SELECT id FROM multiremi_feishu_bot_chat_bindings
+        WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
+    ).get(workspaceId, config.appId, config.agentId, key) as Row | null;
+    if (!row) return false;
+    this.ctx.db.run(
+      `UPDATE multiremi_feishu_bot_chat_bindings
+          SET external_session_key = ?, updated_at = ?
+        WHERE id = ?`,
+      `${key}:closed:${String(row.id)}`,
+      nowIso(),
+      String(row.id),
+    );
+    return true;
+  }
+
+  cancelSessionTask(workspaceId: string, runtimeId: string, revision: number, externalSessionKey: string): string | null {
+    const config = this.getConfig(workspaceId);
+    if (!config || config.runtimeId !== runtimeId || config.revision !== revision) return null;
+    const binding = this.ctx.db.query(
+      `SELECT chat_session_id FROM multiremi_feishu_bot_chat_bindings
+        WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
+    ).get(workspaceId, config.appId, config.agentId, externalSessionKey) as Row | null;
+    if (!binding) return null;
+    const task = this.ctx.chat().getPendingChatTask(String(binding.chat_session_id));
+    if (!task) return null;
+    this.ctx.tasks().cancelTask(task.id);
+    return task.id;
+  }
+
+  inspectSession(
+    workspaceId: string,
+    runtimeId: string,
+    revision: number,
+    externalSessionKey: string,
+  ): FeishuBotSessionSnapshot {
+    const config = this.getConfig(workspaceId);
+    if (!config || config.runtimeId !== runtimeId || config.revision !== revision) {
+      return { chatSessionId: null, task: null };
+    }
+    const key = requiredBoundedString(externalSessionKey, "external_session_key", 1_024);
+    const binding = this.ctx.db.query(
+      `SELECT chat_session_id FROM multiremi_feishu_bot_chat_bindings
+        WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
+    ).get(workspaceId, config.appId, config.agentId, key) as Row | null;
+    if (!binding) return { chatSessionId: null, task: null };
+
+    const chatSessionId = String(binding.chat_session_id);
+    const chat = this.ctx.chat().getChatSession(chatSessionId);
+    const task = chat?.latestTaskId ? this.ctx.tasks().getTask(chat.latestTaskId) : null;
+    return {
+      chatSessionId,
+      task: task
+        ? {
+            taskId: task.id,
+            status: task.status,
+            result: task.result,
+            error: task.error,
+            sessionId: task.sessionId,
+            workDir: task.workDir,
+            usage: task.usage,
+          }
+        : null,
     };
   }
 
@@ -621,7 +816,7 @@ export function deriveStatus(input: {
 
 function resolveSecretColumn(
   workspaceId: string,
-  field: "app_secret" | "verification_token" | "encrypt_key",
+  field: "app_secret",
   op: FeishuBotSecretOp,
   value: string | undefined,
   existing: string | null,
@@ -639,14 +834,13 @@ function resolveSecretColumn(
   return { ciphertext: existing, hint: null, changed: false };
 }
 
-function decryptOptional(
-  workspaceId: string,
-  field: "verification_token" | "encrypt_key",
-  value: unknown,
-): string | null {
-  const ciphertext = nullableString(value);
-  if (!ciphertext) return null;
-  return decryptFeishuBotSecret(ciphertext, { workspaceId, field });
+function requiredBoundedString(value: unknown, field: string, maxLength: number): string {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) throw new FeishuBotConfigError(`${field} is required`, 400, `${field}_required`);
+  if (normalized.length > maxLength) {
+    throw new FeishuBotConfigError(`${field} is too long`, 400, `${field}_too_long`);
+  }
+  return normalized;
 }
 
 function normalizeDomain(value: unknown): FeishuBotDomain {
@@ -665,8 +859,6 @@ function mapConfig(row: Row): MultiremiFeishuBotConfig {
     revision: Number(row.revision ?? 0),
     hasAppSecret: Boolean(nullableString(row.app_secret_encrypted)),
     appSecretHint: nullableString(row.app_secret_hint),
-    hasVerificationToken: Boolean(nullableString(row.verification_token_encrypted)),
-    hasEncryptKey: Boolean(nullableString(row.encrypt_key_encrypted)),
     botName: nullableString(row.bot_name),
     botOpenId: nullableString(row.bot_open_id),
     lastTestedAt: nullableString(row.last_tested_at),

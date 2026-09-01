@@ -154,7 +154,9 @@ export async function *processStream(
     agent: remi.agent,
     sessionRow: sessRow,
     sessionKey,
-    topicCwd,
+    // Legacy Remi owns its own process workspace. Personal Feishu bots no
+    // longer use this path; their cwd is resolved from the canonical Task.
+    topicCwd: topicCwd ?? process.cwd(),
   };
   const sessionConfig = remi._runtime.assemble(runtimeCtx);
 

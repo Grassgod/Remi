@@ -58,9 +58,9 @@ import { FeishuBotRegistrationDialog, type ClaimedRegistration } from "./feishu-
 /**
  * Workspace Feishu concierge (MUL-206).
  *
- * Replaces four environment variables on the daemon machine —
- * `MULTIREMI_WORKSPACE_ID`, `MULTIREMI_BOT_AGENT_ID`, `FEISHU_APP_ID`,
- * `FEISHU_APP_SECRET` — with a form an admin can reach from a browser.
+ * Keeps the selected Agent, machine, domain and app credentials in the control
+ * plane so the daemon can reconcile the connector from a browser-managed
+ * revision.
  *
  * Two things this component is careful about:
  *
@@ -146,11 +146,6 @@ interface Draft {
   appId: string;
   domain: FeishuBotDomain;
   appSecret: string;
-  verificationToken: string;
-  encryptKey: string;
-  /** Set when the admin explicitly clears an optional secret. */
-  clearVerificationToken: boolean;
-  clearEncryptKey: boolean;
   /** Present after a successful scan; consumed by the next save. */
   registration: ClaimedRegistration | null;
 }
@@ -161,10 +156,6 @@ const EMPTY_DRAFT: Draft = {
   appId: "",
   domain: "feishu",
   appSecret: "",
-  verificationToken: "",
-  encryptKey: "",
-  clearVerificationToken: false,
-  clearEncryptKey: false,
   registration: null,
 };
 
@@ -226,6 +217,19 @@ function FeishuBotAdminPanel({
     && secretSatisfied
     && encryptionAvailable
     && !busy;
+  const selectedAgent = candidates?.agents.find((agent) => agent.id === draft.agentId);
+  const selectedProvider = selectedAgent?.provider;
+  const runtimeByMachine = new Map<string, NonNullable<FeishuBotCandidates["runtimes"]>[number]>();
+  for (const runtime of candidates?.runtimes ?? []) {
+    if (runtime.provider !== selectedProvider) continue;
+    const machineKey = runtime.daemon_id ?? runtime.id;
+    const current = runtimeByMachine.get(machineKey);
+    if (!current || preferMachineRuntime(runtime, current, draft.runtimeId)) {
+      runtimeByMachine.set(machineKey, runtime);
+    }
+  }
+  const machineCandidates = [...runtimeByMachine.values()];
+  const selectedMachine = machineCandidates.find((runtime) => runtime.id === draft.runtimeId);
 
   function buildRequest(): UpsertFeishuBotRequest {
     const request: UpsertFeishuBotRequest = {
@@ -238,12 +242,8 @@ function FeishuBotAdminPanel({
       // not quietly go live.
       enabled: config?.enabled ?? false,
       app_secret_op: secretOp(draft.appSecret, false),
-      verification_token_op: secretOp(draft.verificationToken, draft.clearVerificationToken),
-      encrypt_key_op: secretOp(draft.encryptKey, draft.clearEncryptKey),
     };
     if (draft.appSecret.trim()) request.app_secret = draft.appSecret.trim();
-    if (draft.verificationToken.trim()) request.verification_token = draft.verificationToken.trim();
-    if (draft.encryptKey.trim()) request.encrypt_key = draft.encryptKey.trim();
     // A scanned credential never passes through the browser: the server holds
     // the secret against the session id and we only tell it to use that.
     if (draft.registration && !draft.appSecret.trim()) {
@@ -262,10 +262,6 @@ function FeishuBotAdminPanel({
       setDraft((current) => ({
         ...current,
         appSecret: "",
-        verificationToken: "",
-        encryptKey: "",
-        clearVerificationToken: false,
-        clearEncryptKey: false,
         registration: null,
       }));
       setDirty(false);
@@ -325,10 +321,25 @@ function FeishuBotAdminPanel({
               <Select
                 disabled={candidatesPending || busy}
                 value={draft.agentId}
-                onValueChange={(value) => value && edit({ agentId: value })}
+                onValueChange={(value) => {
+                  if (!value) return;
+                  const provider = candidates?.agents.find((agent) => agent.id === value)?.provider;
+                  const currentRuntime = candidates?.runtimes.find((runtime) => runtime.id === draft.runtimeId);
+                  const matchingRuntime = (candidates?.runtimes ?? [])
+                    .filter((runtime) =>
+                      runtime.provider === provider && runtime.daemon_id === currentRuntime?.daemon_id
+                    )
+                    .reduce<FeishuBotCandidates["runtimes"][number] | null>(
+                      (best, runtime) => !best || preferMachineRuntime(runtime, best, "") ? runtime : best,
+                      null,
+                    );
+                  edit({ agentId: value, runtimeId: matchingRuntime?.id ?? "" });
+                }}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={t(($) => $.feishu.concierge.agent_placeholder)} />
+                  <SelectValue>
+                    {() => selectedAgent?.name ?? t(($) => $.feishu.concierge.agent_placeholder)}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {(candidates?.agents ?? []).map((agent) => (
@@ -350,10 +361,12 @@ function FeishuBotAdminPanel({
                 onValueChange={(value) => value && edit({ runtimeId: value })}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={t(($) => $.feishu.concierge.runtime_placeholder)} />
+                  <SelectValue>
+                    {() => selectedMachine?.name ?? t(($) => $.feishu.concierge.runtime_placeholder)}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {(candidates?.runtimes ?? []).map((runtime) => (
+                  {machineCandidates.map((runtime) => (
                     // A Runtime that has not advertised the capability is shown
                     // but not selectable: hiding it would leave an admin
                     // wondering why their daemon is missing from the list.
@@ -416,34 +429,6 @@ function FeishuBotAdminPanel({
               text={t(($) => $.feishu.concierge.registration_pending_save, { appId: draft.registration.appId })}
             />
           )}
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <SecretField
-              id="feishu-bot-verification-token"
-              label={t(($) => $.feishu.concierge.verification_token_label)}
-              hint={null}
-              configured={config?.verification_token_configured === true}
-              value={draft.verificationToken}
-              disabled={busy || draft.clearVerificationToken}
-              cleared={draft.clearVerificationToken}
-              onClearToggle={() => edit({
-                clearVerificationToken: !draft.clearVerificationToken,
-                verificationToken: "",
-              })}
-              onChange={(value) => edit({ verificationToken: value })}
-            />
-            <SecretField
-              id="feishu-bot-encrypt-key"
-              label={t(($) => $.feishu.concierge.encrypt_key_label)}
-              hint={null}
-              configured={config?.encrypt_key_configured === true}
-              value={draft.encryptKey}
-              disabled={busy || draft.clearEncryptKey}
-              cleared={draft.clearEncryptKey}
-              onClearToggle={() => edit({ clearEncryptKey: !draft.clearEncryptKey, encryptKey: "" })}
-              onChange={(value) => edit({ encryptKey: value })}
-            />
-          </div>
 
           <div className="flex flex-wrap items-center gap-2 border-t pt-4">
             <Button size="sm" disabled={!canSave} onClick={() => void handleSave()}>
@@ -542,6 +527,21 @@ function FeishuBotAdminPanel({
       </AlertDialog>
     </section>
   );
+}
+
+function preferMachineRuntime(
+  candidate: FeishuBotCandidates["runtimes"][number],
+  current: FeishuBotCandidates["runtimes"][number],
+  selectedRuntimeId: string,
+): boolean {
+  if (candidate.id === selectedRuntimeId) return true;
+  if (current.id === selectedRuntimeId) return false;
+  if (candidate.supports_config !== current.supports_config) return candidate.supports_config;
+  if (candidate.online !== current.online) return candidate.online;
+  const candidateHeartbeat = Date.parse(candidate.last_heartbeat_at ?? "") || 0;
+  const currentHeartbeat = Date.parse(current.last_heartbeat_at ?? "") || 0;
+  if (candidateHeartbeat !== currentHeartbeat) return candidateHeartbeat > currentHeartbeat;
+  return candidate.id.localeCompare(current.id) < 0;
 }
 
 function StatusPanel({

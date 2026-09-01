@@ -3,7 +3,6 @@ import { stat } from "node:fs/promises";
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiAgent,
-  MultiremiDaemonBotProject,
   ReportBotMenuPublishInput,
   MultiremiProjectDocIndexEntry,
   MultiremiRepoData,
@@ -28,6 +27,11 @@ import type {
   FeishuBotRuntimeState,
   MultiremiFeishuBotDaemonConfig,
   MultiremiFeishuBotDaemonPayload,
+  MultiremiTaskMessage,
+  FeishuBotTaskSnapshot,
+  FeishuBotSessionSnapshot,
+  SubmitFeishuBotMessageInput,
+  SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
 import {
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
@@ -51,8 +55,6 @@ export interface MultiremiDaemonRegisterRuntimeInput {
   launchedBy?: string | null;
   agentPluginProtocol?: number;
   sshMeshProtocol?: number;
-  botAgentId?: string | null;
-  includeBotProjects?: boolean;
   runtime: {
     name: string;
     type: string;
@@ -82,15 +84,11 @@ export interface MultiremiDaemonRegisterResponse {
   settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
   runtimes: Array<{ id: string; provider?: string; type?: string }>;
-  botAgent?: MultiremiAgent | null;
-  botProjects?: MultiremiDaemonBotProject[];
 }
 
 export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonHeartbeatAck {
   workspace_settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
-  botAgent?: MultiremiAgent | null;
-  botProjects?: MultiremiDaemonBotProject[];
 }
 
 export interface MultiremiDaemonGcStatus {
@@ -159,13 +157,12 @@ export class MultiremiDaemonHttpError extends Error {
 }
 
 /**
- * The concierge assignment as the daemon uses it: credentials, plus the Agent
- * row and projects normalized out of the same response.
+ * The concierge assignment as the daemon uses it: credentials plus the Agent
+ * row normalized out of the same response.
  */
 export interface MultiremiFeishuBotAssignment {
   config: MultiremiFeishuBotDaemonConfig;
   agent: MultiremiAgent;
-  projects: MultiremiDaemonBotProject[];
 }
 
 /**
@@ -233,30 +230,18 @@ export class MultiremiDaemonClient {
   }
 
   async registerDaemonRuntime(input: MultiremiDaemonRegisterRuntimeInput): Promise<MultiremiDaemonRegisterResponse> {
-    const response = await this.post<MultiremiDaemonRegisterResponse & {
-      bot_agent?: unknown;
-      bot_projects?: unknown;
-    }>("/api/daemon/register", {
+    return this.post<MultiremiDaemonRegisterResponse>("/api/daemon/register", {
       workspace_id: input.workspaceId,
       daemon_id: input.daemonId,
       device_name: input.deviceName ?? "",
       cli_version: input.cliVersion ?? "",
       launched_by: input.launchedBy ?? "",
-      ...(input.botAgentId ? { bot_agent_id: input.botAgentId } : {}),
-      ...(input.includeBotProjects ? { include_bot_projects: true } : {}),
       capabilities: {
         agent_plugins: input.agentPluginProtocol ?? MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         ssh_mesh: input.sshMeshProtocol ?? MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
       },
       runtimes: [input.runtime],
     });
-    const botAgent = normalizeDaemonAgent(response.bot_agent);
-    const botProjects = normalizeDaemonBotProjects(response.bot_projects);
-    return {
-      ...response,
-      ...(botAgent ? { botAgent } : {}),
-      ...(botProjects ? { botProjects } : {}),
-    };
   }
 
   async recoverOrphans(runtimeId: string): Promise<MultiremiRecoverOrphansResult> {
@@ -272,8 +257,6 @@ export class MultiremiDaemonClient {
     runtimeId: string,
     sshMeshStatus?: MultiremiDaemonSshMeshStatus,
     drainStatus?: { ackGeneration: number; activeTaskCount: number },
-    botAgentId?: string | null,
-    includeBotProjects = false,
     supportsBotMenu = false,
     supportsFeishuConcierge = false,
   ): Promise<MultiremiDaemonHeartbeatConfigAck> {
@@ -293,8 +276,6 @@ export class MultiremiDaemonClient {
               active_task_count: drainStatus.activeTaskCount,
             }
           : {}),
-        ...(botAgentId ? { bot_agent_id: botAgentId } : {}),
-        ...(includeBotProjects ? { include_bot_projects: true } : {}),
         // Only claimed when this process can actually host the connector, so
         // the control plane never hands the bot to a Runtime that cannot run it.
         ...(supportsFeishuConcierge
@@ -307,14 +288,10 @@ export class MultiremiDaemonClient {
       }
       throw error;
     }
-    const botAgent = normalizeDaemonAgent((resp as Record<string, unknown>).bot_agent);
-    const botProjects = normalizeDaemonBotProjects((resp as Record<string, unknown>).bot_projects);
     return {
       runtime_id: runtimeId,
       status: resp.status ?? "ok",
       ...resp,
-      ...(botAgent ? { botAgent } : {}),
-      ...(botProjects ? { botProjects } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
   }
 
@@ -354,12 +331,12 @@ export class MultiremiDaemonClient {
       }
       throw error;
     }
-    const { bot_agent: rawAgent, bot_projects: rawProjects, ...config } = payload;
+    const { bot_agent: rawAgent, ...config } = payload;
     const agent = normalizeDaemonAgent(rawAgent);
     if (!agent) {
       throw new MultiremiFeishuBotAssignmentError("the control plane returned no bot Agent", "agent_unavailable");
     }
-    return { config, agent, projects: Array.isArray(rawProjects) ? rawProjects : [] };
+    return { config, agent };
   }
 
   async reportFeishuBotRuntimeStatus(
@@ -377,6 +354,85 @@ export class MultiremiDaemonClient {
       `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/status`,
       input,
     );
+  }
+
+  async submitFeishuBotMessage(
+    runtimeId: string,
+    input: SubmitFeishuBotMessageInput,
+  ): Promise<SubmitFeishuBotMessageResult> {
+    const response = await this.post<{
+      chatSessionId: string;
+      taskId: string;
+      status: MultiremiTaskStatus;
+      duplicate: boolean;
+      steered: boolean;
+    }>(`/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/messages`, {
+      revision: input.revision,
+      external_session_key: input.externalSessionKey,
+      external_message_id: input.externalMessageId,
+      reply_to_message_id: input.replyToMessageId ?? undefined,
+      sender_open_id: input.senderOpenId ?? undefined,
+      chat_id: input.chatId ?? undefined,
+      thread_id: input.threadId ?? undefined,
+      text: input.text,
+    });
+    return response;
+  }
+
+  async resetFeishuBotSession(runtimeId: string, revision: number, externalSessionKey: string): Promise<boolean> {
+    const response = await this.post<{ reset: boolean }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/session/reset`,
+      { revision, external_session_key: externalSessionKey },
+    );
+    return response.reset === true;
+  }
+
+  async cancelFeishuBotSessionTask(
+    runtimeId: string,
+    revision: number,
+    externalSessionKey: string,
+  ): Promise<{ cancelled: boolean; taskId: string | null }> {
+    const response = await this.post<{ cancelled: boolean; task_id?: string | null }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/session/cancel`,
+      { revision, external_session_key: externalSessionKey },
+    );
+    return { cancelled: response.cancelled === true, taskId: response.task_id ?? null };
+  }
+
+  async inspectFeishuBotSession(
+    runtimeId: string,
+    revision: number,
+    externalSessionKey: string,
+  ): Promise<FeishuBotSessionSnapshot> {
+    const response = await this.post<{
+      chat_session_id?: string | null;
+      task?: {
+        task_id: string;
+        status: MultiremiTaskStatus;
+        result?: string | null;
+        error?: string | null;
+        session_id?: string | null;
+        work_dir?: string | null;
+        usage?: TaskUsageEntry[];
+      } | null;
+    }>(`/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/feishu-bot/session/inspect`, {
+      revision,
+      external_session_key: externalSessionKey,
+    });
+    return {
+      chatSessionId: response.chat_session_id ?? null,
+      task: response.task
+        ? {
+            taskId: response.task.task_id,
+            status: response.task.status,
+            result: response.task.result ?? null,
+            error: response.task.error ?? null,
+            sessionId: response.task.session_id ?? null,
+            workDir: response.task.work_dir ?? null,
+            usage: Array.isArray(response.task.usage) ? response.task.usage : [],
+          }
+        : null,
+    };
   }
 
   async getSshMeshConfig(runtimeId: string, signal?: AbortSignal): Promise<MultiremiDaemonSshMeshConfig> {
@@ -538,6 +594,69 @@ export class MultiremiDaemonClient {
 
   async reportTaskMessages(taskId: string, messages: TaskMessageInput[]): Promise<void> {
     await this.post(`/api/daemon/tasks/${taskId}/messages`, { messages });
+  }
+
+  async listTaskMessages(taskId: string, sinceSeq = 0): Promise<MultiremiTaskMessage[]> {
+    const rows = await this.get<Array<{
+      task_id: string;
+      seq: number;
+      type: string;
+      tool?: string;
+      content?: string;
+      input?: Record<string, unknown>;
+      output?: string;
+      tool_call_id?: string;
+      status?: string;
+      meta?: Record<string, unknown>;
+      created_at: string;
+    }>>(`/api/daemon/tasks/${encodeURIComponent(taskId)}/messages?since_seq=${Math.max(0, Math.floor(sinceSeq))}`);
+    return rows.map((row) => ({
+      id: `${row.task_id}:${row.seq}`,
+      taskId: row.task_id,
+      seq: row.seq,
+      type: row.type,
+      tool: row.tool ?? null,
+      content: row.content ?? null,
+      input: row.input ?? null,
+      output: row.output ?? null,
+      toolCallId: row.tool_call_id ?? null,
+      status: row.status ?? null,
+      meta: row.meta ?? null,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async getFeishuBotTaskSnapshot(taskId: string): Promise<FeishuBotTaskSnapshot> {
+    const response = await this.get<{
+      task_id: string;
+      status: MultiremiTaskStatus;
+      result?: string | null;
+      error?: string | null;
+      session_id?: string | null;
+      work_dir?: string | null;
+      usage?: TaskUsageEntry[];
+    }>(`/api/daemon/tasks/${encodeURIComponent(taskId)}/status`);
+    return {
+      taskId: response.task_id ?? taskId,
+      status: response.status,
+      result: response.result ?? null,
+      error: response.error ?? null,
+      sessionId: response.session_id ?? null,
+      workDir: response.work_dir ?? null,
+      usage: Array.isArray(response.usage) ? response.usage : [],
+    };
+  }
+
+  async respondTaskHumanRequest(
+    taskId: string,
+    requestId: string,
+    response: Record<string, unknown>,
+  ): Promise<MultiremiTaskHumanRequest> {
+    const result = await this.post<{ request: MultiremiTaskHumanRequest }>(
+      `/api/daemon/tasks/${encodeURIComponent(taskId)}/human-requests/${encodeURIComponent(requestId)}/respond`,
+      { response, responded_by: "feishu" },
+    );
+    return result.request;
   }
 
   async reportTaskPrompt(taskId: string, input: { mode: "bootstrap" | "delta"; prompt: string; sha256: string }): Promise<void> {
@@ -1172,7 +1291,6 @@ export function normalizeDaemonAgent(raw: any): MultiremiAgent | null {
     archivedAt: stringOrNull(raw.archived_at ?? raw.archivedAt),
     createdAt: stringOrNull(raw.created_at ?? raw.createdAt) ?? "",
     updatedAt: stringOrNull(raw.updated_at ?? raw.updatedAt) ?? "",
-    cwd: stringOrNull(raw.cwd),
     executable: stringOrNull(raw.executable),
     model: stringOrNull(raw.model),
     skills: Array.isArray(raw.skills) ? raw.skills : [],
@@ -1389,18 +1507,6 @@ function normalizeDaemonClaimProjectContexts(raw: any): MultiremiTaskWithAgent["
       docs,
       repos: Array.isArray(context.repos) ? context.repos : [],
     }];
-  });
-}
-
-function normalizeDaemonBotProjects(raw: unknown): MultiremiDaemonBotProject[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  return raw.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
-    const record = entry as Record<string, unknown>;
-    const id = stringOrNull(record.id);
-    const title = stringOrNull(record.title);
-    const cwd = stringOrNull(record.cwd);
-    return id && title && cwd ? [{ id, title, cwd }] : [];
   });
 }
 

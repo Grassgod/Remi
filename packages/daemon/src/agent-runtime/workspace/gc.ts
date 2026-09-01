@@ -94,14 +94,15 @@ export interface RunWorkspaceGcOnceOptions {
   now?: number;
 }
 
-type MultiremiGcKind = "issue" | "discussion_issue" | "chat" | "autopilot_run" | "quick_create";
+type MultiremiGcKind = "issue" | "issue_runtime" | "discussion_issue" | "chat" | "autopilot_run" | "quick_create";
 type MultiremiGcDecision = "clean" | "orphan" | "skip";
 interface MultiremiGcResolution {
   decision: MultiremiGcDecision;
   archive: MultiremiIssueWorkspaceArchiveBinding | null;
 }
 const ISSUE_CLEANED_OUTBOX_DIR = ".gc-cleaned-outbox";
-const DISCUSSION_SESSION_ROOT = ".sessions";
+const DISCUSSION_SESSION_ROOT = "discussions";
+const RUNTIME_SESSION_ROOT = ".runtime";
 const GC_RESERVED_ROOTS = new Set([
   ISSUE_CLEANED_OUTBOX_DIR,
   ".repos",
@@ -146,6 +147,18 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
       || GC_RESERVED_ROOTS.has(workspace.name)
     ) continue;
     const workspaceDir = join(root, workspace.name);
+    if (workspace.name === RUNTIME_SESSION_ROOT) {
+      for (const session of safeReadDir(workspaceDir) ?? []) {
+        if (!session.isDirectory()) continue;
+        const sessionDir = join(workspaceDir, session.name);
+        // Issue history is archived and removed together with its business
+        // workspace under the Issue lifecycle lock. Never collect one lineage
+        // independently and accidentally make the aggregate incomplete.
+        if (readGcMeta(sessionDir)?.kind === "issue_runtime") continue;
+        await collectWorkspaceGcDecision(root, sessionDir, options, summary);
+      }
+      continue;
+    }
     if (workspace.name === TOPIC_WORKSPACE_ROOT) {
       for (const topic of safeReadDir(workspaceDir) ?? []) {
         if (!topic.isDirectory()) continue;
@@ -317,6 +330,14 @@ async function collectWorkspaceGcDecisionUnlocked(
   }
   try {
     options.assertRootOwner?.();
+    if (decision === "clean" && issueId) {
+      // `getIssueGcDecision` has already crossed the archive barrier (when
+      // enabled). Remove provider-native history before the Issue workspace;
+      // its durable archive receipt remains inside the workspace, so a crash
+      // after a partial runtime cleanup retries against the same verified
+      // archive rather than producing a snapshot of only the survivors.
+      removeIssueRuntimeRoots(root, issueId, options.assertRootOwner);
+    }
     removeGcWorkDir(root, workspaceDir, options.assertRootOwner);
   } catch (error) {
     if (reportReceipt) {
@@ -494,6 +515,7 @@ async function getWorkspaceGcDecision(
     return gcResolution(staleDirDecision(taskDir, options.orphanTtlMs, now));
   }
   if (meta.local_directory) return gcResolution("skip");
+  if (meta.kind === "issue_runtime") return gcResolution("skip");
 
   if (meta.kind === "issue") return getIssueGcDecision(meta, taskDir, options, now);
   if (meta.kind === "discussion_issue") return getDiscussionIssueGcDecision(meta, taskDir, options, now);
@@ -569,7 +591,7 @@ async function getIssueGcDecision(
     return eligibleForDeletion ? gcResolution("clean") : gcResolution("skip");
   } catch (err) {
     if (isNotFoundError(err)) {
-      if (hasIssueSessionState(taskDir)) {
+      if (hasIssueSessionState(taskDir) || hasIssueRuntimeState(options.root, issueId)) {
         throw new Error(
           `Issue ${issueId} is missing from the server while provider Session state remains; refusing orphan cleanup`,
           { cause: err },
@@ -614,6 +636,36 @@ function hasIssueSessionState(workspaceDir: string): boolean {
     }
   }
   return false;
+}
+
+function hasIssueRuntimeState(root: string, issueId: string): boolean {
+  return issueRuntimeRoots(root, issueId).length > 0;
+}
+
+function removeIssueRuntimeRoots(root: string, issueId: string, assertRootOwner?: () => void): void {
+  for (const sessionRoot of issueRuntimeRoots(root, issueId)) {
+    assertRootOwner?.();
+    removeGcWorkDir(root, sessionRoot, assertRootOwner);
+  }
+}
+
+function issueRuntimeRoots(root: string, issueId: string): string[] {
+  const runtimeRoot = join(resolve(root), RUNTIME_SESSION_ROOT);
+  const info = safeLstat(runtimeRoot);
+  if (!info) return [];
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`Runtime state root must be a real directory: ${runtimeRoot}`);
+  }
+  const roots: string[] = [];
+  for (const entry of safeReadDir(runtimeRoot) ?? []) {
+    if (!entry.isDirectory()) continue;
+    const sessionRoot = join(runtimeRoot, entry.name);
+    const meta = readGcMeta(sessionRoot);
+    if (meta?.kind === "issue_runtime" && stringField(meta.issue_id) === issueId) {
+      roots.push(sessionRoot);
+    }
+  }
+  return roots.sort((left, right) => left.localeCompare(right));
 }
 
 function hasPotentialGitWorktree(workspaceDir: string): boolean {

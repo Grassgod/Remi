@@ -66,7 +66,6 @@ export class Remi {
     this.agent = agent;
     this._botProjects = botProjects ? new Map(botProjects.map((project) => [project.id, project])) : null;
     this._ensureTopicWorkspaceCallback = ensureTopicWorkspace;
-    if (!agent.cwd?.trim()) throw new Error(`Bot agent ${agent.id} has no cwd configured`);
     if (agent.archivedAt) throw new Error(`Bot agent ${agent.id} is archived`);
     this._scheduler = new LaneScheduler({ maxConcurrency: agent.maxConcurrentTasks });
     this.metrics = new MetricsCollector(REMI_HOME);
@@ -286,7 +285,7 @@ export class Remi {
       agentType: type,
       model: agent.model,
       allowedTools: agent.allowedTools,
-      cwd: agent.cwd!,
+      cwd: process.cwd(),
       executable: agent.executable ?? undefined,
       args: agent.customArgs,
       env: { ...agent.customEnv, ...runtimeEnv },

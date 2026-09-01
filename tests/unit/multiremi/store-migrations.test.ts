@@ -85,6 +85,9 @@ describe("store migrations", () => {
     expect(tables).not.toContain("multiremi_github_pull_requests");
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
     expect(columnNames(database, "multiremi_agents")).toContain("issue_creation_requires_proposal");
+    expect(columnNames(database, "multiremi_agents")).not.toContain("cwd");
+    expect(columnNames(database, "multiremi_feishu_bot_configs")).not.toContain("verification_token_encrypted");
+    expect(columnNames(database, "multiremi_feishu_bot_configs")).not.toContain("encrypt_key_encrypted");
     expect(columnNames(database, "multiremi_feishu_message_outcomes")).toEqual(expect.arrayContaining([
       "proposal_payload", "proposal_status", "proposal_resolved_at", "proposal_resolved_by",
     ]));
@@ -141,6 +144,23 @@ describe("store migrations", () => {
       "auto_update_last_checked_at",
       "auto_update_last_result",
     ]));
+  });
+
+  it("drops removed Agent cwd and Feishu webhook credential columns", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      ALTER TABLE multiremi_agents ADD COLUMN cwd TEXT;
+      ALTER TABLE multiremi_feishu_bot_configs ADD COLUMN verification_token_encrypted TEXT;
+      ALTER TABLE multiremi_feishu_bot_configs ADD COLUMN encrypt_key_encrypted TEXT;
+    `);
+
+    migrate(database);
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_agents")).not.toContain("cwd");
+    expect(columnNames(database, "multiremi_feishu_bot_configs")).not.toContain("verification_token_encrypted");
+    expect(columnNames(database, "multiremi_feishu_bot_configs")).not.toContain("encrypt_key_encrypted");
   });
 
   it("backfills Project Wiki paths from stable slugs on legacy databases", () => {

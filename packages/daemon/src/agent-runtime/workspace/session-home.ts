@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { access, lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -30,6 +31,11 @@ export interface IssueSessionProviderHome {
   runtimeStateRoot?: string;
   /** Present only for non-Issue task-scoped homes that must be removed after the run. */
   temporaryTaskRoot?: string;
+}
+
+export interface IssueSessionRuntimeRoot {
+  sessionId: string;
+  root: string;
 }
 
 export interface PrepareIssueSessionProviderHomeOptions {
@@ -68,9 +74,9 @@ const CLAUDE_PROVIDER_ENV_KEYS = new Set([
 ]);
 
 /**
- * Resolve the daemon-owned state root for an Issue run. The fallback branch is
- * defensive: Issue tasks normally never resolve to local_directory, but old
- * data must still not place provider/plugin state inside a user's checkout.
+ * Resolve the canonical Issue working root. The fallback branch is defensive:
+ * legacy local-directory tasks still redirect runtime state away from the
+ * user's checkout and into `${R}/issues`.
  */
 export function resolveIssueRuntimeStateRoot(
   task: AgentTask,
@@ -81,20 +87,19 @@ export function resolveIssueRuntimeStateRoot(
   if (!localDirectory) return resolve(workDir);
   const issueId = cleanString(task.issueId ?? task.issue_id);
   if (!issueId) return resolve(workspacesRoot);
-  return join(resolve(workspacesRoot), ".issue-runtime", safePathSegment(issueId));
+  const issueKey = cleanString(task.issue?.key) ?? `legacy-${issueId}`;
+  return join(resolve(workspacesRoot), "issues", safePathSegment(issueKey));
 }
 
 /**
- * Resolve provider-native state beneath the stable Issue workspace. One lane
- * generation owns one home, so a provider reset never mixes its JSONL/history
- * with the lineage that was abandoned. The ACP child receives this exact home,
- * which makes the provider's native session files directly inspectable under
- * `.multiremi/sessions`.
+ * Resolve provider-native state under the single daemon-owned runtime tree.
+ * One product session/Agent/generation tuple owns one home regardless of which
+ * surface (Issue, discussion, Chat) initiated the run.
  */
 export function resolveIssueSessionProviderHome(
   task: AgentTask,
-  workDir: string,
-  _workspacesRoot: string,
+  _workDir: string,
+  workspacesRoot: string,
 ): IssueSessionProviderHome | null {
   const formalSessionId = cleanString(task.issueSessionId ?? task.issue_session_id);
   const issueId = cleanString(task.issueId ?? task.issue_id);
@@ -106,11 +111,10 @@ export function resolveIssueSessionProviderHome(
   const generation = formalSessionId
     ? positiveInteger(task.issueSessionGeneration ?? task.issue_session_generation, 1)
     : 1;
-  const storageRoot = resolve(workDir);
+  const storageRoot = resolve(workspacesRoot);
   const generationRoot = join(
     storageRoot,
-    ".multiremi",
-    "sessions",
+    ".runtime",
     safePathSegment(sessionId),
     safePathSegment(agentId),
     String(generation),
@@ -128,7 +132,44 @@ export function resolveIssueSessionProviderHome(
     generation,
     provider,
     ...(execution ? { executionFingerprint: execution.fingerprint } : {}),
+    runtimeStateRoot: join(storageRoot, ".runtime", safePathSegment(sessionId)),
   };
+}
+
+/** Find the runtime Session roots that belong to one Issue without following links. */
+export function listIssueSessionRuntimeRoots(
+  workspacesRoot: string,
+  issueId: string,
+): IssueSessionRuntimeRoot[] {
+  const runtimeRoot = join(resolve(workspacesRoot), ".runtime");
+  let rootInfo;
+  try {
+    rootInfo = lstatSync(runtimeRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+    throw new Error(`Runtime state root must be a real directory: ${runtimeRoot}`);
+  }
+
+  const roots: IssueSessionRuntimeRoot[] = [];
+  for (const entry of readdirSync(runtimeRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const sessionRoot = join(runtimeRoot, entry.name);
+    const metadataPath = join(sessionRoot, ".multiremi", "gc.json");
+    try {
+      const metadataInfo = lstatSync(metadataPath);
+      if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink()) continue;
+      const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
+      if (metadata.kind === "issue_runtime" && metadata.issue_id === issueId) {
+        roots.push({ sessionId: entry.name, root: sessionRoot });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+  }
+  return roots.sort((left, right) => left.sessionId.localeCompare(right.sessionId));
 }
 
 /**
@@ -158,16 +199,11 @@ export function resolveTaskProviderHome(
   const execution = provider === "codex" ? codexExecutionIdentity(task) : null;
   const chatSessionId = cleanString(task.chatSessionId);
   if (chatSessionId) {
-    const runtimeStateRoot = join(
-      storageRoot,
-      ".session-runtime",
-      safePathSegment(chatSessionId),
-    );
+    const runtimeStateRoot = join(storageRoot, ".runtime", safePathSegment(chatSessionId));
     const providerRoot = join(
       runtimeStateRoot,
-      "provider-home",
       safePathSegment(agentId),
-      provider,
+      "1",
     );
     const root = execution
       ? join(providerRoot, "executions", execution.segment)
@@ -185,12 +221,11 @@ export function resolveTaskProviderHome(
     };
   }
 
-  const temporaryTaskRoot = join(storageRoot, ".task-runtime", safePathSegment(taskId));
+  const temporaryTaskRoot = join(storageRoot, ".runtime", safePathSegment(taskId));
   const providerRoot = join(
     temporaryTaskRoot,
-    "provider-home",
     safePathSegment(agentId),
-    provider,
+    "1",
   );
   const root = execution
     ? join(providerRoot, "executions", execution.segment)
@@ -234,7 +269,7 @@ export async function cleanupTemporaryTaskProviderHome(
   const temporaryTaskRoot = resolvedHome?.temporaryTaskRoot;
   if (!resolvedHome || !temporaryTaskRoot) return;
 
-  const ownerRoot = join(resolve(workspacesRoot), ".task-runtime");
+  const ownerRoot = join(resolve(workspacesRoot), ".runtime");
   const expectedTaskRoot = join(ownerRoot, safePathSegment(resolvedHome.sessionId));
   if (resolve(temporaryTaskRoot) !== resolve(expectedTaskRoot)) {
     throw new Error(`Temporary provider home escapes task runtime root: ${temporaryTaskRoot}`);

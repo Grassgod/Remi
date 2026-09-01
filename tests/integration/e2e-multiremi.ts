@@ -66,7 +66,6 @@ async function main() {
   const agent = store.createAgent({
     name: "E2E Smoke Agent",
     provider: PROVIDER,
-    cwd: workDir,
     model: null,
     allowedTools: [],
   });

@@ -479,13 +479,9 @@ export class TasksRepo {
           : chatSession
           ? (inheritChatSession ? (input.sessionId ?? chatSession.sessionId ?? null) : null)
           : (input.sessionId ?? null),
-        // Only a machine-affine work_dir is stamped here: a session/directory
-        // work_dir reaches only the machine pinned to run it. agent.cwd is NOT
-        // applied — it is a machine-local path that would ride along on an
-        // unpinned pool task and could point nowhere on the claiming machine.
-        // The daemon owns the agent.cwd fallback and guards it against the
-        // local filesystem (resolveWorkDir), then reports the resolved dir back
-        // via pinTaskSession, so session promotion still records the real path.
+        // Only a machine-affine promoted work_dir is stamped here. Brand-new
+        // Tasks let the daemon derive their canonical surface path and report
+        // it back via pinTaskSession for later provider-session promotion.
         issueSession
           ? (
             inheritIssueLane

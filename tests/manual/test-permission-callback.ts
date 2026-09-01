@@ -33,8 +33,6 @@ async function main() {
   const wsHandle = await startWebSocketListener({
     appId: config.appId,
     appSecret: config.appSecret,
-    verificationToken: config.verificationToken,
-    encryptKey: config.encryptKey,
   }, async () => {}, async () => false);
   console.log("WebSocket connected\n");
 

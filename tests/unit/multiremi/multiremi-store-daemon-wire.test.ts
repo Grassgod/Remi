@@ -119,7 +119,6 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       customArgs: ["--fast"],
       allowedTools: ["Read"],
       model: "gpt-5",
-      cwd: "/tmp/claim-shape",
     });
     const project = store.createProject({
       id: "prj_claim_shape",
@@ -178,7 +177,6 @@ describe("Multiremi store — Go daemon wire shapes", () => {
         custom_args: ["--fast"],
         allowed_tools: ["Read"],
         model: "gpt-5",
-        cwd: "/tmp/claim-shape",
         max_concurrent_tasks: 6,
       },
       issue: {

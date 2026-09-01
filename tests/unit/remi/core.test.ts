@@ -129,8 +129,6 @@ function makeConfig(tmpDir: string): RemiConfig {
     feishu: {
       appId: "",
       appSecret: "",
-      verificationToken: "",
-      encryptKey: "",
       port: 9000,
       domain: "feishu",
       connectionMode: "websocket",
@@ -158,7 +156,6 @@ function makeAgent(tmpDir: string, overrides: Partial<MultiremiAgent> = {}): Mul
     instructions: "Follow the configured bot instructions.",
     skills: [],
     maxConcurrentTasks: 4,
-    cwd: tmpDir,
     executable: null,
     model: null,
     allowedTools: [],

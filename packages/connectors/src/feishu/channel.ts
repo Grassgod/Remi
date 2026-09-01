@@ -12,11 +12,13 @@ import { startWebSocketListener, setGroupPolicy, flushDedupCacheSync, type Feish
 import { sendMarkdownCardFeishu, sendCardFeishu } from "./send.js";
 import { FeishuStreamingSession, buildFinalCard, type TokenProvider } from "./streaming.js";
 import { handleAgentStream } from "./adapters/stream-handler.js";
+import { handleTaskStream } from "./adapters/task-stream-handler.js";
+import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import { createAdapter } from "./adapters/index.js";
 import type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
 import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
 import type { SessionUpdate } from "@shared/contracts/acp-protocol.js";
-import { rejectAllPendingActions, rejectPendingActionsForChat } from "./card-actions.js";
+import { rejectPendingActionsForChat } from "./card-actions.js";
 import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
 
 export type { ParsedFeishuMessage } from "./receive.js";
@@ -44,6 +46,13 @@ export interface HandleStreamOpts {
   nameSuffix?: string;
   subtitle?: string | null;
   tokenProvider?: TokenProvider;
+  log?: StreamHandlerLog;
+}
+
+export interface HandleTaskStreamOpts {
+  replyToMessageId?: string;
+  displayName?: string | null;
+  subtitle?: string | null;
   log?: StreamHandlerLog;
 }
 
@@ -221,15 +230,59 @@ export class FeishuChannel {
     }
   }
 
+  /** Consume the canonical persisted Task stream and render one Feishu card. */
+  async handleTaskStream(
+    chatId: string,
+    sessionKey: string,
+    stream: AsyncIterable<TaskStreamEvent>,
+    meta: TaskStreamMeta,
+    opts: HandleTaskStreamOpts = {},
+  ): Promise<void> {
+    const slog: StreamHandlerLog = opts.log ?? {
+      info: (message) => log.info(message),
+      warn: (message) => log.warn(message),
+      error: (message) => log.error(message),
+      debug: (message) => log.debug(message),
+    };
+    const session = this.createStream({ logFn: (message) => slog.info(message) });
+    this._activeSessions.set(sessionKey, session);
+    try {
+      await session.start(chatId, "chat_id", {
+        replyToMessageId: opts.replyToMessageId,
+        sessionId: meta.sessionId,
+        displayName: opts.displayName ?? meta.displayName ?? undefined,
+        subtitle: opts.subtitle ?? "Multiremi Task",
+      });
+      const result = await handleTaskStream(session, stream, chatId, meta);
+      await session.close({
+        finalText: result.contentText || undefined,
+        thinking: result.thinkingText || null,
+        toolEntries: result.toolEntries.length ? result.toolEntries : undefined,
+        toolCount: result.toolCount || undefined,
+        stats: result.stats,
+        sessionId: result.sessionId,
+        displayName: opts.displayName ?? meta.displayName,
+        aborted: result.cancelled,
+      });
+    } catch (error) {
+      slog.error(`handleTaskStream error: ${String(error)}`);
+      if (session.isActive()) {
+        await session.close({ finalText: `Error: ${String(error)}` }).catch(() => {});
+      }
+    } finally {
+      this._activeSessions.delete(sessionKey);
+    }
+  }
+
   /** Abort an active streaming session by sessionKey (called on /esc). */
-  async abortSession(sessionKey: string): Promise<void> {
-    rejectAllPendingActions("User sent /esc");
+  async abortSession(sessionKey: string, chatId?: string): Promise<void> {
+    if (chatId) rejectPendingActionsForChat(chatId, "User sent /esc");
     const session = this._activeSessions.get(sessionKey);
     if (session?.isActive()) {
       await session.abort();
-      if (this._abortHandler) {
-        await this._abortHandler(sessionKey).catch((e) => log.warn(`abort handler failed: ${String(e)}`));
-      }
+    }
+    if (this._abortHandler) {
+      await this._abortHandler(sessionKey).catch((e) => log.warn(`abort handler failed: ${String(e)}`));
     }
   }
 

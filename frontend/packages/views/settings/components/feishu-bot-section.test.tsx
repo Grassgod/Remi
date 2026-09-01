@@ -135,8 +135,6 @@ const CONFIGURED = {
     revision: 4,
     app_secret_configured: true,
     app_secret_hint: "cli_••••••",
-    verification_token_configured: true,
-    encrypt_key_configured: false,
     bot_name: "Remi Bot",
     bot_open_id: "ou_1",
     last_tested_at: "2026-08-30T02:00:00Z",
@@ -155,8 +153,8 @@ const CANDIDATES = {
     { id: "agt_2", name: "Scout", provider: "acp:codex" },
   ],
   runtimes: [
-    { id: "rt_1", name: "mac-mini", daemon_id: "d1", online: true, supports_config: true, last_heartbeat_at: null },
-    { id: "rt_2", name: "old-box", daemon_id: "d2", online: true, supports_config: false, last_heartbeat_at: null },
+    { id: "rt_1", name: "mac-mini", provider: "acp:claude", daemon_id: "d1", online: true, supports_config: true, last_heartbeat_at: null },
+    { id: "rt_2", name: "old-box", provider: "acp:claude", daemon_id: "d2", online: true, supports_config: false, last_heartbeat_at: null },
   ],
   encryption_available: true,
 };
@@ -249,6 +247,14 @@ describe("FeishuBotSection (admin form)", () => {
     expect(secret).toHaveAttribute("placeholder", "cli_••••••");
   });
 
+  it("shows the Agent name and machine name without exposing provider engines", () => {
+    renderSection();
+    const selectors = screen.getAllByRole("combobox");
+    expect(selectors[0]).toHaveTextContent("Remi");
+    expect(selectors[1]).toHaveTextContent("mac-mini");
+    expect(selectors[1]).not.toHaveTextContent(/claude|codex/i);
+  });
+
   it("keeps the stored secret and the enabled state when only the App ID changes", async () => {
     const user = userEvent.setup();
     renderSection();
@@ -283,18 +289,17 @@ describe("FeishuBotSection (admin form)", () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
-  it("clears an optional secret only when the admin asks for it", async () => {
+  it("does not submit webhook callback credentials", async () => {
     const user = userEvent.setup();
     renderSection();
-    await user.click(screen.getByRole("button", { name: "Clear" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
     const request = mockSave.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(request.verification_token_op).toBe("clear");
-    // The Encrypt Key was never configured, so it has no Clear affordance and
-    // stays on `keep`.
-    expect(request.encrypt_key_op).toBe("keep");
+    expect("verification_token" in request).toBe(false);
+    expect("verification_token_op" in request).toBe(false);
+    expect("encrypt_key" in request).toBe(false);
+    expect("encrypt_key_op" in request).toBe(false);
   });
 
   it("refuses to save when the server cannot encrypt credentials", () => {
@@ -383,7 +388,7 @@ describe("FeishuBotSection (status)", () => {
     };
     renderSection();
     expect(screen.getByText("Online")).toBeInTheDocument();
-    expect(screen.getByText("mac-mini")).toBeInTheDocument();
+    expect(screen.getAllByText("mac-mini")).toHaveLength(2);
     expect(screen.getByText("4 / 4")).toBeInTheDocument();
   });
 

@@ -54,7 +54,6 @@ function buildPreviewArtifact(mode: TaskPromptMode) {
         content: placeholder("skill_content"),
         files: [{ path: placeholder("skill_supporting_file_path") }],
       }],
-      cwd: placeholder("agent_cwd"),
       executable: placeholder("agent_executable"),
       allowedTools: [placeholder("allowed_tool")],
       customEnv: {},

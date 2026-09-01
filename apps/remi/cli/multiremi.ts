@@ -17,7 +17,10 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
-import type { MultiremiAgent, MultiremiDaemonBotProject } from "@multiremi/contracts/types.js";
+import type {
+  FeishuBotSessionSnapshot,
+} from "@multiremi/contracts/types.js";
+import type { TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
 import { setLogLevel } from "@shared/logger.js";
 import { multiremiVersion } from "@multiremi/version.js";
@@ -28,7 +31,7 @@ import {
   saveMultiremiConfig,
   type MultiremiCliConfig,
 } from "@multiremi/config.js";
-import { bootFeishuChannel, feishuConfigured, type FeishuChannelHandle } from "./agent.js";
+import { bootFeishuChannel, type FeishuChannelHandle } from "./agent.js";
 import { FeishuConciergeError, type FeishuConciergeHost } from "@multiremi/worker/feishu-concierge.js";
 import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
@@ -282,9 +285,6 @@ export interface WorkerDaemonSupervisorOptions {
   workspacesRoot?: string;
   workspaceRootFence?: () => void;
   onRestartRequested?: () => void;
-  botAgentId?: string | null;
-  onBotAgentResolved?: (agent: MultiremiAgent) => void;
-  onBotProjectsUpdated?: (projects: MultiremiDaemonBotProject[]) => void;
   issueWorkspaceLifecycleLocker?: IssueWorkspaceLifecycleLocker;
 }
 
@@ -357,9 +357,6 @@ export async function resolveWorkerDaemons(
     provider,
     maxConcurrency,
     workspaceId: configuredWorkerWorkspaceId(options, config) ?? "local",
-    botAgentId: supervisor.botAgentId,
-    onBotAgentResolved: supervisor.onBotAgentResolved,
-    onBotProjectsUpdated: supervisor.onBotProjectsUpdated,
     issueWorkspaceLifecycleLocker: supervisor.issueWorkspaceLifecycleLocker,
     daemonPort: providers.length > 1 && baseDaemonPort !== 0 ? baseDaemonPort + providers.indexOf(provider) : baseDaemonPort,
     workspacesRoot: supervisor.workspacesRoot,
@@ -421,72 +418,22 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
   let restartRequested = false;
   try {
     const issueWorkspaceLifecycleLocker = new IssueWorkspaceLifecycleLocker();
-    const botAgentId = String(process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim();
-    const hasFeishuEnvironment = !Boolean(options.once) && feishuConfigured();
-    // `MULTIREMI_BOT_AGENT_ID` is what pins a bot to this machine, and it is
-    // the legacy MUL-190 path. Without it the concierge is driven from
-    // Workspace settings (MUL-206) instead. The two are exclusive on purpose:
-    // the control plane is never offered a Runtime already running its own bot.
-    const shouldStartFeishu = !Boolean(options.once) && Boolean(botAgentId);
-    const conciergeFromControlPlane = !Boolean(options.once) && !shouldStartFeishu;
-    if (shouldStartFeishu && !hasFeishuEnvironment) {
-      throw new Error("Feishu channel cannot start; missing env: FEISHU_APP_ID, FEISHU_APP_SECRET");
-    }
-    if (conciergeFromControlPlane && hasFeishuEnvironment) {
-      console.warn("FEISHU_APP_ID/FEISHU_APP_SECRET are set but MULTIREMI_BOT_AGENT_ID is not; ignoring them and taking the bot from Workspace settings");
-    }
-    const feishuWorkspaceId = shouldStartFeishu
-      ? configuredWorkerWorkspaceId(options, loadMultiremiConfig())
-      : undefined;
-    if (shouldStartFeishu && !feishuWorkspaceId) {
-      throw new Error("Feishu requires an explicitly configured Multiremi workspace");
-    }
-    let resolveBotAgent!: (agent: MultiremiAgent) => void;
-    const botAgentReady = new Promise<MultiremiAgent>((resolve) => { resolveBotAgent = resolve; });
-    let resolvedBotAgentId: string | null = null;
-    let resolveBotProjects!: (projects: MultiremiDaemonBotProject[]) => void;
-    const botProjectsReady = new Promise<MultiremiDaemonBotProject[]>((resolve) => {
-      resolveBotProjects = resolve;
-    });
-    let botProjectsResolved = false;
+    const conciergeFromControlPlane = !Boolean(options.once);
     daemons = await resolveWorkerDaemons(options, {
       workspacesRoot: workspaceSupervisor.workspaceRoot,
       workspaceRootFence: () => workspaceSupervisor?.assertOwner(),
       issueWorkspaceLifecycleLocker,
       // Provider updates must stop the whole supervisor, including Feishu.
       onRestartRequested: () => stopAll(),
-      botAgentId: shouldStartFeishu ? botAgentId : null,
-      onBotAgentResolved: (agent) => {
-        if (resolvedBotAgentId) return;
-        resolvedBotAgentId = agent.id;
-        resolveBotAgent(agent);
-      },
-      // A control-plane concierge needs the same project list, and it can be
-      // switched on at any moment, so the heartbeat carries projects whenever
-      // this process is capable of hosting a bot at all.
-      onBotProjectsUpdated: shouldStartFeishu || conciergeFromControlPlane
-        ? (projects) => {
-            feishu?.updateProjects(projects);
-            if (botProjectsResolved) return;
-            botProjectsResolved = true;
-            resolveBotProjects(projects);
-          }
-        : undefined,
     });
     // Co-resident Feishu requires the daemon's authenticated workspace control
     // plane. Starting it without that gate would admit messages without proof
     // of workspace membership.
-    if (shouldStartFeishu && daemons.length === 0) {
-      throw new Error("Feishu requires a healthy Multiremi daemon for workspace membership checks");
-    }
     if (daemons.length === 0) {
       workspaceSupervisor.release();
       workspaceSupervisor = null;
     }
     if (daemons.length === 0) {
-      if (shouldStartFeishu) {
-        throw new Error("Cannot start Feishu: no healthy Multiremi daemon is available");
-      }
       throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
     }
 
@@ -528,31 +475,6 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     const providerRuns = daemons.map((runtimeDaemon) => runtimeDaemon.start());
     const running: Promise<void>[] = [...providerRuns];
     try {
-      if (shouldStartFeishu) {
-        const providerExitedBeforeBotReady = Promise.race(providerRuns.map((run) => run.then(() => {
-          throw new Error("Multiremi daemon exited before resolving the bot configuration");
-        })));
-        const [botAgent, projects] = await Promise.race([
-          Promise.all([botAgentReady, botProjectsReady]),
-          providerExitedBeforeBotReady,
-        ]);
-        feishu = await bootFeishuChannel(
-          botAgent,
-          projects,
-          (senderOpenId) => daemons[0]!.checkExternalWorkspaceMembership(
-            feishuWorkspaceId!,
-            senderOpenId,
-          ),
-          {
-            daemonPort: daemons[0]!.localPort(),
-            workspacesRoot: workspaceSupervisor!.workspaceRoot,
-            ensureTopicWorkspace: (sessionKey, topicId) =>
-              daemons[0]!.ensureTopicWorkspace(sessionKey, topicId),
-          },
-        );
-        daemons[0]!.setBotMenuPublisher(feishu.publishBotMenu);
-        running.push(feishu.start);
-      }
       if (conciergeFromControlPlane) {
         daemons[0]!.setFeishuConciergeHost(controlPlaneConciergeHost({
           daemon: () => daemons[0],
@@ -590,9 +512,9 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
  * Host the Workspace-configured Feishu concierge (MUL-206).
  *
  * The supervisor in `packages/server/src/worker/feishu-concierge.ts` decides
- * *whether* the bot should run; this decides *how*, and it is the only place
- * that knows how to boot a Remi core. Everything the channel needs — the Agent
- * row, the project list, the credentials — arrives in the assignment, so
+ * *whether* the bot should run; this decides *how* to boot its transport.
+ * Everything the channel needs — the Agent row and credentials — arrives in
+ * the assignment, so
  * switching the workspace to a different bot or a different Agent never
  * requires touching this machine.
  *
@@ -622,10 +544,8 @@ export function controlPlaneConciergeHost(deps: {
           "runtime_unavailable",
         );
       }
-      const { config, agent, projects } = assignment;
+      const { config, agent } = assignment;
       const handle = await boot(
-        agent,
-        projects,
         (senderOpenId) => daemon.checkExternalWorkspaceMembership(config.workspace_id, senderOpenId),
         {
           daemonPort: daemon.localPort(),
@@ -635,8 +555,10 @@ export function controlPlaneConciergeHost(deps: {
             appId: config.app_id,
             appSecret: config.app_secret,
             domain: config.domain,
-            verificationToken: config.verification_token,
-            encryptKey: config.encrypt_key,
+          },
+          taskHandler: createFeishuTaskHandler(daemon, config.revision, agent.name),
+          abortTask: async (sessionKey) => {
+            await daemon.cancelFeishuBotSessionTask(config.revision, sessionKey);
           },
         },
       );
@@ -659,6 +581,159 @@ export function controlPlaneConciergeHost(deps: {
       deps.attach(null);
       deps.daemon()?.setBotMenuPublisher(null);
       if (handle) await handle.stop();
+    },
+  };
+}
+
+function createFeishuTaskHandler(
+  daemon: MultiremiDaemon,
+  revision: number,
+  displayName: string,
+): TaskStreamingHandler {
+  return async (message, sessionKey, consumer) => {
+    const command = message.text.trim().toLowerCase();
+    if (command === "/new") {
+      await daemon.cancelFeishuBotSessionTask(revision, sessionKey);
+      const reset = await daemon.resetFeishuBotSession(revision, sessionKey);
+      await consumer(singleMessageStream(reset ? "New conversation started." : "Conversation is already new."), {
+        taskId: "feishu-command-new",
+        displayName,
+        respondHumanRequest: async () => { throw new Error("command has no human request"); },
+      });
+      return;
+    }
+    if (command === "/status" || command === "/sessions" || command === "/context") {
+      const snapshot = await daemon.inspectFeishuBotSession(revision, sessionKey);
+      await consumer(singleMessageStream(renderFeishuSessionCommand(command, snapshot)), {
+        taskId: `feishu-command-${command.slice(1)}`,
+        displayName,
+        respondHumanRequest: async () => { throw new Error("command has no human request"); },
+      });
+      return;
+    }
+    if (command === "/cwd" || command === "/compact") {
+      await consumer(singleMessageStream(`${command} is no longer supported.`), {
+        taskId: "feishu-command-removed",
+        displayName,
+        respondHumanRequest: async () => { throw new Error("command has no human request"); },
+      });
+      return;
+    }
+
+    const externalMessageId = String(message.metadata?.messageId ?? "").trim();
+    if (!externalMessageId) throw new Error("Feishu message id is missing");
+    const submitted = await daemon.submitFeishuBotMessage({
+      revision,
+      externalSessionKey: sessionKey,
+      externalMessageId,
+      replyToMessageId: externalMessageId,
+      senderOpenId: String(message.metadata?.senderOpenId ?? "").trim() || null,
+      chatId: message.chatId,
+      threadId: String(message.metadata?.rootId ?? "").trim() || null,
+      text: message.text,
+    });
+    // A live Task already has the card created by its first event. The steer is
+    // persisted and injected by the normal Task worker; do not replay it into a
+    // second card.
+    if (submitted.steered || submitted.duplicate) return;
+
+    await consumer(pollFeishuTask(daemon, submitted.taskId), {
+      taskId: submitted.taskId,
+      displayName,
+      respondHumanRequest: (requestId, response) =>
+        daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response),
+    });
+  };
+}
+
+function renderFeishuSessionCommand(command: string, snapshot: FeishuBotSessionSnapshot): string {
+  if (!snapshot.chatSessionId) return "No conversation has been started yet.";
+  const task = snapshot.task;
+  if (command === "/sessions") {
+    return [
+      `Conversation: ${snapshot.chatSessionId}`,
+      task ? `Latest task: ${task.taskId} (${task.status})` : "Latest task: none",
+    ].join("\n");
+  }
+  if (command === "/context") {
+    if (!task) return `Conversation: ${snapshot.chatSessionId}\nContext usage: no task usage yet.`;
+    const input = task.usage.reduce((sum, entry) => sum + entry.inputTokens, 0);
+    const output = task.usage.reduce((sum, entry) => sum + entry.outputTokens, 0);
+    const total = task.usage.reduce(
+      (sum, entry) => sum + (
+        entry.totalTokens && entry.totalTokens > 0
+          ? entry.totalTokens
+          : entry.inputTokens + entry.outputTokens
+      ),
+      0,
+    );
+    return `Context usage: ${total} tokens (${input} input, ${output} output)`;
+  }
+  return [
+    `Conversation: ${snapshot.chatSessionId}`,
+    task ? `Task: ${task.taskId}` : "Task: none",
+    task ? `Status: ${task.status}` : "Status: idle",
+    task?.workDir ? `Working directory: ${task.workDir}` : "Working directory: not created yet",
+  ].join("\n");
+}
+
+async function* pollFeishuTask(
+  daemon: MultiremiDaemon,
+  taskId: string,
+): AsyncGenerator<TaskStreamEvent> {
+  let sinceSeq = 0;
+  for (;;) {
+    const messages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
+    for (const message of messages) {
+      sinceSeq = Math.max(sinceSeq, message.seq);
+      yield { kind: "message", message };
+    }
+    const snapshot = await daemon.getFeishuBotTaskSnapshot(taskId);
+    if (snapshot.status === "completed" || snapshot.status === "failed" || snapshot.status === "cancelled") {
+      // Completion and Task messages commit together, but they are read over
+      // separate HTTP calls. Drain once more so a completion that landed
+      // between the first list and this snapshot cannot hide the final tool,
+      // thinking, or text events.
+      const finalMessages = await daemon.listFeishuBotTaskMessages(taskId, sinceSeq);
+      for (const message of finalMessages) {
+        sinceSeq = Math.max(sinceSeq, message.seq);
+        yield { kind: "message", message };
+      }
+      yield { kind: "snapshot", snapshot };
+      return;
+    }
+    await sleep(400);
+  }
+}
+
+async function* singleMessageStream(text: string): AsyncGenerator<TaskStreamEvent> {
+  yield {
+    kind: "message",
+    message: {
+      id: "feishu-command-message",
+      taskId: "feishu-command",
+      seq: 1,
+      type: "text",
+      tool: null,
+      content: text,
+      input: null,
+      output: null,
+      toolCallId: null,
+      status: null,
+      meta: null,
+      createdAt: new Date().toISOString(),
+    },
+  };
+  yield {
+    kind: "snapshot",
+    snapshot: {
+      taskId: "feishu-command",
+      status: "completed",
+      result: text,
+      error: null,
+      sessionId: null,
+      workDir: null,
+      usage: [],
     },
   };
 }

@@ -48,7 +48,7 @@ const chunk = (text: string) => ({
 describe("Bun Multiremi daemon steering", () => {
   it("injects a mid-run steer into the same provider session and completes", async () => {
     const { store, root } = testBed("multiremi-daemon-steer-");
-    const agent = store.createAgent({ name: "Steer Agent", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Steer Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Write the summary in English" });
     const daemonToken = await store.createAccessToken({ name: "Steer daemon", type: "daemon", workspaceId: "local" });
     const runtimeId = daemonRuntimeIdForTest("daemon-steer", "claude");
@@ -125,7 +125,7 @@ describe("Bun Multiremi daemon steering", () => {
 
   it("a steer accepted just before natural turn end is injected, not stranded", async () => {
     const { store, root } = testBed("multiremi-daemon-steer-late-");
-    const agent = store.createAgent({ name: "Late Steer Agent", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Late Steer Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Answer briefly" });
     const daemonToken = await store.createAccessToken({ name: "Late steer daemon", type: "daemon", workspaceId: "local" });
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-late", "claude");
@@ -192,7 +192,7 @@ describe("Bun Multiremi daemon steering", () => {
 
   it("a delayed feed poll returning an already-handled steer does not cancel the next turn", async () => {
     const { store, root } = testBed("multiremi-daemon-steer-duppoll-");
-    const agent = store.createAgent({ name: "Dup Poll Agent", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Dup Poll Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Answer in English" });
     const daemonToken = await store.createAccessToken({ name: "Dup poll daemon", type: "daemon", workspaceId: "local" });
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-duppoll", "claude");
@@ -290,7 +290,7 @@ describe("Bun Multiremi daemon steering", () => {
 
   it("force answer wraps up within the grace window even if the agent keeps going", async () => {
     const { store, root } = testBed("multiremi-daemon-force-answer-");
-    const agent = store.createAgent({ name: "Force Agent", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Force Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Research deeply" });
     const daemonToken = await store.createAccessToken({ name: "Force daemon", type: "daemon", workspaceId: "local" });
     const runtimeId = daemonRuntimeIdForTest("daemon-force", "claude");
@@ -357,7 +357,7 @@ describe("Bun Multiremi daemon steering", () => {
 
   it("cancel still cancels: no steer, no resurrection of the run", async () => {
     const { store, root } = testBed("multiremi-daemon-steer-cancel-");
-    const agent = store.createAgent({ name: "Cancel Agent", provider: "claude", cwd: root });
+    const agent = store.createAgent({ name: "Cancel Agent", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "Long run" });
     const daemonToken = await store.createAccessToken({ name: "Cancel daemon", type: "daemon", workspaceId: "local" });
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-cancel", "claude");

@@ -110,7 +110,10 @@ export function registerFeishuBotRoutes(
       .filter((runtime) => runtime.workspaceId === workspaceId)
       .map((runtime) => ({
         id: runtime.id,
-        name: runtime.name,
+        name: runtime.daemonId
+          ? store.getDaemonProfile(workspaceId, runtime.daemonId)?.displayName ?? runtime.daemonId
+          : runtime.name,
+        provider: runtime.provider,
         daemon_id: runtime.daemonId,
         online: isRuntimeEffectivelyOnline(runtime),
         supports_config: runtimeSupportsFeishuBotConfig(runtime),
@@ -168,8 +171,6 @@ export function registerFeishuBotRoutes(
           revision: saved.revision,
           // Which secrets moved, never what they became.
           app_secret_op: parsed.input.appSecretOp,
-          verification_token_op: parsed.input.verificationTokenOp,
-          encrypt_key_op: parsed.input.encryptKeyOp,
         },
       });
       return c.json(configView(store, workspaceId));
@@ -347,10 +348,6 @@ interface FeishuBotConfigBody {
   enabled?: unknown;
   app_secret?: unknown;
   app_secret_op?: unknown;
-  verification_token?: unknown;
-  verification_token_op?: unknown;
-  encrypt_key?: unknown;
-  encrypt_key_op?: unknown;
   registration_session_id?: unknown;
 }
 
@@ -391,10 +388,6 @@ function parseConfigBody(
       enabled: body.enabled,
       appSecretOp,
       appSecret,
-      verificationTokenOp: parseSecretOp(body.verification_token_op, body.verification_token),
-      verificationToken: optionalString(body.verification_token) ?? undefined,
-      encryptKeyOp: parseSecretOp(body.encrypt_key_op, body.encrypt_key),
-      encryptKey: optionalString(body.encrypt_key) ?? undefined,
     },
     registrationUsed,
   };
@@ -471,8 +464,6 @@ export function configView(store: MultiremiStore, workspaceId: string): FeishuBo
       revision: 0,
       app_secret_configured: false,
       app_secret_hint: null,
-      verification_token_configured: false,
-      encrypt_key_configured: false,
       bot_name: null,
       bot_open_id: null,
       last_tested_at: null,
@@ -492,7 +483,7 @@ export function configView(store: MultiremiStore, workspaceId: string): FeishuBo
     agent_name: agent?.name ?? null,
     agent_archived: Boolean(agent?.archivedAt),
     runtime_id: config.runtimeId,
-    runtime_name: runtime?.name ?? null,
+    runtime_name: runtimeDisplayName(store, workspaceId, runtime),
     runtime_online: snapshot.runtimeOnline,
     runtime_supports_config: Boolean(runtime && runtimeSupportsFeishuBotConfig(runtime)),
     app_id: config.appId,
@@ -501,8 +492,6 @@ export function configView(store: MultiremiStore, workspaceId: string): FeishuBo
     revision: config.revision,
     app_secret_configured: config.hasAppSecret,
     app_secret_hint: config.appSecretHint,
-    verification_token_configured: config.hasVerificationToken,
-    encrypt_key_configured: config.hasEncryptKey,
     bot_name: snapshot.botName,
     bot_open_id: config.botOpenId,
     last_tested_at: config.lastTestedAt,
@@ -524,7 +513,7 @@ export function statusView(store: MultiremiStore, workspaceId: string): FeishuBo
     revision: snapshot.config?.revision ?? 0,
     desired_state: snapshot.desiredState,
     runtime_id: snapshot.config?.runtimeId ?? null,
-    runtime_name: runtime?.name ?? null,
+    runtime_name: runtimeDisplayName(store, workspaceId, runtime),
     runtime_online: snapshot.runtimeOnline,
     applied_revision: snapshot.appliedRevision,
     bot_name: snapshot.botName,
@@ -552,4 +541,14 @@ function configErrorResponse(c: Context, error: unknown): Response {
     return c.json({ error: error.message, code: error.code }, 503);
   }
   return c.json({ error: redactFeishuBotError(error) }, 400);
+}
+
+function runtimeDisplayName(
+  store: MultiremiStore,
+  workspaceId: string,
+  runtime: MultiremiRuntime | null,
+): string | null {
+  if (!runtime) return null;
+  if (!runtime.daemonId) return runtime.name;
+  return store.getDaemonProfile(workspaceId, runtime.daemonId)?.displayName ?? runtime.daemonId;
 }

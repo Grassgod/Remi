@@ -58,7 +58,7 @@ describe("workspace bot menu API", () => {
     expect(response.status).toBe(403);
   });
 
-  it("resolves member targets only in the publish request sent to a capable daemon", async () => {
+  it("resolves member targets only in the publish request sent to the configured host", async () => {
     const store = createLocalStore();
     const linked = store.getOrCreateUser({ externalId: "resolved-open-id", email: "linked@example.test", name: "Linked" });
     const selected = store.createWorkspaceMember({ workspaceId: "local", userId: linked.id, name: "Linked", role: "member" });
@@ -70,6 +70,7 @@ describe("workspace bot menu API", () => {
       status: "online",
       metadata: { feishu_bot_menu: true },
     });
+    configureConcierge(store, "rt_bot_menu");
     store.updateWorkspace("local", {
       settings: {
         botMenu: {
@@ -111,7 +112,7 @@ describe("workspace bot menu API", () => {
     expect(store.getBotMenuPublishRequest("rt_bot_menu", publicRequest.id)?.config).toEqual({});
   });
 
-  it("fails publish when no online daemon advertises the publisher capability", async () => {
+  it("fails publish when the workspace has no Feishu bot configured", async () => {
     const store = createLocalStore();
     const app = createMultiremiApp({ store, authToken: "MASTER" });
 
@@ -121,7 +122,7 @@ describe("workspace bot menu API", () => {
       body: JSON.stringify({ dry_run: true }),
     });
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
   });
 
   it("publishes through the Runtime hosting the concierge, not the newest capable one", async () => {
@@ -170,9 +171,7 @@ describe("workspace bot menu API", () => {
     expect((await publish.json()).error).toContain("Feishu concierge");
   });
 
-  it("keeps the newest-capable-Runtime pick for a workspace still on the env-driven bot", async () => {
-    // No config row means the legacy MUL-190 path, where the daemon's own
-    // environment supplies the credentials — there is no host to prefer.
+  it("does not fall back to an env-driven bot when the workspace has no config", async () => {
     const { store, app } = menuScaffold();
     registerPublisher(store, "rt_old", 20_000);
     registerPublisher(store, "rt_new", 1_000);
@@ -183,10 +182,8 @@ describe("workspace bot menu API", () => {
       body: JSON.stringify({ dry_run: true }),
     });
 
-    expect(publish.status).toBe(202);
-    const request = await publish.json();
-    expect(store.getBotMenuPublishRequest("rt_new", request.id)).not.toBeNull();
-    expect(store.getBotMenuPublishRequest("rt_old", request.id)).toBeNull();
+    expect(publish.status).toBe(409);
+    expect((await publish.json()).error).toContain("Feishu concierge");
   });
 });
 
@@ -231,7 +228,5 @@ function configureConcierge(store: MultiremiStore, runtimeId: string): void {
     enabled: true,
     appSecretOp: "set",
     appSecret: "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA",
-    verificationTokenOp: "keep",
-    encryptKeyOp: "keep",
   });
 }

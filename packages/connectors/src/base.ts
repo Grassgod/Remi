@@ -4,6 +4,11 @@
 
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
+import type {
+  FeishuBotTaskSnapshot,
+  MultiremiTaskHumanRequest,
+  MultiremiTaskMessage,
+} from "@multiremi/contracts/types.js";
 
 /** A message received from any connector. */
 export interface IncomingMessage {
@@ -44,6 +49,27 @@ export interface StreamMeta {
 export type StreamingHandler = (
   msg: IncomingMessage,
   consumer: (stream: AsyncIterable<ProviderEvent>, meta: StreamMeta) => Promise<void>,
+) => Promise<void>;
+
+export type TaskStreamEvent =
+  | { kind: "message"; message: MultiremiTaskMessage }
+  | { kind: "snapshot"; snapshot: FeishuBotTaskSnapshot };
+
+export interface TaskStreamMeta {
+  taskId: string;
+  displayName?: string | null;
+  sessionId?: string | null;
+  respondHumanRequest: (
+    requestId: string,
+    response: Record<string, unknown>,
+  ) => Promise<MultiremiTaskHumanRequest>;
+}
+
+/** Connector bridge for the persisted Multiremi Task event stream. */
+export type TaskStreamingHandler = (
+  msg: IncomingMessage,
+  sessionKey: string,
+  consumer: (stream: AsyncIterable<TaskStreamEvent>, meta: TaskStreamMeta) => Promise<void>,
 ) => Promise<void>;
 
 /** Protocol that all input connectors must implement. */

@@ -6,12 +6,10 @@ describe("loadConfig", () => {
     expect(loadConfig({})).toEqual(defaultRemiConfig());
   });
 
-  it("preserves every legacy environment override", () => {
+  it("preserves every supported environment override", () => {
     const config = loadConfig({
       FEISHU_APP_ID: "app-id",
       FEISHU_APP_SECRET: "app-secret",
-      FEISHU_VERIFICATION_TOKEN: "verification-token",
-      FEISHU_ENCRYPT_KEY: "encrypt-key",
       FEISHU_PORT: "9010",
       FEISHU_DOMAIN: "lark",
       FEISHU_USER_ACCESS_TOKEN: "user-token",
@@ -22,8 +20,6 @@ describe("loadConfig", () => {
     expect(config.feishu).toEqual({
       appId: "app-id",
       appSecret: "app-secret",
-      verificationToken: "verification-token",
-      encryptKey: "encrypt-key",
       port: 9010,
       domain: "lark",
       connectionMode: "websocket",

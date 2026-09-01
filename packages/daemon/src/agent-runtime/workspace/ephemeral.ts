@@ -18,9 +18,8 @@ import { resolveWorkDir } from "./persistent.js";
 export interface ResolvedTaskWorkDir {
   workDir: string;
   localDirectory: boolean;
-  // Whether the daemon may create this dir. false for a local_directory (must
-  // pre-exist) and for a validated agent.cwd (never recreate a machine-local
-  // path); true for the default per-task dir and a machine-affine task.workDir.
+  // Whether the daemon may create this dir. false only for a local_directory
+  // that must already exist; daemon-owned Task/session paths are created.
   ensureDir: boolean;
   release?: () => void;
 }

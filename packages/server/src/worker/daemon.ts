@@ -77,6 +77,7 @@ import {
   cleanupTemporaryTaskProviderHome,
   ensureProviderHomeDirectory,
   loadIssueSessionProviderEnv,
+  listIssueSessionRuntimeRoots,
   prepareIssueSessionProviderHome,
   resolveIssueRuntimeStateRoot,
   resolveTaskProviderHome,
@@ -149,9 +150,7 @@ import {
 import { SshMeshManager } from "@daemon/ssh-mesh.js";
 import type {
   BotMenuPublishResult,
-  MultiremiDaemonBotProject,
   MultiremiDaemonHeartbeatAck,
-  MultiremiAgent,
   MultiremiDaemonSshMeshStatus,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceArchiveBinding,
@@ -159,12 +158,16 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
   MultiremiTaskHumanRequest,
+  MultiremiTaskMessage,
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
   MultiremiSshMeshHeartbeatAck,
   RegisterRuntimeInput,
   ResolvedBotMenuConfig,
   TaskUsageEntry,
+  FeishuBotTaskSnapshot,
+  SubmitFeishuBotMessageInput,
+  SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
 import {
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
@@ -338,12 +341,6 @@ export interface MultiremiDaemonOptions {
   deviceName?: string;
   provider?: string;
   workspaceId?: string | null;
-  /** Workspace agent that owns the co-resident bot's persistent chat lane. */
-  botAgentId?: string | null;
-  /** Delivers the validated bot agent returned by daemon registration/heartbeat. */
-  onBotAgentResolved?: (agent: MultiremiAgent) => void;
-  /** Delivers the server-filtered project directories available to the co-resident bot. */
-  onBotProjectsUpdated?: (projects: MultiremiDaemonBotProject[]) => void;
   pollIntervalMs?: number;
   maxConcurrency?: number;
   once?: boolean;
@@ -559,7 +556,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "botAgentId" | "onBotAgentResolved" | "onBotProjectsUpdated" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -629,9 +626,6 @@ export class MultiremiDaemon {
   private readonly supervisorReady: () => boolean;
   private readonly onReadyChange: (ready: boolean) => void;
   private readonly cliUpdateCoordinator: MultiremiCliUpdateCoordinator | null;
-  private readonly botAgentId: string | null;
-  private readonly onBotAgentResolved: ((agent: MultiremiAgent) => void) | null;
-  private readonly onBotProjectsUpdated: ((projects: MultiremiDaemonBotProject[]) => void) | null;
   private workspaceOwnershipLost = false;
   private terminalAuthorityCleanup: Promise<void> | null = null;
   private terminalAuthorityCleanupRetryWake: (() => void) | null = null;
@@ -662,8 +656,6 @@ export class MultiremiDaemon {
     const deviceName = options.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
     const runtimeId = options.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID ?? null;
     const daemonId = options.daemonId ?? process.env.MULTIREMI_DAEMON_ID ?? runtimeId ?? deviceName;
-    this.botAgentId = String(options.botAgentId ?? process.env.MULTIREMI_BOT_AGENT_ID ?? "").trim() || null;
-    this.onBotAgentResolved = options.onBotAgentResolved ?? null;
     const runtimeModelRetryBaseMs = Math.max(
       1,
       options.runtimeModelRetryBaseMs
@@ -683,7 +675,6 @@ export class MultiremiDaemon {
     this.supervisorReady = options.supervisorReady ?? (() => this.ready);
     this.onReadyChange = options.onReadyChange ?? (() => {});
     this.cliUpdateCoordinator = options.cliUpdateCoordinator ?? null;
-    this.onBotProjectsUpdated = options.onBotProjectsUpdated ?? null;
     this.options = {
       token: options.token ?? process.env.MULTIREMI_TOKEN ?? null,
       runtimeId,
@@ -832,6 +823,41 @@ export class MultiremiDaemon {
     return this.client.checkExternalWorkspaceMembership(workspaceId, externalId);
   }
 
+  submitFeishuBotMessage(input: SubmitFeishuBotMessageInput): Promise<SubmitFeishuBotMessageResult> {
+    return this.client.submitFeishuBotMessage(this.options.runtimeId!, input);
+  }
+
+  listFeishuBotTaskMessages(taskId: string, sinceSeq: number): Promise<MultiremiTaskMessage[]> {
+    return this.client.listTaskMessages(taskId, sinceSeq);
+  }
+
+  getFeishuBotTaskSnapshot(taskId: string): Promise<FeishuBotTaskSnapshot> {
+    return this.client.getFeishuBotTaskSnapshot(taskId);
+  }
+
+  respondFeishuBotHumanRequest(
+    taskId: string,
+    requestId: string,
+    response: Record<string, unknown>,
+  ): Promise<MultiremiTaskHumanRequest> {
+    return this.client.respondTaskHumanRequest(taskId, requestId, response);
+  }
+
+  resetFeishuBotSession(revision: number, externalSessionKey: string): Promise<boolean> {
+    return this.client.resetFeishuBotSession(this.options.runtimeId!, revision, externalSessionKey);
+  }
+
+  cancelFeishuBotSessionTask(
+    revision: number,
+    externalSessionKey: string,
+  ): Promise<{ cancelled: boolean; taskId: string | null }> {
+    return this.client.cancelFeishuBotSessionTask(this.options.runtimeId!, revision, externalSessionKey);
+  }
+
+  inspectFeishuBotSession(revision: number, externalSessionKey: string) {
+    return this.client.inspectFeishuBotSession(this.options.runtimeId!, revision, externalSessionKey);
+  }
+
   async ensureTopicWorkspace(sessionKey: string, topicId: string): Promise<string | null> {
     return this.topicWorkspaces.ensureTopicWorkspace(sessionKey, topicId);
   }
@@ -947,8 +973,6 @@ export class MultiremiDaemon {
               ackGeneration: this.appliedDrainGeneration,
               activeTaskCount: this.activeTaskCount,
             },
-            this.botAgentId,
-            Boolean(this.onBotProjectsUpdated),
             this.botMenuPublisher !== null,
             this.feishuConcierge !== null,
           );
@@ -1058,8 +1082,6 @@ export class MultiremiDaemon {
         launchedBy: this.options.launchedBy ?? "manual",
         agentPluginProtocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         sshMeshProtocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
-        botAgentId: this.botAgentId,
-        includeBotProjects: Boolean(this.onBotProjectsUpdated),
         runtime: {
           // Empty name → server derives `<provider> (<deviceName>)`, which the
           // dashboard splits into the machine title + a clean provider row.
@@ -1076,28 +1098,22 @@ export class MultiremiDaemon {
       if (!runtime) throw new Error("daemon register returned no runtimes");
       this.options.runtimeId = runtime.id;
       this.applyWorkspaceRegistrationState(response);
-      this.applyBotAgent(response.botAgent);
-      this.applyBotProjects(response.botProjects);
       this.runtimeRegistrationGeneration++;
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
       return this.options.runtimeId;
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
     this.options.runtimeId = runtime.runtime.id;
-    if (this.botAgentId || this.onBotProjectsUpdated || this.botMenuPublisher || this.feishuConcierge) {
+    if (this.botMenuPublisher || this.feishuConcierge) {
       const ack = await this.client.heartbeatRuntime(
         this.options.runtimeId,
         undefined,
         undefined,
-        this.botAgentId,
-        Boolean(this.onBotProjectsUpdated),
         this.botMenuPublisher !== null,
         this.feishuConcierge !== null,
       );
       if (ack.workspace_settings) this.applyWorkspaceSettings(this.options.workspaceId ?? "local", ack.workspace_settings);
       if (ack.relay) this.workspaceRelays.set(this.options.workspaceId ?? "local", ack.relay);
-      this.applyBotAgent(ack.botAgent);
-      this.applyBotProjects(ack.botProjects);
       this.applyFeishuBotDirective(ack);
     }
     this.runtimeRegistrationGeneration++;
@@ -1114,14 +1130,6 @@ export class MultiremiDaemon {
     // Keep startup metadata-only. Eager Git sync blocks Bun's event loop and is
     // duplicated by co-resident Claude/Codex daemons. Tasks and explicit
     // checkouts populate only the repositories they actually need.
-  }
-
-  private applyBotProjects(projects: MultiremiDaemonBotProject[] | undefined): void {
-    if (!this.onBotProjectsUpdated) return;
-    if (!projects) {
-      throw new Error("daemon response did not include the requested bot project catalog");
-    }
-    this.onBotProjectsUpdated(projects);
   }
 
   /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
@@ -1182,8 +1190,6 @@ export class MultiremiDaemon {
       return !(await this.handleRuntimeGone(runtimeId, Date.now()));
     }
     if (ack.workspace_settings) this.applyWorkspaceSettings(workspaceId, ack.workspace_settings);
-    if (this.botAgentId) this.applyBotAgent(ack.botAgent);
-    this.applyBotProjects(ack.botProjects);
     if (ack.relay) {
       this.workspaceRelays.set(workspaceId, ack.relay);
     }
@@ -1218,16 +1224,6 @@ export class MultiremiDaemon {
       await this.handleRuntimeLocalSkillImport(runtimeId, request.id, request.skill_key);
     }
     return false;
-  }
-
-  private applyBotAgent(agent: MultiremiAgent | null | undefined): void {
-    if (!this.botAgentId) return;
-    if (!agent) throw new Error(`daemon response omitted configured bot agent ${this.botAgentId}`);
-    const workspaceId = this.options.workspaceId ?? "local";
-    if (agent.id !== this.botAgentId || agent.workspaceId !== workspaceId || agent.archivedAt) {
-      throw new Error(`daemon returned an invalid bot agent for workspace ${workspaceId}`);
-    }
-    this.onBotAgentResolved?.(agent);
   }
 
   private async handleRuntimeGone(runtimeId: string, entryAtMs: number): Promise<boolean> {
@@ -1948,11 +1944,19 @@ export class MultiremiDaemon {
     if (this.shouldDeferIssueSessionArchive(issueId, preflightStatus.latest)) {
       return null;
     }
+    const runtimeStorageRoot = this.options.workspacesRoot;
+    const sessionArchiveSource = runtimeStorageRoot ? ".runtime" : ".multiremi/sessions";
     let prepared: Awaited<ReturnType<typeof prepareIssueSessionArchive>>;
     try {
       this.assertWorkspaceRootOwner();
       prepared = await prepareIssueSessionArchive(workspaceDir, {
         maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
+        ...(runtimeStorageRoot
+          ? {
+              sessionRoots: listIssueSessionRuntimeRoots(runtimeStorageRoot, issueId),
+              sessionRootBoundary: runtimeStorageRoot,
+            }
+          : {}),
       });
       log.debug(`Issue Session archive prepared for ${issueId}`);
     } catch (error) {
@@ -1991,7 +1995,7 @@ export class MultiremiDaemon {
             fileCount: prepared.fileCount,
             metadata: {
               format: prepared.metadata.format,
-              source: ".multiremi/sessions",
+              source: sessionArchiveSource,
             },
           });
         }
@@ -2019,7 +2023,7 @@ export class MultiremiDaemon {
         fileCount: prepared.fileCount,
         metadata: {
           format: prepared.metadata.format,
-          source: ".multiremi/sessions",
+          source: sessionArchiveSource,
         },
       });
       log.debug(`Issue Session archive initialized for ${issueId}: status=${initialized.archive.status}`);
@@ -2434,7 +2438,11 @@ export class MultiremiDaemon {
         }
       }
       if (providerHome?.runtimeStateRoot) {
-        writeTaskGcContext(providerHome.runtimeStateRoot, task);
+        writeTaskGcContext(
+          providerHome.runtimeStateRoot,
+          task,
+          task.issueId ? { kind: "issue_runtime" } : undefined,
+        );
       }
       const workspaceRelay = this.workspaceRelays.get(task.workspaceId);
       const relayAuthoritative = workspaceRelay !== undefined;
@@ -2465,7 +2473,11 @@ export class MultiremiDaemon {
       }
       if (resolveTaskPluginSnapshot(task).length) {
         this.assertWorkspaceRootOwner();
-        pluginRuntimeBase = resolveTaskPluginRuntimeBase(task, issueRuntimeStateRoot, this.options.workspacesRoot);
+        pluginRuntimeBase = resolveTaskPluginRuntimeBase(
+          task,
+          providerHome?.root ?? issueRuntimeStateRoot,
+          this.options.workspacesRoot,
+        );
         pluginRuntime = await this.prepareTaskPluginRuntime(
           task,
           resolvedWorkDir.workDir,
@@ -2609,7 +2621,7 @@ export class MultiremiDaemon {
    * in the task's workDir before the agent starts, so an issue's work is
    * branch-isolated from the first turn without relying on the agent running
    * `remi repo checkout` itself. Scope is deliberately narrow: issue tasks
-   * only, and only in daemon-owned dirs (never agent.cwd / local_directory).
+   * only, and only in daemon-owned dirs (never local_directory).
    * An existing worktree is reused as-is so a resumed task keeps uncommitted
    * work, and any failure degrades to the manual-checkout prompt instead of
    * failing the task.
@@ -3048,10 +3060,8 @@ export class MultiremiDaemon {
     }
 
     const workDir = resolvedWorkDir.workDir;
-    // Only create dirs the daemon owns (default per-task dir / machine-affine
-    // task.workDir). A validated agent.cwd (ensureDir=false) is never recreated
-    // — if it vanished post-resolve the run fails loudly instead of mkdir-ing a
-    // machine-local path on a pool machine that shouldn't have it.
+    // Only create dirs the daemon owns. local_directory paths are validated
+    // separately and carry ensureDir=false.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
     // Homepage Chat starts from the safe database directory and performs Git
     // work only through an explicit `remi repo checkout`. Keep Issue task repo
