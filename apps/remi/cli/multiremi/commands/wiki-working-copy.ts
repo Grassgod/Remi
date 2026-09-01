@@ -256,6 +256,12 @@ export async function wikiMove(
 export async function wikiPush(options: CliOptions, projectId: string | null): Promise<void> {
   const paths = wikiPaths(options);
   await withWikiLock(paths, async () => {
+    const submissionIds = new Set<string>();
+    const collectSubmission = (value: unknown): void => {
+      if (!isRecord(value)) return;
+      const id = typeof value.submission_id === "string" ? value.submission_id.trim() : "";
+      if (id) submissionIds.add(id);
+    };
     const sourceRevision = rawStringOption(options, "source-revision", "sourceRevision")?.trim()
       || process.env.MULTIREMI_SCM_REVISION?.trim()
       || null;
@@ -302,24 +308,24 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
         };
         const taskId = process.env.MULTIREMI_TASK_ID?.trim();
         if (taskId) body.source_task_id = taskId;
-        await multiremiApiRequest("POST", `/api/projects/${encodeURIComponent(projectId)}/docs`, body, options);
+        collectSubmission(await multiremiApiRequest("POST", `/api/projects/${encodeURIComponent(projectId)}/docs`, body, options));
         continue;
       }
       if (action.kind === "update") {
-        await multiremiApiRequest(
+        collectSubmission(await multiremiApiRequest(
           "PUT",
           `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(action.slug)}`,
           { path: action.path, body: apiBody(action.body), expected_version: action.version },
           options,
-        );
+        ));
         continue;
       }
-      await multiremiApiRequest(
+      collectSubmission(await multiremiApiRequest(
         "DELETE",
         `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(action.slug)}?expected_version=${action.version}`,
         undefined,
         options,
-      );
+      ));
     }
 
     for (const action of repositoryPlan.actions) {
@@ -334,23 +340,35 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
         if (sourceRevision) body.source_revision = sourceRevision;
         const taskId = process.env.MULTIREMI_TASK_ID?.trim();
         if (taskId) body.source_task_id = taskId;
-        await multiremiApiRequest("POST", root, body, options);
+        collectSubmission(await multiremiApiRequest("POST", root, body, options));
       } else if (action.kind === "update") {
-        await multiremiApiRequest("PUT", `${root}/${encodeURIComponent(action.id)}`, {
+        collectSubmission(await multiremiApiRequest("PUT", `${root}/${encodeURIComponent(action.id)}`, {
           path: action.repositoryPath,
           body: apiBody(action.body),
           expected_version: action.version,
           status: "healthy",
           ...(sourceRevision ? { source_revision: sourceRevision } : {}),
-        }, options);
+        }, options));
       } else {
-        await multiremiApiRequest(
+        collectSubmission(await multiremiApiRequest(
           "DELETE",
           `${root}/${encodeURIComponent(action.id)}?expected_version=${action.version}`,
           undefined,
           options,
-        );
+        ));
       }
+    }
+
+    if (submissionIds.size) {
+      printJson({
+        pushed: true,
+        submitted: true,
+        project_id: projectId,
+        submission_ids: [...submissionIds],
+        status: "pending",
+        message: "等待 Atlas 加工",
+      });
+      return;
     }
 
     if (projectId && manifest) {

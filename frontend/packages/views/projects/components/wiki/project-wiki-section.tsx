@@ -10,6 +10,7 @@ import {
   FileQuestion,
   Files,
   GitFork,
+  History,
   PanelLeft,
   Pin,
   Search,
@@ -34,6 +35,7 @@ import { WikiDirectoryTree, WikiPathBreadcrumb } from "../../../common/wiki-dire
 import { ReadonlyContent } from "../../../editor";
 import { AppLink } from "../../../navigation";
 import { useT } from "../../../i18n";
+import { KnowledgeProvenance } from "../../../knowledge/knowledge-provenance";
 import { useFormatRelativeDate } from "../labels";
 import { extractWikiLinkSlugs, replaceWikiLinkMarkers } from "./wiki-links";
 
@@ -266,6 +268,7 @@ function WikiPagePane({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) 
         <p className="mt-1 text-sm text-muted-foreground">{doc.summary}</p>
       )}
       <DocRefs refs={doc.refs ?? []} className="mt-3" />
+      <KnowledgeProvenance compilationRunId={doc.compilation_run_id} />
       <div className="mt-5">
         <ReadonlyContent content={body} />
       </div>
@@ -377,6 +380,12 @@ export function MemoryCard({
             {t(($) => $.wiki.pinned_badge)}
           </Badge>
         )}
+        {!doc.compilation_run_id && (
+          <Badge variant="outline" className="shrink-0 gap-1 font-normal text-muted-foreground">
+            <History className="size-3" />
+            {t(($) => $.knowledge.history_unverified)}
+          </Badge>
+        )}
       </div>
       {body && (
         <div className="mt-1.5">
@@ -479,6 +488,7 @@ function MemoryDetailPane({
       </div>
 
       <DocRefs refs={doc.refs ?? []} className="mt-3" />
+      <KnowledgeProvenance compilationRunId={doc.compilation_run_id} />
 
       {body && (
         <div className="mt-5">

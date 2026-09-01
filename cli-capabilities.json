@@ -10,6 +10,7 @@
     "token",
     "project",
     "repo",
+    "knowledge",
     "memory",
     "wiki",
     "issue",
@@ -1383,6 +1384,118 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "knowledge": {
+      "command": "remi knowledge",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.submit": {
+      "command": "remi knowledge submit",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submit",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.submissions": {
+      "command": "remi knowledge submissions",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.submissions",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.inspect": {
+      "command": "remi knowledge inspect",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.inspect",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.runs": {
+      "command": "remi knowledge runs",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.runs",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.run.show": {
+      "command": "remi knowledge run show",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.run.show",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "knowledge.migrate-legacy": {
+      "command": "remi knowledge migrate-legacy",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "knowledge.migrate-legacy",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "memory": {
       "command": "remi memory",
       "aliases": [],
@@ -1663,6 +1776,38 @@
       ],
       "capability": "wiki.revisions",
       "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "memory.publish": {
+      "command": "remi memory publish",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "memory.publish",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "wiki.publish": {
+      "command": "remi wiki publish",
+      "aliases": [],
+      "auth": [
+        "task"
+      ],
+      "capability": "wiki.publish",
+      "mutation": "write",
       "output": [
         "table",
         "json",
@@ -8693,6 +8838,18 @@
     "GET /api/issues/search": {
       "command": "issue.search"
     },
+    "GET /api/knowledge/runs": {
+      "command": "knowledge.runs"
+    },
+    "GET /api/knowledge/runs/:id": {
+      "command": "knowledge.run.show"
+    },
+    "GET /api/knowledge/submissions": {
+      "command": "knowledge.submissions"
+    },
+    "GET /api/knowledge/submissions/:id": {
+      "command": "knowledge.inspect"
+    },
     "GET /api/labels": {
       "command": "label.list"
     },
@@ -9733,6 +9890,17 @@
     "POST /api/issues/quick-create": {
       "command": "issue.quick-create"
     },
+    "POST /api/knowledge/events/repository-merged": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "SCM merge event ingestion is machine-to-server automation traffic; it is not a user command."
+    },
+    "POST /api/knowledge/migrate-legacy": {
+      "command": "knowledge.migrate-legacy"
+    },
+    "POST /api/knowledge/submissions": {
+      "command": "knowledge.submit"
+    },
     "POST /api/labels": {
       "command": "label.create"
     },
@@ -10012,6 +10180,9 @@
     "POST /api/projects/:id/docs": {
       "command": "memory.create"
     },
+    "POST /api/projects/:id/knowledge/publish": {
+      "command": "memory.publish"
+    },
     "POST /api/projects/:id/resources": {
       "command": "project.resource.create"
     },
@@ -10113,6 +10284,9 @@
     },
     "POST /api/workspaces/:id/repos/:repositoryId/wiki/build": {
       "command": "wiki.repository.build"
+    },
+    "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish": {
+      "command": "wiki.publish"
     },
     "POST /api/workspaces/:id/repos/inspect": {
       "command": "repo.inspect"

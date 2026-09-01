@@ -171,6 +171,20 @@ export type {
   ListWorkspaceDocsResponse,
   ListProjectDocRevisionsResponse,
 } from "./project-doc";
+export type {
+  KnowledgeIssueSummary,
+  KnowledgeAgentSummary,
+  KnowledgeTaskSummary,
+  KnowledgeSubmission,
+  KnowledgeCompilationRun,
+  KnowledgeCompilationSource,
+  KnowledgeArtifactSummary,
+  KnowledgeCompilationOutput,
+  KnowledgeRunDetail,
+  ListKnowledgeSubmissionsResponse,
+  GetKnowledgeSubmissionResponse,
+  ListKnowledgeRunsResponse,
+} from "./knowledge";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   LarkInstallation,

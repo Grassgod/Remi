@@ -2565,6 +2565,8 @@ export interface MultiremiProjectDoc {
   syncStatus?: "sql" | "pending" | "ready" | "failed" | "deleting";
   syncError?: string | null;
   snapshotOid?: string | null;
+  /** Compilation run that produced the current formal version. Legacy rows are null. */
+  compilationRunId?: string | null;
 }
 
 export interface MultiremiProjectDocRevision {
@@ -2580,6 +2582,8 @@ export interface MultiremiProjectDocRevision {
   contentSha256?: string | null;
   snapshotOid?: string | null;
   contentUri?: string | null;
+  /** Compilation run that produced this revision. Legacy rows are null. */
+  compilationRunId?: string | null;
 }
 
 export type MultiremiRepositoryWikiStatus =
@@ -2620,6 +2624,8 @@ export interface MultiremiRepositoryWikiDoc {
   snapshotOid: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Compilation run that produced the current formal version. Legacy rows are null. */
+  compilationRunId?: string | null;
 }
 
 export interface MultiremiRepositoryWikiDocRevision {
@@ -2637,6 +2643,8 @@ export interface MultiremiRepositoryWikiDocRevision {
   contentSha256: string | null;
   snapshotOid: string | null;
   createdAt: string;
+  /** Compilation run that produced this revision. Legacy rows are null. */
+  compilationRunId?: string | null;
 }
 
 export interface CreateRepositoryWikiDocInput {
@@ -2711,6 +2719,134 @@ export interface MultiremiProjectDocsIndex {
   wiki: MultiremiProjectDocIndexEntry[];
   /** Body of the `_schema` doc (trimmed to 1500 chars), null when absent. `_schema` is not in wiki[]. */
   schema: string | null;
+}
+
+export type MultiremiKnowledgeScope = "project_wiki" | "repository_wiki" | "memory";
+export type MultiremiKnowledgeSubmissionSourceType =
+  | "agent"
+  | "issue_completion"
+  | "external"
+  | "legacy_wiki"
+  | "legacy_memory";
+export type MultiremiKnowledgeSubmissionStatus =
+  | "pending"
+  | "processing"
+  | "consumed"
+  | "partial"
+  | "rejected"
+  | "archived";
+export type MultiremiKnowledgeCompilationMode =
+  | "issue_ingest"
+  | "repository_update"
+  | "memory_curate"
+  | "lint"
+  | "legacy_migration"
+  | "manual_edit";
+export type MultiremiKnowledgeCompilationStatus =
+  | "preparing"
+  | "validating"
+  | "published"
+  | "published_with_warnings"
+  | "failed"
+  | "noop";
+export type MultiremiKnowledgeCompilationAction =
+  | "create"
+  | "update"
+  | "merge"
+  | "split"
+  | "reject"
+  | "noop";
+
+export interface MultiremiKnowledgeSubmission {
+  id: string;
+  workspaceId: string;
+  projectId: string | null;
+  repositoryId: string | null;
+  scope: MultiremiKnowledgeScope;
+  sourceType: MultiremiKnowledgeSubmissionSourceType;
+  proposedPath: string | null;
+  proposedSlug: string | null;
+  body: string;
+  patch: string | null;
+  baseRevision: string | null;
+  sourceTaskId: string | null;
+  sourceIssueId: string | null;
+  sourceRevision: string | null;
+  authorAgentId: string | null;
+  contentSha256: string;
+  status: MultiremiKnowledgeSubmissionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiKnowledgeCompilationRun {
+  id: string;
+  workspaceId: string;
+  projectId: string | null;
+  repositoryId: string | null;
+  taskId: string | null;
+  agentId: string | null;
+  autopilotRunId: string | null;
+  mode: MultiremiKnowledgeCompilationMode;
+  status: MultiremiKnowledgeCompilationStatus;
+  resultSummary: string | null;
+  dedupeKey: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface MultiremiKnowledgeCompilationRunSource {
+  id: string;
+  runId: string;
+  submissionId: string | null;
+  sourceType: "submission" | "scm_event";
+  sourceRef: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface MultiremiKnowledgeCompilationOutput {
+  id: string;
+  runId: string;
+  artifactScope: MultiremiKnowledgeScope;
+  docId: string | null;
+  revisionId: string | null;
+  version: number | null;
+  action: MultiremiKnowledgeCompilationAction;
+  contentSha256: string | null;
+  createdAt: string;
+}
+
+export interface CreateKnowledgeSubmissionInput {
+  workspaceId: string;
+  projectId?: string | null;
+  repositoryId?: string | null;
+  scope: MultiremiKnowledgeScope;
+  sourceType: MultiremiKnowledgeSubmissionSourceType;
+  proposedPath?: string | null;
+  proposedSlug?: string | null;
+  body?: string | null;
+  patch?: string | null;
+  baseRevision?: string | null;
+  sourceTaskId?: string | null;
+  sourceIssueId?: string | null;
+  sourceRevision?: string | null;
+  authorAgentId?: string | null;
+  /** Legacy migration deduplicates against every status, not only pending Raw. */
+  dedupeAllStatuses?: boolean;
+}
+
+export interface CreateKnowledgeCompilationRunInput {
+  workspaceId: string;
+  projectId?: string | null;
+  repositoryId?: string | null;
+  taskId?: string | null;
+  agentId?: string | null;
+  autopilotRunId?: string | null;
+  mode: MultiremiKnowledgeCompilationMode;
+  status?: MultiremiKnowledgeCompilationStatus;
+  resultSummary?: string | null;
+  dedupeKey?: string | null;
 }
 
 export interface MultiremiRepoData {

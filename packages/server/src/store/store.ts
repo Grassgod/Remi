@@ -52,6 +52,13 @@ import {
   RepositoryWikiRepo,
   type RepositoryWikiWriteControl,
 } from "@multiremi/store/repos/repository-wiki-repo.js";
+import {
+  KnowledgeRepo,
+  type KnowledgeListInput,
+  type KnowledgeRunListInput,
+  type RecordKnowledgeOutputInput,
+  type RepositoryMergeKnowledgeEventInput,
+} from "@multiremi/store/repos/knowledge-repo.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
@@ -218,6 +225,14 @@ import type {
   ListIssueCommentsResult,
   MultiremiIssueDependency,
   MultiremiIssue,
+  CreateKnowledgeCompilationRunInput,
+  CreateKnowledgeSubmissionInput,
+  MultiremiKnowledgeCompilationOutput,
+  MultiremiKnowledgeCompilationRun,
+  MultiremiKnowledgeCompilationRunSource,
+  MultiremiKnowledgeCompilationStatus,
+  MultiremiKnowledgeSubmission,
+  MultiremiKnowledgeSubmissionStatus,
   MultiremiIssueShare,
   MultiremiIssueSession,
   MultiremiSessionArchive,
@@ -404,6 +419,7 @@ export class MultiremiStore {
   private analytics: AnalyticsRepo;
   private projects: ProjectsRepo;
   private repositoryWiki: RepositoryWikiRepo;
+  private knowledge: KnowledgeRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
   private issues: IssuesRepo;
@@ -458,6 +474,7 @@ export class MultiremiStore {
     this.ctx.registerAnalytics(this.analytics);
     this.projects = new ProjectsRepo(this.ctx);
     this.repositoryWiki = new RepositoryWikiRepo(this.ctx);
+    this.knowledge = new KnowledgeRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
     this.issues = new IssuesRepo(this.ctx);
@@ -3270,6 +3287,93 @@ runMigrations(this.db);
 
   listRepositoryWikiDocRevisions(docId: string): MultiremiRepositoryWikiDocRevision[] {
     return this.repositoryWiki.revisions(docId);
+  }
+
+  createKnowledgeSubmission(input: CreateKnowledgeSubmissionInput): {
+    submission: MultiremiKnowledgeSubmission;
+    deduplicated: boolean;
+  } {
+    return this.knowledge.createSubmission(input);
+  }
+
+  getKnowledgeSubmission(id: string): MultiremiKnowledgeSubmission | null {
+    return this.knowledge.getSubmission(id);
+  }
+
+  listKnowledgeSubmissions(input: KnowledgeListInput): MultiremiKnowledgeSubmission[] {
+    return this.knowledge.listSubmissions(input);
+  }
+
+  updateKnowledgeSubmissionStatus(
+    id: string,
+    status: MultiremiKnowledgeSubmissionStatus,
+  ): MultiremiKnowledgeSubmission {
+    return this.knowledge.updateSubmissionStatus(id, status);
+  }
+
+  createKnowledgeCompilationRun(input: CreateKnowledgeCompilationRunInput): {
+    run: MultiremiKnowledgeCompilationRun;
+    deduplicated: boolean;
+  } {
+    return this.knowledge.createRun(input);
+  }
+
+  getKnowledgeCompilationRun(id: string): MultiremiKnowledgeCompilationRun | null {
+    return this.knowledge.getRun(id);
+  }
+
+  listKnowledgeCompilationRuns(input: KnowledgeRunListInput): MultiremiKnowledgeCompilationRun[] {
+    return this.knowledge.listRuns(input);
+  }
+
+  completeKnowledgeCompilationRun(
+    id: string,
+    status: MultiremiKnowledgeCompilationStatus,
+    resultSummary?: string | null,
+  ): MultiremiKnowledgeCompilationRun {
+    return this.knowledge.completeRun(id, status, resultSummary);
+  }
+
+  addKnowledgeRunSubmissionSource(
+    runId: string,
+    submissionId: string,
+  ): MultiremiKnowledgeCompilationRunSource {
+    return this.knowledge.addRunSubmissionSource(runId, submissionId);
+  }
+
+  addKnowledgeRunScmSource(
+    runId: string,
+    sourceRef: string,
+    metadata: Record<string, unknown>,
+  ): MultiremiKnowledgeCompilationRunSource {
+    return this.knowledge.addRunScmSource(runId, sourceRef, metadata);
+  }
+
+  listKnowledgeRunSources(runId: string): MultiremiKnowledgeCompilationRunSource[] {
+    return this.knowledge.listRunSources(runId);
+  }
+
+  recordKnowledgeCompilationOutput(input: RecordKnowledgeOutputInput): MultiremiKnowledgeCompilationOutput {
+    return this.knowledge.recordOutput(input);
+  }
+
+  linkKnowledgeFormalVersion(input: Omit<RecordKnowledgeOutputInput, "revisionId">): MultiremiKnowledgeCompilationOutput {
+    return this.knowledge.linkFormalVersion(input);
+  }
+
+  listKnowledgeRunOutputs(runId: string): MultiremiKnowledgeCompilationOutput[] {
+    return this.knowledge.listRunOutputs(runId);
+  }
+
+  createIssueCompletionKnowledgeBundle(issue: MultiremiIssue): {
+    submission: MultiremiKnowledgeSubmission;
+    deduplicated: boolean;
+  } | null {
+    return this.knowledge.createIssueCompletionBundle(issue);
+  }
+
+  recordRepositoryMergeKnowledgeEvent(input: RepositoryMergeKnowledgeEventInput) {
+    return this.knowledge.recordRepositoryMergeEvent(input);
   }
 
   createSquad(input: CreateSquadInput): MultiremiSquad {

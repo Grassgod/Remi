@@ -55,6 +55,16 @@ import type {
 import type { RouterDeps } from "./deps.js";
 import { ProjectKnowledgeUnavailableError } from "@multiremi/project-knowledge/service.js";
 import { OpenVikingClientError } from "@multiremi/project-knowledge/openviking-client.js";
+import {
+  assertProjectKnowledgeTarget,
+  createFormalWriteRun,
+  createProjectMutationSubmission,
+  linkSeededProjectSchema,
+  knowledgePolicyErrorResponse,
+  rawSubmissionResponse,
+  resolveKnowledgeWriteActor,
+} from "../helpers/knowledge.js";
+import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 
 export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   const { store, projectKnowledge } = deps;
@@ -472,13 +482,42 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (project instanceof Response) return project;
     const body = await readJsonStrict<CreateProjectDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
     try {
-      const doc = await projectKnowledge.createProjectDoc(project.id, projectDocCreateInput(c, store, body));
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertProjectKnowledgeTarget(actor, project.id);
+      const input = projectDocCreateInput(c, store, body);
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createProjectMutationSubmission({
+          store, actor, projectId: project.id, operation: "create", body: input,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const scope = input.kind === "memory" ? "memory" : "project_wiki";
+      const schemaExisted = Boolean(store.getProjectDocByRef(project.id, "_schema"));
+      const run = createFormalWriteRun({
+        store, actor, workspaceId: project.workspaceId, projectId: project.id, scope,
+      });
+      runId = run.id;
+      const written = await projectKnowledge.createProjectDoc(project.id, input);
+      store.linkKnowledgeFormalVersion({
+        runId: run.id,
+        artifactScope: written.kind === "memory" ? "memory" : "project_wiki",
+        docId: written.id,
+        version: written.version,
+        action: "create",
+        contentSha256: written.contentSha256 ?? sha256Text(written.body),
+      });
+      linkSeededProjectSchema({ store, projectId: project.id, runId: run.id, schemaExisted });
+      store.completeKnowledgeCompilationRun(run.id, "published", `created ${written.id} v${written.version}`);
+      const doc = { ...written, compilationRunId: run.id };
       const response = projectDocCompatibilityResponse(doc);
       publishProjectDocCreated(c, store, doc, response);
       return c.json({ doc: response }, 201);
     } catch (err) {
-      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", err instanceof Error ? err.message : "project knowledge create failed");
+      const response = knowledgePolicyErrorResponse(c, err)
+        ?? projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
@@ -501,13 +540,45 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (project instanceof Response) return project;
     const body = await readJsonStrict<UpdateProjectDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
     try {
-      const doc = await projectKnowledge.updateProjectDoc(project.id, c.req.param("ref"), projectDocUpdateInput(c, body));
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertProjectKnowledgeTarget(actor, project.id);
+      const current = store.getProjectDocByRef(project.id, c.req.param("ref"));
+      if (!current) return c.json({ error: "project doc not found" }, 404);
+      const input = projectDocUpdateInput(c, body);
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createProjectMutationSubmission({
+          store, actor, projectId: project.id, operation: "update", body: input, current,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const run = createFormalWriteRun({
+        store,
+        actor,
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        scope: current.kind === "memory" ? "memory" : "project_wiki",
+      });
+      runId = run.id;
+      const written = await projectKnowledge.updateProjectDoc(project.id, c.req.param("ref"), input);
+      store.linkKnowledgeFormalVersion({
+        runId: run.id,
+        artifactScope: written.kind === "memory" ? "memory" : "project_wiki",
+        docId: written.id,
+        version: written.version,
+        action: "update",
+        contentSha256: written.contentSha256 ?? sha256Text(written.body),
+      });
+      store.completeKnowledgeCompilationRun(run.id, "published", `updated ${written.id} v${written.version}`);
+      const doc = { ...written, compilationRunId: run.id };
       const response = projectDocCompatibilityResponse(doc);
       publishProjectDocUpdated(c, store, doc, response);
       return c.json({ doc: response });
     } catch (err) {
-      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", err instanceof Error ? err.message : "project knowledge update failed");
+      const response = knowledgePolicyErrorResponse(c, err)
+        ?? projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }
@@ -515,14 +586,45 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/projects/:id/docs/:ref", async (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));
     if (project instanceof Response) return project;
+    let runId: string | null = null;
     try {
-      const doc = await projectKnowledge.deleteProjectDoc(project.id, c.req.param("ref"), {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertProjectKnowledgeTarget(actor, project.id);
+      const current = store.getProjectDocByRef(project.id, c.req.param("ref"));
+      if (!current) return c.json({ error: "project doc not found" }, 404);
+      const input = {
         expectedVersion: parseOptionalInt(c.req.query("expected_version")),
+      };
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createProjectMutationSubmission({
+          store, actor, projectId: project.id, operation: "delete", body: input, current,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const run = createFormalWriteRun({
+        store,
+        actor,
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        scope: current.kind === "memory" ? "memory" : "project_wiki",
       });
+      runId = run.id;
+      const doc = await projectKnowledge.deleteProjectDoc(project.id, c.req.param("ref"), input);
+      store.recordKnowledgeCompilationOutput({
+        runId: run.id,
+        artifactScope: doc.kind === "memory" ? "memory" : "project_wiki",
+        docId: doc.id,
+        version: doc.version,
+        action: "reject",
+        contentSha256: doc.contentSha256 ?? sha256Text(doc.body),
+      });
+      store.completeKnowledgeCompilationRun(run.id, "published", `deleted ${doc.id} v${doc.version}`);
       publishProjectDocDeleted(c, store, doc);
       return c.json({ deleted: true });
     } catch (err) {
-      const response = projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", err instanceof Error ? err.message : "project knowledge delete failed");
+      const response = knowledgePolicyErrorResponse(c, err)
+        ?? projectKnowledgeErrorResponse(c, err) ?? projectDocErrorResponse(c, err);
       if (response) return response;
       throw err;
     }

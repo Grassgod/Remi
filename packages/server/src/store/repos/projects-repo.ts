@@ -1452,6 +1452,7 @@ function toProjectDoc(row: Row): MultiremiProjectDoc {
     syncStatus: normalizeProjectDocSyncStatus(row.sync_status),
     syncError: nullableString(row.sync_error),
     snapshotOid: nullableString(row.snapshot_oid),
+    compilationRunId: nullableString(row.compilation_run_id),
   };
 }
 
@@ -1469,6 +1470,7 @@ function toProjectDocRevision(row: Row): MultiremiProjectDocRevision {
     contentUri: nullableString(row.content_uri),
     contentSha256: nullableString(row.content_sha256),
     snapshotOid: nullableString(row.snapshot_oid),
+    compilationRunId: nullableString(row.compilation_run_id),
   };
 }
 

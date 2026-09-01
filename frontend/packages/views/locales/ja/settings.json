@@ -804,7 +804,7 @@
       "validation_summary": "既定メニューと {{count}} 件の個別メニューを検証しました。", "publish_summary": "既定メニューと {{count}} 件の個別メニューを公開しました。",
       "read_only": "Owner と Admin のみ編集・公開できます。", "default_title": "既定メニュー", "audiences_title": "対象別メニュー", "audiences_description": "メンバー指定はロール指定より優先されます。",
       "add_audience": "対象を追加", "no_audiences": "対象別メニューはありません", "target_type": "対象タイプ", "target_member": "Workspace メンバー", "target_role": "Workspace ロール", "target_external": "外部 ID",
-      "member": "メンバー", "role": "ロール", "select_member": "メンバーを選択", "external_id": "Feishu ユーザー ID", "delete_audience": "対象を削除",
+      "member": "メンバー", "role": "ロール", "role_owner": "オーナー", "role_admin": "管理者", "role_member": "メンバー", "id_type_open": "open_id", "id_type_union": "union_id", "id_type_user": "user_id", "select_member": "メンバーを選択", "external_id": "Feishu ユーザー ID", "delete_audience": "対象を削除",
       "add_item": "項目を追加", "no_items": "メニュー項目はありません", "drag_item": "ドラッグして並べ替え", "item_name": "メニュー名", "delete_item": "項目を削除", "item_tag": "タグ", "item_kind": "アクション",
       "kind_message": "メッセージ送信", "kind_link": "リンクを開く", "kind_event": "イベント送信", "kind_submenu": "サブメニュー", "children": "サブメニュー項目",
       "confirm_title": "Feishu に公開しますか？", "confirm_description": "Workspace 全体の Bot メニューを更新します。先にドライランすることを推奨します。", "cancel": "キャンセル", "confirm_publish": "今すぐ公開"

@@ -38,6 +38,7 @@ import { registerRuntimeRoutes } from "./routers/runtimes.js";
 import { registerDaemonRetirementRoutes } from "./routers/daemon-retirement.js";
 import { registerDashboardRoutes } from "./routers/dashboard.js";
 import { registerProjectRoutes } from "./routers/projects.js";
+import { registerKnowledgeRoutes } from "./routers/knowledge.js";
 import { registerSquadRoutes } from "./routers/squads.js";
 import { registerAutopilotRoutes } from "./routers/autopilots.js";
 import { registerLabelRoutes } from "./routers/labels.js";
@@ -586,6 +587,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   registerPlatformRoutes(app, deps);
 
   registerDashboardRoutes(app, deps);
+
+  registerKnowledgeRoutes(app, deps);
 
   registerProjectRoutes(app, deps);
 

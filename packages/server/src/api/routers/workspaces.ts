@@ -90,6 +90,15 @@ import {
   type MultiremiAutopilotRunRecord,
 } from "@multiremi/store/repos/autopilots-repo.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
+import {
+  assertRepositoryKnowledgeTarget,
+  createFormalWriteRun,
+  createRepositoryMutationSubmission,
+  knowledgePolicyErrorResponse,
+  rawSubmissionResponse,
+  resolveKnowledgeWriteActor,
+} from "../helpers/knowledge.js";
+import { sha256Text } from "@multiremi/project-knowledge/codec.js";
 
 export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
@@ -459,15 +468,48 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (missing) return c.json({ error: "repository not found" }, 404);
     const body = await readJsonStrict<CreateRepositoryWikiDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
     try {
-      const doc = await deps.repositoryWiki.create(workspaceId, repositoryId, {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      const input: CreateRepositoryWikiDocInput = {
         ...body,
-        authorType: body.authorType ?? body.author_type ?? "member",
-        authorId: body.authorId ?? body.author_id ?? authenticatedRequestUserId(c),
+        sourceTaskId: actor.task?.id ?? null,
+        source_task_id: actor.task?.id ?? null,
+        sourceIssueId: actor.issue?.id ?? null,
+        source_issue_id: actor.issue?.id ?? null,
+        sourceRevision: actor.sourceRevision,
+        source_revision: actor.sourceRevision,
+        authorType: actor.kind,
+        author_type: actor.kind,
+        authorId: actor.agent?.id ?? authenticatedRequestUserId(c),
+        author_id: actor.agent?.id ?? authenticatedRequestUserId(c),
+      };
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createRepositoryMutationSubmission({
+          store, actor, workspaceId, repositoryId, operation: "create", body: input,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const run = createFormalWriteRun({
+        store, actor, workspaceId, repositoryId, scope: "repository_wiki",
       });
+      runId = run.id;
+      const written = await deps.repositoryWiki.create(workspaceId, repositoryId, input);
+      store.linkKnowledgeFormalVersion({
+        runId: run.id,
+        artifactScope: "repository_wiki",
+        docId: written.id,
+        version: written.version,
+        action: "create",
+        contentSha256: written.contentSha256 ?? sha256Text(written.body),
+      });
+      store.completeKnowledgeCompilationRun(run.id, "published", `created ${written.id} v${written.version}`);
+      const doc = { ...written, compilationRunId: run.id };
       return c.json({ doc: repositoryWikiDocResponse(doc) }, 201);
     } catch (error) {
-      return repositoryWikiError(c, error);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "repository wiki create failed");
+      return knowledgePolicyErrorResponse(c, error) ?? repositoryWikiError(c, error);
     }
   });
   app.post("/api/workspaces/:id/repos/:repositoryId/wiki/build", (c) => {
@@ -524,15 +566,46 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
     const body = await readJsonStrict<UpdateRepositoryWikiDocInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    let runId: string | null = null;
     try {
-      const doc = await deps.repositoryWiki.update(workspaceId, repositoryId, c.req.param("ref"), {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
+      const current = await deps.repositoryWiki.get(workspaceId, repositoryId, c.req.param("ref"));
+      if (!current) return c.json({ error: "repository wiki doc not found" }, 404);
+      const input: UpdateRepositoryWikiDocInput = {
         ...body,
-        updatedByType: body.updatedByType ?? body.updated_by_type ?? "member",
-        updatedById: body.updatedById ?? body.updated_by_id ?? authenticatedRequestUserId(c),
+        sourceRevision: actor.sourceRevision ?? body.sourceRevision ?? body.source_revision,
+        source_revision: actor.sourceRevision ?? body.sourceRevision ?? body.source_revision,
+        updatedByType: actor.kind,
+        updated_by_type: actor.kind,
+        updatedById: actor.agent?.id ?? authenticatedRequestUserId(c),
+        updated_by_id: actor.agent?.id ?? authenticatedRequestUserId(c),
+      };
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createRepositoryMutationSubmission({
+          store, actor, workspaceId, repositoryId, operation: "update", body: input, current,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const run = createFormalWriteRun({
+        store, actor, workspaceId, repositoryId, scope: "repository_wiki",
       });
+      runId = run.id;
+      const written = await deps.repositoryWiki.update(workspaceId, repositoryId, c.req.param("ref"), input);
+      store.linkKnowledgeFormalVersion({
+        runId: run.id,
+        artifactScope: "repository_wiki",
+        docId: written.id,
+        version: written.version,
+        action: "update",
+        contentSha256: written.contentSha256 ?? sha256Text(written.body),
+      });
+      store.completeKnowledgeCompilationRun(run.id, "published", `updated ${written.id} v${written.version}`);
+      const doc = { ...written, compilationRunId: run.id };
       return c.json({ doc: repositoryWikiDocResponse(doc) });
     } catch (error) {
-      return repositoryWikiError(c, error);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "repository wiki update failed");
+      return knowledgePolicyErrorResponse(c, error) ?? repositoryWikiError(c, error);
     }
   });
   app.delete("/api/workspaces/:id/repos/:repositoryId/wiki/:ref", async (c) => {
@@ -541,17 +614,45 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     if (requireWorkspaceRepository(store, workspaceId, repositoryId)) return c.json({ error: "repository not found" }, 404);
+    let runId: string | null = null;
     try {
+      const actor = resolveKnowledgeWriteActor(c, store);
+      assertRepositoryKnowledgeTarget(actor, store, repositoryId);
       const expectedVersion = c.req.query("expected_version");
+      const current = await deps.repositoryWiki.get(workspaceId, repositoryId, c.req.param("ref"));
+      if (!current) return c.json({ error: "repository wiki doc not found" }, 404);
+      const input: UpdateRepositoryWikiDocInput = {
+        expectedVersion: expectedVersion ? Number(expectedVersion) : null,
+      };
+      if (actor.kind === "agent" && !actor.canPublish) {
+        const submission = createRepositoryMutationSubmission({
+          store, actor, workspaceId, repositoryId, operation: "delete", body: input, current,
+        });
+        return c.json(rawSubmissionResponse(submission), 202);
+      }
+      const run = createFormalWriteRun({
+        store, actor, workspaceId, repositoryId, scope: "repository_wiki",
+      });
+      runId = run.id;
       const doc = await deps.repositoryWiki.delete(
         workspaceId,
         repositoryId,
         c.req.param("ref"),
         expectedVersion ? Number(expectedVersion) : null,
       );
+      store.recordKnowledgeCompilationOutput({
+        runId: run.id,
+        artifactScope: "repository_wiki",
+        docId: doc.id,
+        version: doc.version,
+        action: "reject",
+        contentSha256: doc.contentSha256 ?? sha256Text(doc.body),
+      });
+      store.completeKnowledgeCompilationRun(run.id, "published", `deleted ${doc.id} v${doc.version}`);
       return c.json({ doc: repositoryWikiDocResponse(doc) });
     } catch (error) {
-      return repositoryWikiError(c, error);
+      if (runId) store.completeKnowledgeCompilationRun(runId, "failed", error instanceof Error ? error.message : "repository wiki delete failed");
+      return knowledgePolicyErrorResponse(c, error) ?? repositoryWikiError(c, error);
     }
   });
   app.get("/api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions", async (c) => {
@@ -1049,6 +1150,7 @@ function repositoryWikiDocResponse(doc: MultiremiRepositoryWikiDoc): Record<stri
     snapshot_oid: doc.snapshotOid,
     created_at: doc.createdAt,
     updated_at: doc.updatedAt,
+    compilation_run_id: doc.compilationRunId ?? null,
   };
 }
 
@@ -1134,6 +1236,7 @@ function repositoryWikiRevisionResponse(revision: MultiremiRepositoryWikiDocRevi
     content_sha256: revision.contentSha256,
     snapshot_oid: revision.snapshotOid,
     created_at: revision.createdAt,
+    compilation_run_id: revision.compilationRunId ?? null,
   };
 }
 
