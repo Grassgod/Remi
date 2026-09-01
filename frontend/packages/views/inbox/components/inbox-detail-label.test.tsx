@@ -271,8 +271,8 @@ function titleOf(value: InboxItem, variant: "row" | "detail" = "row"): string {
 
 describe("useInboxTitle", () => {
   it("keeps the server title for a native notification", () => {
-    expect(titleOf(feishuItem({ type: "issue_assigned", title: "Fix the sidecar" }))).toBe(
-      "Fix the sidecar",
+    expect(titleOf(feishuItem({ type: "issue_assigned", title: "Fix the flaky poller" }))).toBe(
+      "Fix the flaky poller",
     );
   });
 

@@ -39,7 +39,7 @@ function outcome(overrides: Partial<FeishuMessageOutcome> = {}): FeishuMessageOu
 
 describe("deriveEndpointState", () => {
   it("reports forbidden for a non-admin before anything else", () => {
-    // A Member must not even learn whether a sidecar exists, so this outranks
+    // A Member must not even learn whether a connection exists, so this outranks
     // both loading and not-configured.
     expect(deriveEndpointState({
       permitted: false,
@@ -76,7 +76,7 @@ describe("deriveEndpointState", () => {
     })).toBe("not_configured");
   });
 
-  it("reports ready for a healthy sidecar", () => {
+  it("reports ready for a healthy connection", () => {
     expect(deriveEndpointState({
       permitted: true,
       configured: true,
@@ -85,7 +85,7 @@ describe("deriveEndpointState", () => {
     })).toBe("ready");
   });
 
-  it("reports unreachable for a sidecar that failed its probe", () => {
+  it("reports unreachable for a connection that failed its probe", () => {
     expect(deriveEndpointState({
       permitted: true,
       configured: true,
@@ -143,7 +143,7 @@ describe("deriveSourceState", () => {
     })).toBe("paused");
   });
 
-  it("reports blocked_endpoint when the sidecar is unreachable", () => {
+  it("reports blocked_endpoint when the connection is unreachable", () => {
     expect(deriveSourceState({
       source,
       endpoint: endpoint({ status: "unreachable" }),

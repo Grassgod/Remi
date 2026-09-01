@@ -50,6 +50,39 @@ describe("CLI capabilities manifest", () => {
     for (const id of taskOperable) expect(manifest.commands[id]?.auth, id).toEqual(["human", "task"]);
   });
 
+  it("draws the same line on the channel-independent messaging commands", () => {
+    // Wiring a workspace to a channel is a person's decision; reading what the
+    // channel delivered and recording an outcome is an agent's job. The
+    // refactor moved the routes, not that boundary.
+    const humanOnly = [
+      "messaging.connection.add",
+      "messaging.connection.update",
+      "messaging.connection.delete",
+      "messaging.connection.check",
+      "messaging.source.add",
+      "messaging.source.update",
+      "messaging.source.delete",
+      "messaging.source.available-conversations",
+      "messaging.message.create-issue",
+      "messaging.proposal.approve",
+      "messaging.proposal.reject",
+    ];
+    const taskOperable = [
+      "messaging.source.status",
+      "messaging.conversation.list",
+      "messaging.message.list",
+      "messaging.message.get",
+      "messaging.message.resolve",
+      "messaging.message.notify",
+      "messaging.message.draft-reply",
+      "messaging.message.propose-issue",
+      "messaging.proposal.list",
+    ];
+
+    for (const id of humanOnly) expect(manifest.commands[id]?.auth, id).toEqual(["human"]);
+    for (const id of taskOperable) expect(manifest.commands[id]?.auth, id).toEqual(["human", "task"]);
+  });
+
   it("keeps Feishu bot menu mutations and publish status human-only", () => {
     expect(manifest.commands["workspace.bot-menu.get"]?.auth).toEqual(["human", "task"]);
     for (const command of [
@@ -104,10 +137,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 589,
+      mapped: 614,
       exempt: 78,
       missing: 0,
-      total: 667,
+      total: 692,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(cliCoverageReport(manifest).missing).toBeLessThanOrEqual(manifest.max_planned_routes);

@@ -220,8 +220,8 @@ function source(overrides: Partial<FeishuSource> = {}): FeishuSource {
   return {
     id: "src-1",
     workspaceId: "ws-1",
-    name: "Personal automation",
-    type: "personal_automation",
+    name: "Team chats",
+    type: "feishu",
     endpointName: "personal",
     allowlist: [{ chatId: "oc_alpha", addedAt: "2026-08-01T00:00:00.000Z" }],
     enabled: true,
@@ -364,8 +364,8 @@ beforeEach(() => {
   calls.availableChats = [];
 });
 
-describe("ingestion service panel", () => {
-  it("reports a reachable sidecar with its name, version and latency", () => {
+describe("message connection panel", () => {
+  it("reports a reachable connection with its name, version and latency", () => {
     renderTab();
     expect(screen.getByText("Ready")).toBeTruthy();
     expect(screen.getByText("personal")).toBeTruthy();
@@ -386,7 +386,7 @@ describe("ingestion service panel", () => {
     expect(document.body.innerHTML).not.toContain("8042");
   });
 
-  it("reports an unreachable sidecar with its error code", () => {
+  it("reports an unreachable connection with its error code", () => {
     server.endpoints = {
       configured: true,
       endpoints: [endpoint({ status: "unreachable", errorCode: "connection_refused" })],
@@ -396,11 +396,11 @@ describe("ingestion service panel", () => {
     expect(screen.getAllByText(/connection_refused/).length).toBeGreaterThan(0);
   });
 
-  it("tells the operator to register a sidecar when none is configured", () => {
+  it("tells the operator to add a connection when none is configured", () => {
     server.endpoints = { configured: false, endpoints: [] };
     renderTab();
     expect(screen.getByText("Not configured")).toBeTruthy();
-    expect(screen.getByText(/No ingestion sidecar is registered/)).toBeTruthy();
+    expect(screen.getByText(/No message connection is configured/)).toBeTruthy();
     // Nothing to probe, so no button that would probe it.
     expect(screen.queryByRole("button", { name: /Check again/ })).toBeNull();
   });
@@ -445,7 +445,7 @@ describe("message sources", () => {
     expect(screen.getByText("Empty allowlist")).toBeTruthy();
   });
 
-  it("blocks every source while the sidecar is unreachable", () => {
+  it("blocks every source while the connection is unreachable", () => {
     server.endpoints = { configured: true, endpoints: [endpoint({ status: "unreachable" })] };
     server.sources = { sources: [source()], total: 1 };
     renderTab();
@@ -470,7 +470,7 @@ describe("message sources", () => {
     expect(mutations.remove.mutate).not.toHaveBeenCalled();
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText(/Delete Personal automation\?/)).toBeTruthy();
+    expect(within(dialog).getByText(/Delete Team chats\?/)).toBeTruthy();
     // The counts are what make this a real confirmation rather than a speed bump.
     expect(within(dialog).getByText(/1 chats, 3 unprocessed messages and 2 pending proposals/)).toBeTruthy();
 
@@ -521,19 +521,19 @@ describe("message sources", () => {
 });
 
 describe("source dialog", () => {
-  it("offers registered endpoint names and no address field", async () => {
+  it("offers configured connection names and no address field", async () => {
     const user = userEvent.setup();
     renderTab();
     await user.click(screen.getByRole("button", { name: /New source/ }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByLabelText("Ingestion endpoint")).toBeTruthy();
-    // No text input anywhere in the dialog accepts a URL: the endpoint control
-    // is a Select over server-registered names.
+    expect(within(dialog).getByLabelText("Connection")).toBeTruthy();
+    // No text input anywhere in the dialog accepts a URL: the connection control
+    // is a Select over names the server already knows.
     for (const field of within(dialog).getAllByRole("textbox")) {
       expect(field.getAttribute("type")).not.toBe("url");
     }
-    expect(within(dialog).getByText(/Endpoints are registered by an operator/)).toBeTruthy();
+    expect(within(dialog).getByText(/Connections are configured by an operator/)).toBeTruthy();
   });
 
   it("warns that an empty allowlist ingests nothing and defers chat selection", async () => {
@@ -646,8 +646,8 @@ describe("message list", () => {
     expect(screen.queryByText("__any__")).toBeNull();
 
     await user.click(sourceFilter);
-    await user.click(await screen.findByRole("option", { name: "Personal automation" }));
-    await waitFor(() => expect(screen.getByLabelText("Source").textContent).toContain("Personal automation"));
+    await user.click(await screen.findByRole("option", { name: "Team chats" }));
+    await waitFor(() => expect(screen.getByLabelText("Source").textContent).toContain("Team chats"));
     expect(screen.queryByText("src-1")).toBeNull();
   });
 

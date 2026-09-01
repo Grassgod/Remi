@@ -2,7 +2,18 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { INBOX_ROUTE_BY_TYPE } from "@multiremi/contracts";
+import { MESSAGING_INBOX_TYPES } from "@multiremi/messaging/outcomes.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
+
+/**
+ * Files that choose their Inbox type from a table instead of writing a literal
+ * at the call site. Each one exports the full set of types it can write, which
+ * the test below checks exactly — a stronger guarantee than the regex scan,
+ * which simply cannot see through the indirection.
+ */
+const TABLE_DRIVEN_TYPES: Record<string, readonly string[]> = {
+  "messaging/outcomes.ts": MESSAGING_INBOX_TYPES,
+};
 
 describe("inbox routing", () => {
   it("routes one representative event for each boundary rule", () => {
@@ -38,6 +49,8 @@ describe("inbox routing", () => {
     let invocationCount = 0;
 
     for (const file of files) {
+      const relative = file.slice(sourceRoot.length + 1);
+      if (TABLE_DRIVEN_TYPES[relative]) continue;
       const source = readFileSync(file, "utf8");
       invocationCount += [...source.matchAll(/\.createInboxItem\s*\(/g)].length;
       for (const match of source.matchAll(/\.createInboxItem\s*\(\s*\{([\s\S]*?)\n\s*\}\);/g)) {
@@ -56,6 +69,15 @@ describe("inbox routing", () => {
       if (call.severity) {
         expect(call.severity, `${call.file}: ${call.type} overrides the registered severity`)
           .toBe(INBOX_ROUTING[call.type]?.severity);
+      }
+    }
+  });
+
+  it("registers every Inbox type a table-driven writer can produce", () => {
+    for (const [file, types] of Object.entries(TABLE_DRIVEN_TYPES)) {
+      expect(types.length).toBeGreaterThan(0);
+      for (const type of types) {
+        expect(INBOX_ROUTING, `${file}: ${type} is missing from INBOX_ROUTING`).toHaveProperty(type);
       }
     }
   });

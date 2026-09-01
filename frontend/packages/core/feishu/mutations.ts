@@ -12,8 +12,8 @@ function invalidateMessageCaches(queryClient: QueryClient, workspaceId: string):
   void queryClient.invalidateQueries({ queryKey: inboxKeys.all(workspaceId) });
 }
 
-/** Re-checks one endpoint on demand and refreshes the whole panel: a sidecar
- *  that just came back also unblocks every source pointing at it. */
+/** Re-checks one connection on demand and refreshes the whole panel: a
+ *  connection that just came back also unblocks every source pointing at it. */
 export function useCheckFeishuEndpoint(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({

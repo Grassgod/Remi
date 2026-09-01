@@ -7,10 +7,8 @@ import type { ProjectKnowledgeServiceContract } from "@multiremi/project-knowled
 import type { RepositoryWikiServiceContract } from "@multiremi/repository-wiki/service.js";
 import type { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { ScmConnectionVerifier } from "@multiremi/scm/verification.js";
-import type { FeishuSidecarEndpointRegistry } from "@multiremi/feishu-ingest/endpoints.js";
-import type { FeishuEndpointHealthChecker } from "@multiremi/feishu-ingest/health.js";
-import type { FeishuChatDirectory } from "@multiremi/feishu-ingest/chat-directory.js";
 import type { retitleIssue } from "@multiremi/issue-title/service.js";
+import type { MessageProviderRegistry } from "@multiremi/messaging/registry.js";
 
 /**
  * The values `createMultiremiApp` closes over. Domain routers receive them
@@ -32,8 +30,7 @@ export interface RouterDeps {
   sessionArchives: SessionArchiveService;
   daemonDirectBaseUrl: string | null;
   verifyScmConnection: ScmConnectionVerifier;
-  feishuSidecarEndpoints: FeishuSidecarEndpointRegistry;
-  feishuEndpointHealth: FeishuEndpointHealthChecker;
-  feishuChatDirectory: FeishuChatDirectory;
+  /** The Core's only way to reach a channel. Empty means no Provider is installed. */
+  messagingProviders: MessageProviderRegistry;
   issueRetitle: typeof retitleIssue;
 }

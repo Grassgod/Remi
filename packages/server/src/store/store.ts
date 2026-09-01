@@ -26,6 +26,8 @@ import {
   type RecordScmCanonicalEventResult,
   type ScmConnectionWithRepositories,
 } from "@multiremi/store/repos/scm-repo.js";
+import { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
+import { MessagingOutcomeService } from "@multiremi/messaging/outcomes.js";
 import {
   FeishuIngestRepo,
   type CreateFeishuInboxOutcomeInput,
@@ -414,6 +416,23 @@ export class MultiremiStore {
   private workspaces: WorkspacesRepo;
   private scm: ScmRepo;
   private feishuIngest: FeishuIngestRepo;
+  /**
+   * The Messaging Core's persistence, exposed whole rather than through
+   * per-method delegates.
+   *
+   * The Core is a self-contained subsystem with its own contract, and it is
+   * the only caller; mirroring its surface here would add a second place to
+   * keep in step without adding a boundary.
+   */
+  readonly messaging: MessagingRepo;
+  /**
+   * What a reviewer or an agent decided about an ingested message.
+   *
+   * Separate from {@link messaging} because recording an outcome can create an
+   * Inbox item or an Issue, which belong to other subsystems; keeping it out of
+   * the repo is what lets the repo stay pure persistence.
+   */
+  readonly messagingOutcomes: MessagingOutcomeService;
   private usage: UsageRepo;
   private squads: SquadsRepo;
   private analytics: AnalyticsRepo;
@@ -466,6 +485,8 @@ export class MultiremiStore {
     this.workspaces = new WorkspacesRepo(this.ctx);
     this.scm = new ScmRepo(this.ctx);
     this.feishuIngest = new FeishuIngestRepo(this.ctx);
+    this.messaging = new MessagingRepo(this.ctx);
+    this.messagingOutcomes = new MessagingOutcomeService(this.ctx, this.messaging);
     this.usage = new UsageRepo(this.ctx);
     this.squads = new SquadsRepo(this.ctx);
     this.analytics = new AnalyticsRepo(this.ctx);

@@ -65,6 +65,7 @@ export function operationsCommandSpecs(): CommandSpec[] {
     ...daemonSpecs(),
     ...autopilotSpecs(),
     ...scmSpecs(),
+    ...messagingSpecs(),
     ...feishuSpecs(),
     ...inboxSpecs(),
     ...notificationSpecs(),
@@ -322,6 +323,296 @@ function scmSpecs(): CommandSpec[] {
   ];
 }
 
+/**
+ * The channel-independent messaging commands.
+ *
+ * `remi feishu` below is the same workflow bound to one channel and one
+ * legacy id space; it stays for shipped clients. Anything new belongs here,
+ * where the channel is whatever the Connection's Provider serves.
+ */
+function messagingSpecs(): CommandSpec[] {
+  const workspaceBase = (i: CommandInvocation) =>
+    `/api/workspaces/${encodePath(requiredWorkspace(i))}/messaging`;
+  const connection = (i: CommandInvocation) =>
+    `${workspaceBase(i)}/connections/${encodePath(positional(i, 0, "connection"))}`;
+  const source = (i: CommandInvocation) =>
+    `${workspaceBase(i)}/sources/${encodePath(positional(i, 0, "source"))}`;
+  // A message id is only unique inside its Connection, so both halves of the
+  // key travel in the path rather than the id being looked up workspace-wide.
+  const message = (i: CommandInvocation) =>
+    `${connection(i)}/messages/${encodePath(positional(i, 1, "message"))}`;
+  const messageRef: readonly CliPositionalSpec[] = [ref("connection"), ref("message")];
+
+  const sourceFields: readonly CliOptionSpec[] = [
+    { name: "name", type: "string", valueName: "name", description: "Source display name" },
+    { name: "connection", type: "string", valueName: "id", description: "Connection that ingests for this source" },
+    { name: "conversation", type: "string", valueName: "id", repeatable: true, description: "Allowlisted conversation ID" },
+    { name: "clear-allowlist", type: "boolean", conflictsWith: ["conversation"], description: "Replace the allowlist with an empty list" },
+    { name: "enabled", type: "boolean", description: "Enable or disable ingestion" },
+    { name: "retention-days", type: "integer", valueName: "days", description: "Message retention period" },
+    { name: "poll-interval-seconds", type: "integer", valueName: "seconds", description: "Minimum poll interval" },
+    { name: "unprocessed-retry-seconds", type: "integer", valueName: "seconds", description: "Delay before retrying unresolved messages" },
+    { name: "unprocessed-retry-limit", type: "integer", valueName: "count", description: "Retries before timeout dismissal" },
+  ];
+  const sourceBody = (i: CommandInvocation) => requestBody(i, {
+    name: stringOption(i, "name") ?? undefined,
+    connection_id: stringOption(i, "connection") ?? undefined,
+    allowlist: booleanOption(i, "clear-allowlist")
+      ? []
+      : i.options.conversation === undefined ? undefined : stringOptions(i, "conversation"),
+    enabled: booleanOption(i, "enabled") ?? undefined,
+    retention_days: integerOption(i, "retention-days") ?? undefined,
+    poll_interval_seconds: integerOption(i, "poll-interval-seconds") ?? undefined,
+    unprocessed_retry_seconds: integerOption(i, "unprocessed-retry-seconds") ?? undefined,
+    unprocessed_retry_limit: integerOption(i, "unprocessed-retry-limit") ?? undefined,
+  });
+  const issueProposalOptions: readonly CliOptionSpec[] = [
+    { name: "title", type: "string", valueName: "text", required: true, description: "Issue title" },
+    { name: "description", type: "string", valueName: "text", description: "Issue description" },
+    { name: "project-id", type: "string", valueName: "id", description: "Project ID" },
+    { name: "priority", type: "string", valueName: "priority", description: "Issue priority" },
+    { name: "assignee-type", type: "string", valueName: "type", description: "Suggested assignee type" },
+    { name: "assignee-id", type: "string", valueName: "id", description: "Suggested assignee ID" },
+  ];
+  const issueProposalBody = (i: CommandInvocation) => requestBody(i, {
+    title: requiredStringOption(i, "title"),
+    description: stringOption(i, "description") ?? undefined,
+    project_id: stringOption(i, "project-id") ?? undefined,
+    priority: stringOption(i, "priority") ?? undefined,
+    assignee_type: stringOption(i, "assignee-type") ?? undefined,
+    assignee_id: stringOption(i, "assignee-id") ?? undefined,
+  });
+  return [
+    group("messaging", "Connect message channels and process what they deliver"),
+    op({
+      id: "messaging.provider.list",
+      path: ["messaging", "provider", "list"],
+      description: "List registered providers and the channels they serve",
+      method: "GET",
+      apiPath: (i) => `${workspaceBase(i)}/providers`,
+      auth: HUMAN,
+      collections: ["providers"],
+    }),
+    op({ id: "messaging.connection.list", path: ["messaging", "connection", "list"], description: "List message connections and their health", method: "GET", apiPath: (i) => `${workspaceBase(i)}/connections`, auth: HUMAN, collections: ["connections"] }),
+    op({
+      id: "messaging.connection.add",
+      path: ["messaging", "connection", "add"],
+      description: "Connect a provider to a channel",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/connections`,
+      mutation: "write",
+      auth: HUMAN,
+      options: [
+        ...INPUT_OPTIONS,
+        { name: "name", type: "string", valueName: "name", required: true, description: "Connection display name" },
+        { name: "provider", type: "string", valueName: "id", required: true, description: "Registered provider, e.g. lark_cli" },
+        { name: "channel", type: "string", valueName: "channel", description: "Channel to serve; defaults to the provider's only one" },
+      ],
+      // Provider configuration is provider-shaped, so it arrives as JSON
+      // through --data rather than as a flag per provider.
+      body: (i) => requestBody(i, {
+        name: requiredStringOption(i, "name"),
+        provider: requiredStringOption(i, "provider"),
+        channel: stringOption(i, "channel") ?? undefined,
+      }),
+    }),
+    op({ id: "messaging.connection.get", path: ["messaging", "connection", "get"], description: "Get a message connection", method: "GET", apiPath: connection, auth: HUMAN, positionals: [ref("connection")] }),
+    op({
+      id: "messaging.connection.update",
+      path: ["messaging", "connection", "update"],
+      description: "Rename a connection or replace its provider configuration",
+      method: "PATCH",
+      apiPath: connection,
+      mutation: "write",
+      auth: HUMAN,
+      positionals: [ref("connection")],
+      options: [...INPUT_OPTIONS, { name: "name", type: "string", valueName: "name", description: "Connection display name" }],
+      body: (i) => requestBody(i, { name: stringOption(i, "name") ?? undefined }),
+    }),
+    op({ id: "messaging.connection.delete", path: ["messaging", "connection", "delete"], description: "Delete a connection with its sources, messages and outcomes", method: "DELETE", apiPath: connection, mutation: "destructive", auth: HUMAN, positionals: [ref("connection")] }),
+    op({ id: "messaging.connection.check", path: ["messaging", "connection", "check"], description: "Ask the provider whether the connection still works", method: "POST", apiPath: (i) => `${connection(i)}/check`, mutation: "write", auth: HUMAN, positionals: [ref("connection")] }),
+    op({ id: "messaging.source.list", path: ["messaging", "source", "list"], description: "List message sources", method: "GET", apiPath: (i) => `${workspaceBase(i)}/sources`, auth: HUMAN, collections: ["sources"] }),
+    op({ id: "messaging.source.get", path: ["messaging", "source", "get"], description: "Get a message source", method: "GET", apiPath: source, auth: HUMAN, positionals: [ref("source")] }),
+    op({ id: "messaging.source.status", path: ["messaging", "source", "status"], description: "Show sync health, lag, and unresolved backlog", method: "GET", apiPath: (i) => `${source(i)}/status`, auth: HUMAN_TASK, positionals: [ref("source")] }),
+    op({ id: "messaging.source.add", path: ["messaging", "source", "add"], description: "Add a source that ingests through a connection", method: "POST", apiPath: (i) => `${workspaceBase(i)}/sources`, mutation: "write", auth: HUMAN, options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
+    op({ id: "messaging.source.update", path: ["messaging", "source", "update"], description: "Update a source and its allowlist", method: "PATCH", apiPath: source, mutation: "write", auth: HUMAN, positionals: [ref("source")], options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
+    op({ id: "messaging.source.delete", path: ["messaging", "source", "delete"], description: "Delete a source with its messages, outcomes and sync cursor", method: "DELETE", apiPath: source, mutation: "destructive", auth: HUMAN, positionals: [ref("source")] }),
+    op({
+      id: "messaging.source.available-conversations",
+      path: ["messaging", "source", "available-conversations"],
+      description: "Search candidate conversations for a source allowlist through its provider",
+      method: "GET",
+      apiPath: (i) => `${source(i)}/available-conversations`,
+      auth: HUMAN,
+      positionals: [ref("source")],
+      query: (i) => ({
+        q: stringOption(i, "query"),
+        cursor: stringOption(i, "cursor"),
+        limit: integerOption(i, "limit"),
+      }),
+      collections: ["conversations"],
+    }),
+    op({
+      id: "messaging.conversation.list",
+      path: ["messaging", "conversation", "list"],
+      description: "List conversations that have already delivered messages",
+      method: "GET",
+      apiPath: (i) => `${workspaceBase(i)}/conversations`,
+      auth: HUMAN_TASK,
+      collections: ["conversations"],
+    }),
+    op({
+      id: "messaging.message.list",
+      path: ["messaging", "message", "list"],
+      description: "List ingested messages",
+      method: "GET",
+      apiPath: (i) => `${workspaceBase(i)}/messages`,
+      auth: HUMAN_TASK,
+      options: [
+        { name: "unprocessed", type: "boolean", conflictsWith: ["processed"], description: "Only messages without an outcome" },
+        { name: "processed", type: "boolean", conflictsWith: ["unprocessed"], description: "Only messages that already have an outcome" },
+        { name: "source", type: "string", valueName: "id", description: "Filter by source ID" },
+        { name: "connection", type: "string", valueName: "id", description: "Filter by connection ID" },
+        { name: "conversation", type: "string", valueName: "id", description: "Filter by conversation ID" },
+        { name: "since", type: "string", valueName: "timestamp", description: "Earliest message timestamp" },
+        { name: "until", type: "string", valueName: "timestamp", description: "Latest message timestamp" },
+        { name: "offset", type: "integer", valueName: "count", description: "Skip this many messages" },
+      ],
+      query: (i) => ({
+        limit: integerOption(i, "limit"),
+        offset: integerOption(i, "offset"),
+        unprocessed: booleanOption(i, "unprocessed"),
+        processed: booleanOption(i, "processed"),
+        // Literal text, not a wildcard pattern.
+        q: stringOption(i, "query"),
+        source: stringOption(i, "source"),
+        connection: stringOption(i, "connection"),
+        conversation: stringOption(i, "conversation"),
+        since: stringOption(i, "since"),
+        until: stringOption(i, "until"),
+      }),
+      collections: ["messages"],
+    }),
+    op({
+      id: "messaging.message.get",
+      path: ["messaging", "message", "get"],
+      description: "Get one message and everything already decided about it",
+      method: "GET",
+      apiPath: message,
+      auth: HUMAN_TASK,
+      positionals: messageRef,
+    }),
+    op({
+      id: "messaging.message.resolve",
+      path: ["messaging", "message", "resolve"],
+      description: "Record a message outcome and mark it processed",
+      method: "POST",
+      apiPath: (i) => `${message(i)}/resolve`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      positionals: messageRef,
+      options: [
+        { name: "outcome", type: "string", valueName: "kind", required: true, description: "ignored or dismissed" },
+        { name: "reason", type: "string", valueName: "text", description: "Decision reason" },
+        { name: "task-id", type: "string", valueName: "id", description: "Processing task ID (human calls only)" },
+      ],
+      body: (i) => requestBody(i, {
+        outcome: requiredStringOption(i, "outcome"),
+        reason: stringOption(i, "reason") ?? undefined,
+        task_id: stringOption(i, "task-id") ?? undefined,
+      }),
+    }),
+    op({
+      id: "messaging.message.notify",
+      path: ["messaging", "message", "notify"],
+      description: "Create an Inbox reminder for a message",
+      method: "POST",
+      apiPath: (i) => `${message(i)}/notify`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      positionals: messageRef,
+      options: [{ name: "summary", type: "string", valueName: "text", required: true, description: "Reminder summary" }],
+      body: (i) => requestBody(i, { summary: requiredStringOption(i, "summary") }),
+    }),
+    op({
+      id: "messaging.message.draft-reply",
+      path: ["messaging", "message", "draft-reply"],
+      description: "Create an Inbox reply draft for a message",
+      method: "POST",
+      apiPath: (i) => `${message(i)}/draft-reply`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      positionals: messageRef,
+      options: [{ name: "draft-text", type: "string", valueName: "text", required: true, description: "Reply draft text" }],
+      body: (i) => requestBody(i, { draft_text: requiredStringOption(i, "draft-text") }),
+    }),
+    op({
+      id: "messaging.message.propose-issue",
+      path: ["messaging", "message", "propose-issue"],
+      description: "Propose an Issue for human approval and resolve a message",
+      method: "POST",
+      apiPath: (i) => `${message(i)}/propose-issue`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      positionals: messageRef,
+      options: issueProposalOptions,
+      body: issueProposalBody,
+    }),
+    op({
+      id: "messaging.message.create-issue",
+      path: ["messaging", "message", "create-issue"],
+      description: "Atomically create an Issue and resolve a message",
+      method: "POST",
+      apiPath: (i) => `${message(i)}/create-issue`,
+      mutation: "write",
+      auth: HUMAN,
+      positionals: messageRef,
+      options: issueProposalOptions,
+      body: issueProposalBody,
+    }),
+    op({
+      id: "messaging.proposal.list",
+      path: ["messaging", "proposal", "list"],
+      description: "List Issue proposals awaiting human approval",
+      method: "GET",
+      apiPath: (i) => `${workspaceBase(i)}/proposals`,
+      auth: HUMAN_TASK,
+      options: [
+        { name: "status", type: "string", valueName: "status", description: "pending, approved, or rejected" },
+        { name: "source", type: "string", valueName: "id", description: "Filter by source ID" },
+        { name: "offset", type: "integer", valueName: "count", description: "Skip this many proposals" },
+      ],
+      query: (i) => ({
+        status: stringOption(i, "status"),
+        source: stringOption(i, "source"),
+        limit: integerOption(i, "limit"),
+        offset: integerOption(i, "offset"),
+      }),
+      collections: ["proposals"],
+    }),
+    op({
+      id: "messaging.proposal.approve",
+      path: ["messaging", "proposal", "approve"],
+      description: "Approve an Issue proposal",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/proposals/${encodePath(positional(i, 0, "proposal"))}/approve`,
+      mutation: "write",
+      auth: HUMAN,
+      positionals: [ref("proposal")],
+    }),
+    op({
+      id: "messaging.proposal.reject",
+      path: ["messaging", "proposal", "reject"],
+      description: "Reject an Issue proposal",
+      method: "POST",
+      apiPath: (i) => `${workspaceBase(i)}/proposals/${encodePath(positional(i, 0, "proposal"))}/reject`,
+      mutation: "write",
+      auth: HUMAN,
+      positionals: [ref("proposal")],
+    }),
+  ];
+}
+
 function feishuSpecs(): CommandSpec[] {
   const workspaceBase = (i: CommandInvocation) =>
     `/api/workspaces/${encodePath(requiredWorkspace(i))}/feishu`;
@@ -329,7 +620,7 @@ function feishuSpecs(): CommandSpec[] {
     `${workspaceBase(i)}/sources/${encodePath(positional(i, 0, "source"))}`;
   const sourceFields: readonly CliOptionSpec[] = [
     { name: "name", type: "string", valueName: "name", description: "Source display name" },
-    { name: "endpoint-name", type: "string", valueName: "name", description: "Server-configured sidecar endpoint name" },
+    { name: "endpoint-name", type: "string", valueName: "name", description: "Legacy endpoint name; maps to a messaging connection" },
     { name: "chat", type: "string", valueName: "chat-id", repeatable: true, description: "Allowlisted chat ID" },
     { name: "clear-allowlist", type: "boolean", conflictsWith: ["chat"], description: "Replace the allowlist with an empty list" },
     { name: "enabled", type: "boolean", description: "Enable or disable ingestion" },
@@ -371,11 +662,11 @@ function feishuSpecs(): CommandSpec[] {
     op({ id: "feishu.source.list", path: ["feishu", "source", "list"], description: "List Feishu message sources", method: "GET", apiPath: (i) => `${workspaceBase(i)}/sources`, auth: HUMAN, collections: ["sources"] }),
     op({ id: "feishu.source.get", path: ["feishu", "source", "get"], description: "Get a Feishu message source", method: "GET", apiPath: source, auth: HUMAN, positionals: [ref("source")] }),
     op({ id: "feishu.source.status", path: ["feishu", "source", "status"], description: "Show connection health, lag, and unresolved backlog", method: "GET", apiPath: (i) => `${source(i)}/status`, auth: HUMAN_TASK, positionals: [ref("source")] }),
-    op({ id: "feishu.source.add", path: ["feishu", "source", "add"], description: "Add a personal_automation Feishu source", method: "POST", apiPath: (i) => `${workspaceBase(i)}/sources`, mutation: "write", auth: HUMAN, options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
+    op({ id: "feishu.source.add", path: ["feishu", "source", "add"], description: "Add a Feishu source (legacy id space; prefer remi messaging source add)", method: "POST", apiPath: (i) => `${workspaceBase(i)}/sources`, mutation: "write", auth: HUMAN, options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
     op({ id: "feishu.source.update", path: ["feishu", "source", "update"], description: "Update a Feishu source and its allowlist", method: "PATCH", apiPath: source, mutation: "write", auth: HUMAN, positionals: [ref("source")], options: [...INPUT_OPTIONS, ...sourceFields], body: sourceBody }),
     op({ id: "feishu.source.delete", path: ["feishu", "source", "delete"], description: "Delete a Feishu source with its messages and outcomes", method: "DELETE", apiPath: source, mutation: "destructive", auth: HUMAN, positionals: [ref("source")] }),
-    op({ id: "feishu.endpoint.list", path: ["feishu", "endpoint", "list"], description: "List server-registered sidecar endpoint names and health", method: "GET", apiPath: (i) => `${workspaceBase(i)}/endpoints`, auth: HUMAN, collections: ["endpoints"] }),
-    op({ id: "feishu.endpoint.check", path: ["feishu", "endpoint", "check"], description: "Re-probe one registered sidecar endpoint", method: "POST", apiPath: (i) => `${workspaceBase(i)}/endpoints/${encodePath(positional(i, 0, "endpoint"))}/check`, mutation: "write", auth: HUMAN, positionals: [ref("endpoint")] }),
+    op({ id: "feishu.endpoint.list", path: ["feishu", "endpoint", "list"], description: "List legacy endpoint names and health", method: "GET", apiPath: (i) => `${workspaceBase(i)}/endpoints`, auth: HUMAN, collections: ["endpoints"] }),
+    op({ id: "feishu.endpoint.check", path: ["feishu", "endpoint", "check"], description: "Re-probe one legacy endpoint", method: "POST", apiPath: (i) => `${workspaceBase(i)}/endpoints/${encodePath(positional(i, 0, "endpoint"))}/check`, mutation: "write", auth: HUMAN, positionals: [ref("endpoint")] }),
     op({
       id: "feishu.source.available-chats",
       path: ["feishu", "source", "available-chats"],
