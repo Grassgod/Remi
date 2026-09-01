@@ -652,7 +652,30 @@
       "field_latency": "지연 시간",
       "latency_value": "{{ms}} ms",
       "field_error": "최근 오류",
-      "field_sources": "연결된 소스"
+      "field_sources": "연결된 소스",
+      "add_connection": "연결 추가",
+      "connection_dialog": {
+        "title": "Feishu 메시지 연결",
+        "description": "Feishu 사용자 지정 앱 자격 증명을 입력합니다. 연결마다 독립된 구성이 생성됩니다.",
+        "authorization_description": "Feishu에서 인증을 확인하세요. 완료되면 이 페이지가 자동으로 갱신됩니다.",
+        "name_label": "연결 이름",
+        "name_placeholder": "업무용 Feishu",
+        "app_id_label": "App ID",
+        "app_secret_label": "App Secret",
+        "required": "연결 이름, App ID, App Secret을 입력하세요.",
+        "configure_and_authorize": "구성 및 인증",
+        "open_authorization": "Feishu 인증 페이지 열기",
+        "waiting": "Feishu 인증을 기다리는 중…",
+        "authorized": "Feishu 메시지 연결이 인증되었습니다",
+        "create_failed": "메시지 연결을 만들 수 없습니다. 앱 자격 증명을 확인하세요.",
+        "authorize_failed": "Feishu 인증을 시작할 수 없습니다. 앱 게시 상태와 메시지 권한을 확인하세요.",
+        "poll_failed": "인증 상태를 일시적으로 확인할 수 없습니다. 계속 기다립니다.",
+        "expired": "인증 링크가 만료되었습니다. 다시 인증하세요.",
+        "denied": "인증이 취소되었습니다. 다시 인증하세요.",
+        "retry": "다시 인증",
+        "cancel": "취소",
+        "close": "닫기"
+      }
     },
     "sources": {
       "title": "메시지 소스",

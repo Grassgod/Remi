@@ -652,7 +652,30 @@
       "field_latency": "レイテンシ",
       "latency_value": "{{ms}} ミリ秒",
       "field_error": "最新のエラー",
-      "field_sources": "関連ソース"
+      "field_sources": "関連ソース",
+      "add_connection": "接続を追加",
+      "connection_dialog": {
+        "title": "Feishu メッセージを接続",
+        "description": "Feishu カスタムアプリの認証情報を入力します。接続ごとに独立した設定が作成されます。",
+        "authorization_description": "Feishu で認証を確認してください。完了すると自動的に更新されます。",
+        "name_label": "接続名",
+        "name_placeholder": "業務用 Feishu",
+        "app_id_label": "App ID",
+        "app_secret_label": "App Secret",
+        "required": "接続名、App ID、App Secret を入力してください。",
+        "configure_and_authorize": "設定して認証",
+        "open_authorization": "Feishu 認証ページを開く",
+        "waiting": "Feishu での認証を待っています…",
+        "authorized": "Feishu メッセージ接続を認証しました",
+        "create_failed": "メッセージ接続を作成できませんでした。アプリ認証情報を確認してください。",
+        "authorize_failed": "Feishu 認証を開始できませんでした。アプリの公開状態とメッセージ権限を確認してください。",
+        "poll_failed": "認証状態を一時的に取得できません。待機を続けます。",
+        "expired": "認証リンクの有効期限が切れました。もう一度開始してください。",
+        "denied": "認証がキャンセルされました。もう一度開始してください。",
+        "retry": "再認証",
+        "cancel": "キャンセル",
+        "close": "閉じる"
+      }
     },
     "sources": {
       "title": "メッセージソース",

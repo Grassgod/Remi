@@ -15,6 +15,8 @@ export const feishuKeys = {
   chats: (workspaceId: string) => ["feishu", workspaceId, "chats"] as const,
   proposals: (workspaceId: string, params: { status?: string; source?: string }) =>
     ["feishu", workspaceId, "proposals", params] as const,
+  authorization: (workspaceId: string, connectionId: string, sessionId: string) =>
+    ["feishu", workspaceId, "connections", connectionId, "authorization", sessionId] as const,
 };
 
 /**
@@ -29,6 +31,21 @@ export function feishuEndpointsOptions(workspaceId: string, enabled = true) {
     enabled: enabled && workspaceId.length > 0,
     retry: false,
     staleTime: 15_000,
+  });
+}
+
+export function feishuMessageAuthorizationOptions(
+  workspaceId: string,
+  connectionId: string,
+  sessionId: string,
+  enabled = true,
+) {
+  return queryOptions({
+    queryKey: feishuKeys.authorization(workspaceId, connectionId, sessionId),
+    queryFn: () => api.getFeishuMessageAuthorization(workspaceId, connectionId, sessionId),
+    enabled: enabled && workspaceId.length > 0 && connectionId.length > 0 && sessionId.length > 0,
+    retry: false,
+    refetchInterval: (query) => query.state.data?.authorization.status === "pending" ? 1_500 : false,
   });
 }
 

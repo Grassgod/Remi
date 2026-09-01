@@ -10,12 +10,13 @@ export interface LarkCliRunOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   kind?: LarkCliCommandKind;
+  /** Sensitive command input. Written to stdin and never added to argv. */
+  stdin?: string;
   /**
    * Return trimmed stdout instead of requiring JSON.
    *
-   * Only `lark-cli --version` needs this: it predates the `--format` flag and
-   * rejects it, so its single `lark-cli version X.Y.Z` line is the only
-   * machine-readable version source. Every other command must stay on JSON.
+   * Used only for commands whose documented output is plain text. Commands
+   * with structured output must stay on JSON.
    */
   text?: boolean;
 }
@@ -68,11 +69,19 @@ export class BunLarkCliRunner implements LarkCliRunner {
     let processHandle: ReturnType<typeof Bun.spawn>;
     try {
       processHandle = Bun.spawn([this.executable, ...argv], {
-        stdin: "ignore",
+        stdin: options.stdin === undefined ? "ignore" : "pipe",
         stdout: "pipe",
         stderr: "pipe",
         env: this.env,
       });
+      if (options.stdin !== undefined) {
+        const stdin = processHandle.stdin;
+        if (!stdin || typeof stdin === "number") {
+          throw new Error("lark-cli stdin pipe is unavailable");
+        }
+        stdin.write(options.stdin);
+        stdin.end();
+      }
     } catch (cause) {
       log.warn("lark-cli executable is unavailable; install lark-cli before enabling this connection");
       throw new MessageProviderError("provider_unavailable", "lark-cli is not installed", { cause });
@@ -138,6 +147,8 @@ export function mapLarkCliErrorCode(value: unknown, kind: LarkCliCommandKind = "
     "token_expired",
     "credential_expired",
     "needs_refresh",
+    "expired_token",
+    "device_code_expired",
     "401",
   ].includes(code)) {
     return "unauthenticated";
@@ -151,6 +162,7 @@ export function mapLarkCliErrorCode(value: unknown, kind: LarkCliCommandKind = "
     "scope_missing",
     "missing_scope",
     "confirmation_required",
+    "access_denied",
     "authorization",
     "403",
   ].includes(code)) {

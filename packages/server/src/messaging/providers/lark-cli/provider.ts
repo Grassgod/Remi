@@ -7,8 +7,13 @@ import {
   type ConversationSearchResult,
   type MessageAttachmentDownload,
   type MessageAttachmentRef,
+  type MessageAuthorizationSession,
   type MessageConversation,
   type MessageConversationKind,
+  type MessageConnectionProvisioningInput,
+  type MessageConnectionProvisioningProvider,
+  type MessageConnectionProvisioningResult,
+  type MessageInteractiveAuthorizationProvider,
   type MessageMention,
   type MessageProviderContext,
   type MessageProviderHealth,
@@ -44,6 +49,8 @@ const DEFAULT_PAGE_SIZE = MAX_MESSAGE_PAGE_SIZE;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_READ_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 100;
+const DEFAULT_AUTHORIZATION_LIFETIME_MS = 10 * 60_000;
+const AUTHORIZATION_SESSION_RETENTION_MS = 60 * 60_000;
 /**
  * The lark-cli commands this Provider drives.
  *
@@ -78,6 +85,8 @@ export const LARK_CLI_MESSAGE_PROVIDER_MANIFEST: MessageProviderManifest = {
     reaction: false,
     edit: true,
     recall: true,
+    connectionProvisioning: true,
+    interactiveAuthorization: true,
   },
   displayName: "Lark CLI",
 };
@@ -92,11 +101,22 @@ export interface LarkCliMessageProviderOptions {
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
+interface StoredAuthorizationSession {
+  public: MessageAuthorizationSession;
+  connectionId: string;
+  deviceCode: string;
+  controller: AbortController;
+  updatedAtMs: number;
+  completion?: Promise<void>;
+}
+
 export class LarkCliMessageProvider implements
   ConversationProvider,
   MessageSyncProvider,
   MessageSendProvider,
-  AttachmentProvider {
+  AttachmentProvider,
+  MessageConnectionProvisioningProvider,
+  MessageInteractiveAuthorizationProvider {
   readonly manifest = LARK_CLI_MESSAGE_PROVIDER_MANIFEST;
 
   private readonly runner: LarkCliRunner;
@@ -106,6 +126,7 @@ export class LarkCliMessageProvider implements
   private readonly now: () => Date;
   private readonly createIdempotencyKey: () => string;
   private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly authorizationSessions = new Map<string, StoredAuthorizationSession>();
 
   constructor(options: LarkCliMessageProviderOptions = {}) {
     this.runner = options.runner ?? new BunLarkCliRunner({ timeoutMs: options.timeoutMs });
@@ -115,6 +136,189 @@ export class LarkCliMessageProvider implements
     this.now = options.now ?? (() => new Date());
     this.createIdempotencyKey = options.createIdempotencyKey ?? (() => crypto.randomUUID());
     this.sleep = options.sleep ?? ((milliseconds) => Bun.sleep(milliseconds));
+  }
+
+  async provisionConnection(
+    context: MessageProviderContext,
+    input: MessageConnectionProvisioningInput,
+  ): Promise<MessageConnectionProvisioningResult> {
+    const appId = requiredString(input.appId, "app id");
+    const appSecret = requiredString(input.appSecret, "app secret");
+    const profile = profileName(context.connection.id);
+    await this.runner.run([
+      "profile",
+      "add",
+      "--name",
+      profile,
+      "--app-id",
+      appId,
+      "--app-secret-stdin",
+      "--brand",
+      "feishu",
+    ], {
+      timeoutMs: this.timeoutMs,
+      kind: "read",
+      stdin: `${appSecret}\n`,
+      text: true,
+    });
+    return { config: { profile, managedProfile: true } };
+  }
+
+  async removeConnection(context: MessageProviderContext): Promise<void> {
+    const profile = connectionProfile(context);
+    if (!profile || context.connection.config.managedProfile !== true) return;
+
+    const pending = [...this.authorizationSessions.values()]
+      .filter((session) => session.connectionId === context.connection.id);
+    for (const session of pending) session.controller.abort();
+    await Promise.allSettled(pending.map((session) => session.completion));
+    for (const session of pending) this.authorizationSessions.delete(session.public.id);
+
+    try {
+      await this.runner.run([
+        "--profile",
+        profile,
+        "auth",
+        "logout",
+        "--json",
+      ], { timeoutMs: this.timeoutMs, kind: "read" });
+    } catch {
+      // Removing the profile below clears its credentials even when logout
+      // reports that no user token exists.
+    }
+    await this.runner.run(["profile", "remove", profile], {
+      timeoutMs: this.timeoutMs,
+      kind: "read",
+      text: true,
+    });
+  }
+
+  async beginAuthorization(context: MessageProviderContext): Promise<MessageAuthorizationSession> {
+    const profile = requiredConnectionProfile(context);
+    this.pruneAuthorizationSessions();
+    for (const session of this.authorizationSessions.values()) {
+      if (session.connectionId === context.connection.id && session.public.status === "pending") {
+        session.controller.abort();
+      }
+    }
+
+    const payload = await this.runner.run([
+      "--profile",
+      profile,
+      "auth",
+      "login",
+      "--domain",
+      "im",
+      "--no-wait",
+      "--json",
+    ], { timeoutMs: this.timeoutMs, kind: "read" });
+    const data = payloadRecord(payload);
+    const deviceCode = data && firstString(data, ["device_code", "deviceCode"]);
+    const verificationUrl = data && httpsUrl(firstString(data, [
+      "verification_url",
+      "verificationUrl",
+      "verification_uri",
+      "verificationUri",
+    ]));
+    if (!deviceCode || !verificationUrl) {
+      throw new MessageProviderError("malformed_response", "lark-cli authorization response is malformed");
+    }
+
+    const nowMs = this.now().getTime();
+    const lifetimeSeconds = positiveNumber(data?.expires_in ?? data?.expiresIn);
+    const expiresAtMs = nowMs + (lifetimeSeconds === null
+      ? DEFAULT_AUTHORIZATION_LIFETIME_MS
+      : lifetimeSeconds * 1_000);
+    const publicSession: MessageAuthorizationSession = {
+      id: crypto.randomUUID(),
+      status: "pending",
+      verificationUrl,
+      userCode: firstString(data ?? {}, ["user_code", "userCode"]) || null,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      errorCode: null,
+    };
+    const stored: StoredAuthorizationSession = {
+      public: publicSession,
+      connectionId: context.connection.id,
+      deviceCode,
+      controller: new AbortController(),
+      updatedAtMs: nowMs,
+    };
+    this.authorizationSessions.set(publicSession.id, stored);
+    stored.completion = this.completeAuthorization(stored, profile, expiresAtMs);
+    return { ...publicSession };
+  }
+
+  async getAuthorizationSession(
+    context: MessageProviderContext,
+    sessionId: string,
+  ): Promise<MessageAuthorizationSession | null> {
+    this.pruneAuthorizationSessions();
+    const stored = this.authorizationSessions.get(sessionId.trim());
+    if (!stored || stored.connectionId !== context.connection.id) return null;
+    const expiresAtMs = Date.parse(stored.public.expiresAt ?? "");
+    if (stored.public.status === "pending" && Number.isFinite(expiresAtMs) && expiresAtMs <= this.now().getTime()) {
+      stored.controller.abort();
+      this.updateAuthorizationSession(stored, "expired", "unauthenticated");
+    }
+    return { ...stored.public };
+  }
+
+  private async completeAuthorization(
+    stored: StoredAuthorizationSession,
+    profile: string,
+    expiresAtMs: number,
+  ): Promise<void> {
+    try {
+      const remainingMs = Math.max(1_000, expiresAtMs - this.now().getTime() + 5_000);
+      await this.runner.run([
+        "--profile",
+        profile,
+        "auth",
+        "login",
+        "--device-code",
+        stored.deviceCode,
+        "--json",
+      ], { signal: stored.controller.signal, timeoutMs: remainingMs, kind: "read" });
+      this.updateAuthorizationSession(stored, "ready", null);
+    } catch (error) {
+      if (stored.public.status !== "pending") return;
+      const providerError = asProviderError(error);
+      const expired = this.now().getTime() >= expiresAtMs || providerError.code === "unauthenticated";
+      this.updateAuthorizationSession(
+        stored,
+        expired ? "expired" : providerError.code === "forbidden" ? "denied" : "failed",
+        providerError.code,
+      );
+    } finally {
+      // Retain only the credential-free public state. The device code is useful
+      // solely while the polling subprocess is alive.
+      stored.deviceCode = "";
+    }
+  }
+
+  private updateAuthorizationSession(
+    stored: StoredAuthorizationSession,
+    status: MessageAuthorizationSession["status"],
+    errorCode: MessageAuthorizationSession["errorCode"],
+  ): void {
+    stored.public = {
+      ...stored.public,
+      status,
+      errorCode,
+      verificationUrl: status === "pending" ? stored.public.verificationUrl : null,
+      userCode: status === "pending" ? stored.public.userCode : null,
+    };
+    stored.updatedAtMs = this.now().getTime();
+  }
+
+  private pruneAuthorizationSessions(): void {
+    const cutoff = this.now().getTime() - AUTHORIZATION_SESSION_RETENTION_MS;
+    for (const [id, session] of this.authorizationSessions) {
+      if (session.public.status !== "pending" && session.updatedAtMs < cutoff) {
+        this.authorizationSessions.delete(id);
+      }
+    }
   }
 
   async checkHealth(context: MessageProviderContext): Promise<MessageProviderHealth> {
@@ -132,7 +336,7 @@ export class LarkCliMessageProvider implements
       }
 
       // `auth status` takes no `--format` either, but already emits JSON.
-      const user = authUser(await this.runRead(["auth", "status"], context));
+      const user = authUser(await this.runRead(["auth", "status", "--json", "--verify"], context));
       if (!user) throw new MessageProviderError("malformed_response", "lark-cli auth status is malformed");
       const unauthenticated = authFailure(user, now);
       if (unauthenticated) {
@@ -371,7 +575,7 @@ export class LarkCliMessageProvider implements
     for (let attempt = 0; attempt < this.maxReadAttempts; attempt += 1) {
       if (context.signal?.aborted) throw new MessageProviderError("timeout", "lark-cli command was aborted");
       try {
-        return await this.runner.run(argv, this.runOptions(context, "read"));
+        return await this.runner.run(withConnectionProfile(argv, context), this.runOptions(context, "read"));
       } catch (error) {
         lastError = asProviderError(error);
         if (!lastError.retryable || attempt + 1 >= this.maxReadAttempts || context.signal?.aborted) throw lastError;
@@ -388,7 +592,7 @@ export class LarkCliMessageProvider implements
 
   private async runSend(argv: readonly string[], context: MessageProviderContext): Promise<unknown> {
     try {
-      return await this.runner.run(argv, this.runOptions(context, "send"));
+      return await this.runner.run(withConnectionProfile(argv, context), this.runOptions(context, "send"));
     } catch (error) {
       const providerError = asProviderError(error, "send_result_unknown");
       if (providerError.code === "timeout" || providerError.code === "unreachable") {
@@ -810,12 +1014,40 @@ function requiredString(value: unknown, label: string): string {
   return result;
 }
 
+function profileName(connectionId: string): string {
+  return `multiremi_${connectionId.replace(/[^a-zA-Z0-9_-]/gu, "_")}`;
+}
+
+function connectionProfile(context: MessageProviderContext): string | null {
+  const profile = stringValue(context.connection.config.profile);
+  return profile || null;
+}
+
+function requiredConnectionProfile(context: MessageProviderContext): string {
+  const profile = connectionProfile(context);
+  if (!profile) throw new MessageProviderError("unauthenticated", "message connection has no credential profile");
+  return profile;
+}
+
+function withConnectionProfile(argv: readonly string[], context: MessageProviderContext): readonly string[] {
+  const profile = connectionProfile(context);
+  return profile ? ["--profile", profile, ...argv] : argv;
+}
+
 function firstString(value: Record<string, unknown>, keys: readonly string[]): string {
   for (const key of keys) {
     const result = stringValue(value[key]);
     if (result) return result;
   }
   return "";
+}
+
+function httpsUrl(value: string): string | null {
+  try {
+    return new URL(value).protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function stringValue(value: unknown): string {
@@ -832,6 +1064,11 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function positiveInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const parsed = typeof value === "string" && /^\d+(?:\.\d+)?$/u.test(value.trim()) ? Number(value) : value;
+  return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function nonNegativeInteger(value: unknown): number | null {

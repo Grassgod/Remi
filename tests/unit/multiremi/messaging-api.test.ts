@@ -6,6 +6,10 @@ import {
   type ConversationProvider,
   type ConversationSearchResult,
   type MessageConversation,
+  type MessageAuthorizationSession,
+  type MessageConnectionProvisioningInput,
+  type MessageConnectionProvisioningProvider,
+  type MessageInteractiveAuthorizationProvider,
   type MessageProviderContext,
   type MessageProviderHealth,
   type MessageProviderManifest,
@@ -34,6 +38,8 @@ const MANIFEST: MessageProviderManifest = {
     reaction: false,
     edit: false,
     recall: false,
+    connectionProvisioning: true,
+    interactiveAuthorization: true,
   },
 };
 
@@ -42,7 +48,10 @@ function conversation(id: string, name: string): MessageConversation {
 }
 
 /** Stands in for a channel: it answers health and conversation search, nothing else. */
-class TestProvider implements ConversationProvider {
+class TestProvider implements
+  ConversationProvider,
+  MessageConnectionProvisioningProvider,
+  MessageInteractiveAuthorizationProvider {
   readonly manifest = MANIFEST;
   health: MessageProviderHealth = {
     status: "ready",
@@ -52,6 +61,16 @@ class TestProvider implements ConversationProvider {
     errorCode: null,
     detail: null,
     checkedAt: "2026-08-31T09:00:00.000Z",
+  };
+  provisioned: MessageConnectionProvisioningInput[] = [];
+  removedConnectionIds: string[] = [];
+  authorization: MessageAuthorizationSession = {
+    id: "authorization_1",
+    status: "pending",
+    verificationUrl: "https://example.test/device",
+    userCode: "ABCD-EFGH",
+    expiresAt: "2026-08-31T09:10:00.000Z",
+    errorCode: null,
   };
 
   async checkHealth(_context: MessageProviderContext): Promise<MessageProviderHealth> {
@@ -71,6 +90,29 @@ class TestProvider implements ConversationProvider {
     externalConversationId: string,
   ): Promise<MessageConversation | null> {
     return conversation(externalConversationId, "Product chat");
+  }
+
+  async provisionConnection(
+    _context: MessageProviderContext,
+    input: MessageConnectionProvisioningInput,
+  ) {
+    this.provisioned.push(input);
+    return { config: { profile: "isolated_profile", managedProfile: true } };
+  }
+
+  async removeConnection(context: MessageProviderContext): Promise<void> {
+    this.removedConnectionIds.push(context.connection.id);
+  }
+
+  async beginAuthorization(): Promise<MessageAuthorizationSession> {
+    return { ...this.authorization };
+  }
+
+  async getAuthorizationSession(
+    _context: MessageProviderContext,
+    sessionId: string,
+  ): Promise<MessageAuthorizationSession | null> {
+    return sessionId === this.authorization.id ? { ...this.authorization } : null;
   }
 }
 
@@ -175,6 +217,62 @@ describe("messaging API", () => {
     expect(source.status).toBe(201);
     // Nothing is ingested until somebody consents to a conversation.
     expect((await source.json()).source.allowlist).toEqual([]);
+  });
+
+  it("provisions credentials ephemerally and drives authorization through an opaque session", async () => {
+    const { app, store, provider } = createApp();
+    const createdResponse = await app.request("/api/workspaces/local/messaging/connections", {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({
+        provider: "test_provider",
+        channel: "test_channel",
+        name: "Work account",
+        configuration: { appId: "cli_app", appSecret: "must-not-persist" },
+      }),
+    });
+    expect(createdResponse.status).toBe(201);
+    const createdBody = await createdResponse.json();
+    const connectionId = createdBody.connection.id as string;
+    expect(JSON.stringify(createdBody)).not.toContain("must-not-persist");
+    expect(provider.provisioned).toEqual([{ appId: "cli_app", appSecret: "must-not-persist" }]);
+    expect(store.messaging.getConnection(connectionId)?.config).toEqual({
+      profile: "isolated_profile",
+      managedProfile: true,
+    });
+
+    const beginResponse = await app.request(
+      `/api/workspaces/local/messaging/connections/${connectionId}/authorization-sessions`,
+      { method: "POST", headers: AUTH },
+    );
+    expect(beginResponse.status).toBe(201);
+    const beginBody = await beginResponse.json();
+    expect(beginBody).toMatchObject({
+      authorization: {
+        id: "authorization_1",
+        status: "pending",
+        verificationUrl: "https://example.test/device",
+      },
+      connection: { status: "unauthenticated" },
+    });
+
+    provider.authorization = { ...provider.authorization, status: "ready" };
+    const statusResponse = await app.request(
+      `/api/workspaces/local/messaging/connections/${connectionId}/authorization-sessions/authorization_1`,
+      { headers: AUTH },
+    );
+    expect(statusResponse.status).toBe(200);
+    expect(await statusResponse.json()).toMatchObject({
+      authorization: { status: "ready" },
+      connection: { status: "ready", externalAccountId: "account_1" },
+    });
+
+    const deleted = await app.request(`/api/workspaces/local/messaging/connections/${connectionId}`, {
+      method: "DELETE",
+      headers: AUTH,
+    });
+    expect(deleted.status).toBe(200);
+    expect(provider.removedConnectionIds).toEqual([connectionId]);
   });
 
   it("stores what the health check found, and says when no Provider is registered", async () => {

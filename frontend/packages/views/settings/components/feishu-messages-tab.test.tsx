@@ -54,6 +54,8 @@ const mutations = vi.hoisted(() => ({
   propose: { mutate: vi.fn(), isPending: false },
   approve: { mutate: vi.fn(), isPending: false },
   reject: { mutate: vi.fn(), isPending: false },
+  createConnection: { mutate: vi.fn(), reset: vi.fn(), isPending: false },
+  beginAuthorization: { mutate: vi.fn(), isPending: false },
 }));
 
 vi.mock("@tanstack/react-query", () => {
@@ -119,6 +121,7 @@ vi.mock("@tanstack/react-query", () => {
     useQuery: resolve,
     useQueries: ({ queries }: { queries: { __kind?: string; enabled?: boolean; sourceId?: string }[] }) =>
       queries.map(resolve),
+    useQueryClient: () => ({ invalidateQueries: vi.fn().mockResolvedValue(undefined) }),
   };
 });
 
@@ -156,7 +159,11 @@ vi.mock("@multiremi/core/feishu", async () => {
       calls.availableChats.push({ sourceId, enabled });
       return { __kind: "available-chats", sourceId, enabled };
     },
+    feishuKeys: { all: (workspaceId: string) => ["feishu", workspaceId] },
+    feishuMessageAuthorizationOptions: () => ({ __kind: "authorization", enabled: false }),
     useCheckFeishuEndpoint: () => mutations.check,
+    useCreateFeishuMessageConnection: () => mutations.createConnection,
+    useBeginFeishuMessageAuthorization: () => mutations.beginAuthorization,
     useCreateFeishuSource: () => mutations.create,
     useUpdateFeishuSource: () => mutations.update,
     useDeleteFeishuSource: () => mutations.remove,
@@ -178,6 +185,9 @@ vi.mock("@multiremi/core/workspace/queries", () => ({
 }));
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({ useIsMobile: () => server.isMobile }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("react-qr-code", () => ({
+  QRCode: ({ value }: { value: string }) => <div data-testid="authorization-qr">{value}</div>,
+}));
 
 // Base UI renders menu content in a portal behind a real pointer interaction
 // that jsdom cannot simulate faithfully. Rendering the items inline keeps these
@@ -403,6 +413,46 @@ describe("message connection panel", () => {
     expect(screen.getByText(/No message connection is configured/)).toBeTruthy();
     // Nothing to probe, so no button that would probe it.
     expect(screen.queryByRole("button", { name: /Check again/ })).toBeNull();
+  });
+
+  it("configures credentials and opens the returned authorization URL from the page", async () => {
+    const user = userEvent.setup();
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    mutations.createConnection.mutate.mockImplementation((_input, options) => {
+      options.onSuccess({ id: "mconn_1", name: "Work Feishu", status: "unauthenticated" });
+    });
+    mutations.beginAuthorization.mutate.mockImplementation((_connectionId, options) => {
+      options.onSuccess({
+        authorization: {
+          id: "auth_1",
+          status: "pending",
+          verificationUrl: "https://open.feishu.cn/device",
+          userCode: "ABCD-EFGH",
+          expiresAt: "2026-09-01T00:10:00.000Z",
+          errorCode: null,
+        },
+        connection: { id: "mconn_1", name: "Work Feishu", status: "unauthenticated" },
+      });
+    });
+    server.endpoints = { configured: false, endpoints: [] };
+    renderTab();
+
+    await user.click(screen.getByRole("button", { name: /Add connection/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Connection name"), "Work Feishu");
+    await user.type(within(dialog).getByLabelText("App ID"), "cli_app");
+    await user.type(within(dialog).getByLabelText("App Secret"), "app-secret");
+    await user.click(within(dialog).getByRole("button", { name: /Configure and authorize/ }));
+
+    expect(mutations.createConnection.mutate.mock.calls[0]?.[0]).toEqual({
+      name: "Work Feishu",
+      appId: "cli_app",
+      appSecret: "app-secret",
+    });
+    expect(mutations.createConnection.reset).toHaveBeenCalledTimes(1);
+    expect(mutations.beginAuthorization.mutate).toHaveBeenCalledWith("mconn_1", expect.any(Object));
+    expect(await screen.findByTestId("authorization-qr")).toHaveTextContent("https://open.feishu.cn/device");
+    expect(open).toHaveBeenCalledWith("https://open.feishu.cn/device", "_blank", "noopener,noreferrer");
   });
 
   it("rechecks by endpoint name, never by address", async () => {

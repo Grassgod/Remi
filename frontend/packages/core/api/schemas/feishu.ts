@@ -27,6 +27,30 @@ export const FeishuEndpointCheckResponseSchema = z.object({
   endpoint: FeishuEndpointHealthSchema,
 }).loose();
 
+export const FeishuMessageConnectionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().default(""),
+  status: z.string().default("unknown"),
+}).loose();
+
+export const FeishuMessageConnectionResponseSchema = z.object({
+  connection: FeishuMessageConnectionSchema,
+}).loose();
+
+export const FeishuMessageAuthorizationSchema = z.object({
+  id: z.string().min(1),
+  status: z.enum(["pending", "ready", "expired", "denied", "failed"]),
+  verificationUrl: z.string().nullable().default(null),
+  userCode: z.string().nullable().default(null),
+  expiresAt: z.string().nullable().default(null),
+  errorCode: z.string().nullable().default(null),
+}).loose();
+
+export const FeishuMessageAuthorizationResponseSchema = z.object({
+  authorization: FeishuMessageAuthorizationSchema,
+  connection: FeishuMessageConnectionSchema,
+}).loose();
+
 export const FeishuAllowlistEntrySchema = z.object({
   chatId: z.string().default(""),
   addedAt: z.string().default(""),
@@ -210,6 +234,9 @@ export const FeishuProposalListResponseSchema = z.object({
 
 export type FeishuEndpointHealth = z.infer<typeof FeishuEndpointHealthSchema>;
 export type FeishuEndpointList = z.infer<typeof FeishuEndpointListResponseSchema>;
+export type FeishuMessageConnection = z.infer<typeof FeishuMessageConnectionSchema>;
+export type FeishuMessageAuthorization = z.infer<typeof FeishuMessageAuthorizationSchema>;
+export type FeishuMessageAuthorizationResponse = z.infer<typeof FeishuMessageAuthorizationResponseSchema>;
 export type FeishuSource = z.infer<typeof FeishuSourceSchema>;
 export type FeishuSourceList = z.infer<typeof FeishuSourceListResponseSchema>;
 export type FeishuSourceStatus = z.infer<typeof FeishuSourceStatusSchema>;

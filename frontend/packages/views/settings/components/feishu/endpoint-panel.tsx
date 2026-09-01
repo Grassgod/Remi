@@ -1,6 +1,7 @@
 "use client";
 
-import { RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import {
   deriveEndpointState,
@@ -15,6 +16,7 @@ import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT, useTimeAgo } from "../../../i18n";
 import { StateBadge, absoluteTime } from "./shared";
+import { ConnectionDialog } from "./connection-dialog";
 
 interface EndpointPanelProps {
   /** Owner/Admin. A Member never reaches the endpoint query at all — see
@@ -31,6 +33,7 @@ export function EndpointPanel(props: EndpointPanelProps) {
   const { t } = useT("settings");
   const timeAgo = useTimeAgo();
   const check = useCheckFeishuEndpoint(props.workspaceId);
+  const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const state = deriveEndpointState({
     permitted: props.permitted,
     configured: props.configured,
@@ -72,7 +75,15 @@ export function EndpointPanel(props: EndpointPanelProps) {
 
   return (
     <section className="space-y-3">
-      <h3 className="text-sm font-semibold">{t(($) => $.feishu.endpoint.title)}</h3>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">{t(($) => $.feishu.endpoint.title)}</h3>
+        {props.permitted && (
+          <Button size="sm" onClick={() => setConnectionDialogOpen(true)}>
+            <Plus className="size-4" aria-hidden />
+            {t(($) => $.feishu.endpoint.add_connection)}
+          </Button>
+        )}
+      </div>
       <Card>
         <CardHeader className="gap-2">
           <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-medium">
@@ -134,6 +145,11 @@ export function EndpointPanel(props: EndpointPanelProps) {
           </CardContent>
         )}
       </Card>
+      <ConnectionDialog
+        open={connectionDialogOpen}
+        onOpenChange={setConnectionDialogOpen}
+        workspaceId={props.workspaceId}
+      />
     </section>
   );
 }

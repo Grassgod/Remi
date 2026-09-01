@@ -653,7 +653,30 @@
       "field_latency": "延迟",
       "latency_value": "{{ms}} 毫秒",
       "field_error": "最近错误",
-      "field_sources": "关联消息源"
+      "field_sources": "关联消息源",
+      "add_connection": "添加连接",
+      "connection_dialog": {
+        "title": "连接飞书消息",
+        "description": "填写飞书自建应用凭证，Multiremi 会为这个连接创建独立配置。",
+        "authorization_description": "在飞书中确认授权，完成后本页会自动更新。",
+        "name_label": "连接名称",
+        "name_placeholder": "工作飞书",
+        "app_id_label": "App ID",
+        "app_secret_label": "App Secret",
+        "required": "请完整填写连接名称、App ID 和 App Secret。",
+        "configure_and_authorize": "配置并授权",
+        "open_authorization": "打开飞书授权页",
+        "waiting": "等待飞书授权确认……",
+        "authorized": "飞书消息连接已授权",
+        "create_failed": "创建消息连接失败，请检查应用凭证。",
+        "authorize_failed": "发起飞书授权失败。请确认应用已发布并开通消息权限。",
+        "poll_failed": "暂时无法读取授权状态，将继续等待。",
+        "expired": "授权链接已过期，请重新发起授权。",
+        "denied": "授权已取消，请重新发起授权。",
+        "retry": "重新授权",
+        "cancel": "取消",
+        "close": "关闭"
+      }
     },
     "sources": {
       "title": "消息源",

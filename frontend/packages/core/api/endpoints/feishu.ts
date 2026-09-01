@@ -11,6 +11,8 @@ import {
   FeishuChatListResponseSchema,
   FeishuEndpointCheckResponseSchema,
   FeishuEndpointListResponseSchema,
+  FeishuMessageAuthorizationResponseSchema,
+  FeishuMessageConnectionResponseSchema,
   FeishuMessageActionResponseSchema,
   FeishuMessageListResponseSchema,
   FeishuProposalListResponseSchema,
@@ -22,6 +24,9 @@ import {
   type FeishuEndpointHealth,
   type FeishuEndpointList,
   type FeishuMessageList,
+  type FeishuMessageAuthorizationResponse,
+  type FeishuMessageAuthorization,
+  type FeishuMessageConnection,
   type FeishuMessageOutcome,
   type FeishuProposalList,
   type FeishuSource,
@@ -42,6 +47,12 @@ export interface FeishuSourceInput {
   pollIntervalSeconds?: number;
   unprocessedRetrySeconds?: number;
   unprocessedRetryLimit?: number;
+}
+
+export interface FeishuMessageConnectionInput {
+  name: string;
+  appId: string;
+  appSecret: string;
 }
 
 export interface FeishuMessageListParams {
@@ -85,6 +96,24 @@ function pickEndpoint(endpoint: FeishuEndpointHealth): FeishuEndpointHealth {
     errorCode: endpoint.errorCode,
     sourceCount: endpoint.sourceCount,
   };
+}
+
+function pickMessageConnection(connection: FeishuMessageConnection): FeishuMessageConnection {
+  return { id: connection.id, name: connection.name, status: connection.status };
+}
+
+function pickMessageAuthorization(
+  response: FeishuMessageAuthorizationResponse,
+): FeishuMessageAuthorizationResponse {
+  const authorization: FeishuMessageAuthorization = {
+    id: response.authorization.id,
+    status: response.authorization.status,
+    verificationUrl: response.authorization.verificationUrl,
+    userCode: response.authorization.userCode,
+    expiresAt: response.authorization.expiresAt,
+    errorCode: response.authorization.errorCode,
+  };
+  return { authorization, connection: pickMessageConnection(response.connection) };
 }
 
 function query(params: Record<string, string | number | boolean | undefined>): string {
@@ -153,6 +182,64 @@ export class FeishuEndpoints {
       endpoint: "POST /api/workspaces/:id/feishu/endpoints/:name/check",
     });
     return pickEndpoint(parsed.endpoint);
+  }
+
+  async createFeishuMessageConnection(
+    workspaceId: string,
+    input: FeishuMessageConnectionInput,
+  ): Promise<FeishuMessageConnection> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/messaging/connections`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "lark_cli",
+          channel: "feishu",
+          name: input.name,
+          configuration: { appId: input.appId, appSecret: input.appSecret },
+        }),
+      },
+    );
+    const parsed = parseStrictResponse<{ connection: FeishuMessageConnection }>(raw, FeishuMessageConnectionResponseSchema, {
+      endpoint: "POST /api/workspaces/:id/messaging/connections",
+    });
+    return pickMessageConnection(parsed.connection);
+  }
+
+  async beginFeishuMessageAuthorization(
+    workspaceId: string,
+    connectionId: string,
+  ): Promise<FeishuMessageAuthorizationResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/messaging/connections/`
+      + `${encodeURIComponent(connectionId)}/authorization-sessions`,
+      { method: "POST" },
+    );
+    return pickMessageAuthorization(parseStrictResponse<FeishuMessageAuthorizationResponse>(
+      raw,
+      FeishuMessageAuthorizationResponseSchema,
+      {
+      endpoint: "POST /api/workspaces/:id/messaging/connections/:connectionId/authorization-sessions",
+      },
+    ));
+  }
+
+  async getFeishuMessageAuthorization(
+    workspaceId: string,
+    connectionId: string,
+    sessionId: string,
+  ): Promise<FeishuMessageAuthorizationResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/messaging/connections/`
+      + `${encodeURIComponent(connectionId)}/authorization-sessions/${encodeURIComponent(sessionId)}`,
+    );
+    return pickMessageAuthorization(parseStrictResponse<FeishuMessageAuthorizationResponse>(
+      raw,
+      FeishuMessageAuthorizationResponseSchema,
+      {
+      endpoint: "GET /api/workspaces/:id/messaging/connections/:connectionId/authorization-sessions/:sessionId",
+      },
+    ));
   }
 
   async listFeishuSources(workspaceId: string): Promise<FeishuSourceList> {

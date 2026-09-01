@@ -1,7 +1,9 @@
 import type { Context, Hono } from "hono";
 import {
   MessageProviderError,
+  supportsConnectionProvisioning,
   supportsConversations,
+  supportsInteractiveAuthorization,
   type MessageConnection,
   type MessageErrorCode,
   type MessageOutcomeKind,
@@ -70,20 +72,52 @@ export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateConnectionBody>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = c.req.param("workspaceId");
+    let created: MessageConnection | null = null;
+    let cleanupProvisionedConnection: (() => Promise<void>) | null = null;
     try {
       const provider = resolveProvider(deps, body.provider ?? "");
-      const connection = repo.upsertConnection({
+      const channel = resolveChannel(provider, body.channel);
+      const configuration = optionalRecord(body.configuration, "configuration");
+      created = repo.upsertConnection({
         id: createId("mconn"),
         workspaceId,
         provider: provider.manifest.provider,
-        channel: resolveChannel(provider, body.channel),
+        channel,
         name: requireText(body.name, "name"),
         config: body.config ?? {},
         status: "unknown",
       });
-      publishWorkspaceEvent(c, deps.store, "messaging:connection_created", workspaceId, { connection });
-      return c.json({ connection }, 201);
+      if (configuration) {
+        if (!supportsConnectionProvisioning(provider)) {
+          throw new Error(`provider ${provider.manifest.provider} does not support connection provisioning`);
+        }
+        const provisioned = await provider.provisionConnection({ connection: created }, configuration);
+        const provisionedConnection = {
+          ...created,
+          config: { ...created.config, ...provisioned.config },
+        };
+        cleanupProvisionedConnection = () => provider.removeConnection({ connection: provisionedConnection });
+        created = repo.upsertConnection({
+          ...connectionIdentity(created),
+          config: provisionedConnection.config,
+          status: "unauthenticated",
+          lastErrorCode: "unauthenticated",
+          lastErrorAt: new Date().toISOString(),
+        });
+      }
+      publishWorkspaceEvent(c, deps.store, "messaging:connection_created", workspaceId, { connection: created });
+      cleanupProvisionedConnection = null;
+      return c.json({ connection: created }, 201);
     } catch (error) {
+      if (cleanupProvisionedConnection) {
+        try {
+          await cleanupProvisionedConnection();
+        } catch {
+          // Preserve the original provisioning/storage failure. The Provider's
+          // process boundary already logs cleanup failures without credentials.
+        }
+      }
+      if (created) repo.deleteConnection(created.id);
       return errorResponse(c, error);
     }
   });
@@ -118,9 +152,17 @@ export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
 
-  app.delete(`${BASE}/connections/:connectionId`, (c) => {
+  app.delete(`${BASE}/connections/:connectionId`, async (c) => {
     const loaded = loadConnection(c, deps, true);
     if (loaded instanceof Response) return loaded;
+    const provider = deps.messagingProviders.get(loaded.provider);
+    try {
+      if (provider && supportsConnectionProvisioning(provider)) {
+        await provider.removeConnection({ connection: loaded });
+      }
+    } catch (error) {
+      return errorResponse(c, error);
+    }
     if (!repo.deleteConnection(loaded.id)) return c.json({ error: "Message connection not found" }, 404);
     publishWorkspaceEvent(c, deps.store, "messaging:connection_deleted", loaded.workspaceId, {
       connectionId: loaded.id,
@@ -135,6 +177,50 @@ export function registerMessagingRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     try {
       return c.json(await probeConnection(deps, loaded));
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.post(`${BASE}/connections/:connectionId/authorization-sessions`, async (c) => {
+    const loaded = loadConnection(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    try {
+      const provider = resolveProvider(deps, loaded.provider);
+      if (!supportsInteractiveAuthorization(provider)) {
+        throw new Error(`provider ${provider.manifest.provider} does not support interactive authorization`);
+      }
+      const authorization = await provider.beginAuthorization({ connection: loaded });
+      const connection = repo.upsertConnection({
+        ...connectionIdentity(loaded),
+        config: loaded.config,
+        status: "unauthenticated",
+        lastErrorCode: "unauthenticated",
+        lastErrorAt: new Date().toISOString(),
+      });
+      return c.json({ authorization, connection }, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  });
+
+  app.get(`${BASE}/connections/:connectionId/authorization-sessions/:sessionId`, async (c) => {
+    const loaded = loadConnection(c, deps, true);
+    if (loaded instanceof Response) return loaded;
+    try {
+      const provider = resolveProvider(deps, loaded.provider);
+      if (!supportsInteractiveAuthorization(provider)) {
+        throw new Error(`provider ${provider.manifest.provider} does not support interactive authorization`);
+      }
+      const authorization = await provider.getAuthorizationSession(
+        { connection: loaded },
+        c.req.param("sessionId") ?? "",
+      );
+      if (!authorization) return c.json({ error: "Authorization session not found" }, 404);
+      const connection = authorization.status === "ready"
+        ? (await probeConnection(deps, loaded)).connection
+        : loaded;
+      return c.json({ authorization, connection });
     } catch (error) {
       return errorResponse(c, error);
     }
@@ -592,6 +678,8 @@ interface CreateConnectionBody {
   channel?: string;
   name?: string;
   config?: Record<string, unknown>;
+  /** Ephemeral Provider input. It is never persisted or echoed. */
+  configuration?: unknown;
 }
 
 interface UpdateConnectionBody {
@@ -649,6 +737,14 @@ function resolveProvider(deps: RouterDeps, provider: string): MessageProvider {
   const resolved = deps.messagingProviders.get(provider.trim());
   if (!resolved) throw new Error(`provider is not registered: ${provider.trim() || "(empty)"}`);
   return resolved;
+}
+
+function optionalRecord(value: unknown, field: string): Record<string, unknown> | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function resolveChannel(provider: MessageProvider, channel: string | undefined): string {

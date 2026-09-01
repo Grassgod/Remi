@@ -402,6 +402,10 @@ export interface MessageProviderCapabilities {
   edit: boolean;
   /** The channel reports recalls, so the Core can tombstone them. */
   recall: boolean;
+  /** The Provider can provision isolated connection-local credentials. */
+  connectionProvisioning?: boolean;
+  /** The Provider can drive an interactive authorization session. */
+  interactiveAuthorization?: boolean;
 }
 
 export interface MessageProviderManifest {
@@ -447,6 +451,50 @@ export interface MessageProvider {
   readonly manifest: MessageProviderManifest;
   /** Probe the dependency and credential. Must not throw for expected failures. */
   checkHealth(context: MessageProviderContext): Promise<MessageProviderHealth>;
+}
+
+/**
+ * Ephemeral input supplied while provisioning a Connection.
+ *
+ * Values here may contain credentials. The Core passes them directly to the
+ * Provider and must never persist, log, or echo them. Only `config` returned by
+ * the Provider is safe to store on the Connection.
+ */
+export type MessageConnectionProvisioningInput = Record<string, unknown>;
+
+export interface MessageConnectionProvisioningResult {
+  /** Provider-owned, non-secret settings to persist on the Connection. */
+  config: Record<string, unknown>;
+}
+
+export interface MessageConnectionProvisioningProvider extends MessageProvider {
+  provisionConnection(
+    context: MessageProviderContext,
+    input: MessageConnectionProvisioningInput,
+  ): Promise<MessageConnectionProvisioningResult>;
+  /** Remove Provider-owned credentials for a managed Connection. */
+  removeConnection(context: MessageProviderContext): Promise<void>;
+}
+
+export type MessageAuthorizationStatus = "pending" | "ready" | "expired" | "denied" | "failed";
+
+/** Public, credential-free view of one short-lived authorization session. */
+export interface MessageAuthorizationSession {
+  id: string;
+  status: MessageAuthorizationStatus;
+  /** Opaque URL supplied by the Provider. Consumers must not rewrite it. */
+  verificationUrl: string | null;
+  userCode: string | null;
+  expiresAt: string | null;
+  errorCode: MessageErrorCode | null;
+}
+
+export interface MessageInteractiveAuthorizationProvider extends MessageProvider {
+  beginAuthorization(context: MessageProviderContext): Promise<MessageAuthorizationSession>;
+  getAuthorizationSession(
+    context: MessageProviderContext,
+    sessionId: string,
+  ): Promise<MessageAuthorizationSession | null>;
 }
 
 export interface ConversationSearchQuery {
@@ -616,4 +664,20 @@ export function supportsAttachments(provider: MessageProvider): provider is Atta
   const { attachmentDownload, attachmentUpload } = provider.manifest.capabilities;
   return (attachmentDownload || attachmentUpload)
     && typeof (provider as AttachmentProvider).downloadAttachment === "function";
+}
+
+export function supportsConnectionProvisioning(
+  provider: MessageProvider,
+): provider is MessageConnectionProvisioningProvider {
+  return provider.manifest.capabilities.connectionProvisioning === true
+    && typeof (provider as MessageConnectionProvisioningProvider).provisionConnection === "function"
+    && typeof (provider as MessageConnectionProvisioningProvider).removeConnection === "function";
+}
+
+export function supportsInteractiveAuthorization(
+  provider: MessageProvider,
+): provider is MessageInteractiveAuthorizationProvider {
+  return provider.manifest.capabilities.interactiveAuthorization === true
+    && typeof (provider as MessageInteractiveAuthorizationProvider).beginAuthorization === "function"
+    && typeof (provider as MessageInteractiveAuthorizationProvider).getAuthorizationSession === "function";
 }

@@ -5,6 +5,7 @@ export * from "./inbox";
 export type {
   FeishuIssueInput,
   FeishuMessageActionResult,
+  FeishuMessageConnectionInput,
   FeishuMessageListParams,
   FeishuSourceInput,
 } from "../api/endpoints/feishu";
@@ -14,6 +15,9 @@ export type {
   FeishuEndpointHealth,
   FeishuEndpointList,
   FeishuMessage,
+  FeishuMessageAuthorization,
+  FeishuMessageAuthorizationResponse,
+  FeishuMessageConnection,
   FeishuMessageList,
   FeishuMessageOutcome,
   FeishuProposal,

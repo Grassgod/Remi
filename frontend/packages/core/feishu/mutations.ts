@@ -1,6 +1,10 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { FeishuIssueInput, FeishuSourceInput } from "../api/endpoints/feishu";
+import type {
+  FeishuIssueInput,
+  FeishuMessageConnectionInput,
+  FeishuSourceInput,
+} from "../api/endpoints/feishu";
 import { inboxKeys } from "../inbox/queries";
 import { feishuKeys } from "./queries";
 
@@ -18,6 +22,26 @@ export function useCheckFeishuEndpoint(workspaceId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => api.checkFeishuEndpoint(workspaceId, name),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+  });
+}
+
+export function useCreateFeishuMessageConnection(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: FeishuMessageConnectionInput) => api.createFeishuMessageConnection(workspaceId, input),
+    // The mutation variables contain App Secret. Once its observer resets,
+    // remove the completed mutation immediately instead of retaining it in
+    // the default cache window.
+    gcTime: 0,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
+  });
+}
+
+export function useBeginFeishuMessageAuthorization(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (connectionId: string) => api.beginFeishuMessageAuthorization(workspaceId, connectionId),
     onSettled: () => queryClient.invalidateQueries({ queryKey: feishuKeys.all(workspaceId) }),
   });
 }

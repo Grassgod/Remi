@@ -90,7 +90,7 @@ describe("LarkCliMessageProvider", () => {
     expect(JSON.stringify(health)).not.toContain("im:message");
     expect(runner.calls.map((call) => call.argv)).toEqual([
       ["--version"],
-      ["auth", "status"],
+      ["auth", "status", "--json", "--verify"],
     ]);
     expect(runner.calls[0]?.options?.text).toBe(true);
   });
@@ -151,6 +151,88 @@ describe("LarkCliMessageProvider", () => {
       detail: "lark-cli authorization has expired; sign in again",
     });
     expect(JSON.stringify(health)).not.toContain("secret");
+  });
+
+  test("provisions an isolated profile through stdin and completes device authorization", async () => {
+    const runner = new FakeRunner([
+      "Profile added",
+      {
+        device_code: "device-secret",
+        verification_url: "https://open.feishu.cn/device?code=opaque",
+        user_code: "ABCD-EFGH",
+        expires_in: 600,
+      },
+      { ok: true },
+    ]);
+    const provider = providerWith(runner);
+    const base = context({}, null);
+
+    const provisioned = await provider.provisionConnection(base, {
+      appId: "cli_app",
+      appSecret: "app-secret",
+    });
+    expect(provisioned).toEqual({
+      config: { profile: "multiremi_connection-1", managedProfile: true },
+    });
+    expect(runner.calls[0]?.argv).toEqual([
+      "profile", "add", "--name", "multiremi_connection-1",
+      "--app-id", "cli_app", "--app-secret-stdin", "--brand", "feishu",
+    ]);
+    expect(runner.calls[0]?.options?.stdin).toBe("app-secret\n");
+    expect(runner.calls[0]?.argv).not.toContain("app-secret");
+
+    const configured = context(provisioned.config, null);
+    const pending = await provider.beginAuthorization(configured);
+    expect(pending).toMatchObject({
+      status: "pending",
+      verificationUrl: "https://open.feishu.cn/device?code=opaque",
+      userCode: "ABCD-EFGH",
+      errorCode: null,
+    });
+    expect(JSON.stringify(pending)).not.toContain("device-secret");
+
+    const completed = await provider.getAuthorizationSession(configured, pending.id);
+    expect(completed).toMatchObject({
+      status: "ready",
+      verificationUrl: null,
+      userCode: null,
+    });
+    expect(runner.calls.slice(1).map((call) => call.argv)).toEqual([
+      [
+        "--profile", "multiremi_connection-1", "auth", "login",
+        "--domain", "im", "--no-wait", "--json",
+      ],
+      [
+        "--profile", "multiremi_connection-1", "auth", "login",
+        "--device-code", "device-secret", "--json",
+      ],
+    ]);
+  });
+
+  test("rejects a non-HTTPS authorization URL", async () => {
+    const provider = providerWith(new FakeRunner([{
+      device_code: "device-secret",
+      verification_url: "javascript:alert(1)",
+      expires_in: 600,
+    }]));
+
+    await expect(provider.beginAuthorization(context({ profile: "multiremi_profile" })))
+      .rejects.toMatchObject({ code: "malformed_response" });
+  });
+
+  test("binds every connection operation to its configured profile", async () => {
+    const runner = new FakeRunner([
+      "lark-cli version 1.0.90",
+      { identities: { user: { status: "ready", tokenStatus: "valid", openId: "ou_1" } } },
+    ]);
+    const provider = providerWith(runner);
+
+    await provider.checkHealth(context({ profile: "multiremi_profile" }));
+
+    expect(runner.calls.map((call) => call.argv)).toEqual([
+      ["--version"],
+      ["--profile", "multiremi_profile", "auth", "status", "--json", "--verify"],
+    ]);
   });
 
   test("normalizes conversation search and preserves page cursors", async () => {
@@ -698,6 +780,15 @@ describe("BunLarkCliRunner", () => {
     }
     expect(error).toMatchObject({ code: "unauthenticated", retryable: false });
     expect(String(error)).not.toContain("secret");
+  });
+
+  test("writes sensitive input through stdin instead of argv", async () => {
+    const runner = new BunLarkCliRunner({ executable: process.execPath, timeoutMs: 2_000 });
+    const result = await runner.run([
+      "-e",
+      "let value='';for await(const chunk of Bun.stdin.stream())value+=new TextDecoder().decode(chunk);console.log(JSON.stringify({length:value.length}))",
+    ], { stdin: "top-secret\n" });
+    expect(result).toEqual({ length: 11 });
   });
 
   test("kills timed out processes and reports timeout", async () => {

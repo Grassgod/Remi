@@ -653,7 +653,30 @@
       "field_latency": "Latency",
       "latency_value": "{{ms}} ms",
       "field_error": "Last error",
-      "field_sources": "Linked sources"
+      "field_sources": "Linked sources",
+      "add_connection": "Add connection",
+      "connection_dialog": {
+        "title": "Connect Feishu messages",
+        "description": "Enter credentials for a custom Feishu app. Multiremi creates an isolated configuration for this connection.",
+        "authorization_description": "Confirm authorization in Feishu. This page updates automatically when it completes.",
+        "name_label": "Connection name",
+        "name_placeholder": "Work Feishu",
+        "app_id_label": "App ID",
+        "app_secret_label": "App Secret",
+        "required": "Enter a connection name, App ID, and App Secret.",
+        "configure_and_authorize": "Configure and authorize",
+        "open_authorization": "Open Feishu authorization",
+        "waiting": "Waiting for authorization in Feishu…",
+        "authorized": "Feishu message connection authorized",
+        "create_failed": "Couldn't create the message connection. Check the app credentials.",
+        "authorize_failed": "Couldn't start Feishu authorization. Check that the app is published and has message permissions.",
+        "poll_failed": "The authorization status is temporarily unavailable. Waiting will continue.",
+        "expired": "The authorization link expired. Start authorization again.",
+        "denied": "Authorization was cancelled. Start authorization again.",
+        "retry": "Authorize again",
+        "cancel": "Cancel",
+        "close": "Close"
+      }
     },
     "sources": {
       "title": "Message sources",
